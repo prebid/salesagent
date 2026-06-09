@@ -767,26 +767,14 @@ def then_response_has_media_buy_id(ctx: dict) -> None:
         )
 
 
-@then("the response should contain buyer_ref")
-def then_response_has_buyer_ref(ctx: dict) -> None:
-    """No-op: buyer_ref removed from response in adcp 3.12."""
-    assert ctx.get("response") is not None or ctx.get("error") is not None
-
-
-@then(parsers.parse('the response should contain buyer_ref "{buyer_ref}"'))
-def then_response_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed from response in adcp 3.12."""
-    assert ctx.get("response") is not None or ctx.get("error") is not None
-
-
 @then("the response should contain implementation_date that is null")
 def then_implementation_date_null(ctx: dict) -> None:
     """Assert response has a null implementation_date (pending approval)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    assert hasattr(resp, "implementation_date"), "Response has no implementation_date field"
-    impl_date = resp.implementation_date
-    assert impl_date is None, f"Expected implementation_date to be None (pending approval), got {impl_date!r}"
+    assert resp.implementation_date is None, (
+        f"Expected implementation_date to be None (pending approval), got {resp.implementation_date!r}"
+    )
 
 
 @then("the response should contain an implementation_date that is not null")
@@ -803,10 +791,6 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
     assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check implementation_date on error"
-    assert hasattr(resp, "implementation_date"), (
-        f"Response (type: {type(resp).__name__}) has no implementation_date field — "
-        "step claims response 'should contain' it"
-    )
     impl_date = resp.implementation_date
     # Step text claims "not null" unconditionally — hard assert.
     # If production doesn't populate this, the SCENARIO should be xfailed in conftest.py,
@@ -945,7 +929,7 @@ def then_response_has_sandbox(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
-    assert "error" not in ctx, f"Update errored ({ctx['error']}) — cannot check sandbox flag on an error response"
+    assert "error" not in ctx, f"Update errored ({ctx.get('error')}) — cannot check sandbox flag on an error response"
     # Guard: response must be a Pydantic model (not a raw dict/string) — the
     # transport dispatch always yields a typed response on success.
     assert isinstance(resp, BaseModel), (
@@ -995,21 +979,33 @@ def then_response_has_errors_array(ctx: dict) -> None:
 
     For error responses, ctx["error"] is set and ctx["response"] is deleted
     by _promote_update_errors. This step checks the raw error response stored
-    in ctx["error_response"] or inspects ctx["error"] as proof that errors exist.
+    in ctx["error_response"] and validates that each error has the required
+    AdCP Error structure (code + message fields).
     """
+    from src.core.schemas._base import UpdateMediaBuyError
+
     error_resp = ctx.get("error_response")
     if error_resp is not None:
-        if hasattr(error_resp, "errors"):
-            assert error_resp.errors is not None and len(error_resp.errors) > 0, (
-                f"Error response has empty/None errors: {error_resp}"
-            )
-            return
+        assert isinstance(error_resp, UpdateMediaBuyError), (
+            f"Expected error_response to be UpdateMediaBuyError, got {type(error_resp).__name__}"
+        )
+        assert error_resp.errors is not None and len(error_resp.errors) >= 1, (
+            f"Error response has empty/None errors: {error_resp}"
+        )
+        # Validate AdCP Error structure: each error must have code and message
+        for i, err in enumerate(error_resp.errors):
+            assert err.code, f"errors[{i}] missing required 'code' field: {err!r}"
+            assert err.message, f"errors[{i}] missing required 'message' field: {err!r}"
+        return
     # Fallback: _promote_update_errors sets ctx["error"] from errors[0]
     error = ctx.get("error")
     assert error is not None, (
         "Expected response to contain 'errors' array but no error found — "
         "neither ctx['error_response'] nor ctx['error'] is set"
     )
+    # Validate the promoted error has AdCP Error structure
+    assert error.code, f"Promoted error missing required 'code' field: {error!r}"
+    assert error.message, f"Promoted error missing required 'message' field: {error!r}"
 
 
 @then(parsers.parse('the response should NOT contain "{field_name}" field'))

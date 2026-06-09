@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require_response
+
 if TYPE_CHECKING:
     from tests.harness.admin_accounts import AdminAccountEnv
 
@@ -177,21 +179,21 @@ def when_status_change(ctx: dict, name: str, new_status: str) -> None:
 @then(parsers.parse("the page returns status {status_code:d}"))
 def then_page_status(ctx: dict, status_code: int) -> None:
     """Assert HTTP status code."""
-    response = ctx["response"]
+    response = _require_response(ctx)
     assert response.status_code == status_code, f"Expected status {status_code}, got {response.status_code}"
 
 
 @then(parsers.parse('the page contains "{text}"'))
 def then_page_contains(ctx: dict, text: str) -> None:
     """Assert page HTML contains the given text."""
-    html = ctx["response"].data.decode()
+    html = _require_response(ctx).data.decode()
     assert text in html, f"Page does not contain '{text}'"
 
 
 @then(parsers.parse("the page shows {count:d} accounts"))
 def then_page_shows_n_accounts(ctx: dict, count: int) -> None:
     """Assert the number of account rows shown on the list page."""
-    html = ctx["response"].data.decode()
+    html = _require_response(ctx).data.decode()
     # Count table rows in the tbody (each account is a <tr> in the accounts table)
     row_count = html.count("<tr onclick=")
     assert row_count == count, f"Expected {count} accounts, found {row_count}"
@@ -199,25 +201,33 @@ def then_page_shows_n_accounts(ctx: dict, count: int) -> None:
 
 @then(parsers.parse('the page shows account "{name}" with status "{status}"'))
 def then_page_shows_account(ctx: dict, name: str, status: str) -> None:
-    """Assert the page shows an account with the given name and status badge."""
-    html = ctx["response"].data.decode()
+    """Assert the page shows an account with the given name and status badge in the same row."""
+    html = _require_response(ctx).data.decode()
     assert name in html, f"Account '{name}' not found on page"
-    # Status badge should be present
+    # Find the table row containing this account name and verify the status badge
+    # is within that same row (not just anywhere on the page)
     badge_class = f"status-{status}"
-    assert badge_class in html, f"Status badge '{badge_class}' not found"
+    rows = html.split("<tr onclick=")
+    matched_row = None
+    for row in rows:
+        if name in row:
+            matched_row = row
+            break
+    assert matched_row is not None, f"No table row found containing account '{name}'"
+    assert badge_class in matched_row, f"Account '{name}' row does not contain status badge '{badge_class}'"
 
 
 @then(parsers.parse('the page does not show account "{name}"'))
 def then_page_does_not_show_account(ctx: dict, name: str) -> None:
     """Assert the page does NOT show the named account."""
-    html = ctx["response"].data.decode()
+    html = _require_response(ctx).data.decode()
     assert name not in html, f"Account '{name}' should not be on page but was found"
 
 
 @then(parsers.parse('the page shows the account status as "{status}"'))
 def then_page_shows_status(ctx: dict, status: str) -> None:
     """Assert the detail page shows the expected status badge."""
-    html = ctx["response"].data.decode()
+    html = _require_response(ctx).data.decode()
     badge_class = f"status-{status}"
     assert badge_class in html, f"Status badge '{badge_class}' not found"
 
@@ -225,7 +235,7 @@ def then_page_shows_status(ctx: dict, status: str) -> None:
 @then(parsers.parse('the page shows action buttons for "{buttons_str}"'))
 def then_page_shows_action_buttons(ctx: dict, buttons_str: str) -> None:
     """Assert action buttons are present on the detail page."""
-    html = ctx["response"].data.decode()
+    html = _require_response(ctx).data.decode()
     buttons = [b.strip().strip('"') for b in buttons_str.split(" and ")]
     for button_text in buttons:
         assert f"onclick=\"changeStatus('{button_text.lower()}')" in html, (
@@ -236,7 +246,7 @@ def then_page_shows_action_buttons(ctx: dict, buttons_str: str) -> None:
 @then(parsers.parse('the page does not show action button for "{button_text}"'))
 def then_page_no_action_button(ctx: dict, button_text: str) -> None:
     """Assert an action button is NOT present."""
-    html = ctx["response"].data.decode()
+    html = _require_response(ctx).data.decode()
     assert f"onclick=\"changeStatus('{button_text.lower()}')" not in html, (
         f"Action button for '{button_text}' should not be present"
     )
@@ -248,14 +258,14 @@ def then_page_no_action_buttons(ctx: dict) -> None:
 
     Checks for onclick="changeStatus(...)" on buttons, not the JS function definition.
     """
-    html = ctx["response"].data.decode()
+    html = _require_response(ctx).data.decode()
     assert 'onclick="changeStatus(' not in html, "Found action buttons on a terminal-state account"
 
 
 @then("the admin is redirected to the accounts list")
 def then_redirected_to_list(ctx: dict) -> None:
     """Assert redirect to accounts list page."""
-    response = ctx["response"]
+    response = _require_response(ctx)
     assert response.status_code in (302, 303), f"Expected redirect, got {response.status_code}"
     location = response.headers.get("Location", "")
     assert "/accounts/" in location or location.endswith("/accounts"), (
@@ -266,7 +276,7 @@ def then_redirected_to_list(ctx: dict) -> None:
 @then("the admin is redirected to the account detail page")
 def then_redirected_to_detail(ctx: dict) -> None:
     """Assert redirect to account detail page."""
-    response = ctx["response"]
+    response = _require_response(ctx)
     assert response.status_code in (302, 303), f"Expected redirect, got {response.status_code}"
     location = response.headers.get("Location", "")
     assert "/accounts/" in location, f"Expected redirect to account page, got: {location}"
@@ -275,7 +285,7 @@ def then_redirected_to_detail(ctx: dict) -> None:
 @then("the admin is redirected back to the create page")
 def then_redirected_to_create(ctx: dict) -> None:
     """Assert redirect back to create page (validation failure)."""
-    response = ctx["response"]
+    response = _require_response(ctx)
     assert response.status_code in (302, 303), f"Expected redirect, got {response.status_code}"
     location = response.headers.get("Location", "")
     assert "create" in location, f"Expected redirect to create page, got: {location}"
@@ -283,9 +293,11 @@ def then_redirected_to_create(ctx: dict) -> None:
 
 @then("the page returns a redirect to the login page")
 def then_redirect_to_login(ctx: dict) -> None:
-    """Assert unauthenticated users are redirected."""
-    response = ctx["response"]
-    assert response.status_code in (302, 303, 401), f"Expected redirect/unauthorized, got {response.status_code}"
+    """Assert unauthenticated users are redirected to the login page."""
+    response = _require_response(ctx)
+    assert response.status_code in (302, 303), f"Expected redirect to login, got {response.status_code}"
+    location = response.headers.get("Location", "")
+    assert "login" in location, f"Expected redirect Location to contain 'login', got: {location}"
 
 
 @then(parsers.parse('the database contains an account named "{name}"'))
@@ -343,33 +355,33 @@ def then_db_account_status(ctx: dict, name: str, status: str) -> None:
 @then(parsers.parse('the JSON response has "{key}" as true'))
 def then_json_key_true(ctx: dict, key: str) -> None:
     """Assert JSON response key is true."""
-    data = ctx["response"].get_json()
+    data = _require_response(ctx).get_json()
     assert data[key] is True, f"Expected {key}=true, got {data.get(key)}"
 
 
 @then(parsers.parse('the JSON response has "{key}" as false'))
 def then_json_key_false(ctx: dict, key: str) -> None:
     """Assert JSON response key is false."""
-    data = ctx["response"].get_json()
+    data = _require_response(ctx).get_json()
     assert data[key] is False, f"Expected {key}=false, got {data.get(key)}"
 
 
 @then(parsers.parse('the JSON response has "{key}" as "{value}"'))
 def then_json_key_value(ctx: dict, key: str, value: str) -> None:
     """Assert JSON response key has specific value."""
-    data = ctx["response"].get_json()
+    data = _require_response(ctx).get_json()
     assert data[key] == value, f"Expected {key}='{value}', got '{data.get(key)}'"
 
 
 @then(parsers.parse('the JSON response has "{key}" containing "{substring}"'))
 def then_json_key_contains(ctx: dict, key: str, substring: str) -> None:
     """Assert JSON response key contains a substring."""
-    data = ctx["response"].get_json()
+    data = _require_response(ctx).get_json()
     assert substring in str(data.get(key, "")), f"Expected {key} to contain '{substring}', got '{data.get(key)}'"
 
 
 @then(parsers.parse("the JSON response returns status {status_code:d}"))
 def then_json_status(ctx: dict, status_code: int) -> None:
     """Assert JSON response HTTP status code."""
-    response = ctx["response"]
+    response = _require_response(ctx)
     assert response.status_code == status_code, f"Expected status {status_code}, got {response.status_code}"

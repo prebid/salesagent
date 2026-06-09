@@ -151,9 +151,11 @@ class TestSortOrderByName:
         result = _call_impl(formats)
 
         names = [f.name for f in result]
-        assert names == ["Alpha Video", "Display Ad", "Zebra Video"], (
-            f"Results should be sorted alphabetically: {names}"
-        )
+        assert names == [
+            "Alpha Video",
+            "Display Ad",
+            "Zebra Video",
+        ], f"Results should be sorted alphabetically: {names}"
 
 
 # ---------------------------------------------------------------------------
@@ -732,29 +734,29 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
             assert err.message is not None
 
 
-class TestRegistryCreationFailureReturnsErrors:
-    """UC-005-EXT-C-03: Registry creation failure returns empty formats plus errors.
+class TestRegistryCreationFailureRaisesServiceUnavailable:
+    """UC-005-EXT-C-03: Registry creation failure raises AdCPServiceUnavailableError.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-03)
+    Per AdCP 3.0.1 error-handling: operation-level failures (registry init) raise,
+    so the boundary translator produces a two-layer envelope. Per-item advisory
+    errors (partial-agent failure inside a successful discovery) stay in errors[].
     """
 
-    def test_registry_creation_failure_returns_errors(self):
+    def test_registry_creation_failure_raises(self):
         """Covers: UC-005-EXT-C-03
 
         Given the creative agent registry cannot be initialized,
         when list_creative_formats is called,
-        then the response contains an empty formats array
-        and errors[] describing the infrastructure failure.
+        then AdCPServiceUnavailableError is raised so the boundary translator
+        builds a spec-compliant two-layer envelope.
         """
-        response = _call_impl_raw(
-            formats=[],
-            registry_side_effect=RuntimeError("Cannot connect to agent registry"),
-        )
+        from src.core.exceptions import AdCPServiceUnavailableError
 
-        assert response.formats == []
-        assert response.errors is not None, "Infrastructure failure must be reported in errors[], not swallowed"
-        assert len(response.errors) >= 1
-        assert any("registry" in err.message.lower() for err in response.errors)
+        with pytest.raises(AdCPServiceUnavailableError, match="registry"):
+            _call_impl_raw(
+                formats=[],
+                registry_side_effect=RuntimeError("Cannot connect to agent registry"),
+            )
 
 
 class TestErrorEntriesFollowAdCPSchema:
@@ -766,17 +768,15 @@ class TestErrorEntriesFollowAdCPSchema:
     def test_error_entries_have_code_and_message(self):
         """Covers: UC-005-EXT-C-04
 
-        Given a list_creative_formats response with errors,
+        Given a list_creative_formats response with partial-agent errors,
         when the Buyer inspects the errors[] array,
         then each error has code (string) and message (string) at minimum,
         conforming to error.json schema.
         """
         from adcp.types import Error
 
-        response = _call_impl_raw(
-            formats=[],
-            registry_side_effect=RuntimeError("Test infrastructure failure"),
-        )
+        agent_errors = [Error(code="AGENT_UNREACHABLE", message="Creative agent at https://x is unreachable")]
+        response = _call_impl_raw(formats=[], errors=agent_errors)
 
         assert response.errors is not None
         for err in response.errors:

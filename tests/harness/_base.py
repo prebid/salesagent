@@ -1030,6 +1030,47 @@ class IntegrationEnv(BaseTestEnv):
         principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
 
+    # -- Public query API (step functions must use these, not env._session) ----
+
+    def get_session(self) -> Session:
+        """Return the env-bound SQLAlchemy session for read-back assertions.
+
+        Public accessor so step functions never reach into the private
+        ``_session`` attribute. Only valid inside the ``with env:`` block.
+        """
+        if self._session is None:
+            raise RuntimeError(
+                f"{type(self).__name__}.get_session() called without an active session — "
+                "use it inside a 'with env:' block (integration mode)."
+            )
+        return self._session
+
+    def query(self, model: type, **filters: Any) -> list:
+        """Return all rows of ``model`` matching ``filters`` via the bound session."""
+        from sqlalchemy import select
+
+        return list(self.get_session().scalars(select(model).filter_by(**filters)).all())
+
+    def get_one(self, model: type, **filters: Any) -> Any:
+        """Return the first row of ``model`` matching ``filters``, or ``None``."""
+        from sqlalchemy import select
+
+        return self.get_session().scalars(select(model).filter_by(**filters)).first()
+
+    def get_workflow_steps(self) -> list:
+        """Return WorkflowStep rows scoped to this env's tenant.
+
+        WorkflowStep has no tenant_id column; tenant scoping is via its Context
+        relationship, so this joins WorkflowStep -> Context and filters on
+        ``Context.tenant_id``.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Context, WorkflowStep
+
+        stmt = select(WorkflowStep).join(WorkflowStep.context).where(Context.tenant_id == self._tenant_id)
+        return list(self.get_session().scalars(stmt).all())
+
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with default auth dep override.
 

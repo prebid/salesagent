@@ -10,13 +10,18 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from adcp.types import ContextObject
+
+logger = logging.getLogger(__name__)
 
 RecoveryHint = Literal["transient", "correctable", "terminal"]
 
@@ -34,6 +39,15 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # entry so the wire stays spec-compliant. Raise sites can later migrate to
     # specific subclasses; the mappings stay as a safety net.
     "NOT_FOUND": "INVALID_REQUEST",
+    # Entity-specific not-found codes the SDK does not define as standard. The typed
+    # subclasses (AdCPCreativeNotFoundError / AdCPFormatNotFoundError /
+    # AdCPTaskNotFoundError) exist for recovery=correctable + guard-enforceability;
+    # the buyer-visible wire code is INVALID_REQUEST. NOTE: CREATIVE_NOT_FOUND
+    # (singular, a lookup miss) is distinct from the plural CREATIVES_NOT_FOUND →
+    # CREATIVE_REJECTED bulk-sync code below — different keys, no overwrite.
+    "CREATIVE_NOT_FOUND": "INVALID_REQUEST",
+    "FORMAT_NOT_FOUND": "INVALID_REQUEST",
+    "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
@@ -76,10 +90,15 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "ACTIVATION_ERROR": "SERVICE_UNAVAILABLE",
     "ACTIVATION_FAILED": "SERVICE_UNAVAILABLE",
     "WORKFLOW_CREATION_FAILED": "SERVICE_UNAVAILABLE",
+    "ACTIVATION_WORKFLOW_FAILED": "SERVICE_UNAVAILABLE",
+    "LINE_ITEM_CREATION_FAILED": "SERVICE_UNAVAILABLE",
+    "GAM_UPDATE_FAILED": "SERVICE_UNAVAILABLE",
     "CREATIVE_SYNC_FAILED": "SERVICE_UNAVAILABLE",
     "PARTIAL_FAILURE": "SERVICE_UNAVAILABLE",
     "PRODUCT_NOT_CONFIGURED": "PRODUCT_UNAVAILABLE",
+    "INVENTORY_UNAVAILABLE": "PRODUCT_UNAVAILABLE",
     "CREATIVES_NOT_FOUND": "CREATIVE_REJECTED",
+    "MEDIA_BUY_REJECTED": "POLICY_VIOLATION",
 }
 
 # Internal-only codes: never reach the buyer agent.  Each entry has a
@@ -88,6 +107,9 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     {
         "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
+        "CREATIVE_NOT_FOUND",  # AdCPCreativeNotFoundError; wire → INVALID_REQUEST
+        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
+        "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
         "CONFIGURATION_ERROR",  # Server-side config; needs admin, not buyer
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
@@ -96,13 +118,15 @@ INTERNAL_CODES: frozenset[str] = frozenset(
         "ACTIVATION_WORKFLOW_FAILED",  # GAM activation workflow detail
         "API_UPDATE_FAILED",  # Broadstreet API update detail
         "GAM_UPDATE_FAILED",  # GAM update API detail
+        "PARTIAL_FAILURE",  # Bulk partial-failure taxonomy (AdCPBulkUpdateError)
+        "MEDIA_BUY_REJECTED",  # Seller declined the buy; wire emits POLICY_VIOLATION
+        "INVENTORY_UNAVAILABLE",  # Requested inventory absent; wire emits PRODUCT_UNAVAILABLE
     }
 )
 
 # Sanity check: every mapping target must be a standard code.
-assert all(v in STANDARD_ERROR_CODES for v in ERROR_CODE_MAPPING.values()), (
-    "ERROR_CODE_MAPPING contains non-standard target codes"
-)
+_NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(STANDARD_ERROR_CODES)
+assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
 
 
 def translate_error_code(code: str) -> str:
@@ -134,13 +158,21 @@ def _serialize_context(
           ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
           primitives; ``exclude_none=True`` matches the spec's emit-only-
           populated-fields norm.
+        - anything else → log a warning and return ``None``. This is reached
+          from ``to_dict``/``to_adcp_error``/``build_two_layer_error_envelope``,
+          all of which run inside exception handlers — raising here would shadow
+          the original exception and the boundary translator would fail open
+          with no envelope. A malformed context drops to ``None`` instead.
     """
     if context is None:
         return None
     if isinstance(context, dict):
         return dict(context)
     if not isinstance(context, BaseModel):
-        raise TypeError(f"_serialize_context expected dict or BaseModel, got {type(context).__name__}")
+        logger.warning(
+            "_serialize_context expected dict or BaseModel, got %s; dropping context", type(context).__name__
+        )
+        return None
     return context.model_dump(mode="json", exclude_none=True)
 
 
@@ -243,7 +275,7 @@ class AdCPError(Exception):
         Typed subclasses (``AdCPValidationError``, etc.) carry
         ``error_code``/``status_code`` as class attributes. Two boundary
         callers — ``handle_tool_error``'s plain-``ToolError`` fallback and
-        ``ContextManager.fail_workflow_step_for_exception``'s wire-code
+        ``ContextManager.audit_workflow_step_failure``'s wire-code
         sanitization — need to construct an ``AdCPError`` with a code/status
         the typed class hierarchy doesn't model.
 
@@ -263,6 +295,30 @@ class AdCPError(Exception):
             suggestion=suggestion,
             context=context,
         )
+
+    @classmethod
+    def iter_concrete_subclasses(cls) -> Iterator[type[AdCPError]]:
+        """Yield every transitive *concrete* subclass of ``cls`` exactly once.
+
+        Single source of truth for the subclass walk that builds the
+        wire-code -> HTTP-status table (``_build_error_code_to_status``) and
+        backs the error-code compliance tests. Yields descendants only — not
+        ``cls`` itself — deduplicates so a class reachable by more than one
+        path is visited once, and skips abstract bases (their descendants are
+        still walked) so the name's "concrete" promise holds.
+        """
+        import inspect
+
+        seen: set[type] = set()
+        stack: list[type] = list(cls.__subclasses__())
+        while stack:
+            sub = stack.pop()
+            if sub in seen:
+                continue
+            seen.add(sub)
+            stack.extend(sub.__subclasses__())
+            if not inspect.isabstract(sub):
+                yield sub
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to flat response body dict (legacy format).
@@ -333,6 +389,18 @@ class AdCPValidationError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPInvalidRequestError(AdCPValidationError):
+    """A request value is well-formed but semantically invalid (400 → INVALID_REQUEST).
+
+    Distinct from the schema-level VALIDATION_ERROR: the value passes type/shape
+    validation but is invalid in context (e.g. start_time in the past, end_time
+    before start_time). Carries the INVALID_REQUEST standard wire code as class
+    identity; inherits 400 + correctable from AdCPValidationError.
+    """
+
+    _default_error_code: ClassVar[str] = "INVALID_REQUEST"
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
@@ -369,6 +437,20 @@ class AdCPAuthorizationError(AdCPError):
 
     _default_status_code: ClassVar[int] = 403
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+
+
+class AdCPPolicyViolationError(AdCPAuthorizationError):
+    """Request content blocked by an advertising/content policy (403, POLICY_VIOLATION).
+
+    Refines ``AdCPAuthorizationError`` (still a 403, still ``isinstance`` of it):
+    the caller is permitted to call the tool, but the *content* of the request
+    (brief, brand, targeting) violates a publisher policy. Carries the distinct
+    ``POLICY_VIOLATION`` wire code, and the buyer can revise and retry, so
+    recovery is ``correctable`` rather than the parent's ``terminal``.
+    """
+
+    _default_error_code: ClassVar[str] = "POLICY_VIOLATION"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPNotFoundError(AdCPError):
@@ -468,12 +550,12 @@ class AdCPConfigurationError(AdCPError):
 
     Raised when encrypted secrets cannot be decrypted (key rotation,
     corruption, missing ENCRYPTION_KEY). Callers should NOT silently
-    fall back — the configuration needs admin intervention.
+    fall back — the configuration needs admin intervention, so recovery is
+    ``terminal`` (inherited): the buyer has no lever to fix server config.
     """
 
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPServiceUnavailableError(AdCPError):
@@ -520,6 +602,87 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "PACKAGE_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPProductNotFoundError(AdCPNotFoundError):
+    """Requested product does not exist (404, PRODUCT_NOT_FOUND).
+
+    Recovery=correctable: the buyer can correct by supplying a valid
+    product_id (discoverable via get_products). Overrides the
+    ``AdCPNotFoundError`` ``terminal`` default for the same reason as
+    ``AdCPMediaBuyNotFoundError`` — the buyer's own request is the lever
+    for recovery. PRODUCT_NOT_FOUND is a standard SDK code (passthrough,
+    not in ERROR_CODE_MAPPING).
+    """
+
+    _default_error_code: ClassVar[str] = "PRODUCT_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPContextNotFoundError(AdCPNotFoundError):
+    """Buyer-supplied context_id does not resolve (404, SESSION_NOT_FOUND).
+
+    A ``context_id`` that does not map to a persistent context is a not-found
+    condition, not a gone/expired one: ``Context`` rows have no TTL, expiry, or
+    delete path anywhere in ``src/``, so a non-resolving id never existed. That
+    rules out ``AdCPGoneError`` (``INVALID_STATE``) — the correct wire code is
+    ``SESSION_NOT_FOUND``, the standard SDK code for an unresolvable
+    session/context (passthrough, not in ERROR_CODE_MAPPING).
+
+    Recovery=correctable: the buyer can correct by supplying a valid context_id
+    or omitting it to start a fresh context. Overrides the ``AdCPNotFoundError``
+    ``terminal`` default for the same reason as ``AdCPMediaBuyNotFoundError``.
+    """
+
+    _default_error_code: ClassVar[str] = "SESSION_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPCreativeNotFoundError(AdCPNotFoundError):
+    """Requested creative does not exist (404, wire → INVALID_REQUEST).
+
+    The SDK has no ``CREATIVE_NOT_FOUND`` standard code, so the raw code is
+    internal and translated to ``INVALID_REQUEST`` at the wire boundary (see
+    ERROR_CODE_MAPPING). The buyer-visible gain over the bare
+    ``AdCPNotFoundError`` is recovery=correctable + a typed identity callers and
+    guards can pin — not a distinct wire code.
+
+    Recovery=correctable: the buyer can correct by supplying a valid creative_id
+    (discoverable via list_creatives / sync_creatives).
+    """
+
+    _default_error_code: ClassVar[str] = "CREATIVE_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPFormatNotFoundError(AdCPNotFoundError):
+    """Requested creative format does not exist on the agent (404, wire → INVALID_REQUEST).
+
+    No standard ``FORMAT_NOT_FOUND`` SDK code exists, so the raw code is internal
+    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
+    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+
+    Recovery=correctable: the buyer can correct by supplying a valid format_id
+    (discoverable via list_creative_formats).
+    """
+
+    _default_error_code: ClassVar[str] = "FORMAT_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPTaskNotFoundError(AdCPNotFoundError):
+    """Requested workflow task/step does not exist (404, wire → INVALID_REQUEST).
+
+    No standard ``TASK_NOT_FOUND`` SDK code exists, so the raw code is internal
+    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
+    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+
+    Recovery=correctable: the buyer can correct by supplying a valid task_id
+    (discoverable via list_tasks).
+    """
+
+    _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -585,11 +748,129 @@ class AdCPIdempotencyExpiredError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
+class AdCPCreativeRejectedError(AdCPError):
+    """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "CREATIVE_REJECTED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPBudgetExceededError(AdCPError):
+    """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "BUDGET_EXCEEDED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPProductUnavailableError(AdCPError):
+    """Product is offline, deactivated, or otherwise unavailable (422, PRODUCT_UNAVAILABLE)."""
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "PRODUCT_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+# ---------------------------------------------------------------------------
+# Adapter-taxonomy subclasses (502 → SERVICE_UNAVAILABLE).
+# ---------------------------------------------------------------------------
+# These extend AdCPAdapterError to carry an internal failure taxonomy as the
+# class identity instead of smuggling it through ``details["internal_code"]``
+# (which is buyer-visible). The raw ``error_code`` stays in INTERNAL_CODES for
+# server-side logs/audit; ``wire_error_code`` translates it to
+# SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING so the buyer sees a standard code.
+
+
+class AdCPWorkflowError(AdCPAdapterError):
+    """Workflow-step orchestration failed inside an adapter (502 → SERVICE_UNAVAILABLE).
+
+    Carries the WORKFLOW_CREATION_FAILED taxonomy as the class identity so
+    logs/audit retain the specific failure mode while the wire shows the
+    standard SERVICE_UNAVAILABLE. Recovery=transient (inherited): the
+    workflow subsystem may succeed on retry.
+    """
+
+    _default_error_code: ClassVar[str] = "WORKFLOW_CREATION_FAILED"
+
+
+class AdCPLineItemError(AdCPAdapterError):
+    """Adapter line-item creation failed (502 → SERVICE_UNAVAILABLE).
+
+    Carries the LINE_ITEM_CREATION_FAILED taxonomy as the class identity;
+    same rationale as ``AdCPWorkflowError``.
+    """
+
+    _default_error_code: ClassVar[str] = "LINE_ITEM_CREATION_FAILED"
+
+
+class AdCPBulkUpdateError(AdCPAdapterError):
+    """A bulk update partially failed — N operations attempted, M failed (502 → SERVICE_UNAVAILABLE).
+
+    Unifies the cross-adapter partial-failure event under one class and one
+    status (502) so REST clients filtering on HTTP status don't fork by
+    adapter (previously broadstreet raised 502, GAM raised 503 for the same
+    semantic event). Carries the PARTIAL_FAILURE taxonomy as the class
+    identity; per-operation detail (failed IDs, counts) belongs in ``details``
+    as data. Recovery=transient (inherited): failed operations may succeed
+    on retry.
+    """
+
+    _default_error_code: ClassVar[str] = "PARTIAL_FAILURE"
+
+
+class AdCPActivationWorkflowError(AdCPAdapterError):
+    """Adapter order/line-item activation workflow failed (502 → SERVICE_UNAVAILABLE).
+
+    Distinct from ``AdCPWorkflowError`` (creation): this is the activation step
+    of an existing order. Carries the ACTIVATION_WORKFLOW_FAILED taxonomy as the
+    class identity; same wire mapping as the other adapter-workflow failures.
+    """
+
+    _default_error_code: ClassVar[str] = "ACTIVATION_WORKFLOW_FAILED"
+
+
+class AdCPGamUpdateError(AdCPAdapterError):
+    """A GAM line-item update API call failed (502 → SERVICE_UNAVAILABLE).
+
+    Carries the GAM_UPDATE_FAILED taxonomy as the class identity; per-operation
+    detail (package_id, line_item_id) belongs in ``details`` as data.
+    """
+
+    _default_error_code: ClassVar[str] = "GAM_UPDATE_FAILED"
+
+
+class AdCPMediaBuyRejectedError(AdCPError):
+    """The seller declined the media buy (422 → POLICY_VIOLATION).
+
+    A business rejection, not a server failure: recovery=correctable so the
+    buyer can adjust the request and resubmit. Carries the MEDIA_BUY_REJECTED
+    taxonomy as the class identity; the wire code is the standard POLICY_VIOLATION.
+    """
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "MEDIA_BUY_REJECTED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPInventoryUnavailableError(AdCPError):
+    """Requested inventory is not available (422 → PRODUCT_UNAVAILABLE).
+
+    recovery=correctable: the buyer can select different inventory. Carries the
+    INVENTORY_UNAVAILABLE taxonomy as the class identity; the wire code is the
+    standard PRODUCT_UNAVAILABLE.
+    """
+
+    _default_status_code: ClassVar[int] = 422
+    _default_error_code: ClassVar[str] = "INVENTORY_UNAVAILABLE"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
 # ---------------------------------------------------------------------------
 # Two-layer envelope serializer — single source of truth for wire shape.
 # ---------------------------------------------------------------------------
 # All three boundary translators (MCP, A2A, REST) and
-# ContextManager.fail_workflow_step_for_exception call this so wire
+# ContextManager.audit_workflow_step_failure call this so wire
 # responses and persisted workflow_step.response_data share the same
 # two-layer shape. _impl functions never build wire shape; they raise
 # AdCPError subclasses and the boundary translator runs this.

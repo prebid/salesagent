@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ render on 2026-06-04T09:53:12Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-011 Manage Accounts
   As a Buyer
@@ -24,6 +24,7 @@ Feature: BR-UC-011 Manage Accounts
   Background:
     Given a Seller Agent is operational and accepting requests
     And a tenant is resolvable from the request context
+
 
 
   @T-UC-011-list-main @list @happy-path @post-s1 @post-s2 @post-s3 @partition @boundary
@@ -628,4 +629,78 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-209 INV-1: sandbox inputs validated same as production
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
+
+  @T-UC-011-sandbox-response-shape @sync @v3-1 @sandbox @invariant @partition @boundary
+  Scenario Outline: Account response reflects sandbox type for a <request_item> request item
+    Given the Buyer Agent has an authenticated connection
+    And the seller declares features.sandbox equals true in capabilities
+    When the Buyer Agent sends a sync_accounts request with idempotency_key "sandbox-shape-001" and a request item where sandbox is <request_item>
+    Then the response is a success variant with accounts array
+    And the per-account result sandbox field is "<response_field>"
+    # @bva sandbox: sandbox: true in response (sandbox account)
+    # @bva sandbox: sandbox: false in response (explicit production)
+    # @bva sandbox: sandbox absent in response (production account)
+    # @bva sandbox: sandbox omitted on sync_accounts request item
+    # BR-RULE-209 INV-4: sandbox accounts identifiable via sandbox: true; production accounts via false or absence
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/list-accounts-request.json
+
+    Examples:
+      | request_item | response_field |
+      | true         | true           |
+      | false        | false          |
+      | omitted      | absent         |
+
+  @T-UC-011-sandbox-capability-not-declared @sync @v3-1 @sandbox @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Sandbox provisioning requested when capability not declared is rejected
+    Given the Buyer Agent has an authenticated connection
+    And the seller does not declare features.sandbox in capabilities
+    When the Buyer Agent sends a sync_accounts request with idempotency_key "sandbox-nocap-001" and:
+    | brand.domain  | operator      | billing  | sandbox |
+    | acme-corp.com | acme-corp.com | operator | true    |
+    Then the account for brand domain "acme-corp.com" has action "failed"
+    And the per-account errors array contains an error describing that sandbox provisioning is not supported
+    And the error should include "suggestion" field with remediation guidance
+    # @bva sandbox: capability not declared, sandbox provisioning requested
+    # BR-RULE-209 INV-6: only a seller with features.sandbox: true supports sandbox provisioning
+    # POST-F1: no real or sandbox account created on failure
+
+  @T-UC-011-v31-error-account-setup-required @v3-1 @error-details @post-f1 @post-f2 @post-f3
+  Scenario: ACCOUNT_SETUP_REQUIRED carries v3.1 details shape (setup_url + setup_steps)
+    Given the Buyer Agent has an authenticated connection
+    And the tenant's account onboarding is incomplete (no billing entity attached)
+    When the Buyer Agent sends a sync_accounts request
+    Then the operation should fail
+    And the error code should be "ACCOUNT_SETUP_REQUIRED"
+    And the error "details" object should include "setup_url" matching a URI format
+    And the error "details" object should include "setup_steps" as a non-empty array of strings
+    # @bva status + setup (approval workflow): ACCOUNT_SETUP_REQUIRED details with setup_url + setup_steps
+    # v3.1: setup_url + setup_steps enable operator-side completion without re-querying
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/list-accounts-request.json
+
+  @T-UC-011-v31-error-conflict-version @v3-1 @error-details @concurrency @post-f1 @post-f2 @post-f3
+  Scenario: CONFLICT on sync_accounts carries v3.1 details shape (resource_id + expected/current version)
+    Given the Buyer Agent has an authenticated connection
+    And account "acct-001" is at version 12
+    And the Buyer Agent's last-read version of "acct-001" is 9
+    When the Buyer Agent sends a sync_accounts request updating "acct-001"
+    Then the operation should fail
+    And the error code should be "CONFLICT"
+    And the error "details" object should include "resource_id" with value "acct-001"
+    And the error "details" object should include "expected_version" with value 9
+    And the error "details" object should include "current_version" with value 12
+    # v3.1: CONFLICT details enable optimistic-concurrency retry on batch account sync
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/list-accounts-request.json
+
+  @T-UC-011-v31-error-idempotency-conflict @v3-1 @error-details @idempotency @ext-h @post-f1 @post-f2 @post-f3
+  Scenario: IDEMPOTENCY_CONFLICT on sync_accounts carries v3.1 details shape with ETag versions
+    Given idempotency_key "sync-acct-20260521-001" was previously used with a different accounts array
+    And the recorded ETag for that key is "W/\"etag-zzz\""
+    When the Buyer Agent re-sends sync_accounts with idempotency_key "sync-acct-20260521-001" but a modified accounts array
+    Then the operation should fail
+    And the error code should be "IDEMPOTENCY_CONFLICT"
+    And the error "details" object should include "current_version" with value "W/\"etag-zzz\""
+    And the error should include "suggestion" field with remediation guidance
+    # @bva idempotency_key: same key reused with a different accounts payload
+    # v3.1: ETag string form supported by current_version
+    # POST-F3: recovery suggestion (use a fresh idempotency_key or re-read current state) accompanies the conflict
 

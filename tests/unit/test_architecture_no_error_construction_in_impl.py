@@ -25,50 +25,36 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-# Per-file caps captured at substrate landing. The cleanup sweep drains these to zero.
-# Cannot be raised; only lowered. The guard fails if any file exceeds its cap
-# or if a new file shows up with Pattern A sites.
-#
-# Every entry below is a MIGRATION TARGET. Capped files may carry
-# ``# FIXME(salesagent-pattern-a): migrate to typed AdCPError raise`` comments
-# at the Error(code=...) sites to help reviewers grep to cleanup work, but
-# the cap dict + ratchet (`assert_caps_only_shrink`) is the actual
-# enforcement; the comments are aspirational.
-#
-# Legitimate per-item advisory Error(code=...) sites in success envelopes
-# (e.g., GetMediaBuysResponse.errors[]) live in this dict too — they're
-# allowlist-permanent, not migration targets. Their entries are marked with
-# an inline comment.
-# When cleanup sub-batches land, drop the relevant entry below to zero rather
-# than gradually lowering it — keep the cap honest.
-PATTERN_A_PER_FILE_CAP: dict[str, int] = {
-    "src/adapters/broadstreet/adapter.py": 13,
-    "src/adapters/google_ad_manager.py": 22,
-    "src/adapters/kevel.py": 5,
-    "src/adapters/triton_digital.py": 5,
-    "src/core/tools/accounts.py": 2,
-    "src/core/tools/media_buy_create.py": 1,  # principal-not-found AUTH_REQUIRED return (main's established contract)
-    "src/core/tools/media_buy_delivery.py": 5,
-    # Advisory Error() in success envelope (2 AUTH_REQUIRED + 1 TARGETING_REHYDRATION_FAILED).
-    # These are returned inside GetMediaBuysResponse.errors[] alongside successful media_buys[],
-    # not raised as fatal errors — legitimate per-item failure surface, allowlist-permanent.
-    "src/core/tools/media_buy_list.py": 3,
-    "src/core/tools/media_buy_update.py": 21,
-    "src/core/tools/signals.py": 3,
-}
+# Pattern A (``Error(code=...)`` construction in business logic) is fully drained:
+# the cap is empty, so any new site fails the guard immediately. The handful of
+# legitimate per-item advisory ``Error(code=...)`` sites in success envelopes
+# (e.g., ``GetMediaBuysResponse.errors[]``) carry an inline
+# ``# structural-guard:`` marker and are skipped by ``_count_pattern_a_sites``
+# — legitimacy is recorded at the site, not in this dict. A plain comment
+# (not a ruff suppression directive) is used so ruff does not parse it as a
+# malformed directive.
+PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
+
+_SKIP_MARKER = "# structural-guard:"
 
 from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
 from tests.unit._ast_helpers import rel as _rel
 
 
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
-    """Return line numbers of ``Error(code=...)`` literals in the file."""
+    """Return line numbers of ``Error(code=...)`` literals not marked for skip.
+
+    Sites carrying a ``# structural-guard:`` comment anywhere within the
+    call's line span are legitimate per-item advisory results in a success
+    envelope and are excluded.
+    """
     from tests.unit._ast_helpers import collect_error_aliases
 
     tree = safe_parse(filepath)
     if tree is None:
         return []
 
+    source_lines = filepath.read_text().splitlines()
     aliases = collect_error_aliases(tree)
     lines: list[int] = []
     for node in ast.walk(tree):
@@ -82,10 +68,13 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
             matched = True
         if not matched:
             continue
-        for kw in node.keywords:
-            if kw.arg == "code":
-                lines.append(node.lineno)
-                break
+        if not any(kw.arg == "code" for kw in node.keywords):
+            continue
+        start = node.lineno - 1
+        end = (getattr(node, "end_lineno", None) or node.lineno) - 1
+        if any(_SKIP_MARKER in source_lines[i] for i in range(start, min(end + 1, len(source_lines)))):
+            continue
+        lines.append(node.lineno)
     return lines
 
 

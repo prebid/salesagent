@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any, Union
 from fastmcp.server.context import Context
 
 if TYPE_CHECKING:
+    from adcp.types import ContextObject
+
+    from src.core.resolved_identity import ResolvedIdentity
     from src.core.tool_context import ToolContext
 from fastmcp.server.dependencies import get_http_headers
 from sqlalchemy import select
@@ -258,7 +261,6 @@ def get_principal_from_context(
             raise AdCPAuthenticationError(
                 f"Authentication token is invalid for tenant '{requested_tenant_id or 'any'}'. "
                 f"The token may be expired, revoked, or associated with a different tenant.",
-                details={"error_code": "INVALID_AUTH_TOKEN"},
             )
         else:
             # For discovery endpoints, treat invalid token like missing token
@@ -304,6 +306,96 @@ def get_principal_object(principal_id: str, tenant_id: str | None = None) -> Pri
                 platform_mappings=principal.platform_mappings,
             )
     return None
+
+
+def resolve_principal_or_raise(
+    principal_id: str,
+    *,
+    tenant_id: str | None = None,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> Principal:
+    """Resolve the Principal for ``principal_id`` or raise ``AdCPAuthenticationError``.
+
+    Collapses the identical "look up the principal, fail authentication if it
+    does not exist" guard shared by the create, update, and delivery media-buy
+    tools into one definition. ``context`` is echoed into the error envelope so
+    buyer agents can correlate the failure to their request.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    principal = get_principal_object(principal_id, tenant_id=tenant_id)
+    if principal is None:
+        raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=context)
+    return principal
+
+
+def require_principal_id(
+    identity: "ResolvedIdentity | None",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> str:
+    """Return ``identity.principal_id`` or raise ``AdCPAuthenticationError``.
+
+    Single source of truth for the "no principal_id in identity" guard that
+    every ``_impl`` runs at entry. Use this instead of open-coding the check
+    across tool modules. ``context`` is echoed into the error envelope so
+    buyer agents can correlate the failure to their request.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    principal_id = identity.principal_id if identity else None
+    if not principal_id:
+        raise AdCPAuthenticationError(
+            "Authentication required: Principal ID not found in identity. Provide a valid x-adcp-auth token.",
+            context=context,
+        )
+    return principal_id
+
+
+def require_tenant(
+    identity: "ResolvedIdentity | None",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> dict[str, Any]:
+    """Return ``identity.tenant`` or raise ``AdCPAuthenticationError``.
+
+    Single source of truth for the "no tenant context available" guard — the
+    most-repeated ``_impl`` prologue. Use this instead of open-coding the check
+    across tool modules. The canonical message carries the actionable
+    diagnostic (token + host headers) so buyer agents can self-correct.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    tenant = identity.tenant if identity else None
+    if not tenant:
+        raise AdCPAuthenticationError(
+            "No tenant context available. Check x-adcp-auth token and host headers.",
+            context=context,
+        )
+    return tenant
+
+
+def require_identity(
+    identity: "ResolvedIdentity | None",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> "ResolvedIdentity":
+    """Return the resolved identity or raise ``AdCPAuthRequiredError``.
+
+    Single source of truth for the "identity is required" guard every ``_impl``
+    runs at entry. Narrowing the return type lets callers drop the follow-up
+    ``assert identity is not None`` (which ``python -O`` strips) instead of
+    open-coding the check across tool modules.
+    """
+    from src.core.exceptions import AdCPAuthRequiredError
+
+    if identity is None:
+        raise AdCPAuthRequiredError(
+            "Identity is required",
+            context=context,
+            details={"suggestion": "Provide a valid authentication token"},
+        )
+    return identity
 
 
 def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:

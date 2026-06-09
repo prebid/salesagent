@@ -312,39 +312,65 @@ def then_adapter_execution_logged(ctx: dict) -> None:
 
 @then("the response should be returned within 15 seconds (p95)")
 def then_response_within_sla(ctx: dict) -> None:
-    """Assert response latency is within the 15s p95 SLA.
+    """Assert the request-path architecture supports the 15s p95 SLA.
 
-    Measures elapsed time of a call through the harness and asserts it
-    completes within 15 seconds. In test harness (mock adapter), this
-    always passes. The real SLA enforcement gap is tracked separately.
+    A single-call BDD harness cannot measure p95 latency. The controllable
+    latency risk is synchronous adapter I/O (GAM SOAP, etc.) blocking the
+    request thread. This step asserts:
+    1. The request completed successfully (full pipeline ran).
+    2. The adapter was not called synchronously on the request thread
+       (the actual SLA risk). Currently xfailed because production DOES
+       call adapter I/O in-line.
 
-    FIXME(salesagent-9vgz.92): Implement SLA enforcement or monitoring alert.
+    True p95 enforcement belongs in production monitoring/alerting.
+
+    FIXME(salesagent-9vgz.92): Move adapter I/O to background workers
+    so latency SLA is enforceable at the application layer.
     """
-    import time
-    from copy import deepcopy
+    import pytest
 
-    from src.core.schemas import CreateMediaBuyRequest
+    from src.core.schemas._base import CreateMediaBuySuccess
 
     env = ctx["env"]
 
-    # Verify the original request succeeded
-    resp = ctx.get("response")
+    # --- Part 1: Verify the original request completed successfully ---
     error = ctx.get("error")
-    assert resp is not None and error is None, f"Expected a successful response to measure latency, got error: {error}"
+    assert error is None, f"Expected a successful response to verify SLA, got error: {error}"
+    result = ctx.get("response")
+    assert result is not None, "No response recorded — the request did not complete"
+    assert result.status == "success", f"Expected status='success' (full pipeline completed), got '{result.status}'"
+    assert isinstance(result.response, CreateMediaBuySuccess), (
+        f"Expected CreateMediaBuySuccess, got {type(result.response).__name__}"
+    )
 
-    # Time a follow-up call to measure actual latency through the harness
-    request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
-    req = CreateMediaBuyRequest(**request_kwargs)
+    # Production-computed: media_buy_id proves the pipeline completed end-to-end
+    assert result.response.media_buy_id, (
+        "media_buy_id is empty — pipeline did not complete (fast error is not SLA compliance)"
+    )
+    # Production-computed: packages prove adapter + persistence completed
+    assert result.response.packages, "packages list is empty — adapter/persistence did not complete"
 
-    start = time.monotonic()
-    try:
-        env.call_impl(req=req)
-    except Exception:
-        pass  # Even if the call fails, we measured latency
-    elapsed = time.monotonic() - start
+    # --- Part 2: Assert no synchronous adapter I/O on request thread ---
+    # The controllable latency risk for p95 SLA is synchronous external
+    # calls (GAM SOAP, Kevel API) blocking the request thread. When
+    # adapters run in background workers, the adapter mock should NOT be
+    # called during the request cycle.
+    mock_adapter = env.mock["adapter"].return_value
+    adapter_called_sync = mock_adapter.create_media_buy.called
 
-    sla_seconds = 15.0
-    assert elapsed < sla_seconds, f"Response latency {elapsed:.2f}s exceeds {sla_seconds}s p95 SLA"
+    if adapter_called_sync:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: Adapter I/O runs synchronously on the "
+            "request thread. Architecture direction is to move adapter calls "
+            "to background workers and return 201 pending. Until then, p95 "
+            "SLA is not enforceable at the application layer. "
+            "FIXME(salesagent-9vgz.92)"
+        )
+
+    assert not adapter_called_sync, (
+        "Adapter.create_media_buy was called on the request thread — "
+        "synchronous adapter I/O is the primary latency risk for SLA compliance"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

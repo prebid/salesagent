@@ -4,11 +4,10 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
-import functools
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
@@ -105,6 +104,7 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
+from src.core.validation_helpers import first_validation_error_field
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -162,9 +162,10 @@ DISCOVERY_SKILLS = frozenset(
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical InternalError shape for non-skill A2A boundary failures.
 
-    The ``@_a2a_skill`` decorator standardised the wire-error prefix for the
-    14 skill handlers via the ``AdCPError`` ladder. Non-skill paths
-    (``on_message_send`` fallthrough, NL handlers) historically picked their
+    Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
+    dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
+    surface those as a two-layer envelope on a failed Task's DataPart. Non-skill
+    paths (``on_message_send`` fallthrough, NL handlers) historically picked their
     own prefixes (``"Message processing failed: "``, ``"Error in ..."``)
     for semantically identical untyped failures — divergence on the buyer-
     facing wire message for the same condition.
@@ -174,61 +175,19 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     below). The canonical prefix is ``"{operation} failed: {exc}"`` so
     storyboard runners can parse the failure uniformly.
 
-    Protocol-level RPC handlers (``on_get_task_push_notification_config``,
-    ``on_create_task_push_notification_config``,
-    ``on_list_task_push_notification_config``,
-    ``on_delete_task_push_notification_config``) deliberately use a
-    ``"Failed to {verb} push notification config: {exc}"`` shape — they are
-    JSON-RPC protocol methods, not async-task skill handlers, and follow
-    the JSON-RPC error convention rather than the skill-error convention.
-    Do not migrate those sites through this helper.
+    The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
+    this helper too — they have no async Task to carry a DataPart, so the two-layer
+    envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
+    / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
+    SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
+    a non-``A2AError`` (e.g. ``AdCPAdapterError``) would hit the dispatcher's
+    ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
+    envelope.
     """
-    return InternalError(message=f"{operation} failed: {exc}")
-
-
-def _a2a_skill(skill_name: str):
-    """Decorator: wrap a skill handler in the canonical AdCPError-passthrough +
-    untyped-Exception → AdCPError ladder.
-
-    Both branches re-raise into the AdCPError surface so the dispatcher's
-    ``except AdCPError`` branch in ``_handle_explicit_skill`` routes the
-    failure through ``_build_failed_skill_result`` → two-layer envelope on a
-    failed Task's DataPart. Wrapping the untyped path as ``InternalError``
-    instead would land at the dispatcher's earlier ``except A2AError``
-    branch, which re-raises into the JSON-RPC error surface — the buyer
-    would receive a JSON-RPC InternalError without an envelope code, while
-    a non-decorated handler raising the same untyped exception would
-    surface as a typed DataPart envelope. Wrapping as ``AdCPError`` keeps
-    decorated and non-decorated handlers symmetric on the wire; the wire
-    code translates to ``SERVICE_UNAVAILABLE`` via the standard
-    INTERNAL_CODES → ERROR_CODE_MAPPING rewrite.
-
-    Removes ~10 lines of try/except boilerplate per handler (~14 handlers)
-    and converges error prefixes — handlers previously picked their own
-    ("Unable to retrieve", "Failed to", "Error in") for semantically
-    identical failures.
-    """
-
-    def decorator(handler):
-        @functools.wraps(handler)
-        async def wrapper(self, *args, **kwargs):
-            try:
-                return await handler(self, *args, **kwargs)
-            except AdCPError:
-                # Let dispatcher translate to wire envelope.
-                raise
-            except A2AError:
-                # JSON-RPC protocol errors (InvalidParamsError, TaskNotFoundError,
-                # etc.) flow through unchanged so the dispatcher's `except A2AError`
-                # branch re-raises them as JSON-RPC errors.
-                raise
-            except Exception as e:
-                logger.error(f"Error in {skill_name} skill: {e}", exc_info=True)
-                raise AdCPError(f"{skill_name} skill handler failed: {e}") from e
-
-        return wrapper
-
-    return decorator
+    return InternalError(
+        message=f"{operation} failed: {exc}",
+        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
+    )
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -264,13 +223,13 @@ class AdCPRequestHandler(RequestHandler):
 
         Both the typed-AdCPError branch and the untyped fallthrough land here so
         the artifact DataPart always carries a spec-compliant two-layer envelope
-        — never a flat ``{"error": "..."}`` dict.
+        under ``error_envelope`` — the single source of truth on the wire, never a
+        flat ``{"error": "..."}`` dict. Callers needing the human-readable message
+        read ``error_envelope["errors"][0]["message"]``.
         """
-        envelope = AdCPRequestHandler._build_error_envelope(exc)
         return {
             "skill": skill_name,
-            "error": envelope["errors"][0]["message"],
-            "error_envelope": envelope,
+            "error_envelope": AdCPRequestHandler._build_error_envelope(exc),
             "success": False,
         }
 
@@ -409,7 +368,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tenant_id,
             )
         except Exception as e:
-            logger.warning(f"Failed to log A2A operation: {e}")
+            logger.warning("Failed to log A2A operation: %s", e)
 
     async def _send_protocol_webhook(
         self,
@@ -460,7 +419,7 @@ class AdCPRequestHandler(RequestHandler):
                 status_enum = GeneratedTaskStatus(status)
             except ValueError:
                 # Fallback for unknown status values
-                logger.warning(f"Unknown status '{status}', defaulting to 'working'")
+                logger.warning("Unknown status '%s', defaulting to 'working'", status)
                 status_enum = GeneratedTaskStatus.working
 
             # Build result data for the webhook payload
@@ -491,7 +450,7 @@ class AdCPRequestHandler(RequestHandler):
             )
         except Exception as e:
             # Don't fail the task if webhook fails
-            logger.warning(f"Failed to send protocol-level webhook for task {task.id}: {e}")
+            logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
 
     def _reconstruct_response_object(self, skill_name: str, data: dict) -> Any:
         """Reconstruct a response object from skill result data to call __str__().
@@ -553,7 +512,7 @@ class AdCPRequestHandler(RequestHandler):
             if response_class:
                 return response_class(**data)
         except Exception as e:
-            logger.debug(f"Could not reconstruct response object for {skill_name}: {e}")
+            logger.debug("Could not reconstruct response object for %s: %s", skill_name, e)
         return None
 
     async def on_message_send(
@@ -574,7 +533,7 @@ class AdCPRequestHandler(RequestHandler):
         Returns:
             Task object or Message response
         """
-        logger.info(f"Handling message/send request: {params}")
+        logger.info("Handling message/send request: %s", params)
 
         # Parse message for both text and structured data parts
         message = params.message
@@ -673,7 +632,7 @@ class AdCPRequestHandler(RequestHandler):
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
                     parameters = invocation["parameters"]
-                    logger.info(f"Processing explicit skill: {skill_name} with parameters: {parameters}")
+                    logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
 
                     try:
                         result = await self._handle_explicit_skill(
@@ -704,7 +663,20 @@ class AdCPRequestHandler(RequestHandler):
                         # Untyped fallthrough — same envelope shape as the AdCPError
                         # branch so storyboard runners can `JSON.parse` the DataPart
                         # uniformly regardless of which branch caught the failure.
-                        logger.error(f"Error in explicit skill {skill_name}: {e}", exc_info=True)
+                        # Route through the canonical boundary hook (ERROR + exc_info
+                        # for untyped failures, plus activity-feed + audit) so untyped
+                        # A2A skill failures land on the same observability surface as
+                        # MCP/REST and the typed path. The typed
+                        # (AdCPError/ValueError/PermissionError) failures were already
+                        # recorded inside _handle_explicit_skill, so this only fires for
+                        # genuinely-unexpected exceptions that escaped it.
+                        record_boundary_error(
+                            "a2a",
+                            skill_name,
+                            e,
+                            tenant_id=getattr(identity, "tenant_id", None),
+                            principal_id=getattr(identity, "principal_id", None) or "anonymous",
+                        )
                         results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
@@ -728,12 +700,18 @@ class AdCPRequestHandler(RequestHandler):
                     if res["success"]:
                         artifact_data = res["result"]
                     elif "error_envelope" in res:
-                        # AdCPError path: surface the full two-layer envelope as
+                        # Failure path: surface the full two-layer envelope as
                         # the DataPart so the storyboard runner / harness can
                         # read either ``adcp_error.code`` or ``errors[0].code``.
                         artifact_data = res["error_envelope"]
                     else:
-                        artifact_data = {"error": res["error"]}
+                        # Every failure result comes from _build_failed_skill_result,
+                        # which always sets error_envelope. A failed result without it
+                        # is a contract violation — fail loud rather than silently emit
+                        # the legacy flat ``{"error": ...}`` shape.
+                        raise AdCPError(
+                            f"Skill result for {res.get('skill', '?')!r} is marked failed but carries no error_envelope"
+                        )
 
                     # Generate human-readable text from response __str__()
                     # Per A2A spec, use TextPart + DataPart pattern (not description field)
@@ -769,7 +747,9 @@ class AdCPRequestHandler(RequestHandler):
                     task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
 
                     # Send protocol-level webhook notification for failure
-                    error_messages = [res.get("error", "Unknown error") for res in results if not res["success"]]
+                    error_messages = [
+                        res["error_envelope"]["errors"][0]["message"] for res in results if not res["success"]
+                    ]
                     await self._send_protocol_webhook(task, status="failed", error="; ".join(error_messages))
 
                     return task
@@ -815,7 +795,7 @@ class AdCPRequestHandler(RequestHandler):
                             log_details,
                         )
                     except Exception as e:
-                        logger.warning(f"Could not log skill invocations: {e}")
+                        logger.warning("Could not log skill invocations: %s", e)
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
@@ -1008,7 +988,7 @@ class AdCPRequestHandler(RequestHandler):
             await self._send_protocol_webhook(task, status="failed")
 
             # Raise A2A error instead of creating failed task
-            raise _internal_error_for("Message processing", e)
+            raise _internal_error_for("message processing", e)
 
         self.tasks[task_id] = task
         return task
@@ -1150,7 +1130,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise InternalError(message=f"Failed to get push notification config: {str(e)}")
+            raise _internal_error_for("get push notification config", e) from e
 
     async def on_create_task_push_notification_config(
         self,
@@ -1225,7 +1205,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise InternalError(message=f"Failed to set push notification config: {str(e)}")
+            raise _internal_error_for("set push notification config", e) from e
 
     async def on_list_task_push_notification_configs(
         self,
@@ -1269,7 +1249,7 @@ class AdCPRequestHandler(RequestHandler):
                 for snap_id, snap_url, snap_auth_type, snap_auth_token, snap_validation_token in config_snapshots
             ]
 
-            logger.info(f"Listed {len(configs_list)} push notification configs for tenant {tool_context.tenant_id}")
+            logger.info("Listed %s push notification configs for tenant %s", len(configs_list), tool_context.tenant_id)
 
             return ListTaskPushNotificationConfigsResponse(configs=configs_list)
 
@@ -1283,7 +1263,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise InternalError(message=f"Failed to list push notification configs: {str(e)}")
+            raise _internal_error_for("list push notification configs", e) from e
 
     async def on_delete_task_push_notification_config(
         self,
@@ -1315,7 +1295,7 @@ class AdCPRequestHandler(RequestHandler):
                 if not deleted:
                     raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
 
-            logger.info(f"Deleted push notification config: {config_id} for tenant {tool_context.tenant_id}")
+            logger.info("Deleted push notification config: %s for tenant %s", config_id, tool_context.tenant_id)
             return None
 
         except A2AError:
@@ -1328,7 +1308,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise InternalError(message=f"Failed to delete push notification config: {str(e)}")
+            raise _internal_error_for("delete push notification config", e) from e
 
     async def on_get_extended_agent_card(
         self,
@@ -1416,14 +1396,17 @@ class AdCPRequestHandler(RequestHandler):
         compat_result = normalize_request_params(skill_name, parameters)
         parameters = compat_result.params
 
-        logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
+        logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
         # Validate identity for non-discovery skills
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(message="Authentication required for skill invocation")
 
-        # Map skill names to handlers
-        skill_handlers = {
+        # Map skill names to handlers. Handler signatures are heterogeneous
+        # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
+        # require non-None), so the dispatch is typed dynamically — the non-discovery
+        # guard above enforces a non-None identity before the call.
+        skill_handlers: dict[str, Callable[..., Awaitable[Any]]] = {
             # Core AdCP Discovery Skills
             "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
             # Core AdCP Media Buy Skills
@@ -1491,7 +1474,6 @@ class AdCPRequestHandler(RequestHandler):
         # at the call site, which routes them through `_build_failed_skill_result`
         # for uniform envelope shape. No catch-all here.
 
-    @_a2a_skill("get_products")
     async def _handle_get_products_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_products skill invocation.
 
@@ -1530,7 +1512,6 @@ class AdCPRequestHandler(RequestHandler):
             response_data.setdefault("success", True)
         return apply_version_compat("get_products", response_data, adcp_version)
 
-    @_a2a_skill("create_media_buy")
     async def _handle_create_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1589,7 +1570,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             req = CreateMediaBuyRequest.model_validate(params)
         except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}") from e
+            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1610,13 +1591,12 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("sync_creatives")
     async def _handle_sync_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""
         # DEBUG: Log incoming parameters
-        logger.info(f"[A2A sync_creatives] Received parameters keys: {list(parameters.keys())}")
-        logger.info(f"[A2A sync_creatives] assignments param: {parameters.get('assignments')}")
-        logger.info(f"[A2A sync_creatives] creatives count: {len(parameters.get('creatives', []))}")
+        logger.info("[A2A sync_creatives] Received parameters keys: %s", list(parameters.keys()))
+        logger.info("[A2A sync_creatives] assignments param: %s", parameters.get("assignments"))
+        logger.info("[A2A sync_creatives] creatives count: %s", len(parameters.get("creatives", [])))
 
         # Create ToolContext from A2A auth info and resolve identity
         tool_context = self._make_tool_context(identity, "sync_creatives")
@@ -1659,7 +1639,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("list_creatives")
     async def _handle_list_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit list_creatives skill invocation (AdCP spec endpoint)."""
         # Create ToolContext from A2A auth info and resolve identity
@@ -1684,7 +1663,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("create_creative")
     async def _handle_create_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit create_creative skill invocation."""
         tool_context = self._make_tool_context(identity, "create_creative")
@@ -1705,7 +1683,6 @@ class AdCPRequestHandler(RequestHandler):
         # response = core_create_creative_tool(...)
         raise UnsupportedOperationError(message="create_creative skill not yet implemented")
 
-    @_a2a_skill("get_creatives")
     async def _handle_get_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_creatives skill invocation."""
         tool_context = self._make_tool_context(identity, "get_creatives")
@@ -1722,7 +1699,6 @@ class AdCPRequestHandler(RequestHandler):
         # )
         raise UnsupportedOperationError(message="get_creatives skill not yet implemented")
 
-    @_a2a_skill("assign_creative")
     async def _handle_assign_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit assign_creative skill invocation."""
         tool_context = self._make_tool_context(identity, "assign_creative")
@@ -1766,7 +1742,6 @@ class AdCPRequestHandler(RequestHandler):
         """Handle explicit optimize_media_buy skill invocation."""
         raise UnsupportedOperationError(message="optimize_media_buy skill not yet implemented")
 
-    @_a2a_skill("get_adcp_capabilities")
     async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
 
@@ -1786,7 +1761,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("list_creative_formats")
     async def _handle_list_creative_formats_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_creative_formats skill invocation (CRITICAL AdCP endpoint).
 
@@ -1817,7 +1791,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("list_accounts")
     async def _handle_list_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_accounts skill invocation.
 
@@ -1834,7 +1807,6 @@ class AdCPRequestHandler(RequestHandler):
         )
         return core_list_accounts_tool(req=request, identity=identity)
 
-    @_a2a_skill("sync_accounts")
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit sync_accounts skill invocation.
 
@@ -1850,7 +1822,6 @@ class AdCPRequestHandler(RequestHandler):
         )
         return await core_sync_accounts_tool(req=request, identity=identity)
 
-    @_a2a_skill("list_authorized_properties")
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None
     ) -> Any:
@@ -1881,7 +1852,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("update_media_buy")
     async def _handle_update_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_media_buy skill invocation (CRITICAL for campaign management)."""
         # Identity already resolved at transport boundary (on_message_send)
@@ -1898,9 +1868,13 @@ class AdCPRequestHandler(RequestHandler):
             if isinstance(legacy_updates, dict) and "packages" in legacy_updates:
                 params["packages"] = legacy_updates["packages"]
 
-        # media_buy_id is required
+        # media_buy_id is required. Raise typed AdCPValidationError so the dispatcher
+        # routes it through the two-layer envelope, matching the create_media_buy skill.
         if "media_buy_id" not in params:
-            raise InvalidParamsError(message="Missing required parameter: 'media_buy_id'")
+            raise AdCPValidationError(
+                "Missing required parameter: media_buy_id",
+                suggestion="Provide the media_buy_id of the media buy to update",
+            )
 
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')
@@ -1913,7 +1887,7 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
         except ValidationError as e:
-            raise InvalidParamsError(message=f"Invalid parameters: {e}")
+            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields + raw nested structures and identity
         response = core_update_media_buy_tool(
@@ -1930,7 +1904,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("get_media_buys")
     async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> Any:
         """Handle get_media_buys skill invocation."""
         from src.core.schemas import GetMediaBuysRequest
@@ -1943,7 +1916,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("get_media_buy_delivery")
     async def _handle_get_media_buy_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_delivery skill invocation (CRITICAL for monitoring).
 
@@ -1991,7 +1963,6 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
-    @_a2a_skill("update_performance_index")
     async def _handle_update_performance_index_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
         # Identity already resolved at transport boundary (on_message_send)
@@ -2005,7 +1976,7 @@ class AdCPRequestHandler(RequestHandler):
             req = UpdatePerformanceIndexRequest.model_validate(parameters)
         except ValidationError as e:
             # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            raise AdCPValidationError(f"Invalid parameters: {e}") from e
+            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(

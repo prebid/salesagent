@@ -18,7 +18,6 @@ from src.core.exceptions import (
     AdCPAccountSetupRequiredError,
     AdCPAccountSuspendedError,
     AdCPAuthorizationError,
-    AdCPNotFoundError,
 )
 from src.core.resolved_identity import ResolvedIdentity
 
@@ -58,7 +57,10 @@ def resolve_account(
     if isinstance(inner, AccountReferenceByNaturalKey):
         return _resolve_by_natural_key(inner, identity, repo)
 
-    raise AdCPNotFoundError(f"Unsupported AccountReference variant: {type(inner)}")
+    # Unreachable: AccountReference is a closed two-variant union validated by
+    # Pydantic upstream. A fresh variant reaching here is an internal contract
+    # violation, not a buyer-facing not-found — raise ValueError, not AdCPError.
+    raise ValueError(f"Unsupported AccountReference variant: {type(inner)}")
 
 
 def _check_account_status(account_id: str, status: str | None) -> None:
@@ -114,7 +116,7 @@ def _resolve_by_natural_key(
     brand_domain = ref.brand.domain
     brand_id = None
     if ref.brand.brand_id is not None:
-        brand_id = str(ref.brand.brand_id.root) if hasattr(ref.brand.brand_id, "root") else str(ref.brand.brand_id)
+        brand_id = str(ref.brand.brand_id.root)
 
     # Single query: fetch up to 2 matches for ambiguity detection
     matches = repo.list_by_natural_key(

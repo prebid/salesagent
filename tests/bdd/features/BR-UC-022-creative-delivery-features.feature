@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-022 Creative Delivery & Features
   As a Buyer
@@ -71,12 +71,13 @@ Feature: BR-UC-022 Creative Delivery & Features
     Then the response includes pagination with limit, offset, has_more, and optional total
     And the creatives array contains at most 10 entries
 
-  @T-UC-022-main-delivery-buyer-ref @main-flow @get-delivery @happy-path @post-s1
+  @T-UC-022-main-delivery-buyer-ref @main-flow @get-delivery @happy-path @post-s1 @deprecated
   Scenario: Get creative delivery -- scoped by buyer reference
     Given media buy with buyer_ref "campaign-spring-2026" exists with creative delivery data
     When the Buyer Agent invokes get_creative_delivery with media_buy_buyer_refs ["campaign-spring-2026"]
     Then the response contains creative delivery data for the matching media buy
     # POST-S1: Buyer knows delivery performance
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-main-delivery-creative-ids @main-flow @get-delivery @happy-path @post-s1
   Scenario: Get creative delivery -- scoped by creative IDs
@@ -135,10 +136,36 @@ Feature: BR-UC-022 Creative Delivery & Features
     Then the response contains governance evaluation results scoped to the account context
     # POST-S6: Buyer knows evaluation results
 
+  @T-UC-022-features-billing @main-flow @get-features @v3-1 @billing @post-s9
+  Scenario Outline: Get creative features -- billing fields present only when billable and account supplied - <case>
+    Given the seller declares creative_features capability as true
+    And the governance agent <charges> for evaluation
+    When the Buyer Agent invokes get_creative_features with a valid creative_manifest and <account>
+    Then the response contains a results array of creative-feature-result objects
+    And the billing fields vendor_cost, pricing_option_id, currency, and consumption are <billing_presence>
+    # POST-S9: cost detail (vendor_cost as source of truth, consumption breakdown) appears only when
+    #          the governance evaluation is billable AND an account was supplied to bill against
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
+
+    Examples:
+      | case                       | charges         | account            | billing_presence |
+      | billable with account      | charges         | account "acct-001" | present          |
+      | billable without account   | charges         | no account         | absent           |
+      | non-billable with account  | does not charge | account "acct-001" | absent           |
+      | non-billable no account    | does not charge | no account         | absent           |
+
+  @T-UC-022-feature-policy-id @main-flow @get-features @v3-1 @post-s6
+  Scenario: Creative features -- feature result carries reserved policy_id attribution
+    Given the seller declares creative_features capability as true
+    And the governance agent returns a result with policy_id "policy-brand-safety-v2"
+    When the Buyer Agent invokes get_creative_features with a valid creative_manifest
+    Then the result includes an optional policy_id attributing the evaluation to a policy entry
+    # POST-S6: result attribution is available via policy_id (reserved attribution, 3.1+)
+
   @T-UC-022-ext-a @extension @ext-a @error @get-delivery @post-f1 @post-f2 @post-f3
   Scenario: Creative delivery fails -- no scoping filters provided
     Given no scoping filters are included in the delivery request
-    When the Buyer Agent invokes get_creative_delivery without media_buy_ids, media_buy_buyer_refs, or creative_ids
+    When the Buyer Agent invokes get_creative_delivery without media_buy_ids or creative_ids
     Then the operation should fail
     And the error code should be "SCOPING_FILTER_REQUIRED"
     And the error message should contain "at least one scoping filter"
@@ -147,7 +174,8 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the suggestion should contain "media_buy_ids"
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows at least one scoping filter is required
-    # POST-F3: Buyer knows to provide media_buy_ids, media_buy_buyer_refs, or creative_ids
+    # POST-F3: Buyer knows to provide media_buy_ids or creative_ids
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-ext-a-empty @extension @ext-a @error @get-delivery @post-f1 @post-f2 @post-f3
   Scenario: Creative delivery fails -- scoping filter present but empty array
@@ -177,7 +205,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     # POST-F2: Buyer knows which media buy identifiers could not be resolved
     # POST-F3: Buyer knows to verify media buy IDs
 
-  @T-UC-022-ext-b-ref @extension @ext-b @error @get-delivery @post-f1 @post-f2 @post-f3
+  @T-UC-022-ext-b-ref @extension @ext-b @error @get-delivery @post-f1 @post-f2 @post-f3 @deprecated
   Scenario: Creative delivery fails -- media buy not found by buyer reference
     Given buyer reference "ref-nonexistent" does not resolve to any media buy
     When the Buyer Agent invokes get_creative_delivery with media_buy_buyer_refs ["ref-nonexistent"]
@@ -366,7 +394,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the governance agent does not support feature "nonexistent_metric"
     When the Buyer Agent invokes get_creative_features with feature_ids ["nonexistent_metric"]
     Then the operation should fail
-    And the error code should be "FEATURE_NOT_SUPPORTED"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error message should contain "feature"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -374,6 +402,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows which feature_ids are not evaluable
     # POST-F3: Buyer knows to omit the filter or check capabilities
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-ext-i-cap @extension @ext-i @error @get-features @post-f1 @post-f2 @post-f3
   Scenario: Creative features fails -- creative_features capability not declared
@@ -395,7 +424,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the governance agent is unavailable or times out
     When the Buyer Agent invokes get_creative_features with a valid creative_manifest
     Then the operation should fail
-    And the error code should be "GOVERNANCE_AGENT_UNAVAILABLE"
+    And the error code should be "GOVERNANCE_UNAVAILABLE"
     And the error message should contain "governance"
     And the error recovery should be "transient"
     And the error should include "retry_after" field
@@ -411,7 +440,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the ad server adapter is unavailable or times out
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-015"]
     Then the operation should fail
-    And the error code should be "ADAPTER_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error message should contain "adapter"
     And the error recovery should be "transient"
     And the error should include "retry_after" field
@@ -624,10 +653,8 @@ Feature: BR-UC-022 Creative Delivery & Features
     Examples: Valid partitions
       | partition             | filter_config                                                                                            | outcome                                         |
       | single_media_buy_ids  | {"media_buy_ids": ["mb-001"]}                                                                            | success with delivery data                       |
-      | single_buyer_refs     | {"media_buy_buyer_refs": ["buyer-ref-001"]}                                                              | success with delivery data                       |
       | single_creative_ids   | {"creative_ids": ["cr-001"]}                                                                             | success with delivery data                       |
       | dual_filters          | {"media_buy_ids": ["mb-001"], "creative_ids": ["cr-001"]}                                                | success with delivery data                       |
-      | all_filters           | {"media_buy_ids": ["mb-001"], "media_buy_buyer_refs": ["ref-1"], "creative_ids": ["cr-001"]}             | success with delivery data                       |
 
     Examples: Invalid partitions
       | partition     | filter_config                  | outcome                                                            |
@@ -645,8 +672,7 @@ Feature: BR-UC-022 Creative Delivery & Features
       | zero filters present                              | {"start_date": "2026-01-01"}                                                                             | error "SCOPING_FILTER_REQUIRED" with suggestion                    |
       | one filter with exactly one element               | {"media_buy_ids": ["mb-001"]}                                                                            | success with delivery data                                         |
       | one filter with empty array []                    | {"media_buy_ids": []}                                                                                    | error "SCOPING_FILTER_EMPTY" with suggestion                       |
-      | all three filters each with one element           | {"media_buy_ids": ["mb-001"], "media_buy_buyer_refs": ["ref-1"], "creative_ids": ["cr-001"]}             | success with delivery data                                         |
-      | two filters present, one absent                   | {"media_buy_ids": ["mb-001"], "creative_ids": ["cr-001"]}                                                | success with delivery data                                         |
+      | both scoping filters present                      | {"media_buy_ids": ["mb-001"], "creative_ids": ["cr-001"]}                                                | success with delivery data                                         |
 
   @T-UC-022-partition-truncation @partition @variant_truncation
   Scenario Outline: Variant truncation partition validation - <partition>
@@ -786,6 +812,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with feature_ids []
     Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
     And the error message should contain "feature_ids"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -817,15 +844,18 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given media buy "mb-063" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-063"] and pagination max_results 0
     Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
     And the error message should contain "max_results"
     And the error should include "suggestion" field
     And the suggestion should contain "1"
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
 
   @T-UC-022-pagination-over @boundary @get-delivery @error
   Scenario: Creative delivery fails -- pagination max_results above maximum
     Given media buy "mb-064" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-064"] and pagination max_results 101
     Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
     And the error message should contain "max_results"
     And the error should include "suggestion" field
     And the suggestion should contain "100"
@@ -867,4 +897,35 @@ Feature: BR-UC-022 Creative Delivery & Features
       | format_id with width=1, height=1 (minimum dimensions) | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 1, "height": 1}, "assets": {"img": {}}}             | success                                                         |
       | format_id with width=0 (below minimum)              | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 0, "height": 0}, "assets": {"img": {}}}               | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
       | format_id with width but no height                  | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 300}, "assets": {"img": {}}}                          | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
+
+  @T-UC-022-creative-rejected-details @v3-1 @error-details @creative-rejected
+  Scenario: get_creative_features error branch carries CREATIVE_REJECTED details
+    Given the request targets a production account
+    And a creative_manifest that is refused by the publisher's governance review
+    When the Buyer Agent calls get_creative_features
+    Then the response should be the error branch of the oneOf
+    And the error code should be "CREATIVE_REJECTED"
+    And the error details should include policy_id and a non-empty reasons array
+    And the error details should include a policy_url where the full policy can be reviewed
+    # POST-F2: rejection rationale is structured, not free text
+    # POST-F3: buyer knows which policy to consult before re-submitting
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
+
+  @T-UC-022-creative-rejected-policy-url-format @v3-1 @error-details @creative-rejected
+  Scenario: CREATIVE_REJECTED policy_url is a syntactically valid URI
+    Given the request targets a production account
+    And a creative_manifest that is refused by the publisher's governance review
+    When the Buyer Agent calls get_creative_features
+    Then the error code should be "CREATIVE_REJECTED"
+    And the error details policy_url should be a syntactically valid URI
+    # POST-F3: policy_url is dereferenceable so the buyer can review
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
+
+  @T-UC-022-creative-rejected-delivery-not-applicable @v3-1 @error-details @creative-rejected
+  Scenario: get_creative_delivery does not raise CREATIVE_REJECTED
+    Given the request targets a production account
+    And delivery is being reported for an already-served creative
+    When the Buyer Agent calls get_creative_delivery
+    Then the response should never carry an error with code "CREATIVE_REJECTED"
+    # CREATIVE_REJECTED is a pre-serve verdict; delivery reports refer to already-approved creatives
 

@@ -82,11 +82,15 @@ def test_update_media_buy_calls_auth_before_tenant():
     impl_end = source.find("\ndef ", impl_start + 1)
     impl_source = source[impl_start:impl_end] if impl_end != -1 else source[impl_start:]
 
-    # Verify identity.principal_id is accessed before identity.tenant
-    auth_pos = impl_source.find("identity.principal_id")
+    # Find first occurrence of principal extraction from identity. After the
+    # require_principal_id DRY migration the prologue calls the helper instead
+    # of accessing identity.principal_id directly; accept either marker.
+    auth_pos = impl_source.find("require_principal_id(")
+    if auth_pos == -1:
+        auth_pos = impl_source.find("identity.principal_id")
     tenant_pos = impl_source.find("identity.tenant")
 
-    assert auth_pos != -1, "identity.principal_id not found in _update_media_buy_impl"
+    assert auth_pos != -1, "principal-from-identity extraction not found in _update_media_buy_impl"
     assert tenant_pos != -1, "identity.tenant not found in _update_media_buy_impl"
 
     # Auth (identity.principal_id) must come before tenant access
@@ -107,8 +111,10 @@ def test_update_media_buy_calls_auth_before_tenant():
 def test_create_media_buy_has_correct_pattern_in_source():
     """Verify create_media_buy source code follows correct pattern.
 
-    With the ResolvedIdentity migration, _impl functions now access
-    identity.principal_id and use ensure_tenant_context() instead of get_current_tenant().
+    With the ResolvedIdentity migration, _impl functions extract the principal
+    from identity (via the require_principal_id helper or identity.principal_id)
+    and use ensure_tenant_context() instead of get_current_tenant(). Auth
+    extraction must precede tenant-context setup.
     """
     from pathlib import Path
 
@@ -126,11 +132,15 @@ def test_create_media_buy_has_correct_pattern_in_source():
         impl_end = source.find("\ndef ", impl_start + 1)
     impl_source = source[impl_start:impl_end] if impl_end != -1 else source[impl_start:]
 
-    # Find first occurrence of identity.principal_id (new pattern)
-    auth_pos = impl_source.find("identity.principal_id")
+    # Find first occurrence of principal extraction from identity. After the
+    # require_principal_id DRY migration (gh-1307) the prologue calls the helper
+    # instead of accessing identity.principal_id directly; accept either marker.
+    auth_pos = impl_source.find("require_principal_id(")
+    if auth_pos == -1:
+        auth_pos = impl_source.find("identity.principal_id")
 
-    # Both should be present
-    assert auth_pos != -1, "identity.principal_id not found in _create_media_buy_impl"
+    # Auth extraction must be present
+    assert auth_pos != -1, "principal-from-identity extraction not found in _create_media_buy_impl"
 
     # Check if ensure_tenant_context() is used; if so, identity access must come first
     tenant_pos = impl_source.find("ensure_tenant_context(")

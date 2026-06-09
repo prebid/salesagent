@@ -33,6 +33,28 @@ from src.services.webhook_delivery_service import (
 )
 
 
+def make_adapter_update_side_effect() -> Any:
+    """Return a side_effect for a mocked ``adapter.update_media_buy``.
+
+    Produces an ``UpdateMediaBuySuccess`` echoing the media_buy_id from the
+    call and a resolved ``implementation_date``, mirroring the mock adapter's
+    own ``update_media_buy`` return (mock_ad_server.update_media_buy). Used by
+    MediaBuyDualEnv to wire the update-path adapter mock.
+    """
+    from src.core.schemas._base import UpdateMediaBuySuccess
+
+    def _update_response(*args: Any, **kwargs: Any) -> UpdateMediaBuySuccess:
+        media_buy_id = kwargs.get("media_buy_id") or (args[0] if args else "")
+        today = kwargs.get("today") or datetime.now(UTC)
+        return UpdateMediaBuySuccess(
+            media_buy_id=media_buy_id,
+            affected_packages=[],
+            implementation_date=today,
+        )
+
+    return _update_response
+
+
 class DeliveryPollMixin:
     """Shared fluent API for delivery poll testing.
 

@@ -1,7 +1,7 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ render on 2026-06-04T09:53:13Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
-@analysis-2026-03-10 @schema-v3.0.0-rc.1
+@analysis-2026-03-10 @schema-v3.1
 Feature: BR-UC-026 Package Media Buy
   As a Buyer (via Buyer Agent)
   I want to configure packages within a media buy
@@ -13,7 +13,7 @@ Feature: BR-UC-026 Package Media Buy
   #   POST-S3: Buyer knows the format_ids active for the package (echoed from request or defaulted)
   #   POST-S4: Buyer knows the paused state of each package
   #   POST-S5: Buyer knows which format_ids still need creative assets (format_ids_to_provide)
-  #   POST-S6: Buyer knows that deduplication was applied when the same buyer_ref was resubmitted
+  #   POST-S6: [DEPRECATED v3.1 -- buyer_ref removed from package-request/package/package-update] Buyer knows that deduplication was applied when the same buyer_ref was resubmitted
   #   POST-F1: Buyer knows the operation failed
   #   POST-F2: Buyer knows what went wrong (error code and message)
   #   POST-F3: Buyer knows how to recover (suggestion and recovery classification)
@@ -24,6 +24,7 @@ Feature: BR-UC-026 Package Media Buy
     And the Buyer is authenticated with a valid principal_id
     And the seller has a product "prod-1" in inventory with pricing_options ["cpm-standard", "cpm-auction"]
     And the product "prod-1" supports format_ids ["banner-300x250", "banner-728x90"]
+
 
 
   @T-UC-026-main-mcp @main-flow @mcp @post-s1 @post-s2 @post-s3 @post-s4 @post-s5
@@ -120,17 +121,6 @@ Feature: BR-UC-026 Package Media Buy
     # POST-S2: Updated package state reflects new budget
     # POST-S4: Paused state unchanged
 
-  @T-UC-026-alt-update-buyer-ref @alt-flow @update @post-s2
-  Scenario: Update package budget via buyer_ref
-    Given the Buyer owns a media buy with a package identified by buyer_ref "pkg-my-ref"
-    And a valid update_media_buy request with package update:
-    | field      | value       |
-    | buyer_ref  | pkg-my-ref  |
-    | budget     | 6000        |
-    When the Buyer Agent sends the update_media_buy request
-    Then the response should contain the updated package with budget 6000
-    # POST-S2: Updated state reflects change
-
   @T-UC-026-alt-pause @alt-flow @pause @post-s4
   Scenario: Pause a running package
     Given the Buyer owns a media buy with an active package "pkg-001" (paused=false)
@@ -154,6 +144,49 @@ Feature: BR-UC-026 Package Media Buy
     Then the response should contain the package with paused=false
     And the package should resume delivering impressions
     # POST-S4: Paused state updated to false
+
+  @T-UC-026-alt-cancel @alt-flow @cancel @post-s7
+  Scenario: Cancel a package via canceled=true
+    Given the Buyer owns a media buy with an active package "pkg-001"
+    And a valid update_media_buy request with package update:
+    | field               | value                  |
+    | package_id          | pkg-001                |
+    | canceled            | true                   |
+    | cancellation_reason | campaign pulled by client |
+    When the Buyer Agent sends the update_media_buy request
+    Then the response should contain the package with canceled=true
+    And the package should contain a cancellation object with canceled_at set
+    And the package cancellation should contain canceled_by "buyer"
+    And the package should stop delivering impressions
+    # POST-S7: Buyer knows the package was canceled (canceled_at, canceled_by)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
+
+  @T-UC-026-alt-cancel-irreversible @alt-flow @cancel @post-f1 @post-f2 @post-f3
+  Scenario: Reactivating a canceled package is impossible -- canceled is const:true
+    Given the Buyer owns a media buy with a canceled package "pkg-001"
+    When the Buyer Agent attempts to send an update_media_buy request setting canceled=false on "pkg-001"
+    Then the request should be rejected as schema-invalid because canceled accepts only the constant true
+    # canceled is const:true in PackageUpdate -- un-cancellation cannot be expressed on the wire
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
+
+  @T-UC-026-ext-j @extension @ext-j @cancel @error @post-f1 @post-f2 @post-f3
+  Scenario: Seller rejects cancellation -- NOT_CANCELLABLE
+    Given the Buyer owns a media buy with a package "pkg-001" that has already settled
+    And a valid update_media_buy request with package update:
+    | field      | value   |
+    | package_id | pkg-001 |
+    | canceled   | true    |
+    When the Buyer Agent sends the update_media_buy request
+    Then the operation should fail
+    And the error code should be "NOT_CANCELLABLE"
+    And the error message should contain "cancel"
+    And the error should include "suggestion" field
+    And the suggestion should explain the condition blocking cancellation
+    And the error recovery should be "correctable"
+    And the package "pkg-001" should remain active with no cancellation state persisted
+    # POST-F1: Buyer knows the cancellation failed
+    # POST-F2: Error explains the package is not cancellable
+    # POST-F3: Suggestion advises the blocking condition / alternative
 
   @T-UC-026-alt-keyword-add @alt-flow @keyword @post-s2
   Scenario: Add new keyword targets via keyword_targets_add
@@ -219,30 +252,6 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response should succeed with package negative keywords unchanged
     # BR-RULE-202 INV-4: Non-matching negative keyword pair treated as no-op
-
-  @T-UC-026-alt-dedup @alt-flow @dedup @post-s1 @post-s6
-  Scenario: Duplicate buyer_ref returns existing package
-    Given the Buyer owns a media buy with a package having buyer_ref "pkg-001" and package_id "existing-pkg"
-    And a valid create_media_buy request with a package containing:
-    | field              | value        |
-    | buyer_ref          | pkg-001      |
-    | product_id         | prod-1       |
-    | budget             | 5000         |
-    | pricing_option_id  | cpm-standard |
-    When the Buyer Agent sends the create_media_buy request
-    Then the response should contain the existing package with package_id "existing-pkg"
-    And no duplicate package should be created
-    # POST-S1: Buyer receives existing package_id
-    # POST-S6: Deduplication applied
-
-  @T-UC-026-alt-dedup-crossbuy @alt-flow @dedup @invariant @BR-RULE-194
-  Scenario: Same buyer_ref in different media buy -- not a duplicate (INV-3 holds)
-    Given the Buyer owns media buy "mb-A" with a package having buyer_ref "pkg-001"
-    And the Buyer is creating a new media buy "mb-B"
-    And the create_media_buy request for "mb-B" includes a package with buyer_ref "pkg-001"
-    When the Buyer Agent sends the create_media_buy request for "mb-B"
-    Then a new package should be created in "mb-B" with a new package_id
-    # BR-RULE-194 INV-3: No cross-buy deduplication
 
   @T-UC-026-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Package references unknown product_id -- PRODUCT_NOT_FOUND
@@ -507,22 +516,6 @@ Feature: BR-UC-026 Package Media Buy
     # POST-F2: Error explains that a package identifier is required
     # POST-F3: Suggestion advises providing package_id or buyer_ref
 
-  @T-UC-026-inv-194-1 @invariant @BR-RULE-194
-  Scenario: INV-1 holds -- new buyer_ref creates new package
-    Given the Buyer is creating a media buy with no existing packages
-    And a valid create_media_buy request with a package containing buyer_ref "brand-new-ref"
-    When the Buyer Agent sends the create_media_buy request
-    Then a new package should be created with a seller-assigned package_id
-    # BR-RULE-194 INV-1: New buyer_ref creates new package
-
-  @T-UC-026-inv-194-2 @invariant @BR-RULE-194
-  Scenario: INV-2 holds -- duplicate buyer_ref returns existing package
-    Given the Buyer owns a media buy with a package having buyer_ref "pkg-001"
-    And a valid create_media_buy request resubmits buyer_ref "pkg-001" in the same media buy
-    When the Buyer Agent sends the create_media_buy request
-    Then the existing package should be returned without creating a duplicate
-    # BR-RULE-194 INV-2: Duplicate buyer_ref returns existing package
-
   @T-UC-026-inv-195-1 @invariant @BR-RULE-195
   Scenario: INV-1 holds -- valid pricing_option_id resolves successfully
     Given the product "prod-1" has pricing_option "cpm-standard" in its pricing_options array
@@ -729,7 +722,6 @@ Feature: BR-UC-026 Package Media Buy
 
     Examples: Invalid partitions
       | partition               | outcome                                                    |
-      | missing_buyer_ref       | error "INVALID_REQUEST" with suggestion                    |
       | missing_product_id      | error "INVALID_REQUEST" with suggestion                    |
       | missing_budget          | error "INVALID_REQUEST" with suggestion                    |
       | missing_pricing_option_id | error "INVALID_REQUEST" with suggestion                  |
@@ -746,7 +738,6 @@ Feature: BR-UC-026 Package Media Buy
       | all four required fields present with valid values    | success                                                    |
       | budget = 0 (minimum boundary)                         | success                                                    |
       | budget = -0.01 (below minimum)                        | error "INVALID_REQUEST" with suggestion                    |
-      | buyer_ref missing                                     | error "INVALID_REQUEST" with suggestion                    |
       | product_id missing                                    | error "INVALID_REQUEST" with suggestion                    |
       | budget missing                                        | error "INVALID_REQUEST" with suggestion                    |
       | pricing_option_id missing                             | error "INVALID_REQUEST" with suggestion                    |
@@ -782,35 +773,6 @@ Feature: BR-UC-026 Package Media Buy
       | bid_price absent (optional)                     | success                                    |
       | bid_price with max_bid=true pricing option      | success                                    |
       | bid_price with max_bid=false pricing option     | success                                    |
-
-  @T-UC-026-partition-buyer-ref @partition @buyer_ref
-  Scenario Outline: Buyer_ref deduplication partition validation -- <partition>
-    Given a create_media_buy request with buyer_ref per <partition>
-    When the Buyer Agent sends the create_media_buy request
-    Then the outcome should be <outcome>
-
-    Examples: Valid partitions
-      | partition               | outcome                                    |
-      | new_buyer_ref           | success with new package created            |
-      | duplicate_buyer_ref     | success with existing package returned      |
-      | same_ref_different_buy  | success with new package in different buy   |
-
-    Examples: Invalid partitions
-      | partition           | outcome                                    |
-      | buyer_ref_missing   | error "INVALID_REQUEST" with suggestion    |
-
-  @T-UC-026-boundary-buyer-ref @boundary @buyer_ref
-  Scenario Outline: Buyer_ref deduplication boundary validation -- <boundary_point>
-    Given a create_media_buy request with buyer_ref per boundary <boundary_point>
-    When the Buyer Agent sends the create_media_buy request
-    Then the outcome should be <outcome>
-
-    Examples: Boundary values
-      | boundary_point                                      | outcome                                    |
-      | first submission of buyer_ref in media buy          | success                                    |
-      | second submission of same buyer_ref in same media buy | success (existing returned)               |
-      | same buyer_ref in different media buy               | success (new package)                      |
-      | buyer_ref absent on create                          | error "INVALID_REQUEST" with suggestion    |
 
   @T-UC-026-partition-format-ids @partition @format_ids
   Scenario Outline: Format_ids partition validation -- <partition>

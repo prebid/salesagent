@@ -15,6 +15,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require_response
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
@@ -51,9 +52,9 @@ def _get_first_prop(ctx: dict) -> Any:
     product = ctx["first_product"]
     pp = product.publisher_properties
     assert pp is not None, "publisher_properties is None"
-    assert len(pp) >= 1, "publisher_properties is empty"
+    assert pp, "publisher_properties is empty"
     inner = pp[0]
-    return inner.root if hasattr(inner, "root") else inner
+    return inner.root
 
 
 # ── Given steps ─────────────────────────────────────────────────────
@@ -114,20 +115,24 @@ def given_profile_with_selection_type(ctx: dict, tags: str, domain: str, st: str
 
 @given(parsers.parse('an inventory profile with property_ids "{ids}" for domain "{domain}" and legacy fields'))
 def given_profile_legacy(ctx: dict, ids: str, domain: str) -> None:
-    """Create profile with property_ids plus legacy extra fields that should be stripped."""
+    """Create profile with property_ids plus legacy extra fields that are preserved."""
     tenant = ctx["tenant"]
+    legacy_fields = {
+        "property_name": "Legacy Name",
+        "property_type": "website",
+        "identifiers": ["old_id"],
+    }
     ctx["profile"] = InventoryProfileFactory(
         tenant=tenant,
         publisher_properties=[
             {
                 "publisher_domain": domain,
                 "property_ids": [ids],
-                "property_name": "Legacy Name",
-                "property_type": "website",
-                "identifiers": ["old_id"],
+                **legacy_fields,
             }
         ],
     )
+    ctx["expected_legacy_fields"] = legacy_fields
 
 
 @given("a product linked to that inventory profile with pricing")
@@ -154,12 +159,18 @@ def when_request_products(ctx: dict) -> None:
 
 @then("the response contains at least one product")
 def then_has_products(ctx: dict) -> None:
-    """Assert the response has at least one product."""
+    """Assert the response has exactly the product created in the Given step."""
     assert "error" not in ctx, f"Request failed: {ctx.get('error')}"
-    response = ctx["response"]
+    response = _require_response(ctx)
+    expected = ctx["product"]
     assert response.products is not None, "Response has no products"
-    assert len(response.products) >= 1, f"Expected >= 1 product, got {len(response.products)}"
-    ctx["first_product"] = response.products[0]
+    assert len(response.products) == 1, f"Expected 1 product, got {len(response.products)}"
+    actual = response.products[0]
+    assert actual.product_id == expected.product_id, (
+        f"Expected product_id={expected.product_id!r}, got {actual.product_id!r}"
+    )
+    assert actual.name == expected.name, f"Expected name={expected.name!r}, got {actual.name!r}"
+    ctx["first_product"] = actual
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))
@@ -200,3 +211,23 @@ def then_no_field(ctx: dict, field: str) -> None:
         assert field not in inner, f"Field {field!r} should not be present, got {inner}"
     else:
         assert not hasattr(inner, field), f"Field {field!r} should not be present on {type(inner).__name__}"
+
+
+@then("the first product publisher_properties preserves all legacy fields")
+def then_preserves_legacy_fields(ctx: dict) -> None:
+    """Assert all legacy fields injected in the Given step are preserved with their values.
+
+    The Given step records expected legacy fields in ctx["expected_legacy_fields"].
+    This step verifies each field is present on publisher_properties[0] with the
+    exact value that was injected, confirming ensure_selection_type() is non-destructive.
+    """
+    inner = _get_first_prop(ctx)
+    expected_legacy = ctx["expected_legacy_fields"]
+    assert expected_legacy, "No expected_legacy_fields recorded in ctx — Given step missing?"
+
+    for field_name, expected_value in expected_legacy.items():
+        if isinstance(inner, dict):
+            actual = inner.get(field_name)
+        else:
+            actual = getattr(inner, field_name, None)
+        assert actual == expected_value, f"Legacy field {field_name!r}: expected {expected_value!r}, got {actual!r}"

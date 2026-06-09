@@ -519,11 +519,8 @@ class TestUpdateMediaBuyCreativeAssignments:
                 }
             ],
         )
-        update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
-
-        assert hasattr(update_result, "errors") and update_result.errors
-        error_messages = " ".join(str(e).lower() for e in update_result.errors)
-        assert "placement" in error_messages or "not found" in error_messages or "invalid" in error_messages
+        with pytest.raises(AdCPValidationError, match="placement"):
+            _update_media_buy_impl(req=update_req, identity=mb_identity)
 
 
 # ---------------------------------------------------------------------------
@@ -797,12 +794,8 @@ class TestCreateMediaBuyPrincipalResolution:
         )
         req = _make_create_request()
 
-        result = await _create_media_buy_impl(req=req, identity=identity)
-
-        assert result.status == "failed"
-        assert hasattr(result.response, "errors")
-        error_messages = " ".join(e.message.lower() for e in result.response.errors)
-        assert "not found" in error_messages or "principal" in error_messages
+        with pytest.raises(AdCPAuthenticationError, match="nonexistent_principal_xyz"):
+            await _create_media_buy_impl(req=req, identity=identity)
 
 
 class TestCreateMediaBuyFullRoundtrip:

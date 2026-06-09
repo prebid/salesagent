@@ -7,7 +7,9 @@ and that unsupported actions return explicit errors (no silent failures).
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, Mock, patch
 
-from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuySuccess
+import pytest
+
+from src.core.schemas import UpdateMediaBuySuccess
 
 
 def test_update_package_budget_persists_to_database():
@@ -108,21 +110,17 @@ def test_update_package_budget_returns_error_when_package_not_found():
         mock_scalars.first.return_value = None
         mock_session.scalars.return_value = mock_scalars
 
-        # Call the actual method
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="update_package_budget",
-            package_id=package_id,
-            budget=new_budget,
-            today=datetime.now(UTC),
-        )
+        from src.core.exceptions import AdCPPackageNotFoundError
 
-        # Verify error response
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) == 1
-        assert result.errors[0].code == "PACKAGE_NOT_FOUND"
-        assert package_id in result.errors[0].message
+        with pytest.raises(AdCPPackageNotFoundError, match=package_id):
+            GoogleAdManager.update_media_buy(
+                mock_adapter,
+                media_buy_id=media_buy_id,
+                action="update_package_budget",
+                package_id=package_id,
+                budget=new_budget,
+                today=datetime.now(UTC),
+            )
 
         # Verify commit was NOT called (no changes to persist)
         mock_session.commit.assert_not_called()
@@ -140,21 +138,17 @@ def test_unsupported_action_returns_explicit_error():
     mock_adapter._is_admin_principal = Mock(return_value=False)
     mock_adapter._requires_manual_approval = Mock(return_value=False)
 
-    # Test an action that doesn't exist
-    result = GoogleAdManager.update_media_buy(
-        mock_adapter,
-        media_buy_id=media_buy_id,
-        action="delete_media_buy",  # Not supported
-        package_id=None,
-        budget=None,
-        today=datetime.now(),
-    )
+    from src.core.exceptions import AdCPCapabilityNotSupportedError
 
-    # Verify error response (not success!)
-    assert isinstance(result, UpdateMediaBuyError)
-    assert len(result.errors) == 1
-    assert result.errors[0].code == "UNSUPPORTED_FEATURE"
-    assert "delete_media_buy" in result.errors[0].message
+    with pytest.raises(AdCPCapabilityNotSupportedError, match="delete_media_buy"):
+        GoogleAdManager.update_media_buy(
+            mock_adapter,
+            media_buy_id=media_buy_id,
+            action="delete_media_buy",  # Not supported
+            package_id=None,
+            budget=None,
+            today=datetime.now(),
+        )
 
 
 def test_pause_resume_package_actions_work():
@@ -349,22 +343,147 @@ def test_update_package_budget_rejects_budget_below_delivery():
         mock_scalars.first.return_value = mock_package
         mock_session.scalars.return_value = mock_scalars
 
-        # Call the actual method
-        result = GoogleAdManager.update_media_buy(
-            mock_adapter,
-            media_buy_id=media_buy_id,
-            action="update_package_budget",
-            package_id=package_id,
-            budget=new_budget,
-            today=datetime.now(UTC),
-        )
+        from src.core.exceptions import AdCPBudgetExceededError
 
-        # Verify error response
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) == 1
-        assert result.errors[0].code == "BUDGET_EXCEEDED"
-        assert str(new_budget) in result.errors[0].message
-        assert str(current_spend) in result.errors[0].message
+        with pytest.raises(AdCPBudgetExceededError) as exc_info:
+            GoogleAdManager.update_media_buy(
+                mock_adapter,
+                media_buy_id=media_buy_id,
+                action="update_package_budget",
+                package_id=package_id,
+                budget=new_budget,
+                today=datetime.now(UTC),
+            )
+        msg = str(exc_info.value)
+        assert str(new_budget) in msg
+        assert str(current_spend) in msg
 
         # Verify commit was NOT called (budget rejected)
         mock_session.commit.assert_not_called()
+
+
+class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
+    """Drive the GAM update_media_buy raise sites for the adapter-taxonomy
+    classes so a class-swap at the site is caught.
+
+    test_typed_error_wire_codes.py pins each class -> wire-code mapping by
+    constructing the exception directly; here the production update_media_buy
+    branches are driven so removing the ``raise`` (or swapping it to a parent
+    like AdCPAdapterError) fails the test. The internal error_code asserted on
+    each class is the taxonomy code carried as class identity (logs/audit);
+    the wire collapses it to SERVICE_UNAVAILABLE, pinned separately.
+    """
+
+    @staticmethod
+    def _build_mock_adapter():
+        """A Mock(spec=GoogleAdManager) wired for the update_media_buy entry checks."""
+        from src.adapters.google_ad_manager import GoogleAdManager
+
+        mock_adapter = Mock(spec=GoogleAdManager)
+        mock_adapter.log = Mock()
+        mock_adapter.tenant_id = "tenant_test123"
+        mock_adapter._is_admin_principal = Mock(return_value=False)
+        mock_adapter._requires_manual_approval = Mock(return_value=False)
+        mock_adapter.workflow_manager = Mock()
+        mock_adapter.orders_manager = Mock()
+        return mock_adapter
+
+    def test_activate_order_guaranteed_workflow_failure_raises_activation_error(self):
+        """activate_order on a guaranteed order whose activation workflow step
+        fails to create raises AdCPActivationWorkflowError (ACTIVATION_WORKFLOW_FAILED)."""
+        from src.adapters.google_ad_manager import GoogleAdManager
+        from src.core.exceptions import AdCPActivationWorkflowError
+
+        mock_adapter = self._build_mock_adapter()
+        # Order has guaranteed items -> activation workflow path is taken.
+        mock_adapter._check_order_has_guaranteed_items = Mock(return_value=(True, ["STANDARD"]))
+        # Workflow step creation fails (returns falsy) -> production raises.
+        mock_adapter.workflow_manager.create_activation_workflow_step = Mock(return_value=None)
+
+        with pytest.raises(AdCPActivationWorkflowError) as exc_info:
+            GoogleAdManager.update_media_buy(
+                mock_adapter,
+                media_buy_id="mb_test123",
+                action="activate_order",
+                package_id=None,
+                budget=None,
+                today=datetime.now(UTC),
+            )
+
+        assert exc_info.value.error_code == "ACTIVATION_WORKFLOW_FAILED"
+
+    def test_update_package_budget_gam_sync_failure_raises_gam_update_error(self):
+        """A failed GAM line-item budget sync raises AdCPGamUpdateError (GAM_UPDATE_FAILED)."""
+        from src.adapters.google_ad_manager import GoogleAdManager
+        from src.core.exceptions import AdCPGamUpdateError
+
+        package_id = "pkg_test456"
+        mock_package = Mock()
+        mock_package.package_id = package_id
+        mock_package.package_config = {
+            "budget": 19000,
+            "platform_line_item_id": "123456",
+            "pricing": {"model": "cpm", "currency": "USD"},
+        }
+
+        mock_adapter = self._build_mock_adapter()
+        # GAM sync reports failure (returns falsy) -> production raises.
+        mock_adapter.orders_manager.update_line_item_budget = Mock(return_value=False)
+
+        with patch("src.core.database.database_session.get_db_session") as mock_db:
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_scalars = Mock()
+            mock_scalars.first.return_value = mock_package
+            mock_session.scalars.return_value = mock_scalars
+
+            with pytest.raises(AdCPGamUpdateError) as exc_info:
+                GoogleAdManager.update_media_buy(
+                    mock_adapter,
+                    media_buy_id="mb_test123",
+                    action="update_package_budget",
+                    package_id=package_id,
+                    budget=30000,
+                    today=datetime.now(UTC),
+                )
+
+            # Budget change must NOT be persisted when the GAM sync fails.
+            mock_session.commit.assert_not_called()
+
+        assert exc_info.value.error_code == "GAM_UPDATE_FAILED"
+
+    def test_pause_media_buy_partial_gam_failure_raises_bulk_update_error(self):
+        """When some line items fail to pause in GAM, the bulk operation raises
+        AdCPBulkUpdateError (PARTIAL_FAILURE)."""
+        from src.adapters.google_ad_manager import GoogleAdManager
+        from src.core.exceptions import AdCPBulkUpdateError
+
+        mock_pkg1 = Mock()
+        mock_pkg1.package_id = "pkg1"
+        mock_pkg1.package_config = {"platform_line_item_id": "111"}
+        mock_pkg2 = Mock()
+        mock_pkg2.package_id = "pkg2"
+        mock_pkg2.package_config = {"platform_line_item_id": "222"}
+
+        mock_adapter = self._build_mock_adapter()
+        # First line item pauses, second fails -> at least one failed item -> production raises.
+        mock_adapter.orders_manager.pause_line_item = Mock(side_effect=[True, False])
+
+        with patch("src.core.database.database_session.get_db_session") as mock_db:
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_scalars = Mock()
+            mock_scalars.all.return_value = [mock_pkg1, mock_pkg2]
+            mock_session.scalars.return_value = mock_scalars
+
+            with pytest.raises(AdCPBulkUpdateError) as exc_info:
+                GoogleAdManager.update_media_buy(
+                    mock_adapter,
+                    media_buy_id="mb_test123",
+                    action="pause_media_buy",
+                    package_id=None,
+                    budget=None,
+                    today=datetime.now(UTC),
+                )
+
+        assert exc_info.value.error_code == "PARTIAL_FAILURE"

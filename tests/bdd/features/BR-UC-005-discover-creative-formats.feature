@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-005 Discover Creative Formats
   As a Buyer (Human or AI Agent)
@@ -11,6 +11,7 @@ Feature: BR-UC-005 Discover Creative Formats
   #   POST-S2: Buyer knows the asset requirements (type, dimensions, required/optional) for each format
   #   POST-S3: Buyer knows which formats match their filter criteria (when filters applied)
   #   POST-S4: Buyer knows about additional creative agents they can query for more formats
+  #   POST-S5: Buyer knows each format's pricing options (surfaced pass-through from the registry; the media-buy request carries no include_pricing gate)
   #   POST-F1: Buyer knows the operation failed
   #   POST-F2: Buyer knows what went wrong (error explains the failure)
   #   POST-F3: Buyer knows how to recover (suggestion for corrective action)
@@ -18,6 +19,7 @@ Feature: BR-UC-005 Discover Creative Formats
   Background:
     Given a Seller Agent is operational and accepting requests
     And at least one creative agent is registered with format definitions
+
 
 
   @T-UC-005-main @main-flow @post-s1 @post-s2
@@ -47,6 +49,31 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the response should include creative_agents referrals
     And each referral should include the agent URL and supported capabilities
     # POST-S4: Creative agent referrals present when available
+
+  @T-UC-005-main-pricing @main-flow @post-s5
+  Scenario: Per-format pricing options surfaced pass-through by the media-buy aggregator
+    Given the creative agent registry has formats with vendor pricing options
+    When the Buyer Agent requests the format catalog
+    Then the response should include all registered formats
+    And each format offering vendor pricing should include its pricing_options
+    # POST-S5: per-format pricing surfaced pass-through. The media-buy request [S1] carries
+    # no `include_pricing` flag (that field exists only on the creative-variant request), and
+    # the reference impl applies no include_pricing gate — pricing_options pass through from
+    # the registry unconditionally.
+    # OPEN G-UC005-2: behaviour when a format has no pricing_options (omitted vs empty) unresolved
+    # OUT OF SCOPE: the v3.1 creative-variant request's `include_pricing` / `account` mechanism
+    # (and its "account required when include_pricing=true" constraint) is not part of the
+    # media-buy aggregator contract under analysis (see overview scope notes).
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
+  @T-UC-005-main-no-pricing @main-flow @post-s5
+  Scenario: Formats without vendor pricing carry no pricing_options
+    Given the creative agent registry has formats without vendor pricing options
+    When the Buyer Agent requests the format catalog
+    Then no format should include pricing_options
+    # POST-S5: pricing_options presence reflects registry data, not a request flag. The
+    # media-buy request carries no `include_pricing` gate, so the aggregator never strips
+    # pricing_options — formats lack them only when the registry supplies none.
 
   @T-UC-005-inv-031-1-holds @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-1 holds - Multiple filters combine as AND
@@ -80,22 +107,6 @@ Feature: BR-UC-005 Discover Creative Formats
     | Zebra Banner    | display |
     | Pre-Roll        | video   |
     # BR-RULE-031 INV-2: sorted by type value then name
-
-  @T-UC-005-inv-049-1-holds @invariant @BR-RULE-049
-  Scenario: BR-RULE-049 INV-1 holds - Type filter matches exact category
-    Given the registry has formats: "leaderboard" (display), "pre-roll" (video), "podcast-ad" (audio)
-    When the Buyer Agent requests formats with type filter "display"
-    Then only "leaderboard" should be returned
-    And the returned format type should be "display"
-    # BR-RULE-049 INV-1: type filter -> only formats with exactly matching FormatCategory
-
-  @T-UC-005-inv-049-1-violated @invariant @BR-RULE-049
-  Scenario: BR-RULE-049 INV-1 violated - Type filter excludes non-matching formats
-    Given the registry has formats: "leaderboard" (display), "pre-roll" (video)
-    When the Buyer Agent requests formats with type filter "audio"
-    Then no formats should be returned
-    # BR-RULE-049 INV-1: non-matching FormatCategory excluded
-    # --- INV-2: format_ids id match with silent exclusion ---
 
   @T-UC-005-inv-049-2-holds @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 holds - Format IDs filter matches on id field
@@ -223,6 +234,16 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-8: formats without supported_disclosure_positions excluded
     # --- INV-9: output_format_ids OR-match (NEW) ---
 
+  @T-UC-005-inv-049-8-capabilities @invariant @BR-RULE-049
+  Scenario: BR-RULE-049 INV-8 holds - Disclosure positions matched via disclosure_capabilities
+    Given the registry has format "structured-ad" with disclosure_capabilities positions ["prominent", "footer"]
+    And "structured-ad" has no supported_disclosure_positions field
+    When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "footer"]
+    Then only "structured-ad" should be returned
+    # BR-RULE-049 INV-8 (v3.1): match against disclosure_capabilities[].position when present
+    # --- INV-9: output_format_ids OR-match (NEW) ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
   @T-UC-005-inv-049-9-holds @UC-005-MAIN-MCP-19 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-9 holds - Output format IDs OR-match filter
     Given the registry has format "universal-builder" with output_format_ids:
@@ -281,6 +302,34 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with input_format_ids filter [{"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_static"}]
     Then "basic-display" should not be returned
     # BR-RULE-049 INV-10: formats without input_format_ids excluded (works from raw assets)
+
+  @T-UC-005-inv-049-11-holds @invariant @BR-RULE-049
+  Scenario: BR-RULE-049 INV-11 holds - Persistence modes satisfied across positions
+    Given the registry has format "eu-compliant" with disclosure_capabilities:
+    | position  | persistence |
+    | prominent | continuous  |
+    | footer    | initial     |
+    When the Buyer Agent requests formats with disclosure_persistence filter ["continuous", "initial"]
+    Then only "eu-compliant" should be returned
+    # BR-RULE-049 INV-11: each requested mode satisfied by >=1 position (AND across modes, existential across positions)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
+  @T-UC-005-inv-049-11-violated @invariant @BR-RULE-049
+  Scenario: BR-RULE-049 INV-11 violated - Unsatisfiable persistence mode excludes format
+    Given the registry has format "flex-only" with disclosure_capabilities:
+    | position | persistence |
+    | footer   | flexible    |
+    When the Buyer Agent requests formats with disclosure_persistence filter ["continuous"]
+    Then "flex-only" should not be returned
+    # BR-RULE-049 INV-11: no position supports "continuous" -> excluded
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
+  @T-UC-005-inv-049-11-nofield @invariant @BR-RULE-049
+  Scenario: BR-RULE-049 INV-11 edge - Format without disclosure_capabilities excluded
+    Given the registry has format "legacy-banner" with no disclosure_capabilities field
+    When the Buyer Agent requests formats with disclosure_persistence filter ["initial"]
+    Then "legacy-banner" should not be returned
+    # BR-RULE-049 INV-11: formats without disclosure_capabilities cannot declare persistence -> excluded
 
   @T-UC-005-empty-catalog @UC-005-MAIN-MCP-01 @edge-case
   Scenario: Empty catalog when no agents have formats
@@ -365,6 +414,49 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains uniqueItems violation
     # POST-F3: Suggestion for recovery
     # --- ext-b: Output Format IDs Validation Errors (NEW) ---
+
+  @T-UC-005-ext-b-persistence-invalid @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  Scenario: Invalid disclosure persistence value
+    Given the Buyer has tenant context
+    When the Buyer Agent requests formats with disclosure_persistence filter ["permanent"]
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    And the error message should indicate "permanent" is not a valid persistence mode
+    And the error should include a "suggestion" field
+    And the suggestion should advise using valid DisclosurePersistence enum values
+    # POST-F1: Buyer knows the operation failed
+    # POST-F2: Error explains invalid enum value
+    # POST-F3: Suggestion lists valid enum values
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
+  @T-UC-005-ext-b-persistence-empty @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  Scenario: Empty disclosure persistence array
+    Given the Buyer has tenant context
+    When the Buyer Agent requests formats with disclosure_persistence filter []
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    And the error message should indicate at least 1 item is required
+    And the error should include a "suggestion" field
+    And the suggestion should advise providing at least one mode or omitting the filter
+    # POST-F1: Buyer knows the operation failed
+    # POST-F2: Error explains minItems violation
+    # POST-F3: Suggestion for recovery
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
+  @T-UC-005-ext-b-persistence-dupes @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  Scenario: Duplicate disclosure persistence modes
+    Given the Buyer has tenant context
+    When the Buyer Agent requests formats with disclosure_persistence filter ["continuous", "continuous"]
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    And the error message should indicate duplicate values are not allowed
+    And the error should include a "suggestion" field
+    And the suggestion should advise removing duplicate persistence modes
+    # POST-F1: Buyer knows the operation failed
+    # POST-F2: Error explains uniqueItems violation
+    # POST-F3: Suggestion for recovery
+    # --- ext-b: Output Format IDs Validation Errors (NEW) ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-ext-b-output-empty @UC-005-EXT-B-13 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty output format IDs array
@@ -455,7 +547,8 @@ Feature: BR-UC-005 Discover Creative Formats
       | partition     | expected |
       | display       | valid    |
       | video         | valid    |
-      | native        | valid    |
+      | audio         | valid    |
+      | dooh          | valid    |
       | omitted       | valid    |
 
     Examples: Invalid partitions
@@ -577,6 +670,27 @@ Feature: BR-UC-005 Discover Creative Formats
       | empty_array          | invalid  |
       | duplicate_positions  | invalid  |
 
+  @T-UC-005-partition-disclosure-persistence @partition @disclosure_persistence
+  Scenario Outline: Disclosure persistence filter partition - <partition>
+    Given a seller with formats declaring various disclosure persistence capabilities
+    When the Buyer Agent requests creative formats with disclosure_persistence "<partition>"
+    Then the disclosure_persistence filtering should result in <expected>
+
+    Examples: Valid partitions
+      | partition                                  | expected |
+      | single_mode                                | valid    |
+      | multiple_modes_satisfied_across_positions  | valid    |
+      | all_modes                                  | valid    |
+      | omitted                                    | valid    |
+      | no_matching_formats                        | valid    |
+      | format_without_disclosure_capabilities     | valid    |
+
+    Examples: Invalid partitions
+      | partition       | expected |
+      | unknown_mode    | invalid  |
+      | empty_array     | invalid  |
+      | duplicate_modes | invalid  |
+
   @T-UC-005-partition-output-fmtids @UC-005-MAIN-MCP-19 @partition @output_format_ids
   Scenario Outline: Output format IDs filter partition - <partition>
     Given a seller with formats that produce various output formats
@@ -627,6 +741,8 @@ Feature: BR-UC-005 Discover Creative Formats
       | boundary_point              | expected |
       | display (valid enum)        | valid    |
       | video (valid enum)          | valid    |
+      | audio (valid enum)          | valid    |
+      | dooh (valid enum)           | valid    |
       | omitted (no filter)         | valid    |
       | invalid type (rejected)     | invalid  |
 
@@ -728,6 +844,24 @@ Feature: BR-UC-005 Discover Creative Formats
       | empty array []                                          | invalid  |
       | unknown position string 'sidebar'                       | invalid  |
       | duplicate positions ['prominent','prominent']           | invalid  |
+
+  @T-UC-005-boundary-disclosure-persistence @boundary @disclosure_persistence
+  Scenario Outline: Disclosure persistence filter boundary - <boundary_point>
+    Given a seller with formats declaring various disclosure persistence capabilities
+    When the Buyer Agent requests creative formats at persistence boundary "<boundary_point>"
+    Then the persistence handling should be <expected>
+
+    Examples:
+      | boundary_point                                    | expected |
+      | single mode ['continuous'] (min array size)        | valid    |
+      | all 3 modes (max array size)                       | valid    |
+      | two modes satisfied by different positions         | valid    |
+      | omitted (no filter)                                | valid    |
+      | format has no disclosure_capabilities (excluded)   | valid    |
+      | no format covers all requested modes               | valid    |
+      | empty array []                                     | invalid  |
+      | unknown mode string 'permanent'                    | invalid  |
+      | duplicate modes ['continuous','continuous']        | invalid  |
 
   @T-UC-005-boundary-output-fmtids @UC-005-MAIN-MCP-19 @boundary @output_format_ids
   Scenario Outline: Output format IDs filter boundary - <boundary_point>
@@ -860,4 +994,111 @@ Feature: BR-UC-005 Discover Creative Formats
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
+
+  @T-UC-005-boundary-sandbox @boundary @sandbox @br-rule-209
+  Scenario Outline: Sandbox response flag boundary - <boundary_point>
+    Given a seller handling a list_creative_formats request for the given account context
+    When the Buyer Agent inspects the sandbox response flag at boundary "<boundary_point>"
+    Then the sandbox response handling should be <expected>
+    # BR-RULE-209 INV-4: sandbox account -> sandbox: true in response
+    # BR-RULE-209 INV-5: production account -> sandbox absent in response
+    # BR-RULE-209: explicit production may carry sandbox: false (still a non-simulated response)
+
+    Examples:
+      | boundary_point                                   | expected |
+      | sandbox: true in response (sandbox account)      | valid    |
+      | sandbox absent in response (production account)  | valid    |
+      | sandbox: false in response (explicit production) | valid    |
+
+  @T-UC-005-v31-asset-registry-discriminators @main-flow @v3-1 @asset-registry
+  Scenario Outline: asset_types filter accepts registry discriminator values
+    Given the seller catalog has at least one format containing an "<asset_type>" asset
+    When the Buyer Agent requests creative formats with asset_types filter ["<asset_type>"]
+    Then the response status should be "completed"
+    And each returned format should contain at least one asset of type "<asset_type>"
+    # v3.1: the asset_types FILTER enum is asset-content-type.json (14 values).
+    # vast_tracker / daast_tracker are manifest-payload discriminators in
+    # asset-types/index.json (16 keys) — NOT valid filter inputs.
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
+    Examples: 14 asset-content-type filter enum values
+      | asset_type     |
+      | image          |
+      | video          |
+      | audio          |
+      | vast           |
+      | daast          |
+      | text           |
+      | markdown       |
+      | url            |
+      | html           |
+      | css            |
+      | webhook        |
+      | javascript     |
+      | brief          |
+      | catalog        |
+
+  @T-UC-005-v31-asset-registry-no-variant-siblings @main-flow @v3-1 @asset-registry @validation
+  Scenario: asset_types filter rejects nested-variant discriminators (no sibling registry entries)
+    Given the request targets a production account
+    When the Buyer Agent sends a list_creative_formats request with asset_types ["vast_url"]
+    Then the response should indicate a validation error
+    And the error should indicate "asset_types" must use outer registry discriminators only
+    # v3.1: registry forbids sibling entries like vast_url/vast_inline; use vast with inner delivery_type
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+
+  @T-UC-005-v31-payload-vs-requirements-separation @main-flow @v3-1 @asset-registry
+  Scenario: Format response carries constraints under requirements, not on the asset schema
+    Given the seller catalog has a format with a required image asset capped at 2 MB
+    When the Buyer Agent requests creative formats for that format
+    Then the format's "assets" entry should expose "asset_type" with value "image"
+    And the same entry should expose constraints under "requirements" (e.g., max_file_size)
+    And the asset_type payload shape should NOT carry "max_file_size" or "required"
+    # v3.1: registry mandates payload-vs-requirements separation
+
+  @T-UC-005-storyboard-format-id-roundtrip-from-products @storyboard-v3.1 @v3-1 @format-id-roundtrip
+  Scenario: Format ID roundtrip -- list_creative_formats returns the same format object that get_products advertised
+    Given the Buyer Agent captured a format_id object {agent_url, id} from a prior get_products response
+    When the Buyer Agent sends list_creative_formats with format_ids [{captured agent_url, captured id}]
+    Then the response should be schema-valid against list-creative-formats-response.json
+    And the formats array should contain at least one entry
+    And formats[0].format_id should roundtrip verbatim with the captured {agent_url, id}
+    And an empty formats[] would indicate a stale catalog reference and is a compliance failure
+    # media-buy/index.yaml list_formats_integrity phase: the buyer captures
+    # products[0].format_ids[0] from a get_products response and asks
+    # list_creative_formats to resolve it. The sales agent MUST return the format
+    # it advertised on its own product -- whether it hosts that format directly or
+    # proxies to the creative agent named in format_ids[0].agent_url. An empty
+    # formats[] means the catalog references a stale or typo'd format that would
+    # have failed silently at sync_creatives after the buy was already committed.
+    # list_formats_integrity: format_ids advertised on products MUST resolve through list_creative_formats
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+
+  @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope @storyboard-v3.1 @v3-1 @format-id-roundtrip @third-party-agent
+  Scenario: Format ID with agent_url pointing at a third-party creative agent is reported as observation, not failure
+    Given a product advertises a format_id whose agent_url points at a third-party creative agent
+    And the seller has no local copy of that format in its own catalog
+    When the Buyer Agent sends list_creative_formats with that third-party format_id
+    Then the seller should NOT fabricate a local format entry to satisfy the third-party reference
+    And the verification result should be reported as an observation rather than a graded failure
+    # media-buy/index.yaml list_formats_integrity: when products[].format_ids[].agent_url
+    # points at a creative agent different from this seller's agent, the seller cannot
+    # verify it without calling that agent. The runner reports such references as
+    # observations rather than grading failures (scope.equals=$agent_url with
+    # on_out_of_scope=warn). The seller MUST NOT fabricate a local format entry to
+    # cover a third-party reference.
+    # list_formats_integrity: third-party format_ids are unverifiable locally and out of scope for graded failure
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+
+  @T-UC-005-storyboard-baseline-format-id-object-shape @storyboard-v3.1 @v3-1 @format-id-shape @baseline-conformance
+  Scenario: Baseline list_creative_formats response carries format_id objects with agent_url and id
+    Given the Buyer Agent calls list_creative_formats without filters
+    When the response returns a non-empty formats array
+    Then every entry's format_id should be an object carrying both agent_url and id
+    And no entry's format_id should be a bare string
+    # creative/index.yaml discover_formats phase: every format_id returned must be an
+    # object with both agent_url (the creative agent's URL) and id (the format's
+    # unique identifier within that agent). Sellers returning bare-string format IDs
+    # break the v3.1 federation contract.
+    # discover_formats: format_id object shape is the federation contract
 

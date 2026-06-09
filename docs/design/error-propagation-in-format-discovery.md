@@ -50,8 +50,10 @@ document as their source of truth.
   formats from other agents plus an error entry for the failed agent.
 - **FD-ERR-02:** When all creative agents fail, `list_available_formats` returns
   empty `formats` plus `errors[]` (not bare `[]`).
-- **FD-ERR-03:** When registry creation fails, `list_available_formats` returns
-  empty `formats` plus `errors[]` describing the infrastructure failure.
+- **FD-ERR-03:** When registry creation fails, `list_available_formats` raises
+  `AdCPServiceUnavailableError` — registry init is an operation-level precondition
+  failure, distinct from the per-agent advisory failures above (which stay in
+  `errors[]`), so the transport boundary emits a two-layer error envelope.
 - **FD-ERR-04:** Each error entry follows AdCP `error.json` schema (`code`,
   `message`, at minimum).
 - **FD-ERR-05:** When all agents succeed, `errors[]` is absent or empty.

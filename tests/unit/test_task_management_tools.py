@@ -10,6 +10,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import pytest
 
 from src.core.database.models import WorkflowStep
+from src.core.exceptions import AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -169,7 +170,7 @@ class TestGetTaskTool:
         """Test that get_task returns task details correctly."""
         get_task_fn = await self._get_get_task_fn()
 
-        mock_workflow_repo.get_by_step_id.return_value = sample_workflow_step
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = sample_workflow_step
         mock_workflow_repo.get_mappings_for_step.return_value = []
 
         identity = self._make_identity(sample_tenant)
@@ -191,7 +192,7 @@ class TestGetTaskTool:
 
         get_task_fn = await self._get_get_task_fn()
 
-        mock_workflow_repo.get_by_step_id.return_value = None
+        mock_workflow_repo.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError("Task nonexistent not found")
 
         identity = self._make_identity(sample_tenant)
 
@@ -258,7 +259,7 @@ class TestCompleteTaskTool:
         """Test that complete_task updates task status."""
         complete_task_fn = await self._get_complete_task_fn()
 
-        mock_workflow_repo.get_by_step_id.return_value = sample_pending_step
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = sample_pending_step
         mock_workflow_repo.update_status.return_value = sample_pending_step
 
         identity = self._make_identity(sample_tenant)

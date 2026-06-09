@@ -16,6 +16,7 @@ Maps to test-obligations files:
 Coverage: 47/130 obligations implemented, 83 stubs remaining.
 """
 
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import ANY, MagicMock, patch
@@ -26,7 +27,9 @@ from pydantic import ValidationError
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
-    AdCPNotFoundError,
+    AdCPBudgetExceededError,
+    AdCPContextNotFoundError,
+    AdCPProductNotFoundError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
@@ -395,7 +398,7 @@ class TestCreateMediaBuyValidation:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
@@ -409,10 +412,8 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
-            # converted to AdCPValidationError with error_code="PRODUCT_NOT_FOUND" at
-            # the _impl boundary catch.
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Missing product_ids raise the typed AdCPProductNotFoundError.
+            with pytest.raises(AdCPProductNotFoundError) as excinfo:
                 await _create_media_buy_impl(req, identity=identity)
 
         exc = excinfo.value
@@ -474,7 +475,7 @@ class TestCreateMediaBuyValidation:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
@@ -488,12 +489,8 @@ class TestCreateMediaBuyValidation:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
 
-            with pytest.raises(AdCPValidationError) as excinfo:
+            with pytest.raises(AdCPBudgetExceededError, match="(?i)daily"):
                 await _create_media_buy_impl(req=req, identity=identity)
-
-        exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
-        assert "daily" in exc.message.lower()
 
     def test_pricing_option_xor_both_rejected(self):
         """UC-002-V03 / BR-RULE-006: both fixed_price and floor_price rejected.
@@ -783,7 +780,7 @@ class TestCreateMediaBuyCreativeValidation:
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
-            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
 
     def test_creative_error_state_rejected(self):
         """UC-002-C02: creative with status=error rejected.
@@ -813,7 +810,7 @@ class TestCreateMediaBuyCreativeValidation:
         with pytest.raises(AdCPValidationError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
-        assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+        assert "creative_errors" in exc_info.value.details
 
     def test_creative_rejected_state_rejected(self):
         """UC-002-C03: creative with status=rejected rejected.
@@ -843,7 +840,7 @@ class TestCreateMediaBuyCreativeValidation:
         with pytest.raises(AdCPValidationError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
-        assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+        assert "creative_errors" in exc_info.value.details
 
     def test_creative_format_mismatch_rejected(self):
         """UC-002-C04: creative format not matching product format rejected.
@@ -895,7 +892,7 @@ class TestCreateMediaBuyCreativeValidation:
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
-            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
 
     def test_generative_creatives_skip_validation(self):
         """UC-002-C05: generative formats (with output_format_ids) not pre-validated.
@@ -922,9 +919,7 @@ class TestCreateMediaBuyCreativeValidation:
         package.creative_ids = ["c_gen"]
         package.package_id = "pkg_1"
 
-        with (
-            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec),
-        ):
+        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format_spec):
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
@@ -976,7 +971,7 @@ class TestCreateMediaBuyCreativeValidation:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
             # Both errors should be accumulated in a single exception
-            assert exc_info.value.details.get("error_code") == "INVALID_CREATIVES"
+            assert "creative_errors" in exc_info.value.details
             creative_errors = exc_info.value.details.get("creative_errors", [])
             assert len(creative_errors) >= 2
 
@@ -1072,8 +1067,8 @@ class TestCreateMediaBuyImplAuth:
             await _create_media_buy_impl(req, identity=None)
 
     @pytest.mark.asyncio
-    async def test_missing_principal_returns_error_response(self):
-        """UC-002-A02: principal not found returns error (not exception).
+    async def test_missing_principal_raises_auth_error(self):
+        """UC-002-A02: principal not found raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined principal resolution)
         Covers: UC-002-EXT-I-02
@@ -1085,12 +1080,10 @@ class TestCreateMediaBuyImplAuth:
 
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
+            patch("src.core.auth.get_principal_object", return_value=None),
         ):
-            result = await _create_media_buy_impl(req, identity=identity)
-            response, status = result
-            assert isinstance(response, CreateMediaBuyError)
-            assert status == "failed"
+            with pytest.raises(AdCPAuthenticationError, match="(?i)principal"):
+                await _create_media_buy_impl(req, identity=identity)
 
     @pytest.mark.asyncio
     async def test_missing_tenant_raises_auth_error(self):
@@ -1223,7 +1216,7 @@ class TestCreateMediaBuyIdempotency:
 
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
             mock_princ = MagicMock()
@@ -1272,7 +1265,7 @@ class TestCreateMediaBuyIdempotency:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
@@ -1287,13 +1280,11 @@ class TestCreateMediaBuyIdempotency:
             mock_ctx_mgr.return_value = ctx_mgr
 
             # Without idempotency_key, the function proceeds past the check.
-            # It will fail at product validation (no products in mock DB).
-            # Production raises AdCPValidationError(error_code="PRODUCT_NOT_FOUND"),
-            # which the _impl boundary catch converts to AdCPValidationError with
-            # error_code="PRODUCT_NOT_FOUND" and propagates. The point of this test
+            # It will fail at product validation (no products in mock DB),
+            # raising the typed AdCPProductNotFoundError. The point of this test
             # is that find_by_idempotency_key was never called — capture the
             # propagation so we can still assert that.
-            with pytest.raises(AdCPValidationError):
+            with pytest.raises(AdCPProductNotFoundError):
                 await _create_media_buy_impl(req, identity=identity)
 
         mock_uow.media_buys.find_by_idempotency_key.assert_not_called()
@@ -1405,7 +1396,7 @@ class TestCreateMediaBuyIdempotency:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=uow_instances),
         ):
@@ -1420,12 +1411,9 @@ class TestCreateMediaBuyIdempotency:
             mock_ctx_mgr.return_value = ctx_mgr
 
             # Idempotency probe miss → flow continues into product validation,
-            # which fails with AdCPValidationError(error_code="PRODUCT_NOT_FOUND")
-            # via the _impl boundary catch (sourced from
-            # AdCPValidationError(error_code="PRODUCT_NOT_FOUND")). The typed error
-            # propagates past the narrowed boundary catch. Capture it so we can still
-            # assert the idempotency probe ran.
-            with pytest.raises(AdCPValidationError):
+            # which fails with the typed AdCPProductNotFoundError. Capture it so
+            # we can still assert the idempotency probe ran.
+            with pytest.raises(AdCPProductNotFoundError):
                 await _create_media_buy_impl(req, identity=identity)
 
         # Idempotency check ran but found nothing — proceeded to normal flow
@@ -1594,7 +1582,7 @@ class TestCreateMediaBuyAdapterInteraction:
 
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object", return_value=MagicMock()),
+            patch("src.core.auth.get_principal_object", return_value=MagicMock()),
             patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
@@ -1816,7 +1804,7 @@ class TestUpdateMediaBuyMainFlow:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -1909,7 +1897,7 @@ class TestUpdateMediaBuyPauseResume:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -1970,7 +1958,7 @@ class TestUpdateMediaBuyPauseResume:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2030,7 +2018,7 @@ class TestUpdateMediaBuyPauseResume:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2119,7 +2107,7 @@ class TestUpdateMediaBuyTiming:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2149,10 +2137,11 @@ class TestUpdateMediaBuyTiming:
             # Precondition + currency check + date check
             mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy, mock_buy]
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            from src.core.exceptions import AdCPValidationError
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any("date" in e.message.lower() or "end" in e.message.lower() for e in result.errors)
+            with pytest.raises(AdCPValidationError, match="(?i)date|end") as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+            assert "date" in str(exc_info.value).lower() or "end" in str(exc_info.value).lower()
 
     def test_shortened_flight_recalculates_daily_spend(self):
         """UC-003-T03: shorter flight with same budget may exceed daily cap.
@@ -2192,7 +2181,7 @@ class TestUpdateMediaBuyTiming:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2220,13 +2209,12 @@ class TestUpdateMediaBuyTiming:
 
             mock_uow.media_buys.get_by_id.return_value = mock_buy
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            from src.core.exceptions import AdCPBudgetExceededError
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any(
-            "daily" in e.message.lower() or "budget" in e.message.lower() or "limit" in e.message.lower()
-            for e in result.errors
-        )
+            with pytest.raises(AdCPBudgetExceededError) as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+            msg = str(exc_info.value).lower()
+            assert "daily" in msg or "budget" in msg or "limit" in msg
 
 
 class TestUpdateMediaBuyCampaignBudget:
@@ -2349,7 +2337,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2428,7 +2416,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2464,10 +2452,10 @@ class TestUpdateMediaBuyCreativeIds:
 
             uow_session.scalars.side_effect = [creative_result]
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            from src.core.exceptions import AdCPCreativeRejectedError
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert any("not found" in e.message.lower() for e in result.errors)
+            with pytest.raises(AdCPCreativeRejectedError, match="(?i)not found"):
+                _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_error_state_rejected(self):
         """UC-003-CI03: creative with status=error rejected.
@@ -2514,7 +2502,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2601,7 +2589,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2704,7 +2692,7 @@ class TestUpdateMediaBuyCreativeIds:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2826,7 +2814,12 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises((AdCPNotFoundError, AdCPAuthorizationError), match="(?i)not found|does not own"):
+            from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+            with pytest.raises(
+                (AdCPMediaBuyNotFoundError, AdCPAuthorizationError),
+                match="(?i)not found|does not own",
+            ):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_buyer_ref_no_longer_accepted_on_update(self):
@@ -2918,7 +2911,7 @@ class TestUpdateMediaBuyManualApproval:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2949,8 +2942,8 @@ class TestUpdateMediaBuyManualApproval:
 
         # Should return success but workflow step should be marked as requires_approval
         assert isinstance(result, UpdateMediaBuySuccess)
-        ctx_mgr.update_workflow_step.assert_called_once_with(
-            ANY, status="requires_approval", response_data=ANY, add_comment=ANY
+        ctx_mgr.audit_workflow_step_result.assert_called_once_with(
+            ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
         # Affected packages should be empty (not yet applied)
         assert result.affected_packages == []
@@ -2980,7 +2973,7 @@ class TestUpdateMediaBuyManualApproval:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -3043,7 +3036,7 @@ class TestUpdateMediaBuyAdapterFailure:
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -3117,7 +3110,7 @@ class TestUpdateMediaBuyAdapterFailure:
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -3149,9 +3142,53 @@ class TestUpdateMediaBuyAdapterFailure:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        ctx_mgr.update_workflow_step.assert_called()
-        call_kwargs = ctx_mgr.update_workflow_step.call_args
-        assert call_kwargs[1].get("status") == "failed" or call_kwargs.kwargs.get("status") == "failed"
+        ctx_mgr.audit_workflow_step_result.assert_called_once_with(
+            "step_1", ANY, status="failed", error_message="GAM API timeout"
+        )
+
+    def test_unknown_context_id_raises_context_not_found(self):
+        """A buyer-supplied context_id that does not resolve raises AdCPContextNotFoundError.
+
+        get_or_create_context returns None only when the referenced context_id is
+        absent (create_context never returns None). An unresolvable context_id is a
+        not-found condition, so it surfaces as a correctable SESSION_NOT_FOUND (the
+        standard SDK code for an unresolvable session/context) carrying
+        field="context_id" — not a VALIDATION_ERROR.
+        """
+        from src.core.schemas import AdCPPackageUpdate
+        from src.core.tools.media_buy_update import _update_media_buy_impl
+
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_1",
+            packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
+        )
+        identity = _make_identity()
+
+        mock_buy = _mock_media_buy(media_buy_id="mb_1")
+        mock_buy.principal_id = "test_principal"
+
+        with (
+            patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
+            patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
+            patch("src.core.tools.media_buy_update._verify_principal"),
+        ):
+            ctx_mgr = MagicMock()
+            ctx_mgr.get_or_create_context.return_value = None
+            # Real CM so the raise propagates (a bare MagicMock __exit__ is truthy and would suppress it).
+            ctx_mgr.audit_workflow_step_failure_ctx.return_value = nullcontext()
+            mock_ctx_mgr.return_value = ctx_mgr
+
+            mock_uow = MagicMock()
+            mock_uow.media_buys = MagicMock()
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+            mock_uow_cls.return_value = mock_uow
+
+            with pytest.raises(AdCPContextNotFoundError, match="Context not found") as exc_info:
+                _update_media_buy_impl(req=req, identity=identity, context_id="ctx_missing")
+            assert exc_info.value.field == "context_id"
+            assert exc_info.value.error_code == "SESSION_NOT_FOUND"
 
 
 # ===========================================================================
@@ -3186,7 +3223,7 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3238,7 +3275,7 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3297,7 +3334,7 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
@@ -3361,7 +3398,7 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
@@ -3436,7 +3473,7 @@ class TestDeliveryImplStatusFilter:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
@@ -3506,7 +3543,7 @@ class TestDeliveryImplStatusFilter:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
@@ -3548,7 +3585,7 @@ class TestDeliveryImplStatusFilter:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]) as mock_get_buys,
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3589,7 +3626,7 @@ class TestDeliveryImplStatusFilter:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             # No buys match the status filter — returns empty, not error
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
@@ -3631,7 +3668,7 @@ class TestDeliveryImplDateRange:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3674,7 +3711,7 @@ class TestDeliveryImplDateRange:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3702,14 +3739,14 @@ class TestDeliveryImplDateRange:
             assert 29 <= delta.days <= 31  # ~30 days
 
     def test_start_after_end_returns_error(self):
-        """UC-004-DR03: start >= end returns invalid_date_range error.
+        """UC-004-DR03: start >= end raises AdCPValidationError.
 
         Spec: UNSPECIFIED (implementation-defined date range validation)
         """
         identity = _make_identity()
 
         with (
-            patch("src.core.tools.media_buy_delivery.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_delivery.get_adapter") as mock_adapter,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3720,11 +3757,8 @@ class TestDeliveryImplDateRange:
                 start_date="2026-03-20",
                 end_date="2026-03-10",
             )
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            assert resp.errors is not None
-            assert any(e.code == "VALIDATION_ERROR" for e in resp.errors)
+            with pytest.raises(AdCPValidationError, match="[Ss]tart date"):
+                _get_media_buy_delivery_impl(req, identity)
 
 
 class TestDeliveryImplErrors:
@@ -3751,26 +3785,22 @@ class TestDeliveryImplErrors:
         # but the actual behavior is that the error is raised, which is correct
 
     def test_principal_not_found_returns_error_response(self):
-        """UC-004-E02: principal not in DB returns error in response.
+        """UC-004-E02: principal not in DB raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined principal resolution)
-        Ported from test_delivery_behavioral.py::test_principal_not_found_returns_error
         """
+        from src.core.exceptions import AdCPAuthenticationError
+
         identity = _make_identity()
 
-        with patch("src.core.tools.media_buy_delivery.get_principal_object", return_value=None):
+        with patch("src.core.auth.get_principal_object", return_value=None):
             req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            assert resp.errors is not None
-            assert any(e.code == "AUTH_REQUIRED" for e in resp.errors)
+            with pytest.raises(AdCPAuthenticationError):
+                _get_media_buy_delivery_impl(req, identity)
 
     def test_adapter_error_returns_error_code(self):
-        """UC-004-E03: adapter failure returns adapter_error.
+        """UC-004-E03: adapter failure RETURNS an advisory error (UC-004-EXT-F degrade).
 
-        Spec: CONFIRMED -- get-media-buy-delivery-response.json has errors array
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/get-media-buy-delivery-response.json
         Priority: P1
         Type: unit
         Source: UC-004 ext-f
@@ -3784,7 +3814,7 @@ class TestDeliveryImplErrors:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3802,11 +3832,11 @@ class TestDeliveryImplErrors:
                 start_date="2025-01-01",
                 end_date="2025-06-30",
             )
-            resp = _get_media_buy_delivery_impl(req, identity)
+            result = _get_media_buy_delivery_impl(req, identity)
 
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            assert resp.errors is not None
-            assert any(e.code == "SERVICE_UNAVAILABLE" for e in resp.errors)
+            assert result.errors is not None
+            assert any("mb_1" in e.message for e in result.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
     def test_ownership_mismatch_returns_not_found(self):
         """UC-004-E04: non-owner sees not_found, not ownership_mismatch.
@@ -3821,7 +3851,7 @@ class TestDeliveryImplErrors:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),
@@ -3906,7 +3936,7 @@ class TestDeliveryImplPricingLookup:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value={"42": mock_po}),
@@ -4426,7 +4456,7 @@ class TestBRRule043ContextEcho:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch(f"{_PATCH}.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(f"{_PATCH}._get_pricing_options", return_value={}),

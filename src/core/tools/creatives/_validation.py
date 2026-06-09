@@ -7,6 +7,7 @@ from typing import Any
 
 from adcp.types import CreativeAsset
 
+from src.core.exceptions import AdCPAdapterError, AdCPValidationError
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -92,16 +93,19 @@ def _validate_creative_input(
 
     # Additional business logic validation
     if not creative.name or str(creative.name).strip() == "":
-        raise ValueError("Creative name cannot be empty")
+        raise AdCPValidationError("Creative name cannot be empty", field="name")
 
     if not creative.format_id:
-        raise ValueError("Creative format is required")
+        raise AdCPValidationError("Creative format is required", field="format_id")
 
     # Use validated format (auto-upgraded from string if needed)
     format_value = validated_creative.format
 
     if format_value is None:
-        raise ValueError(f"Creative format '{creative.format_id}' could not be resolved")
+        raise AdCPValidationError(
+            f"Creative format '{creative.format_id}' could not be resolved",
+            field="format_id",
+        )
 
     # Validate format exists in creative agent
     agent_url = str(format_value.agent_url)
@@ -129,18 +133,17 @@ def _validate_creative_input(
             )
 
         if validation_error:
-            # Agent unreachable or network error
-            raise ValueError(
+            raise AdCPAdapterError(
                 f"Cannot validate format '{format_id}': Creative agent at {agent_url} "
                 f"is unreachable or returned an error. Please verify the agent URL is correct "
                 f"and the agent is running. Error: {str(validation_error)}"
-            )
+            ) from validation_error
         elif not format_spec:
-            # Format not found (agent is reachable but format doesn't exist)
-            raise ValueError(
+            raise AdCPValidationError(
                 f"Unknown format '{format_id}' from agent {agent_url}. "
                 f"Format must be registered with the creative agent. "
-                f"Use list_creative_formats to see available formats."
+                f"Use list_creative_formats to see available formats.",
+                field="format_id",
             )
         # TODO(#767): Call validate_creative when available in creative agent spec
         # to validate that creative manifest matches format requirements

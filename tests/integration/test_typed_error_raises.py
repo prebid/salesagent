@@ -33,7 +33,8 @@ from src.core.schemas import CreateMediaBuyRequest, GetMediaBuysRequest, UpdateM
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.helpers.adcp_factories import create_test_package_request_dict, make_real_tenant_identity
+from tests.helpers.adcp_factories import create_test_package_request_dict
+from tests.integration.conftest import seed_error_test_tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -46,16 +47,23 @@ _PRODUCT_ID = "typed_raise_product"
 
 @pytest.fixture
 def typed_raise_setup(integration_db):
-    """Tenant + principal + product fixture for the typed-raise behavioral pins."""
-    yield from make_real_tenant_identity(
-        tenant_id=_TENANT_ID,
-        principal_id=_PRINCIPAL_ID,
-        access_token=_ACCESS_TOKEN,
-        product_id=_PRODUCT_ID,
-        subdomain="typedraise",
-        tenant_name="Typed Raise Test Tenant",
-        advertiser_id="mock_adv_789",
-    )
+    """Tenant + principal + product fixture for the typed-raise behavioral pins.
+
+    Seeds real DB state via factory-boy (session bound by ``IntegrationEnv``) and
+    yields a ``ResolvedIdentity`` pointing at the seeded principal.
+    """
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv():
+        yield seed_error_test_tenant(
+            tenant_id=_TENANT_ID,
+            principal_id=_PRINCIPAL_ID,
+            access_token=_ACCESS_TOKEN,
+            product_id=_PRODUCT_ID,
+            subdomain="typedraise",
+            tenant_name="Typed Raise Test Tenant",
+            advertiser_id="mock_adv_789",
+        )["identity"]
 
 
 @pytest.mark.integration
