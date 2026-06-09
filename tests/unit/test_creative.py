@@ -74,7 +74,7 @@ from src.core.schemas import (
     SyncCreativesResponse,
 )
 from tests.factories import PrincipalFactory
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_image_assets
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_image_assets, make_text_assets
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -106,7 +106,7 @@ def _make_creative(**overrides) -> Creative:
         "variants": [],
         "name": "Test Banner",
         "format_id": _format_id(),
-        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+        "assets": make_image_assets("banner", "https://example.com/banner.png"),
         "principal_id": "principal_1",
         "status": "pending_review",
         "created_date": datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
@@ -1836,19 +1836,7 @@ class TestGenerativeCreativeBuild:
                 "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
-            creative = _make_creative_asset(
-                assets={
-                    "message": [
-                        {
-                            "asset_type": "text",
-                            "asset_id": "message",
-                            "item_type": "individual",
-                            "required": True,
-                            "content": "Create a banner ad",
-                        }
-                    ]
-                }
-            )
+            creative = _make_creative_asset(assets=make_text_assets("message", "Create a banner ad"))
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -1902,33 +1890,9 @@ class TestGenerativeCreativeBuild:
 
             creative = _make_creative_asset(
                 assets={
-                    "message": [
-                        {
-                            "asset_type": "text",
-                            "asset_id": "message",
-                            "item_type": "individual",
-                            "required": True,
-                            "content": "Create a banner ad for shoes",
-                        }
-                    ],
-                    "brief": [
-                        {
-                            "asset_type": "text",
-                            "asset_id": "brief",
-                            "item_type": "individual",
-                            "required": True,
-                            "content": "Shoes ad brief",
-                        }
-                    ],
-                    "prompt": [
-                        {
-                            "asset_type": "text",
-                            "asset_id": "prompt",
-                            "item_type": "individual",
-                            "required": True,
-                            "content": "Shoes prompt",
-                        }
-                    ],
+                    **make_text_assets("message", "Create a banner ad for shoes"),
+                    **make_text_assets("brief", "Shoes ad brief"),
+                    **make_text_assets("prompt", "Shoes prompt"),
                 }
             )
             result, _ = _create_new_creative(
@@ -1983,19 +1947,7 @@ class TestGenerativeCreativeBuild:
             }
 
             # Only 'brief' role, no 'message'
-            creative = _make_creative_asset(
-                assets={
-                    "brief": [
-                        {
-                            "asset_type": "text",
-                            "asset_id": "brief",
-                            "item_type": "individual",
-                            "required": True,
-                            "content": "Shoes ad brief",
-                        }
-                    ]
-                }
-            )
+            creative = _make_creative_asset(assets=make_text_assets("brief", "Shoes ad brief"))
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -2045,19 +1997,7 @@ class TestGenerativeCreativeBuild:
             }
 
             # Only 'prompt' role -- no message or brief
-            creative = _make_creative_asset(
-                assets={
-                    "prompt": [
-                        {
-                            "asset_type": "text",
-                            "asset_id": "prompt",
-                            "item_type": "individual",
-                            "required": True,
-                            "content": "Design a banner for running shoes",
-                        }
-                    ]
-                }
-            )
+            creative = _make_creative_asset(assets=make_text_assets("prompt", "Design a banner for running shoes"))
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -2164,19 +2104,7 @@ class TestGenerativeCreativeBuild:
             # No message/brief/prompt in assets, no inputs -- falls back to name
             creative = _make_creative_asset(
                 name="Running Shoes Banner",
-                assets={
-                    "image": [
-                        {
-                            "asset_type": "image",
-                            "asset_id": "image",
-                            "item_type": "individual",
-                            "required": True,
-                            "url": "https://example.com/img.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    ]
-                },
+                assets=make_image_assets("image", "https://example.com/img.png"),
             )
 
             result, _ = _create_new_creative(
@@ -2237,19 +2165,7 @@ class TestGenerativeCreativeBuild:
 
             # Update with no message/brief/prompt in assets -- should preserve existing data
             creative = _make_creative_asset(
-                assets={
-                    "image": [
-                        {
-                            "asset_type": "image",
-                            "asset_id": "image",
-                            "item_type": "individual",
-                            "required": True,
-                            "url": "https://example.com/img.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    ]
-                },
+                assets=make_image_assets("image", "https://example.com/img.png"),
             )
 
             result, _ = _update_existing_creative(
@@ -2307,19 +2223,7 @@ class TestGenerativeCreativeBuild:
             }
 
             # User provides their own assets -- these should take priority
-            user_assets = {
-                "banner": [
-                    {
-                        "asset_type": "image",
-                        "asset_id": "banner",
-                        "item_type": "individual",
-                        "required": True,
-                        "url": "https://user.example.com/my-ad.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                ]
-            }
+            user_assets = make_image_assets("banner", "https://user.example.com/my-ad.png")
             creative = _make_creative_asset(
                 assets=user_assets,
             )
@@ -2372,17 +2276,7 @@ class TestGenerativeCreativeBuild:
             }
 
             creative = _make_creative_asset(
-                assets={
-                    "message": [
-                        {
-                            "asset_type": "text",
-                            "asset_id": "message",
-                            "item_type": "individual",
-                            "required": True,
-                            "content": "Create a banner",
-                        }
-                    ]
-                },
+                assets=make_text_assets("message", "Create a banner"),
             )
             result, _ = _create_new_creative(
                 creative=creative,

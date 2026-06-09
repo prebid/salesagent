@@ -86,6 +86,33 @@ def make_text_assets(asset_id: str, content: str) -> dict:
     }
 
 
+def make_legacy_asset_dict(asset_id: str, **fields: object) -> dict:
+    """Build a LEGACY (AdCP v1) single-dict asset entry: ``{asset_id: {**fields}}``.
+
+    The v1 shape has NO ``asset_type`` discriminator and is NOT a list — it keys
+    each role directly to a flat dict of fields (e.g. ``url``/``width``/``height``,
+    ``url_type``, ``content``, ``duration_ms``). This is the shape the legacy
+    adapter converter (``_convert_creative_to_adapter_asset``) consumes, and the
+    shape that SDK 5.7's discriminated union rejects.
+
+    Use this ONLY for legacy-input / negative tests that deliberately exercise the
+    old shape. New or valid creative assets must use ``make_image_assets()`` /
+    ``make_video_assets()`` / ``make_text_assets()`` (the SDK 5.7 list shape).
+    Centralising the legacy shape here keeps it out of inline test dicts — see #1391.
+    """
+    return {asset_id: dict(fields)}
+
+
+def make_legacy_image_assets(
+    asset_id: str = "banner",
+    url: str = "https://example.com/banner.png",
+    width: int = 300,
+    height: int = 250,
+) -> dict:
+    """Legacy v1 image-asset dict (no asset_type, not a list) for legacy/negative tests."""
+    return make_legacy_asset_dict(asset_id, url=url, width=width, height=height)
+
+
 def make_creative_asset_minimal(**extra: object) -> CreativeAsset:
     """Build a minimal CreativeAsset with optional extra fields.
 

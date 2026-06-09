@@ -56,6 +56,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     Product as ProductSchema,
 )
+from tests.factories.creative_asset import make_image_assets, make_video_assets
 
 
 class TestSchemaMatchesLibrary:
@@ -1609,14 +1610,7 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative 1",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets={
-                "banner_image": {
-                    "url": "https://example.com/creative1.jpg",
-                    "width": 300,
-                    "height": 250,
-                    "asset_type": "image",
-                }
-            },
+            assets=make_image_assets("banner_image", "https://example.com/creative1.jpg", width=300, height=250),
             tags=["sports"],
             # Internal fields
             principal_id="principal_1",
@@ -1630,14 +1624,7 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative 2",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
-            assets={
-                "video_file": {
-                    "url": "https://example.com/creative2.mp4",
-                    "width": 1280,
-                    "height": 720,
-                    "asset_type": "video",
-                }
-            },
+            assets=make_video_assets("video_file", "https://example.com/creative2.mp4", width=1280, height=720),
             tags=["premium"],
             # Internal fields
             principal_id="principal_1",

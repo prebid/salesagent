@@ -19,7 +19,7 @@ from adcp.types import CreativeAction
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
-from tests.factories.creative_asset import make_image_assets
+from tests.factories.creative_asset import make_creative_asset_minimal, make_image_assets
 from tests.helpers.creative_test_helpers import (
     make_creative_dict as _make_creative_dict,
 )
@@ -596,11 +596,9 @@ class TestValidationEdgeCases:
 
     def test_tags_passthrough(self, mock_format_spec):
         """Line 72: creative with non-empty tags."""
-        from adcp.types import CreativeAsset
-
         from src.core.tools.creatives._validation import _validate_creative_input
 
-        creative = CreativeAsset(
+        creative = make_creative_asset_minimal(
             creative_id="c1",
             name="Test Banner",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},

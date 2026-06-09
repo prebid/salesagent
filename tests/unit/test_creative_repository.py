@@ -14,6 +14,7 @@ from src.core.database.repositories.creative import (
     CreativeListResult,
     CreativeRepository,
 )
+from tests.factories.creative_asset import make_image_assets
 
 
 class TestCreativeRepositoryInit:
@@ -128,7 +129,7 @@ class TestCreativeRepositoryCreate:
             agent_url="https://agent.example.com",
             format="display_300x250_image",
             principal_id="p1",
-            data={"assets": {"banner": {"url": "https://example.com/banner.png"}}},
+            data={"assets": make_image_assets("banner", "https://example.com/banner.png")},
         )
 
         session.add.assert_called_once()
@@ -165,7 +166,7 @@ class TestCreativeRepositoryUpdateData:
         repo = CreativeRepository(session, "t1")
 
         fake_creative = MagicMock()
-        new_data = {"assets": {"banner": {"url": "https://new.example.com/banner.png"}}}
+        new_data = {"assets": make_image_assets("banner", "https://new.example.com/banner.png")}
 
         with patch("src.core.database.repositories.creative.attributes") as mock_attrs:
             repo.update_data(fake_creative, new_data)

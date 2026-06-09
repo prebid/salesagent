@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import Creative, FormatId, SyncCreativesRequest
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_image_assets
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -26,7 +26,7 @@ class TestSyncCreativesCreativeIdsFilter:
             variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/banner.png"),
         )
 
         # Should accept creative_ids parameter
@@ -46,7 +46,7 @@ class TestSyncCreativesCreativeIdsFilter:
             variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/banner.png"),
         )
 
         # Should reject patch parameter (removed in AdCP 2.5)
@@ -324,7 +324,7 @@ class TestSyncCreativesErrorCases:
             variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/banner.png"),
         )
 
         # Filter requests IDs that don't exist in payload
@@ -352,14 +352,14 @@ class TestSyncCreativesErrorCases:
                 variants=[],
                 name="Creative 1",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-                assets={"banner": {"url": "https://example.com/1.png", "asset_type": "image"}},
+                assets=make_image_assets("banner", "https://example.com/1.png"),
             ),
             Creative(
                 creative_id="creative_2",
                 variants=[],
                 name="Creative 2",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-                assets={"banner": {"url": "https://example.com/2.png", "asset_type": "image"}},
+                assets=make_image_assets("banner", "https://example.com/2.png"),
             ),
         ]
 
@@ -390,7 +390,7 @@ class TestSyncCreativesErrorCases:
             variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/banner.png"),
         )
 
         # None = no filter, process all
@@ -427,7 +427,7 @@ class TestSyncCreativesErrorCases:
             Creative(
                 creative_id="test",
                 name="Test",
-                assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+                assets=make_image_assets("banner", "https://example.com/banner.png"),
                 # format_id missing
             )
         assert "format" in str(exc_info.value).lower()
@@ -631,7 +631,7 @@ class TestDeleteMissingWithCreativeIdsFilter:
             variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/banner.png"),
         )
 
         # Both parameters together should be valid schema
@@ -664,7 +664,7 @@ class TestDeleteMissingWithCreativeIdsFilter:
             variants=[],
             name="Creative 1",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/banner.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/banner.png"),
         )
 
         # Scoped delete: creative_ids filter with delete_missing
@@ -721,14 +721,14 @@ class TestUpsertSemantics:
             variants=[],
             name="Creative 1 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/new.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/new.png"),
         )
         c2 = Creative(
             creative_id="c2",
             variants=[],
             name="Creative 2 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
-            assets={"banner": {"url": "https://example.com/new2.png", "asset_type": "image"}},
+            assets=make_image_assets("banner", "https://example.com/new2.png"),
         )
 
         # Only c1 should be processed due to filter

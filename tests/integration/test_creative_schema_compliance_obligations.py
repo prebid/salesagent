@@ -14,7 +14,7 @@ import pytest
 from adcp.types import CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
 
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_creative_asset_minimal
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -31,7 +31,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
         "assets": dict(DEFAULT_IMAGE_ASSETS),
     }
     defaults.update(overrides)
-    return CreativeAsset(**defaults)
+    return make_creative_asset_minimal(**defaults)
 
 
 # ---------------------------------------------------------------------------

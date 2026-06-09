@@ -17,7 +17,7 @@ from adcp.types import FormatId as AdcpFormatId
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS
+from tests.factories.creative_asset import DEFAULT_IMAGE_ASSETS, make_creative_asset_minimal
 from tests.harness import CreativeSyncEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -41,7 +41,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
         "assets": dict(DEFAULT_IMAGE_ASSETS),
     }
     defaults.update(overrides)
-    return CreativeAsset(**defaults)
+    return make_creative_asset_minimal(**defaults)
 
 
 _make_identity = make_identity  # Canonical version from tests.harness

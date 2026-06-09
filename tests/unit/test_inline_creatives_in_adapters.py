@@ -21,6 +21,7 @@ from src.core.schemas import (
     MediaPackage,
     PackageRequest,
 )
+from tests.factories.creative_asset import make_image_assets
 
 
 class TestInlineCreativesInAdapters:
@@ -61,7 +62,7 @@ class TestInlineCreativesInAdapters:
                             variants=[],
                             name="Test Creative 1",
                             format_id=FormatId(agent_url="https://creative.test", id="display_300x250"),
-                            assets={"main": {"url": "https://example.com/ad1.png", "width": 300, "height": 250}},
+                            assets=make_image_assets("main", "https://example.com/ad1.png", width=300, height=250),
                             principal_id="principal_123",
                             created_date=datetime.now(UTC),
                             updated_date=datetime.now(UTC),

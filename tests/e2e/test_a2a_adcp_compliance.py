@@ -25,6 +25,8 @@ from typing import Any
 import httpx
 import pytest
 
+from tests.factories.creative_asset import make_image_assets
+
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
 DEFAULT_AUTH_TOKEN = os.getenv("ADCP_TEST_TOKEN", "ci-test-token")
@@ -380,7 +382,7 @@ class TestA2AAdCPCompliance:
                 "add_creative_assets",
                 {
                     "media_buy_id": "mb_test_123",
-                    "assets": {"main": {"asset_type": "image", "url": "https://example.com/creative.jpg"}},
+                    "assets": make_image_assets(asset_id="main", url="https://example.com/creative.jpg"),
                 },
             ),
         ]
