@@ -11,11 +11,12 @@ role-priority extractor wrapper that the steps feed.
 Part of the #1391 SDK 5.7 creative-asset-shape migration.
 """
 
+import pytest
 from adcp.types import CreativeAsset
 
 from src.core.tools.creatives._assets import _extract_message_from_assets
 from tests.bdd.steps.domain.uc006_sync_creatives import given_message_asset_with_prompt
-from tests.factories.creative_asset import make_text_assets
+from tests.factories.creative_asset import build_assets, text_spec
 
 _FORMAT = {"id": "display_gen", "agent_url": "http://agent.test"}
 
@@ -34,13 +35,15 @@ def test_message_asset_step_builds_parseable_sdk57_shape():
     assert _extract_message_from_assets(creative) == "Generate a banner ad for summer sale"
 
 
-def test_extract_message_from_assets_reads_list_shape_roles():
-    """Role-priority extractor reads SDK 5.7 list-shape message/brief/prompt roles."""
+@pytest.mark.parametrize("multiple", [False, True], ids=["single-object", "list"])
+def test_extract_message_from_assets_reads_both_shape_roles(multiple):
+    """Role-priority extractor reads AdCP 3.1 message/brief/prompt roles in both shapes."""
     for role in ("message", "brief", "prompt"):
+        spec = text_spec(role, content=f"prompt-{role}", multiple=multiple)
         creative = CreativeAsset(
             creative_id="c",
             name="n",
             format_id=_FORMAT,
-            assets=make_text_assets(role, f"prompt-{role}"),
+            assets=build_assets(spec),
         )
         assert _extract_message_from_assets(creative) == f"prompt-{role}"

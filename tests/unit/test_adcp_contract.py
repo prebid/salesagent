@@ -56,7 +56,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     Product as ProductSchema,
 )
-from tests.factories.creative_asset import make_image_asset, make_image_assets, make_url_asset, make_video_assets
+from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
 
 
 class TestSchemaMatchesLibrary:
@@ -844,10 +844,10 @@ class TestAdCPContract:
             creative_id="test_creative_123",
             name="Test AdCP Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets={
-                **make_image_asset("banner_image", url="https://example.com/creative.jpg"),
-                **make_url_asset("click_url", url="https://example.com/landing", url_type="clickthrough"),
-            },
+            assets=build_assets(
+                image_spec("banner_image", url="https://example.com/creative.jpg"),
+                url_spec("click_url", url="https://example.com/landing", url_type="clickthrough"),
+            ),
             tags=["display", "banner"],
             # Internal fields (optional, added by sales agent)
             principal_id="test_principal",
@@ -1371,10 +1371,10 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets={
-                **make_image_asset("banner_image", url="https://example.com/creative.jpg"),
-                **make_url_asset("click_url", url="https://example.com/click", url_type="clickthrough"),
-            },
+            assets=build_assets(
+                image_spec("banner_image", url="https://example.com/creative.jpg"),
+                url_spec("click_url", url="https://example.com/click", url_type="clickthrough"),
+            ),
             tags=["sports", "premium"],
             # Internal fields (added by sales agent during processing)
             principal_id="principal_456",
@@ -1600,7 +1600,9 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative 1",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets=make_image_assets("banner_image", "https://example.com/creative1.jpg", width=300, height=250),
+            assets=build_assets(
+                image_spec("banner_image", url="https://example.com/creative1.jpg", width=300, height=250)
+            ),
             tags=["sports"],
             # Internal fields
             principal_id="principal_1",
@@ -1614,7 +1616,9 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative 2",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
-            assets=make_video_assets("video_file", "https://example.com/creative2.mp4", width=1280, height=720),
+            assets=build_assets(
+                video_spec("video_file", url="https://example.com/creative2.mp4", width=1280, height=720)
+            ),
             tags=["premium"],
             # Internal fields
             principal_id="principal_1",

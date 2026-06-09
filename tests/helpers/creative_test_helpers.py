@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, Mock, patch
 
-from tests.factories.creative_asset import make_image_assets
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import make_mock_uow
 
 
@@ -23,7 +23,7 @@ def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> di
         "creative_id": creative_id,
         "name": name,
         "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        "assets": make_image_assets("banner_image", "https://example.com/banner.png"),
+        "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png", multiple=True)),
         "variants": [],
     }
 
@@ -112,7 +112,7 @@ def make_test_creative(
         "variants": [],
         "name": name,
         "format": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-        "assets": make_image_assets("banner", url="https://example.com/banner.jpg"),
+        "assets": build_assets(image_spec("banner", url="https://example.com/banner.jpg", multiple=True)),
         "principal_id": principal_id,
         "created_date": datetime.now(UTC),
         "updated_date": datetime.now(UTC),
@@ -133,7 +133,7 @@ def make_test_creative_list(count: int = 3) -> list:
             variants=[],
             name=f"Test Creative {i}",
             format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-            assets=make_image_assets("banner", url=f"https://example.com/banner{i}.jpg"),
+            assets=build_assets(image_spec("banner", url=f"https://example.com/banner{i}.jpg", multiple=True)),
             principal_id=f"principal_{i}",
             created_date=datetime.now(UTC),
             updated_date=datetime.now(UTC),

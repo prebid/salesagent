@@ -25,11 +25,8 @@ from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
     image_spec,
-    make_image_asset,
-    make_image_assets,
-    make_text_asset,
-    make_url_asset,
     text_spec,
+    url_spec,
 )
 from tests.factories.principal import PrincipalFactory
 
@@ -53,19 +50,18 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
         return (
             _E2E_FORMAT_ID,
             _E2E_AGENT_URL,
-            {
-                **make_image_asset("banner_image", url="https://example.com/banner.png"),
-                **make_url_asset("click_url", url="https://example.com/landing"),
-            },
+            build_assets(
+                image_spec("banner_image", url="https://example.com/banner.png"),
+                url_spec("click_url", url="https://example.com/landing"),
+            ),
         )
-    # SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role
-    # with LIST values of asset objects carrying an asset_type tag. Build via the
-    # single canonical helper (tests/factories/creative_asset.make_image_assets)
-    # so this shape lives in exactly one place — see GH #1391.
+    # SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role.
+    # Build via the canonical AssetSpec mechanism (image_spec/build_assets) so the
+    # shape lives in exactly one place — see GH #1391.
     return (
         "display_300x250",
         env.DEFAULT_AGENT_URL,
-        make_image_assets("image"),
+        build_assets(image_spec("image")),
     )
 
 
@@ -806,7 +802,7 @@ def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None
         "creative_id": creative_id,
         "name": "Test Creative (format partition)",
         "format_id": {"id": creative_format, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = creative_format
@@ -1832,7 +1828,7 @@ def given_creative_with_unknown_format(ctx: dict) -> None:
         "creative_id": creative_id,
         "name": "Unknown Format Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -1861,7 +1857,7 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
         "creative_id": creative_id,
         "name": "Unreachable Agent Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -2629,7 +2625,7 @@ def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
         "creative_id": f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
         "name": name,
         "format_id": None,
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -2643,7 +2639,7 @@ def given_creative_format_id_empty_name(ctx: dict) -> None:
         "creative_id": "creative-fmt-empty-name-001",
         "name": "",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = "display_300x250"
@@ -3539,7 +3535,7 @@ def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
         "creative_id": creative_id,
         "name": "URL Normalization Creative",
         "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -3986,7 +3982,7 @@ def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
         "creative_id": creative_id,
         "name": f"Synced creative {creative_id}",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
@@ -4144,7 +4140,7 @@ def given_creative_with_adapter_format(ctx: dict) -> None:
         "creative_id": "creative-adapter-fmt-001",
         "name": "Adapter Format Creative",
         "format_id": {"id": format_id, "agent_url": "adapter://local-gam"},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -4223,7 +4219,7 @@ def given_creative_with_agent_url_and_format(ctx: dict, agent_url: str, format_i
         "creative_id": "creative-fmt-match-001",
         "name": "Format Match Creative",
         "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -4534,7 +4530,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
         "creative_id": "creative-generative-001",
         "name": "Generative Creative",
         "format_id": fmt,
-        "assets": make_text_asset("message", "Generate a banner ad for summer sale"),
+        "assets": build_assets(text_spec("message", content="Generate a banner ad for summer sale")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4568,7 +4564,7 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
     creative_payload = {
         "creative_id": "creative-no-fmt-001",
         "name": "Creative Without Format",
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_no_format"] = True
@@ -4596,7 +4592,7 @@ def given_creative_empty_name_known_format(ctx: dict) -> None:
         "creative_id": "creative-empty-name-001",
         "name": "",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = "display_300x250"
@@ -4749,7 +4745,7 @@ def given_any_assets(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add assets to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(make_image_assets("image"))
+    last_creative.setdefault("assets", {}).update(build_assets(image_spec("image")))
 
 
 @given("message asset with prompt text")
@@ -4762,7 +4758,9 @@ def given_message_asset_with_prompt(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(make_text_asset("message", "Generate a banner ad for summer sale"))
+    last_creative.setdefault("assets", {}).update(
+        build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
+    )
 
 
 @given("no prompt assets or inputs")
@@ -4792,7 +4790,9 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(make_text_asset("message", "Generate a banner ad for summer sale"))
+    last_creative.setdefault("assets", {}).update(
+        build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
+    )
     # Remove GEMINI_API_KEY from config mock
     env = ctx["env"]
     env.mock["config"].return_value.gemini_api_key = None
@@ -4832,7 +4832,7 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
         "creative_id": "creative-gen-prompt-001",
         "name": "Generative With Prompt",
         "format_id": fmt,
-        "assets": make_text_asset("message", asset_prompt),
+        "assets": build_assets(text_spec("message", content=asset_prompt)),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4879,7 +4879,7 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
         "creative_id": "creative-gen-no-key-001",
         "name": "Generative No Key",
         "format_id": fmt,
-        "assets": make_text_asset("message", "Generate a banner ad"),
+        "assets": build_assets(text_spec("message", content="Generate a banner ad")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4968,7 +4968,7 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
         "creative_id": "creative-gen-inv1-001",
         "name": "Generative Detection Test",
         "format_id": fmt,
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -5657,7 +5657,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
         "creative_id": creative_id,
         "name": f"Synced creative {creative_id}",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
@@ -5833,7 +5833,7 @@ def given_creative_with_invalid_format_id(ctx: dict) -> None:
         "creative_id": creative_id,
         "name": "Invalid Format Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -6632,7 +6632,7 @@ def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
         "creative_id": creative_id,
         "name": f"Creative {creative_id}",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": make_image_assets("image"),
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_id"] = creative_id

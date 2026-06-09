@@ -18,7 +18,7 @@ from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adc
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
-from tests.factories.creative_asset import make_image_assets
+from tests.factories.creative_asset import build_assets, image_spec
 
 
 def create_test_product(
@@ -484,7 +484,7 @@ def create_test_creative_asset(
         creative = create_test_creative_asset(
             creative_id="creative_001",
             format_id="video_1920x1080",
-            assets=make_image_assets("primary", url="https://cdn.example.com/banner.png")
+            assets=build_assets(image_spec("primary", url="https://cdn.example.com/banner.png", multiple=True))
         )
     """
     if isinstance(format_id, str):
@@ -492,9 +492,9 @@ def create_test_creative_asset(
 
     if assets is None:
         # SDK 5.7: assets values must be lists of discriminated-union asset
-        # models (asset_type tag), not bare dicts. Route through the canonical
-        # helper instead of hand-rolling the shape.
-        assets = make_image_assets("primary", url="https://example.com/creative.jpg")
+        # models (asset_type tag), not bare dicts. Build the list shape via the
+        # AssetSpec mechanism instead of hand-rolling the shape.
+        assets = build_assets(image_spec("primary", url="https://example.com/creative.jpg", multiple=True))
 
     return CreativeAsset(creative_id=creative_id, name=name, format_id=format_id, assets=assets, **kwargs)
 

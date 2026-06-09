@@ -15,7 +15,7 @@ Part of #1391 SDK 5.7 creative-asset-shape migration.
 from adcp.types import CreativeAsset
 
 from tests.bdd.steps.domain.uc006_sync_creatives import given_asset_with_provenance_source_type
-from tests.factories.creative_asset import make_image_asset
+from tests.factories.creative_asset import build_assets, image_spec
 
 _FORMAT = {"id": "display_300x250", "agent_url": "http://agent.test"}
 
@@ -26,7 +26,11 @@ def test_asset_provenance_attaches_to_individual_asset():
     The image slot is a single (flat) asset object, so provenance attaches directly to it
     (no list indexing), and the payload remains parseable as a CreativeAsset.
     """
-    ctx = {"creatives": [{"creative_id": "c", "name": "n", "format_id": _FORMAT, "assets": make_image_asset("image")}]}
+    ctx = {
+        "creatives": [
+            {"creative_id": "c", "name": "n", "format_id": _FORMAT, "assets": build_assets(image_spec("image"))}
+        ]
+    }
 
     given_asset_with_provenance_source_type(ctx, "trained_algorithmic_media")
 
