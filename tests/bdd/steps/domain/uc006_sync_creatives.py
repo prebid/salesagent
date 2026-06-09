@@ -21,7 +21,16 @@ from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-from tests.factories.creative_asset import make_image_asset, make_image_assets, make_text_assets, make_url_asset
+from tests.factories.creative_asset import (
+    assert_assets,
+    build_assets,
+    image_spec,
+    make_image_asset,
+    make_image_assets,
+    make_text_asset,
+    make_url_asset,
+    text_spec,
+)
 from tests.factories.principal import PrincipalFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -3708,7 +3717,7 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
         "name": "Provenance Source Type Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
         "provenance": {"digital_source_type": source_type},
-        "assets": make_image_assets("image", url="https://example.com/banner.png"),
+        "assets": build_assets(image_spec("image", url="https://example.com/banner.png")),
     }
     ctx.setdefault("creatives", []).append(payload)
     ctx["creative_format_id"] = format_id
@@ -3719,14 +3728,14 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
 def given_asset_with_provenance_source_type(ctx: dict, source_type: str) -> None:
     """Add asset-level provenance to the last creative's first asset.
 
-    SDK 5.7: an asset slot is a list of asset objects, so asset-level provenance
-    attaches to the individual asset at index 0 (AdCP core/provenance.json — provenance
-    attaches to individual assets; most-specific replaces inherited).
+    The image slot is an individual asset (single object), so asset-level provenance
+    attaches directly to that object (AdCP core/provenance.json — provenance attaches to
+    individual assets; the most-specific provenance replaces the inherited one).
     """
     creative_payload = ctx["creatives"][-1]
     assets = creative_payload.get("assets", {})
     first_key = next(iter(assets))
-    assets[first_key][0]["provenance"] = {"digital_source_type": source_type}
+    assets[first_key]["provenance"] = {"digital_source_type": source_type}
     ctx["asset_provenance_source_type"] = source_type
 
 
@@ -4525,7 +4534,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
         "creative_id": "creative-generative-001",
         "name": "Generative Creative",
         "format_id": fmt,
-        "assets": make_text_assets("message", "Generate a banner ad for summer sale"),
+        "assets": make_text_asset("message", "Generate a banner ad for summer sale"),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4753,7 +4762,7 @@ def given_message_asset_with_prompt(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(make_text_assets("message", "Generate a banner ad for summer sale"))
+    last_creative.setdefault("assets", {}).update(make_text_asset("message", "Generate a banner ad for summer sale"))
 
 
 @given("no prompt assets or inputs")
@@ -4783,7 +4792,7 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(make_text_assets("message", "Generate a banner ad for summer sale"))
+    last_creative.setdefault("assets", {}).update(make_text_asset("message", "Generate a banner ad for summer sale"))
     # Remove GEMINI_API_KEY from config mock
     env = ctx["env"]
     env.mock["config"].return_value.gemini_api_key = None
@@ -4823,7 +4832,7 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
         "creative_id": "creative-gen-prompt-001",
         "name": "Generative With Prompt",
         "format_id": fmt,
-        "assets": make_text_assets("message", asset_prompt),
+        "assets": make_text_asset("message", asset_prompt),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4870,7 +4879,7 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
         "creative_id": "creative-gen-no-key-001",
         "name": "Generative No Key",
         "format_id": fmt,
-        "assets": make_text_assets("message", "Generate a banner ad"),
+        "assets": make_text_asset("message", "Generate a banner ad"),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -5127,19 +5136,18 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    user_image = image_spec("image", url="https://example.com/user-banner.png")
     creative_payload = {
         "creative_id": "creative-gen-inv6-001",
         "name": "Generative With User Assets",
         "format_id": fmt,
-        "assets": {
-            **make_text_assets("message", "Generate a responsive ad"),
-            **make_image_assets("image", url="https://example.com/user-banner.png"),
-        },
+        "assets": build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
     ctx["generative_creative"] = True
-    ctx["user_provided_assets"] = {"image": creative_payload["assets"]["image"]}
+    # The same spec(s) used to build the mock are stored for verification (assert_assets).
+    ctx["user_provided_assets"] = [user_image]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5334,17 +5342,21 @@ def then_existing_data_preserved(ctx: dict) -> None:
             )
 
 
-def _first_asset_object(asset_value: object) -> dict:
-    """Return the asset object dict from an asset slot value, for either valid shape.
+def _stored_assets_for_last_creative(ctx: dict) -> dict:
+    """Fetch the last synced creative's stored ``data['assets']`` from the DB."""
+    from sqlalchemy import select
 
-    AdCP 3.1 (creative-manifest) allows a slot value to be a single asset object
-    (individual slots) or a list of asset objects (multi-count slots, ``max > 1``);
-    the adcp 5.7 SDK accepts and stores both. Return the (first) asset object either way
-    so assertions don't hard-code one shape.
-    """
-    if isinstance(asset_value, list):
-        return asset_value[0] if asset_value else {}
-    return asset_value if isinstance(asset_value, dict) else {}
+    from src.core.database.models import Creative as CreativeModel
+
+    env = ctx["env"]
+    session = env.get_session()
+    assert session is not None, "Harness must provide a DB session for asset verification"
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    db_creative = session.scalars(
+        select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
+    ).first()
+    assert db_creative is not None, f"Creative {creative_id} not found in DB"
+    return (db_creative.data or {}).get("assets", {})
 
 
 @then("the user-provided assets should be preserved")
@@ -5359,39 +5371,11 @@ def then_user_assets_preserved(ctx: dict) -> None:
     if error is not None:
         pytest.xfail(f"SPEC-PRODUCTION GAP: expected user assets preserved but got {type(error).__name__}: {error}")
 
-    env = ctx["env"]
-    session = env.get_session()
-    assert session is not None, "Harness must provide a DB session for asset preservation check"
-
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative as CreativeModel
-
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    db_creative = session.scalars(
-        select(CreativeModel).filter_by(
-            creative_id=creative_id,
-            tenant_id=env._tenant_id,
-        )
-    ).first()
-    assert db_creative is not None, f"Creative {creative_id} not found in DB"
-    creative_data = db_creative.data or {}
-    stored_assets = creative_data.get("assets", {})
-    user_assets = ctx["user_provided_assets"]
-    assert user_assets, "Given step must populate user_provided_assets with at least one asset"
-    for asset_key, user_value in user_assets.items():
-        assert asset_key in stored_assets, (
-            f"User-provided '{asset_key}' asset missing from stored assets: {list(stored_assets.keys())}"
-        )
-        # Production stores the asset object and enriches it with null-default fields, so assert
-        # the user's fields are preserved (containment) rather than whole-value exact-equality.
-        user_obj = _first_asset_object(user_value)
-        stored_obj = _first_asset_object(stored_assets[asset_key])
-        for field, fval in user_obj.items():
-            assert stored_obj.get(field) == fval, (
-                f"User-provided '{asset_key}'['{field}'] was overwritten by generated content. "
-                f"Expected {fval!r}, got {stored_obj.get(field)!r}"
-            )
+    stored_assets = _stored_assets_for_last_creative(ctx)
+    specs = ctx["user_provided_assets"]
+    assert specs, "Given step must populate user_provided_assets with at least one asset"
+    # Same specs that built the mock verify the stored result (shape + containment handled in AssetSpec).
+    assert_assets(stored_assets, *specs)
 
 
 @then("user assets should take priority over any generated content")
@@ -5404,41 +5388,12 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
     error = ctx.get("error")
     if error is not None:
         pytest.xfail(f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}")
-    env = ctx["env"]
-    session = env.get_session()
-    if session is None:
+    if ctx["env"].get_session() is None:
         pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify asset priority")
 
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative as CreativeModel
-
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    db_creative = session.scalars(
-        select(CreativeModel).filter_by(
-            creative_id=creative_id,
-            tenant_id=env._tenant_id,
-        )
-    ).first()
-    assert db_creative is not None, f"Creative {creative_id} not found in DB"
-
-    creative_data = db_creative.data or {}
-    stored_assets = creative_data.get("assets", {})
-    user_assets = ctx.get("user_provided_assets", {})
-    # User-provided image asset should be preserved, not overwritten by generated assets.
-    # Production may normalize/enrich the asset dict with additional fields (e.g., format,
-    # alt_text, provenance), so we check containment rather than exact equality.
-    if "image" in user_assets:
-        assert "image" in stored_assets, (
-            f"User-provided 'image' asset should be preserved in creative data, "
-            f"got assets keys: {list(stored_assets.keys())}"
-        )
-        stored_obj = _first_asset_object(stored_assets["image"])
-        user_obj = _first_asset_object(user_assets["image"])
-        for key, value in user_obj.items():
-            assert stored_obj.get(key) == value, (
-                f"User-provided image['{key}'] should be preserved. Expected {value!r}, got {stored_obj.get(key)!r}"
-            )
+    stored_assets = _stored_assets_for_last_creative(ctx)
+    # User-provided assets must survive the generative build (not overwritten by generated content).
+    assert_assets(stored_assets, *ctx.get("user_provided_assets", []))
 
 
 # ═══════════════════════════════════════════════════════════════════════
