@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
-      - name: Run pre-commit
+      - name: Run static analysis (make quality-ci)
         run: make quality-ci
 
   # mypy also runs inside Quality Gate via `make quality-ci` (the unified local
