@@ -35,10 +35,17 @@ from pathlib import Path
 # malformed directive.
 PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
 
-_SKIP_MARKER = "# structural-guard:"
+# Sanctioned-advisory marker: the controlled prefix is enforced (any other
+# suffix after "structural-guard:" does NOT exempt a site), so the escape
+# hatch stays a vocabulary, not a free-text bypass.
+_SKIP_MARKER = "# structural-guard: advisory"
 
 from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
 from tests.unit._ast_helpers import rel as _rel
+
+# Pattern A scans wider than the shared default: src/services builds advisory
+# payloads, so an Error(code=...) constructor relocated there must not escape.
+_PATTERN_A_SCAN_DIRS = [*SCAN_DIRS, REPO_ROOT / "src/services"]
 
 
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
@@ -88,7 +95,7 @@ class TestNoErrorConstructionInImpl:
         assert_per_file_caps(
             cap_dict=PATTERN_A_PER_FILE_CAP,
             count_sites=_count_pattern_a_sites,
-            scan_dirs=SCAN_DIRS,
+            scan_dirs=_PATTERN_A_SCAN_DIRS,
             site_label="Pattern A",
             typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPMediaBuyNotFoundError)",
             rel=_rel,
@@ -109,3 +116,38 @@ class TestNoErrorConstructionInImpl:
         from tests.unit._per_file_cap_guard import assert_caps_only_shrink
 
         assert_caps_only_shrink(PATTERN_A_PER_FILE_CAP, _count_pattern_a_sites, repo_root=REPO_ROOT)
+
+
+class TestSkipMarkerSemantics:
+    """The advisory marker exempts exactly the controlled prefix — nothing else."""
+
+    @staticmethod
+    def _count(source: str, tmp_path) -> list[int]:
+        f = tmp_path / "marker_probe.py"
+        f.write_text(source)
+        return _count_pattern_a_sites(f)
+
+    def test_advisory_marker_exempts_site(self, tmp_path):
+        src = (
+            "from src.core.schemas import Error\n"
+            "def f():\n"
+            "    return Error(  # structural-guard: advisory: per-item result on success envelope\n"
+            '        code="PRODUCT_UNAVAILABLE",\n'
+            "    )\n"
+        )
+        assert self._count(src, tmp_path) == []
+
+    def test_unmarked_site_is_counted(self, tmp_path):
+        src = 'from src.core.schemas import Error\ndef f():\n    return Error(code="VALIDATION_ERROR")\n'
+        assert self._count(src, tmp_path) == [3]
+
+    def test_uncontrolled_marker_suffix_does_not_exempt(self, tmp_path):
+        """A bare 'structural-guard:' comment with a non-advisory vocabulary is NOT a bypass."""
+        src = (
+            "from src.core.schemas import Error\n"
+            "def f():\n"
+            "    return Error(  # structural-guard: legacy-exception\n"
+            '        code="VALIDATION_ERROR",\n'
+            "    )\n"
+        )
+        assert self._count(src, tmp_path) == [3]
