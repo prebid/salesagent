@@ -9,6 +9,13 @@ on:
 
 permissions: {}
 
+concurrency:
+  # One run per PR head ref; a superseded push cancels the in-flight run.
+  # push/dispatch events get per-sha groups so runs on main never cancel or
+  # queue behind each other.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: "3.12"
   UV_VERSION: "0.11.15"
