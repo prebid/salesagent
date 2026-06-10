@@ -1597,7 +1597,7 @@ def verify_features(adcp_req_path: Path) -> bool:
         text = source_path.read_text()
         feature = parse_feature_file(text)
         uc_key = _extract_uc_key(source_path.name)
-        expected, _new = _render_feature(feature, traceability, uc_key, source_path.name, commit_sha)
+        expected, _new, _unused = _render_feature(feature, traceability, uc_key, source_path.name, commit_sha)
         actual = output_path.read_text()
         # Compare ignoring timestamp differences in the generation stamp
         # (first two lines contain the timestamp)
