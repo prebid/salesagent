@@ -8,8 +8,32 @@ probe's ``find_by_key`` serves exactly what production would have stored.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from src.core.schemas._base import CreateMediaBuySuccess
+
+
+def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBuySuccess:
+    """Build the canonical ACTIVE-buy success model that cache-seeding tests store.
+
+    One construction shared by the harness seeder and the integration tests so
+    the seeded shape (active status + matching valid_actions, empty packages)
+    cannot drift between files.
+    """
+    from adcp.server.helpers import valid_actions_for_status
+    from adcp.types import MediaBuyStatus
+
+    from src.core.schemas._base import CreateMediaBuySuccess
+
+    return CreateMediaBuySuccess(
+        media_buy_id=media_buy_id,
+        packages=[],
+        status=MediaBuyStatus.active,
+        valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
+    )
 
 
 def seed_cached_success(

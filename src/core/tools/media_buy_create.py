@@ -1483,7 +1483,7 @@ from src.services.slack_notifier import get_slack_notifier
 
 def _build_idempotency_hit_result(
     tenant_id: str,
-    idempotency_key: str | None,
+    idempotency_key: str,
     principal_id: str,
     context: ContextObject | None,
 ) -> CreateMediaBuyResult:
@@ -1506,10 +1506,9 @@ def _build_idempotency_hit_result(
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
     from src.core.database.repositories import MediaBuyUoW
 
-    key = idempotency_key or ""
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
-        existing = uow.media_buys.find_by_idempotency_key(key, principal_id)
+        existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id)
         if existing is None:
             raise AdCPValidationError(
                 f"Idempotency key {idempotency_key} not found after race resolution",
@@ -1743,7 +1742,7 @@ async def _create_media_buy_impl(
     # replay. request_hash is computed once here (in scope for the success-cache stores).
     request_hash = canonical_request_hash(req) if req.idempotency_key else None
     if req.idempotency_key:
-        # Lazy: 49 tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
+        # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
         from src.core.database.repositories import MediaBuyUoW as _IdempotencyUoW
 
         with _IdempotencyUoW(tenant["tenant_id"]) as idem_uow:
@@ -1800,7 +1799,7 @@ async def _create_media_buy_impl(
         # Register push notification config if provided (MCP/A2A protocol support)
         # Skip for dry_run mode (no database writes)
         if push_notification_config:
-            # Lazy: 49 tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
+            # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import MediaBuyUoW
 
             logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
@@ -1959,7 +1958,7 @@ async def _create_media_buy_impl(
                 raise AdCPValidationError(error_msg)
 
         # 4. Currency-specific budget validation
-        # Lazy: 49 tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
+        # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
         from src.core.database.repositories import MediaBuyUoW
 
         # Get products first to determine currency from pricing options

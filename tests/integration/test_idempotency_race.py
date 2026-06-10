@@ -251,14 +251,10 @@ class TestRaceLoserPayloadRules:
 
     def test_different_payload_after_race_conflicts(self, integration_db):
         """A race loser whose payload differs gets IDEMPOTENCY_CONFLICT, never the winner's response."""
-        from adcp.server.helpers import valid_actions_for_status
-        from adcp.types import MediaBuyStatus
-
         from src.core.exceptions import AdCPError
-        from src.core.schemas import CreateMediaBuySuccess
         from src.core.tools.media_buy_create import _replay_after_race
         from tests.factories import PrincipalFactory, TenantFactory
-        from tests.helpers import seed_cached_success
+        from tests.helpers import make_active_cached_success, seed_cached_success
 
         idem_key = f"rconf-{uuid.uuid4().hex}"
         tenant_id = f"rconf_t_{uuid.uuid4().hex[:6]}"
@@ -269,14 +265,12 @@ class TestRaceLoserPayloadRules:
             principal_id = principal.principal_id
             env.get_session()
 
-        winner_success = CreateMediaBuySuccess(
-            media_buy_id="mb_race_winner",
-            packages=[],
-            status=MediaBuyStatus.active,
-            valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
-        )
         seed_cached_success(
-            tenant_id, principal_id, idem_key, response_model=winner_success, payload_hash="winner-hash"
+            tenant_id,
+            principal_id,
+            idem_key,
+            response_model=make_active_cached_success("mb_race_winner"),
+            payload_hash="winner-hash",
         )
 
         with pytest.raises(AdCPError) as exc_info:

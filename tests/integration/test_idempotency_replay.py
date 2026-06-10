@@ -27,19 +27,15 @@ def _seed_success(tenant_id, principal_id, idempotency_key, *, payload_hash, med
     retry (a hash match replays); pass a non-matching hash to exercise the
     IDEMPOTENCY_CONFLICT path.
     """
-    from adcp.server.helpers import valid_actions_for_status
-    from adcp.types import MediaBuyStatus
+    from tests.helpers import make_active_cached_success, seed_cached_success
 
-    from src.core.schemas._base import CreateMediaBuySuccess
-    from tests.helpers import seed_cached_success
-
-    success = CreateMediaBuySuccess(
-        media_buy_id=media_buy_id,
-        packages=[],
-        status=MediaBuyStatus.active,
-        valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
+    seed_cached_success(
+        tenant_id,
+        principal_id,
+        idempotency_key,
+        response_model=make_active_cached_success(media_buy_id),
+        payload_hash=payload_hash,
     )
-    seed_cached_success(tenant_id, principal_id, idempotency_key, response_model=success, payload_hash=payload_hash)
 
 
 def _seed_principal(tenant_id, principal_id):
@@ -221,12 +217,8 @@ class TestOpportunisticEviction:
     def test_fresh_success_evicts_expired_rows(self, integration_db):
         from datetime import timedelta
 
-        from adcp.server.helpers import valid_actions_for_status
-        from adcp.types import MediaBuyStatus
-
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas._base import CreateMediaBuySuccess
-        from tests.helpers import seed_cached_success
+        from tests.helpers import make_active_cached_success, seed_cached_success
 
         expired_key = f"evict-{uuid.uuid4().hex}"
         fresh_key = f"fresh-{uuid.uuid4().hex}"
@@ -235,17 +227,11 @@ class TestOpportunisticEviction:
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
 
-            expired_success = CreateMediaBuySuccess(
-                media_buy_id="mb_expired_row",
-                packages=[],
-                status=MediaBuyStatus.active,
-                valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
-            )
             seed_cached_success(
                 env._tenant_id,
                 env._principal_id,
                 expired_key,
-                response_model=expired_success,
+                response_model=make_active_cached_success("mb_expired_row"),
                 payload_hash="expired-row-hash",
                 ttl=timedelta(minutes=1),
                 now=seeded_at,

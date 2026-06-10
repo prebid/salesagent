@@ -184,24 +184,14 @@ class MediaBuyCreateEnv(IntegrationEnv):
         structured ``{status, response}`` shape production caches — errors are
         never cached.
         """
-        from adcp.server.helpers import valid_actions_for_status
-        from adcp.types import MediaBuyStatus
-
-        from src.core.schemas._base import CreateMediaBuySuccess
-        from tests.helpers import seed_cached_success
+        from tests.helpers import make_active_cached_success, seed_cached_success
 
         self._commit_factory_data()
-        success = CreateMediaBuySuccess(
-            media_buy_id=media_buy_id,
-            packages=[],
-            status=MediaBuyStatus.active,
-            valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
-        )
         seed_cached_success(
             self._tenant_id,
             self._principal_id,
             idempotency_key,
-            response_model=success,
+            response_model=make_active_cached_success(media_buy_id),
             payload_hash=payload_hash,
         )
 
