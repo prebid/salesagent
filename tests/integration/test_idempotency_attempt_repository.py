@@ -19,7 +19,7 @@ import pytest
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
-from tests.harness._base import IntegrationEnv
+from tests.harness._base import BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -39,17 +39,7 @@ def _envelope(status: str, **response_fields) -> dict:
     return {"status": status, "response": response_fields}
 
 
-class _RepoEnv(IntegrationEnv):
-    """Bare integration env for repository tests — no external patches."""
-
-    EXTERNAL_PATCHES: dict[str, str] = {}
-
-    def get_session(self):
-        self._commit_factory_data()
-        return self._session
-
-
-def _setup(env: _RepoEnv, tenant_id: str = "idem_t1", principal_id: str = "idem_p1"):
+def _setup(env: BareIntegrationEnv, tenant_id: str = "idem_t1", principal_id: str = "idem_p1"):
     """Create a tenant + principal so FK constraints are satisfied."""
     from tests.factories import PrincipalFactory, TenantFactory
 
@@ -64,7 +54,7 @@ class TestRecordSuccess:
     def test_writes_row_with_default_ttl(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
 
@@ -93,7 +83,7 @@ class TestRecordSuccess:
         """A pending buy's ``submitted`` status survives even though it is not a domain status."""
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             attempt = repo.record_success(
@@ -111,7 +101,7 @@ class TestRecordSuccess:
     def test_custom_ttl_honored(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             now = datetime(2026, 5, 17, 12, 0, 0, tzinfo=UTC)
@@ -133,7 +123,7 @@ class TestRecordSuccess:
         """Unique index on (tenant, principal, account, tool, key) prevents double-cache."""
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             repo.record_success(
@@ -159,7 +149,7 @@ class TestRecordSuccess:
         """NULLS NOT DISTINCT: two NULL-account rows for the same key still collide."""
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             repo.record_success(
@@ -190,7 +180,7 @@ class TestFindByKey:
     def test_returns_cached_attempt(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             repo.record_success(
@@ -214,7 +204,7 @@ class TestFindByKey:
     def test_returns_none_when_missing(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
 
@@ -229,7 +219,7 @@ class TestFindByKey:
     def test_returns_none_when_expired(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             past = datetime(2020, 1, 1, tzinfo=UTC)
@@ -257,7 +247,7 @@ class TestFindByKey:
     def test_tenant_isolation(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             _setup(env, tenant_id="idem_iso_t1", principal_id="idem_iso_p")
             _setup(env, tenant_id="idem_iso_t2", principal_id="idem_iso_p")
             session = env.get_session()
@@ -285,7 +275,7 @@ class TestFindByKey:
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
         from tests.factories import PrincipalFactory, TenantFactory
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             tenant = TenantFactory(tenant_id="idem_pi_t1")
             PrincipalFactory(tenant=tenant, principal_id="idem_pi_a")
             PrincipalFactory(tenant=tenant, principal_id="idem_pi_b")
@@ -313,7 +303,7 @@ class TestFindByKey:
         """Two accounts under one principal reusing a key are independent (AdCP scope)."""
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             repo.record_success(
@@ -347,7 +337,7 @@ class TestFindByKey:
         """Different tools using the same idempotency_key are independent."""
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             repo.record_success(
@@ -374,7 +364,7 @@ class TestExpireOld:
     def test_removes_expired_only(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             session = _setup(env)
             repo = IdempotencyAttemptRepository(session, "idem_t1")
             past = datetime(2020, 1, 1, tzinfo=UTC)
@@ -421,7 +411,7 @@ class TestExpireOld:
         from src.core.database.models import IdempotencyAttempt
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             _setup(env, tenant_id="idem_exp_t1", principal_id="idem_exp_p")
             _setup(env, tenant_id="idem_exp_t2", principal_id="idem_exp_p")
             session = env.get_session()

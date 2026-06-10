@@ -10,7 +10,11 @@ The exclusion list mirrors the AdCP spec (``security.mdx#idempotency``) — prot
 metadata and routing/auth fields whose presence must not force a new resource on
 replay. Kept salesagent-native (``rfc8785`` directly) rather than importing the
 SDK's ``adcp.server.idempotency`` module, which carries the return-based replay
-store this project deliberately does not adopt.
+store this project deliberately does not adopt. Byte-parity with the SDK hasher
+(and exclusion-set equality) is pinned by ``TestSdkEquivalencePin`` in
+``tests/unit/test_idempotency_canonical.py``; adopting the SDK helpers outright
+is deferred to the SDK v5 bump, at which point this module and the ``rfc8785``
+pin go away.
 """
 
 from __future__ import annotations
@@ -20,6 +24,8 @@ import hashlib
 from typing import Any
 
 import rfc8785
+
+from src.core.exceptions import AdCPValidationError
 
 # Top-level request fields excluded from the canonical hash (spec closed list):
 # idempotency_key is the identifier itself; context / governance_context are
@@ -64,8 +70,13 @@ def canonical_payload_hash(payload: dict[str, Any]) -> str:
     number/string encodings, so two requests differing only in field order (or
     in excluded fields) hash equal — the equivalence test for replay vs conflict.
     """
-    stripped = strip_excluded_fields(payload)
-    canonical = rfc8785.dumps(stripped)
+    try:
+        stripped = strip_excluded_fields(payload)
+        canonical = rfc8785.dumps(stripped)
+    except RecursionError as exc:
+        # A pathologically nested payload must reject as a buyer error, not
+        # crash the boundary with an unhandled RecursionError.
+        raise AdCPValidationError("request payload too deeply nested to canonicalize for idempotency") from exc
     return hashlib.sha256(canonical).hexdigest()
 
 

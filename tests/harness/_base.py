@@ -1092,3 +1092,20 @@ class IntegrationEnv(BaseTestEnv):
             self._rest_client = TestClient(app)
 
         return self._rest_client
+
+
+class BareIntegrationEnv(IntegrationEnv):
+    """Integration env with no external patches — for repository-level tests.
+
+    Repository tests exercise the data layer directly: they need the real
+    database session and factory binding ``IntegrationEnv`` provides, but none
+    of the adapter/notifier mocks. ``get_session()`` commits any pending
+    factory data and exposes the session for direct repository construction.
+    """
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
+
+    def get_session(self) -> Any:
+        """Commit pending factory data and expose the session."""
+        self._commit_factory_data()
+        return self._session

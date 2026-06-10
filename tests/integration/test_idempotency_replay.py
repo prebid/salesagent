@@ -45,12 +45,9 @@ def _seed_success(tenant_id, principal_id, idempotency_key, *, payload_hash, med
 def _seed_principal(tenant_id, principal_id):
     """Commit a tenant + principal so the _impl auth/FK checks pass."""
     from tests.factories import PrincipalFactory, TenantFactory
-    from tests.harness._base import IntegrationEnv
+    from tests.harness._base import BareIntegrationEnv
 
-    class _Env(IntegrationEnv):
-        EXTERNAL_PATCHES: dict[str, str] = {}
-
-    with _Env() as env:
+    with BareIntegrationEnv() as env:
         tenant = TenantFactory(tenant_id=tenant_id)
         PrincipalFactory(tenant=tenant, principal_id=principal_id)
         env._commit_factory_data()

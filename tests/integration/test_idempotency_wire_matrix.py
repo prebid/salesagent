@@ -109,7 +109,14 @@ class TestIdempotencyWireMatrix:
             second = env.call_via(transport, **mutated)
 
         assert second.is_error, f"conflicting payload must reject on {transport.value}"
-        envelope = second.wire_error_envelope or second.synthesized_error_envelope
+        if transport is Transport.IMPL:
+            # IMPL has no wire by definition — its leg grades the synthesized
+            # envelope (what production WOULD emit at the boundary). The three
+            # wire legs below assert REAL wire bytes strictly: an `or` fallback
+            # here would let a dead wire path pass on the synthesized shape.
+            envelope = second.synthesized_error_envelope
+        else:
+            envelope = second.wire_error_envelope
         assert envelope is not None, f"conflict must carry the two-layer envelope on {transport.value}"
         assert_envelope_shape(envelope, "IDEMPOTENCY_CONFLICT", recovery="terminal")
 
@@ -173,8 +180,10 @@ class TestMissingKeyWireMatrix:
             result = env.call_via(transport, **kwargs)
 
         assert result.is_error, f"missing idempotency_key must reject on {transport.value}"
-        envelope = result.wire_error_envelope or result.synthesized_error_envelope
-        assert envelope is not None
+        # Both parametrized transports are real wires — assert actual wire bytes,
+        # never the synthesized fallback (a dead wire path must fail here).
+        envelope = result.wire_error_envelope
+        assert envelope is not None, f"missing-key rejection must carry the wire envelope on {transport.value}"
         assert_envelope_shape(
             envelope,
             "VALIDATION_ERROR",

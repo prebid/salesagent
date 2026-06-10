@@ -153,3 +153,16 @@ class TestSdkEquivalencePin:
         changed = {"po_number": "PO-2", "packages": [{"product_id": "p1"}]}
         assert canonical_payload_hash(base) != canonical_payload_hash(changed)
         assert canonical_json_sha256(base) != canonical_json_sha256(changed)
+
+
+def test_pathological_nesting_rejects_as_validation_error() -> None:
+    """A payload too deep to canonicalize rejects as a typed buyer error, never
+    an unhandled RecursionError at the boundary."""
+    from src.core.exceptions import AdCPValidationError
+
+    deep: dict = {"leaf": True}
+    for _ in range(100_000):
+        deep = {"a": deep}
+
+    with pytest.raises(AdCPValidationError):
+        canonical_payload_hash(deep)

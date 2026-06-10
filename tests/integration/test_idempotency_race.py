@@ -15,7 +15,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from tests.harness._base import IntegrationEnv
+from tests.harness._base import BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -30,17 +30,6 @@ class _FakeRequest:
         return {"idempotency_key": self.idempotency_key, "packages": []}
 
 
-class _RepoEnv(IntegrationEnv):
-    """Bare integration env for repository tests — no external patches."""
-
-    EXTERNAL_PATCHES: dict[str, str] = {}
-
-    def get_session(self):
-        """Expose session for direct repository construction."""
-        self._commit_factory_data()
-        return self._session
-
-
 class TestIdempotencyRaceDbLevel:
     """DB-level: partial unique index enforces idempotency_key uniqueness."""
 
@@ -52,7 +41,7 @@ class TestIdempotencyRaceDbLevel:
         idem_key = f"race-{uuid.uuid4().hex}"
         tenant_id = f"race_t_{uuid.uuid4().hex[:6]}"
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             tenant = TenantFactory(tenant_id=tenant_id)
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
@@ -103,7 +92,7 @@ class TestBuildIdempotencyHitResult:
         idem_key = f"hit-{uuid.uuid4().hex}"
         tenant_id = f"hit_t_{uuid.uuid4().hex[:6]}"
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             tenant = TenantFactory(tenant_id=tenant_id)
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
@@ -154,7 +143,7 @@ class TestIdempotencyRaceRecovery:
         idem_key = f"recovery-{uuid.uuid4().hex}"
         tenant_id = f"recov_t_{uuid.uuid4().hex[:6]}"
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             tenant = TenantFactory(tenant_id=tenant_id)
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
@@ -230,7 +219,7 @@ class TestDegradedFallbackStatus:
         idem_key = f"pend-{uuid.uuid4().hex}"
         tenant_id = f"pend_t_{uuid.uuid4().hex[:6]}"
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             tenant = TenantFactory(tenant_id=tenant_id)
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
@@ -274,7 +263,7 @@ class TestRaceLoserPayloadRules:
         idem_key = f"rconf-{uuid.uuid4().hex}"
         tenant_id = f"rconf_t_{uuid.uuid4().hex[:6]}"
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             tenant = TenantFactory(tenant_id=tenant_id)
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
@@ -316,7 +305,7 @@ class TestRaceLoserPayloadRules:
         idem_key = f"rinv-{uuid.uuid4().hex}"
         tenant_id = f"rinv_t_{uuid.uuid4().hex[:6]}"
 
-        with _RepoEnv() as env:
+        with BareIntegrationEnv() as env:
             tenant = TenantFactory(tenant_id=tenant_id)
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
