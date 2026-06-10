@@ -134,6 +134,33 @@ class TestIdempotencyWireMatrix:
         assert second.payload.response.media_buy_id != first.payload.response.media_buy_id
 
 
+class TestA2ADefaultsDoNotBreakReplay:
+    """A2A must not fold server-minted defaults into the canonical payload.
+
+    A buyer omitting po_number and retrying the same idempotency_key via A2A
+    must get a replay. A randomized server-side po_number default would hash
+    the two identical requests differently — rejecting the legitimate retry as
+    IDEMPOTENCY_CONFLICT — and would diverge from the same payload sent via
+    MCP/REST (cross-transport parity).
+    """
+
+    def test_a2a_retry_without_po_number_replays(self, integration_db):
+        key = f"wire-a2a-nopo-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            kwargs = _create_kwargs(product, idempotency_key=key)
+            kwargs.pop("po_number")
+
+            first = env.call_via(Transport.A2A, **dict(kwargs))
+            assert first.is_success, f"fresh create failed: {first.error}"
+
+            second = env.call_via(Transport.A2A, **dict(kwargs))
+            assert second.is_success, f"identical A2A retry must replay, got: {second.error}"
+            assert second.payload.replayed is True
+            assert second.payload.response.media_buy_id == first.payload.response.media_buy_id
+
+
 @pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP], ids=lambda t: t.value)
 class TestMissingKeyWireMatrix:
     """Storyboard ``missing_key`` on the A2A and MCP wires (REST is pinned in

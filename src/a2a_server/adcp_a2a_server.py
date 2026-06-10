@@ -1535,8 +1535,12 @@ class AdCPRequestHandler(RequestHandler):
         params = {**parameters}
         if "custom_targeting" in params:
             params.setdefault("targeting_overlay", params.pop("custom_targeting"))
-        # Set A2A defaults for optional fields
-        params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
+        # No server-minted defaults for buyer payload fields: a randomized
+        # po_number would change the request's canonical idempotency hash, so an
+        # identical A2A retry would reject as IDEMPOTENCY_CONFLICT instead of
+        # replaying — and the stored payload would diverge from the same request
+        # sent via MCP/REST (cross-transport parity). po_number stays None when
+        # the buyer omits it, exactly like the other transports.
         # buyer_ref removed in adcp 3.12
 
         # push_notification_config is an A2A *transport-layer* parameter
