@@ -55,6 +55,7 @@ class GetProductsBody(BaseModel):
     brief: str = ""
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
+    property_list: dict[str, Any] | None = None  # PropertyListReference; coerced by the request factory
     adcp_version: str = "1.0.0"
 
 
@@ -170,6 +171,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
         brief=body.brief,
         brand=body.brand,
         filters=body.filters,
+        property_list=body.property_list,
     )
     response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")

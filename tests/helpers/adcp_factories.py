@@ -12,7 +12,7 @@ from typing import Any
 
 # Import types from adcp library - use public API when available
 from adcp import Format, Property
-from adcp.types import CreativeAsset, FormatId
+from adcp.types import CreativeAsset, FormatId, Identifier, PropertyIdentifierTypes
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
@@ -142,6 +142,29 @@ def create_product_with_empty_pricing(**overrides) -> Product:
         Product with empty pricing_options list
     """
     return create_test_product(pricing_options=[], **overrides)
+
+
+def create_test_identifier(value: str, type_: str = "domain") -> Identifier:
+    """Create a typed AdCP property ``Identifier``.
+
+    Args:
+        value: The identifier value (e.g. a domain like "espn.com").
+        type_: Identifier type name from ``PropertyIdentifierTypes``
+            (e.g. "domain", "subdomain", "ios_bundle").
+
+    Example:
+        ident = create_test_identifier("espn.com")
+    """
+    return Identifier(type=PropertyIdentifierTypes(type_), value=value)
+
+
+def create_test_identifiers(*values: str, type_: str = "domain") -> list[Identifier]:
+    """Create a list of typed identifiers — the shape a resolved property_list has.
+
+    Example:
+        buyers = create_test_identifiers("espn.com", "cnn.com")
+    """
+    return [create_test_identifier(value, type_=type_) for value in values]
 
 
 def create_test_format_id(

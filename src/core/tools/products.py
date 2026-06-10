@@ -7,7 +7,7 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import os
 import time
-from typing import Annotated, cast
+from typing import TYPE_CHECKING, Annotated, cast
 
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
@@ -16,6 +16,8 @@ from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field, ValidationError
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -26,11 +28,13 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPError,
     AdCPPolicyViolationError,
+    AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
+    Error,
     GetProductsResponse,
     Product,  # Extends library Product
 )
@@ -39,6 +43,10 @@ from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
+from src.services.property_intersection import PropertyIntersection
+
+if TYPE_CHECKING:
+    from src.services.property_intersection import DroppedProduct
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +74,49 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 # Import conversion utilities from dedicated module to avoid circular imports
 from src.core.product_conversion import convert_product_model_to_schema
+
+# Per-item dropped-product advisories stay bounded: enumerate up to this many,
+# then aggregate the tail into a single count entry.
+_MAX_DROPPED_PRODUCT_ADVISORIES = 25
+
+
+def _dropped_product_advisories(dropped: "tuple[DroppedProduct, ...]") -> list[Error]:
+    """Buyer-visible advisories for products excluded by their property_list.
+
+    One ``Error`` per dropped product (bounded), carrying the structured
+    ``DropReason`` — the accept-with-context counterpart to the media-buy
+    side's UNSUPPORTED_FEATURE reject: the request succeeds, and the envelope
+    says what the filter did instead of silently shrinking the list.
+    """
+    advisories = [
+        # PRODUCT_UNAVAILABLE is the closest standard code at spec 3.0.1 (the
+        # storyboard's INSUFFICIENT_INVENTORY/INVALID_TARGETING aren't in the
+        # 3.0.1 enum); "unavailable under your filter" is a documented stretch
+        # of its sold-out wording, chosen over a non-standard code so buyers
+        # keep standard-table recovery resolution.
+        Error(  # structural-guard: advisory: per-product filtering results ride the success envelope, not a raise
+            code="PRODUCT_UNAVAILABLE",
+            message=(
+                f"Product {getattr(item.product, 'product_id', '<unknown>')} was excluded by your "
+                f"property_list filter ({item.reason.value})"
+            ),
+            field="property_list",
+            details={"product_id": getattr(item.product, "product_id", None), "reason": item.reason.value},
+            suggestion="Broaden the property_list (or omit it) to see this seller's full catalog.",
+        )
+        for item in dropped[:_MAX_DROPPED_PRODUCT_ADVISORIES]
+    ]
+    overflow = len(dropped) - _MAX_DROPPED_PRODUCT_ADVISORIES
+    if overflow > 0:
+        advisories.append(
+            Error(  # structural-guard: advisory: aggregate tail keeps the envelope bounded
+                code="PRODUCT_UNAVAILABLE",
+                message=f"{overflow} more products were excluded by your property_list filter",
+                field="property_list",
+                details={"additional_dropped": overflow},
+            )
+        )
+    return advisories
 
 
 async def _get_products_impl(
@@ -312,29 +363,51 @@ async def _get_products_impl(
 
     # Filter products by buyer property list (if provided)
     # Use isinstance check to safely handle mock objects in tests
+    # property_list filtering result, surfaced on the response per the spec's
+    # GetProductsResponse contract: ``property_list_applied`` flags that the
+    # filter ran, and dropped products become per-item ``errors[]`` advisories
+    # ("Task-specific errors and warnings (e.g., product filtering issues)") so
+    # the buyer can refine the filter instead of guessing at a shrunk list.
+    property_list_applied: bool | None = None
+    property_list_errors: list[Error] = []
     _property_list_ref = getattr(req, "property_list", None)
     if isinstance(_property_list_ref, PropertyListReference):
         try:
+            # Lazy: tests patch ProductUoW and the resolver at their source
+            # modules; both must resolve at call time.
             from src.core.database.repositories.uow import ProductUoW as _IntersectionUoW
-            from src.core.property_list_resolver import resolve_property_list
-            from src.services.property_intersection import PropertyIntersection
+            from src.core.property_list_resolver import resolve_property_list_typed
 
-            allowed_property_ids = await resolve_property_list(_property_list_ref)
-            allowed_set = set(allowed_property_ids)
+            buyer_identifiers = await resolve_property_list_typed(_property_list_ref)
             with _IntersectionUoW(tenant["tenant_id"]) as intersection_uow:
                 assert intersection_uow.authorized_properties is not None
                 intersection = PropertyIntersection(intersection_uow.authorized_properties)
-                result = intersection.filter_products(products, allowed_set)
-            products = result.kept_products
+                result = intersection.filter_products(products, buyer_identifiers)
+            products = list(result.kept_products)
+            property_list_applied = True
+            property_list_errors = _dropped_product_advisories(result.dropped_products)
             logger.info(
                 f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
-                f"(allowed {len(allowed_set)} properties; dropped {len(result.dropped_products)})"
+                f"(buyer list has {len(buyer_identifiers)} identifiers; dropped {len(result.dropped_products)})"
             )
         except AdCPError:
             raise
-        except Exception as e:
-            logger.error(f"Property list resolution failed: {e}")
-            raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
+        except ValidationError as e:
+            # The buyer's list service answered with a payload that isn't a
+            # GetPropertyListResponse — correctable on the buyer's side (fix
+            # the list service or the reference), not retryable as-is.
+            raise AdCPValidationError(f"Property list service returned an invalid response: {e}") from e
+        except (OperationalError, InterfaceError, SATimeoutError, DisconnectionError) as e:
+            # Genuinely-transient infrastructure failures (connection refused/
+            # dropped, pool exhausted) → SERVICE_UNAVAILABLE/transient per the
+            # spec's recovery taxonomy. DB-API programming errors
+            # (ProgrammingError/IntegrityError/DataError) and everything else
+            # PROPAGATE to the boundary, which normalizes unexpected exceptions
+            # to the internal-error envelope — bugs are not retryable.
+            logger.error(f"Property list intersection infrastructure failure: {e}")
+            raise AdCPServiceUnavailableError(
+                "Could not evaluate property_list filtering against the property catalog"
+            ) from e
 
     # Generate dynamic product variants from signals agents
     try:
@@ -675,7 +748,8 @@ async def _get_products_impl(
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
-        errors=None,
+        errors=property_list_errors or None,
+        property_list_applied=property_list_applied,
         context=req.context,
     )
 

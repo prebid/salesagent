@@ -13,20 +13,25 @@ Two-stage flow:
    with the discovery-side resolver, so a list is only fetched once across
    both paths.
 2. Fetch Kevel's full ``Site`` index via the ``/v1/site`` endpoint, build a
-   lookup ``{normalized_domain: site_id}``, and intersect with the list's
-   identifier values.
+   lookup ``{host: site_id}`` keyed by each site's TRUE host (URL-parsed,
+   lowercased — never prefix-stripped), and match the list's identifiers
+   against it with the spec ``Identifier.value`` grammar
+   (``src/services/identifier_matching.py``): a bare ``espn.com`` also selects
+   ``www.``/``m.`` hosts, ``*.espn.com`` selects every subdomain host.
 
-The Kevel site index is cached per ``(base_url, network_id)`` with a 5-minute
-TTL — long enough to amortize a multi-page list fetch across the burst of
-``create_media_buy`` calls a typical buyer makes, short enough to pick up
-publisher onboarding within the same operator's session.
+The Kevel site index is cached per ``(base_url, network_id, api_key)`` with a
+5-minute TTL — long enough to amortize a multi-page list fetch across the
+burst of ``create_media_buy`` calls a typical buyer makes, short enough to
+pick up publisher onboarding within the same operator's session. The
+``api_key`` participates in the key so two tenants pointing at the same
+network id with different credentials can never read each other's cached
+index.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-import urllib.parse
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -36,6 +41,11 @@ from adcp.types import Identifier, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.property_list_resolver import resolve_property_list_typed_sync
+from src.services.identifier_matching import (
+    buyer_identifier_matches_host,
+    host_from_url_or_host,
+    identifier_type_str,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +55,6 @@ logger = logging.getLogger(__name__)
 # Internal to this module: the adapter classifies identifier types via
 # ``KevelSiteResolver.classify_identifier_types`` rather than importing this set.
 SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset({"domain", "subdomain"})
-
-
-def identifier_type_str(ident: Identifier) -> str:
-    """Return an identifier's type as a plain string.
-
-    ``Identifier.type`` is an enum on typed SDK objects but can arrive as a
-    bare string after some deserialization paths; normalize both to the string
-    form used for ``SUPPORTED_IDENTIFIER_TYPES`` membership checks.
-    """
-    return ident.type.value if hasattr(ident.type, "value") else str(ident.type)
 
 
 _KEVEL_SITE_PAGE_SIZE = 200
@@ -86,13 +86,14 @@ class KevelSiteResolver:
     """Stateful resolver scoped to a single Kevel network.
 
     Instantiate once per adapter; the underlying site-index cache is keyed by
-    ``(base_url, network_id)`` so multiple resolvers in the same process for
-    different networks don't collide.
+    ``(base_url, network_id, api_key)`` so multiple resolvers in the same
+    process for different networks — or different credentials against the same
+    network id — never share an index.
     """
 
-    # Module-level cache across resolver instances: (base_url, network_id) ->
-    # ({normalized_domain: site_id}, expires_at).
-    _site_cache: ClassVar[dict[tuple[str, str], tuple[dict[str, int], datetime]]] = {}
+    # Module-level cache across resolver instances:
+    # (base_url, network_id, api_key) -> ({host: site_id}, expires_at).
+    _site_cache: ClassVar[dict[tuple[str, str, str], tuple[dict[str, int], datetime]]] = {}
 
     # Guards reads/writes on ``_site_cache`` so concurrent ``create_media_buy``
     # calls on the same network can't race. Without the lock, two threads
@@ -146,12 +147,15 @@ class KevelSiteResolver:
         for ident in identifiers:
             if identifier_type_str(ident) not in SUPPORTED_IDENTIFIER_TYPES:
                 continue
-            normalized = _normalize_domain(ident.value)
-            site_id = site_lookup.get(normalized)
-            if site_id is None:
-                unresolvable_values.append(ident.value)
+            # Spec value grammar via the SDK matcher: one identifier can select
+            # multiple sites (``*.espn.com``) or none. A linear scan over the
+            # cached index is fine — identifiers are dozens, sites are at most
+            # a few thousand, and the index fetch is the amortized cost.
+            matched = {site_id for host, site_id in site_lookup.items() if buyer_identifier_matches_host(ident, host)}
+            if matched:
+                site_ids.update(matched)
             else:
-                site_ids.add(site_id)
+                unresolvable_values.append(ident.value)
 
         logger.debug(
             "Kevel resolve %s/%s → %d sites, %d unsupported types, %d unresolvable values",
@@ -168,7 +172,7 @@ class KevelSiteResolver:
         )
 
     def _get_site_lookup(self) -> dict[str, int]:
-        """Return the cached ``{normalized_domain: site_id}`` index, fetching if needed.
+        """Return the cached ``{host: site_id}`` index, fetching if needed.
 
         Threading: the cache read + expiry-drop runs under ``_cache_lock`` so
         concurrent callers see a consistent view and the expiry ``pop`` cannot
@@ -177,7 +181,7 @@ class KevelSiteResolver:
         produce the same lookup), but the cache write back into ``_site_cache``
         is atomic and last-write-wins.
         """
-        cache_key = (self.base_url, self.network_id)
+        cache_key = (self.base_url, self.network_id, self.api_key)
 
         with self._cache_lock:
             cached = self._site_cache.get(cache_key)
@@ -199,9 +203,12 @@ class KevelSiteResolver:
             url = site.get("Url")
             if site_id is None or not url:
                 continue
-            normalized = _normalize_domain(url)
-            if normalized:
-                lookup[normalized] = int(site_id)
+            # Index by the TRUE host — ``www.espn.com`` and ``espn.com`` are
+            # distinct sites; the spec grammar (not prefix-stripping) decides
+            # which buyer patterns select which hosts.
+            host = host_from_url_or_host(url)
+            if host:
+                lookup[host] = int(site_id)
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self.cache_ttl_seconds)
         with self._cache_lock:
@@ -266,27 +273,3 @@ class KevelSiteResolver:
         """Reset the module-level site index cache. Test-only utility."""
         with cls._cache_lock:
             cls._site_cache.clear()
-
-
-def _normalize_domain(value: str) -> str:
-    """Normalize a URL-or-host string to a bare lowercase host without ``www.``.
-
-    Examples::
-
-        _normalize_domain("https://www.espn.com/sports") == "espn.com"
-        _normalize_domain("www.espn.com") == "espn.com"
-        _normalize_domain("ESPN.COM") == "espn.com"
-
-    Returns an empty string when the input parses to nothing meaningful.
-    """
-    if not value:
-        return ""
-    if "://" in value:
-        parsed = urllib.parse.urlparse(value)
-        host = parsed.hostname or ""
-    else:
-        host = value.split("/", 1)[0]
-    host = host.lower().strip()
-    if host.startswith("www."):
-        host = host[4:]
-    return host

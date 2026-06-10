@@ -237,9 +237,20 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
     recovery ``correctable``) on the first offending package, carrying
     ``field=f"packages[{i}].targeting_overlay.property_list"`` and a
     machine-actionable ``suggestion`` so the buyer agent can drop the field
-    and retry, or pick a capable seller. AdCP spec basis:
-    ``targeting.json:179`` and ``update-media-buy-request.json:64`` — sellers
-    MUST reject rather than silently drop.
+    and retry, or pick a capable seller.
+
+    AdCP spec basis (3.0.1): a seller advertises property_list support via
+    ``features.property_list_filtering`` in get_adcp_capabilities
+    (get_products.mdx: "must declare ... to support this filter"); honest
+    declaration means a seller that cannot compile the field rejects it with
+    UNSUPPORTED_FEATURE (error-code.json: "A requested feature or field is
+    not supported by this seller") rather than silently ignoring it — the
+    spec states the no-silent-ignore rule as a MUST for partially-supported
+    targeting fields (targeting.mdx: "MUST return a validation error for
+    unsupported fields rather than silently ignoring them"). targeting.json's
+    property_list description carries a separate, product-level SHOULD
+    (validation error when ``property_targeting_allowed`` is false), handled
+    by ``raise_if_property_targeting_violations``, not here.
 
     Centralized here so ``_create_media_buy_impl`` and
     ``_update_media_buy_impl`` share a single rejection path.

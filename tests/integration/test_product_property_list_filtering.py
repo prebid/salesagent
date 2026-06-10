@@ -13,8 +13,8 @@ directly and never matched in production).
 Filtering rules:
 - ``selection_type="all"``: unbounded → always included.
 - product covers no buyer property (no identifier-value overlap) → excluded.
-- ``property_targeting_allowed=False``: the buyer must accept EVERY covered
-  identifier value (full subset); ``True``: any overlap is enough.
+- ``property_targeting_allowed=False``: the buyer's list must select EVERY
+  covered property; ``True``: any covered property matching is enough.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pytest
 from adcp.types import PropertyListReference
 
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
-from src.core.tools.media_buy_create import _emit_property_list_advisories
+from src.core.tools.media_buy_create import _build_property_list_advisories
 from tests.factories import (
     AuthorizedPropertyFactory,
     PricingOptionFactory,
@@ -35,6 +35,7 @@ from tests.factories import (
     TenantFactory,
 )
 from tests.harness.product import ProductEnv
+from tests.helpers.adcp_factories import create_test_identifiers
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -271,7 +272,7 @@ class TestPropertyListFilteringByTagE2E:
 
 
 class TestPropertyListFilteringStrictModeE2E:
-    """property_targeting_allowed=False requires the buyer to accept every covered identifier value."""
+    """property_targeting_allowed=False requires the buyer's list to select every covered property."""
 
     @pytest.mark.asyncio
     async def test_strict_partial_overlap_excluded(self, integration_db):
@@ -510,7 +511,7 @@ class TestAuthorizedPropertyRepositoryE2E:
 
             repo = AuthorizedPropertyRepository(env._session, "apr-t")
 
-            by_ids = repo.list_by_ids(["apr_espn", "apr_cnn", "missing"])
+            by_ids = repo.list_by_ids("pub.example", ["apr_espn", "apr_cnn", "missing"])
             assert {r.property_id for r in by_ids} == {"apr_espn", "apr_cnn"}
             # Tenant scoping: our espn row, not the other tenant's.
             espn = next(r for r in by_ids if r.property_id == "apr_espn")
@@ -522,14 +523,14 @@ class TestAuthorizedPropertyRepositoryE2E:
             by_tags = repo.list_by_tags("pub.example", ["sports"])
             assert {r.property_id for r in by_tags} == {"apr_espn"}
 
-            assert repo.list_by_ids([]) == []
+            assert repo.list_by_ids("pub.example", []) == []
             assert repo.list_by_tags("pub.example", []) == []
 
 
 class TestCreateAdvisoryRealProduct:
     """The create zero-overlap advisory runs the REAL intersection against a REAL ORM product.
 
-    ``_emit_property_list_advisories`` must convert each ORM product to its schema
+    ``_build_property_list_advisories`` must convert each ORM product to its schema
     form so the intersection sees ``publisher_properties`` — the ORM model has no
     such attribute (only ``effective_properties``). Passing the raw ORM model
     resolves every product to an empty covered set and logs a false zero-overlap
@@ -564,7 +565,7 @@ class TestCreateAdvisoryRealProduct:
         package.targeting_overlay.property_list = ref
 
         repo = AuthorizedPropertyRepository(env._session, tenant.tenant_id)
-        resolved = {(str(ref.agent_url), ref.list_id): {buyer_domain}}
+        resolved = {(str(ref.agent_url), ref.list_id): create_test_identifiers(buyer_domain)}
         return [package], {"adv_prod": product}, repo, resolved
 
     @pytest.mark.asyncio
@@ -593,7 +594,7 @@ class TestCreateAdvisoryRealProduct:
                 return schema
 
             with patch("src.core.product_conversion.convert_product_model_to_schema", side_effect=_spy):
-                _emit_property_list_advisories(packages, product_map, repo, _resolved)
+                advisories = _build_property_list_advisories(packages, product_map, repo, _resolved)
 
             # The advisory converted the ORM product instead of passing it raw...
             assert converted, "advisory did not convert the ORM product to schema before intersecting"
@@ -601,8 +602,15 @@ class TestCreateAdvisoryRealProduct:
             schema = converted[0]
             assert schema.publisher_properties, "converted product must carry publisher_properties selectors"
 
+            # The zero-overlap outcome is RETURNED as a buyer-visible advisory — a
+            # silent exception inside the helper (its broad accept-with-context
+            # swallow) would yield [] here and fail loudly, instead of hollowing
+            # the test out the way a log-only contract would.
+            assert [a.code for a in advisories] == ["PRODUCT_UNAVAILABLE"]
+            assert advisories[0].details and advisories[0].details["reason"] == "no_property_overlap"
+
             # The conversion yields correct intersection behavior against the real repo:
-            overlap = PropertyIntersection(repo).filter_products([schema], {"espn.com"})
-            mismatch = PropertyIntersection(repo).filter_products([schema], {"nytimes.com"})
+            overlap = PropertyIntersection(repo).filter_products([schema], create_test_identifiers("espn.com"))
+            mismatch = PropertyIntersection(repo).filter_products([schema], create_test_identifiers("nytimes.com"))
             assert not overlap.zero_match, "espn.com overlaps the product's resolved domain → product kept"
             assert mismatch.zero_match, "nytimes.com does not overlap the product's domain → product dropped"

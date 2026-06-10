@@ -2,7 +2,7 @@
 
 Patches: ProductUoW, get_principal_object, convert_product_model_to_schema,
          PolicyCheckService, generate_variants_for_brief, DynamicPricingService,
-         get_factory (ranking), resolve_property_list, get_adapter.
+         get_factory (ranking), resolve_property_list_typed, get_adapter.
 
 Usage::
 
@@ -20,7 +20,7 @@ Available mocks via env.mock:
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
     "ranking_factory"      -- get_factory mock (AI ranking)
     "dynamic_pricing"      -- DynamicPricingService class mock
-    "resolve_property_list" -- resolve_property_list AsyncMock
+    "resolve_property_list" -- resolve_property_list_typed AsyncMock
     "get_adapter"          -- get_adapter mock (for adapter support annotation)
 """
 
@@ -105,7 +105,7 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "ranking_factory": "src.services.ai.factory.get_factory",
         "dynamic_pricing": "src.services.dynamic_pricing_service.DynamicPricingService",
-        "resolve_property_list": "src.core.property_list_resolver.resolve_property_list",
+        "resolve_property_list": "src.core.property_list_resolver.resolve_property_list_typed",
         "get_adapter": "src.core.helpers.adapter_helpers.get_adapter",
     }
 

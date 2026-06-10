@@ -3,17 +3,18 @@
 Fetches buyer property lists from external agent services and caches
 the resolved identifiers using the cache_valid_until TTL from the response.
 
-Two access modes:
-- ``resolve_property_list(ref) -> list[str]``: async, returns identifier values
-  (used by the discovery path that needs string-set intersections).
-- ``resolve_property_list_typed_sync(ref) -> list[Identifier]``: sync, returns
-  the full typed Identifier objects (used by adapter-side compilation that
-  needs to dispatch on identifier type, e.g. Kevel's domain → siteId mapping).
+Two access modes, both returning the full typed ``Identifier`` objects —
+``.type`` participates in downstream matching, so the type is never stripped at
+this boundary:
+- ``resolve_property_list_typed(ref)``: async (products discovery, advisories).
+- ``resolve_property_list_typed_sync(ref)``: sync (adapter-side compilation
+  whose ad-server APIs are sync, e.g. Kevel's domain → siteId mapping).
 
 Both share a single module-level cache so a typed lookup populates the cache
-for subsequent value-only lookups (and vice versa).
+for the other mode's subsequent lookups.
 """
 
+import json
 import logging
 import threading
 from datetime import UTC, datetime, timedelta
@@ -105,6 +106,19 @@ def _store_in_cache(agent_url: str, list_id: str, response_data: dict) -> list[I
     return identifiers
 
 
+def _payload_or_raise(response: httpx.Response, request_url: str) -> dict:
+    """Decode the JSON payload, mapping a non-JSON 2xx to a typed adapter error.
+
+    Without this, ``response.json()`` raises ``json.JSONDecodeError`` past every
+    typed arm and surfaces as an internal error instead of naming the buyer's
+    list service as the failing party.
+    """
+    try:
+        return response.json()
+    except json.JSONDecodeError as exc:
+        raise AdCPAdapterError(f"Property list service returned a non-JSON response: {request_url}") from exc
+
+
 def _http_error_message(url: str, exc: Exception) -> str:
     """Uniform error message for HTTP failures across sync and async paths."""
     if isinstance(exc, httpx.HTTPStatusError):
@@ -132,7 +146,7 @@ async def resolve_property_list_typed(ref: PropertyListReference) -> list[Identi
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
         raise AdCPAdapterError(_http_error_message(request_url, exc)) from exc
 
-    return _store_in_cache(agent_url, ref.list_id, response.json())
+    return _store_in_cache(agent_url, ref.list_id, _payload_or_raise(response, request_url))
 
 
 def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identifier]:
@@ -155,23 +169,7 @@ def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identif
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
         raise AdCPAdapterError(_http_error_message(request_url, exc)) from exc
 
-    return _store_in_cache(agent_url, ref.list_id, response.json())
-
-
-async def resolve_property_list(ref: PropertyListReference) -> list[str]:
-    """Resolve a property list reference to identifier value strings (async).
-
-    Thin wrapper around ``resolve_property_list_typed`` for callers (e.g. the
-    products-discovery filter) that only need the values, not the types.
-
-    Returns:
-        List of property identifier value strings.
-
-    Raises:
-        AdCPAdapterError: On HTTP errors, timeouts, connection failures, or SSRF violations.
-    """
-    identifiers = await resolve_property_list_typed(ref)
-    return [ident.value for ident in identifiers]
+    return _store_in_cache(agent_url, ref.list_id, _payload_or_raise(response, request_url))
 
 
 def clear_cache() -> None:

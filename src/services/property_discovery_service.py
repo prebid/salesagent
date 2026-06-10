@@ -33,10 +33,16 @@ _SUBDOMAIN_PREFIXES = ("www.", "m.", "mobile.")
 
 
 def _normalize_domain(domain: str) -> str:
-    """Strip common subdomain prefixes and lowercase for comparison.
+    """Strip common subdomain prefixes and lowercase for sync association.
 
-    Handles variants like ``www.example.com``, ``m.example.com``, and
-    ``mobile.example.com`` so they all compare equal to ``example.com``.
+    OPERATOR-SYNC SEMANTICS, deliberately looser and symmetric: when deciding
+    which adagents.json properties belong to a configured ``publisher_domain``,
+    ``www.``/``m.``/``mobile.`` variants and the bare domain all associate with
+    the same publisher, in either direction. This is an onboarding heuristic —
+    NOT the buyer-facing ``Identifier.value`` grammar. Buyer-facing matching
+    (property_list intersection, adapter compilation) lives in
+    ``src/services/identifier_matching.py`` and uses the SDK's spec matchers,
+    where ``mobile.`` is not special and direction matters.
     """
     domain = domain.strip().lower()
     for prefix in _SUBDOMAIN_PREFIXES:
@@ -47,10 +53,12 @@ def _normalize_domain(domain: str) -> str:
 
 
 def _domains_match(publisher_domain: str, domain_identifiers: list[str]) -> bool:
-    """Check whether *publisher_domain* matches any value in *domain_identifiers*.
+    """Check whether *publisher_domain* associates with any value in *domain_identifiers*.
 
     Comparison is done on normalized domains so that ``www.example.com``
-    matches ``example.com`` and vice-versa.
+    associates with ``example.com`` and vice-versa. Sync-association semantics
+    only — see ``_normalize_domain`` for the boundary with buyer-facing
+    matching.
     """
     normalized_publisher = _normalize_domain(publisher_domain)
     return any(_normalize_domain(d) == normalized_publisher for d in domain_identifiers)

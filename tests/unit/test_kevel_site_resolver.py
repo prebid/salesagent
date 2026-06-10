@@ -3,9 +3,10 @@
 The resolver is the bridge between AdCP's portable PropertyListReference
 shape and Kevel's native ``Site.Id`` integers. These tests cover:
 
-- Domain normalization (URLs, www-stripping, case-folding)
+- Spec ``Identifier.value`` grammar against the site index (bare/www/m,
+  ``*.`` wildcards, exact subdomains — via the SDK matcher)
 - Identifier-type routing (domain/subdomain compile; others go to unsupported)
-- Site index caching + TTL expiry
+- Site index caching + TTL expiry, keyed by (base_url, network_id, api_key)
 - Pagination of Kevel /v1/site
 - HTTP error translation to AdCPAdapterError
 """
@@ -14,21 +15,16 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from adcp.types import Identifier, PropertyIdentifierTypes, PropertyListReference
+from adcp.types import Identifier, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.property_list_resolver import clear_cache as clear_property_list_cache
-from src.services.kevel_site_resolver import (
-    KevelSiteResolver,
-    ResolvedSiteIds,
-    _normalize_domain,
-    identifier_type_str,
-)
+from src.services.kevel_site_resolver import KevelSiteResolver, ResolvedSiteIds
+from tests.helpers.adcp_factories import create_test_identifier as _identifier
 
 pytestmark = pytest.mark.unit
 
@@ -47,52 +43,96 @@ def _resolver() -> KevelSiteResolver:
     return KevelSiteResolver(network_id="123", api_key="test-key", base_url="https://api.kevel.co/v1")
 
 
+def _site_cache_key(resolver: KevelSiteResolver) -> tuple[str, str, str]:
+    return (resolver.base_url, resolver.network_id, resolver.api_key)
+
+
 def _kevel_site(site_id: int, url: str) -> dict:
     return {"Id": site_id, "Title": f"Site {site_id}", "Url": url}
-
-
-def _identifier(value: str, type_: str = "domain") -> Identifier:
-    return Identifier(type=PropertyIdentifierTypes(type_), value=value)
 
 
 def _ref() -> PropertyListReference:
     return PropertyListReference(agent_url="https://gov.example/lists", list_id="cb_premium_news_v1")
 
 
-class TestNormalizeDomain:
-    """The host-extraction helper underlying the Site.Url ↔ identifier-value match."""
-
-    def test_strips_scheme_and_path(self):
-        assert _normalize_domain("https://www.espn.com/sports/nba") == "espn.com"
-
-    def test_strips_www(self):
-        assert _normalize_domain("www.espn.com") == "espn.com"
-
-    def test_lowercases(self):
-        assert _normalize_domain("ESPN.COM") == "espn.com"
-
-    def test_bare_host(self):
-        assert _normalize_domain("espn.com") == "espn.com"
-
-    def test_empty_input_returns_empty(self):
-        assert _normalize_domain("") == ""
-
-    def test_keeps_non_www_subdomain(self):
-        assert _normalize_domain("https://edition.cnn.com/world") == "edition.cnn.com"
+def _patched_list(identifiers: list[Identifier]):
+    """Patch the property-list fetch the resolver performs, returning ``identifiers``."""
+    return patch(
+        "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
+        return_value=identifiers,
+    )
 
 
-class TestIdentifierTypeStr:
-    """identifier_type_str normalizes enum-typed and bare-string identifier types."""
+class TestSpecValueGrammar:
+    """The site match honors the spec Identifier.value grammar (SDK matcher).
 
-    def test_enum_type_returns_value(self):
-        ident = Identifier(type=PropertyIdentifierTypes("domain"), value="espn.com")
-        assert identifier_type_str(ident) == "domain"
+    Per core/identifier.json: bare ``espn.com`` selects the base host plus
+    ``www.``/``m.``; ``edition.cnn.com`` selects exactly that host;
+    ``*.espn.com`` selects every subdomain host but NOT the base.
+    """
 
-    def test_bare_string_type_returns_str(self):
-        # Defensive path: some deserializations leave ``.type`` as a bare string
-        # (no ``.value``). SimpleNamespace mimics that shape without an enum.
-        bare = SimpleNamespace(type="ios_bundle", value="com.example.app")
-        assert identifier_type_str(bare) == "ios_bundle"
+    def test_bare_domain_selects_base_www_and_m_hosts(self):
+        resolver = _resolver()
+        sites = [
+            _kevel_site(1, "https://espn.com"),
+            _kevel_site(2, "https://www.espn.com"),
+            _kevel_site(3, "https://m.espn.com"),
+            _kevel_site(4, "https://mobile.espn.com"),  # NOT selected: spec says www/m only
+            _kevel_site(5, "https://sports.espn.com"),  # NOT selected by a bare domain
+        ]
+        with _patched_list([_identifier("espn.com")]), patch.object(resolver, "_fetch_all_sites", return_value=sites):
+            result = resolver.resolve(_ref())
+
+        assert result.site_ids == {1, 2, 3}
+        assert result.unresolvable_values == []
+
+    def test_wildcard_selects_all_subdomains_but_not_base(self):
+        resolver = _resolver()
+        sites = [
+            _kevel_site(1, "https://espn.com"),  # base NOT selected by *.espn.com
+            _kevel_site(2, "https://www.espn.com"),
+            _kevel_site(3, "https://sports.espn.com"),
+            _kevel_site(4, "https://stats.sports.espn.com"),
+            _kevel_site(5, "https://espn.de"),  # different domain entirely
+        ]
+        with (
+            _patched_list([_identifier("*.espn.com")]),
+            patch.object(resolver, "_fetch_all_sites", return_value=sites),
+        ):
+            result = resolver.resolve(_ref())
+
+        assert result.site_ids == {2, 3, 4}
+        assert result.unresolvable_values == []
+
+    def test_wildcard_with_no_subdomain_sites_is_unresolvable_not_silent(self):
+        """A wildcard that selects nothing surfaces in unresolvable_values.
+
+        Worst-case before this behavior: ``*.example.com`` parsed as a literal
+        hostname, matched nothing, and the buyer got no signal why.
+        """
+        resolver = _resolver()
+        with (
+            _patched_list([_identifier("*.never-onboarded.example")]),
+            patch.object(resolver, "_fetch_all_sites", return_value=[_kevel_site(42, "https://www.espn.com")]),
+        ):
+            result = resolver.resolve(_ref())
+
+        assert result.site_ids == set()
+        assert result.unresolvable_values == ["*.never-onboarded.example"]
+
+    def test_specific_subdomain_value_selects_only_that_host(self):
+        resolver = _resolver()
+        sites = [
+            _kevel_site(1, "https://cnn.com"),
+            _kevel_site(2, "https://edition.cnn.com"),
+        ]
+        with (
+            _patched_list([_identifier("edition.cnn.com")]),
+            patch.object(resolver, "_fetch_all_sites", return_value=sites),
+        ):
+            result = resolver.resolve(_ref())
+
+        assert result.site_ids == {2}
 
 
 class TestResolveSupportedTypes:
@@ -101,10 +141,7 @@ class TestResolveSupportedTypes:
     def test_resolves_known_domain(self):
         resolver = _resolver()
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("espn.com")],
-            ),
+            _patched_list([_identifier("espn.com")]),
             patch.object(resolver, "_fetch_all_sites", return_value=[_kevel_site(42, "https://www.espn.com")]),
         ):
             result = resolver.resolve(_ref())
@@ -116,10 +153,7 @@ class TestResolveSupportedTypes:
     def test_resolves_multiple_domains(self):
         resolver = _resolver()
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("espn.com"), _identifier("nytimes.com")],
-            ),
+            _patched_list([_identifier("espn.com"), _identifier("nytimes.com")]),
             patch.object(
                 resolver,
                 "_fetch_all_sites",
@@ -136,10 +170,7 @@ class TestResolveSupportedTypes:
     def test_subdomain_identifier_compiles(self):
         resolver = _resolver()
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("edition.cnn.com", type_="subdomain")],
-            ),
+            _patched_list([_identifier("edition.cnn.com", type_="subdomain")]),
             patch.object(resolver, "_fetch_all_sites", return_value=[_kevel_site(7, "https://edition.cnn.com")]),
         ):
             result = resolver.resolve(_ref())
@@ -154,10 +185,7 @@ class TestResolveUnsupportedTypes:
     def test_ios_bundle_routed_to_unsupported(self):
         resolver = _resolver()
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("com.example.app", type_="ios_bundle")],
-            ),
+            _patched_list([_identifier("com.example.app", type_="ios_bundle")]),
             patch.object(resolver, "_fetch_all_sites", return_value=[]),
         ):
             result = resolver.resolve(_ref())
@@ -168,13 +196,12 @@ class TestResolveUnsupportedTypes:
     def test_mixed_types_split_by_support(self):
         resolver = _resolver()
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[
+            _patched_list(
+                [
                     _identifier("espn.com"),
                     _identifier("com.example.app", type_="ios_bundle"),
                     _identifier("podcast-guid-xyz", type_="podcast_guid"),
-                ],
+                ]
             ),
             patch.object(resolver, "_fetch_all_sites", return_value=[_kevel_site(42, "https://www.espn.com")]),
         ):
@@ -190,10 +217,7 @@ class TestUnresolvableValues:
     def test_domain_not_in_kevel_index(self):
         resolver = _resolver()
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("never-onboarded.example")],
-            ),
+            _patched_list([_identifier("never-onboarded.example")]),
             patch.object(resolver, "_fetch_all_sites", return_value=[_kevel_site(42, "https://www.espn.com")]),
         ):
             result = resolver.resolve(_ref())
@@ -204,16 +228,13 @@ class TestUnresolvableValues:
 
 
 class TestSiteIndexCache:
-    """The Kevel /v1/site fetch is cached per (base_url, network_id) with TTL."""
+    """The Kevel /v1/site fetch is cached per (base_url, network_id, api_key) with TTL."""
 
     def test_repeated_resolve_hits_cache(self):
         resolver = _resolver()
         fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("espn.com")],
-            ),
+            _patched_list([_identifier("espn.com")]),
             patch.object(resolver, "_fetch_all_sites", fetch_mock),
         ):
             resolver.resolve(_ref())
@@ -226,29 +247,45 @@ class TestSiteIndexCache:
         r1 = KevelSiteResolver(network_id="net_a", api_key="k", base_url="https://api.kevel.co/v1")
         r2 = KevelSiteResolver(network_id="net_b", api_key="k", base_url="https://api.kevel.co/v1")
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("espn.com")],
-            ),
+            _patched_list([_identifier("espn.com")]),
             patch.object(r1, "_fetch_all_sites", return_value=[_kevel_site(42, "https://www.espn.com")]),
             patch.object(r2, "_fetch_all_sites", return_value=[_kevel_site(99, "https://www.espn.com")]),
         ):
             assert r1.resolve(_ref()).site_ids == {42}
             assert r2.resolve(_ref()).site_ids == {99}
 
+    def test_separate_api_keys_have_separate_caches(self):
+        """Two credentials against the SAME network id never share an index.
+
+        Without api_key in the cache key, tenant B's resolver would read the
+        site index tenant A's credentials fetched — a cross-tenant read of
+        whatever inventory A's key can see.
+        """
+        r1 = KevelSiteResolver(network_id="net_a", api_key="key-tenant-a", base_url="https://api.kevel.co/v1")
+        r2 = KevelSiteResolver(network_id="net_a", api_key="key-tenant-b", base_url="https://api.kevel.co/v1")
+        fetch_a = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
+        fetch_b = MagicMock(return_value=[_kevel_site(99, "https://www.espn.com")])
+        with (
+            _patched_list([_identifier("espn.com")]),
+            patch.object(r1, "_fetch_all_sites", fetch_a),
+            patch.object(r2, "_fetch_all_sites", fetch_b),
+        ):
+            assert r1.resolve(_ref()).site_ids == {42}
+            assert r2.resolve(_ref()).site_ids == {99}
+
+        assert fetch_a.call_count == 1
+        assert fetch_b.call_count == 1, "second credential must fetch with its own key, not reuse the cached index"
+
     def test_expired_cache_entry_is_refetched(self):
         resolver = _resolver()
         fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("espn.com")],
-            ),
+            _patched_list([_identifier("espn.com")]),
             patch.object(resolver, "_fetch_all_sites", fetch_mock),
         ):
             resolver.resolve(_ref())
             # Manually expire the cache entry
-            cache_key = (resolver.base_url, resolver.network_id)
+            cache_key = _site_cache_key(resolver)
             lookup, _expires = KevelSiteResolver._site_cache[cache_key]
             KevelSiteResolver._site_cache[cache_key] = (lookup, datetime.now(UTC) - timedelta(seconds=1))
             resolver.resolve(_ref())
@@ -287,10 +324,7 @@ class TestSiteIndexCache:
                 results.append(res)
 
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("espn.com")],
-            ),
+            _patched_list([_identifier("espn.com")]),
             patch.object(resolver, "_fetch_all_sites", fetch_mock),
         ):
             threads = [threading.Thread(target=_run) for _ in range(8)]
@@ -305,10 +339,13 @@ class TestSiteIndexCache:
         assert all(r.site_ids == {42} for r in results), (
             "Concurrent resolvers returned inconsistent site_ids — cache write was not atomic"
         )
+        # Stampede is tolerated but bounded: at least one fetch happened, and
+        # never more than one per thread (an unbounded retry loop would exceed it).
+        assert 1 <= fetch_mock.call_count <= 8, f"fetch count {fetch_mock.call_count} outside the stampede bound"
         # Final cache state holds the lookup once with no torn entries.
-        cache_key = (resolver.base_url, resolver.network_id)
+        cache_key = _site_cache_key(resolver)
         cached_lookup, _expires_at = KevelSiteResolver._site_cache[cache_key]
-        assert cached_lookup == {"espn.com": 42}, f"Cache state torn after concurrent writes: {cached_lookup!r}"
+        assert cached_lookup == {"www.espn.com": 42}, f"Cache state torn after concurrent writes: {cached_lookup!r}"
 
     def test_sequential_expired_cache_redrop_does_not_raise(self):
         """The expiry-drop branch uses ``pop(key, None)`` not ``del``, so
@@ -321,17 +358,14 @@ class TestSiteIndexCache:
         ``KeyError`` once the key was already removed.
         """
         resolver = _resolver()
-        cache_key = (resolver.base_url, resolver.network_id)
+        cache_key = _site_cache_key(resolver)
 
         # Pre-populate cache with an expired entry to force the pop branch.
         KevelSiteResolver._site_cache[cache_key] = ({"old.com": 1}, datetime.now(UTC) - timedelta(seconds=1))
 
         fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
         with (
-            patch(
-                "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
-                return_value=[_identifier("espn.com")],
-            ),
+            _patched_list([_identifier("espn.com")]),
             patch.object(resolver, "_fetch_all_sites", fetch_mock),
         ):
             # Two sequential calls both see expired entry on entry to the

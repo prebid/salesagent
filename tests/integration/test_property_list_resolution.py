@@ -182,7 +182,7 @@ class TestPropertyListResolution:
 
         Covers: BR-RULE-077-01
         """
-        from src.core.property_list_resolver import clear_cache, resolve_property_list
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
 
         clear_cache()
 
@@ -216,12 +216,10 @@ class TestPropertyListResolution:
             mock_client_cls.return_value = mock_client
 
             with patch("src.core.property_list_resolver._validate_agent_url"):
-                result = await resolve_property_list(ref)
+                result = await resolve_property_list_typed(ref)
 
-        # Resolver should return identifiers from the response
-        assert len(result) == 2
-        assert "site1.com" in result
-        assert "site2.com" in result
+        # Resolver should return typed identifiers from the response
+        assert [ident.value for ident in result] == ["site1.com", "site2.com"]
 
         clear_cache()
 
@@ -231,7 +229,7 @@ class TestPropertyListResolution:
 
         Covers: BR-RULE-077-01
         """
-        from src.core.property_list_resolver import clear_cache, resolve_property_list
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
 
         clear_cache()
 
@@ -260,7 +258,7 @@ class TestPropertyListResolution:
             mock_client_cls.return_value = mock_client
 
             with patch("src.core.property_list_resolver._validate_agent_url"):
-                result = await resolve_property_list(ref)
+                result = await resolve_property_list_typed(ref)
 
         assert result == [], "Exhausted cursor should yield empty identifier list"
 
@@ -272,7 +270,7 @@ class TestPropertyListResolution:
 
         Covers: BR-RULE-077-01
         """
-        from src.core.property_list_resolver import clear_cache, resolve_property_list
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
 
         clear_cache()
 
@@ -304,7 +302,7 @@ class TestPropertyListResolution:
             mock_client_cls.return_value = mock_client
 
             with patch("src.core.property_list_resolver._validate_agent_url"):
-                result = await resolve_property_list(ref)
+                result = await resolve_property_list_typed(ref)
 
         # The resolver returns exactly the identifiers from the current page
         assert len(result) == page_size, (
@@ -318,7 +316,7 @@ class TestPropertyListResolution:
     async def test_resolve_filters_applied_at_resolution_time(self, integration_db):
         """Filters (countries_all AND, channels_any OR) are applied at resolution time.
 
-        When resolve_property_list returns identifiers, only products whose
+        When the property_list resolves to identifiers, only products whose
         publisher_properties overlap with those identifiers are included.
         This verifies that filtering happens after resolution, not before.
 
@@ -327,12 +325,34 @@ class TestPropertyListResolution:
         with ProductEnv(tenant_id="proplist-filter", principal_id="proplist-filter-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-filter", subdomain="proplist-filter")
             PrincipalFactory(tenant=tenant, principal_id="proplist-filter-principal")
-            # by_id slugs resolve through the repo to these identifier values (domains).
-            AuthorizedPropertyFactory(tenant=tenant, property_id="us_site_1", identifiers=_dom("us1.com"))
-            AuthorizedPropertyFactory(tenant=tenant, property_id="us_site_2", identifiers=_dom("us2.com"))
-            AuthorizedPropertyFactory(tenant=tenant, property_id="eu_site_1", identifiers=_dom("eu1.com"))
-            AuthorizedPropertyFactory(tenant=tenant, property_id="eu_site_2", identifiers=_dom("eu2.com"))
-            AuthorizedPropertyFactory(tenant=tenant, property_id="other_site", identifiers=_dom("other.com"))
+            # by_id slugs resolve through the repo to these identifier values
+            # (domains). Lookups are publisher-scoped (the spec requires
+            # publisher_domain on by_id selectors), so each row carries the
+            # publisher its selector references.
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="us_site_1", publisher_domain="us-publisher.com", identifiers=_dom("us1.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="us_site_2", publisher_domain="us-publisher.com", identifiers=_dom("us2.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="eu_site_1", publisher_domain="eu-publisher.com", identifiers=_dom("eu1.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="eu_site_2", publisher_domain="eu-publisher.com", identifiers=_dom("eu2.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant,
+                property_id="mixed_us_site",
+                publisher_domain="mixed-publisher.com",
+                identifiers=_dom("us1.com"),
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant,
+                property_id="mixed_other_site",
+                publisher_domain="mixed-publisher.com",
+                identifiers=_dom("other.com"),
+            )
 
             # Product targeting US sites (specific property IDs)
             p_us = ProductFactory(
@@ -379,7 +399,7 @@ class TestPropertyListResolution:
                 properties=[
                     {
                         "publisher_domain": "mixed-publisher.com",
-                        "property_ids": ["us_site_1", "eu_site_1", "other_site"],
+                        "property_ids": ["mixed_us_site", "mixed_other_site"],
                         "selection_type": "by_id",
                     }
                 ],
@@ -407,7 +427,7 @@ class TestPropertyListResolution:
             )
             # Mixed product included (property_targeting_allowed=True, has partial overlap)
             assert "mixed_sites_product" in product_ids, (
-                "Mixed product should match: property_targeting_allowed=True and has overlap with us_site_1"
+                "Mixed product should match: property_targeting_allowed=True and mixed_us_site's value overlaps"
             )
 
     @pytest.mark.asyncio

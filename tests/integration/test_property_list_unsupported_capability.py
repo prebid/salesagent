@@ -1,9 +1,11 @@
 """Integration tests: property_list capability enforcement at the ``_impl`` boundary.
 
-AdCP honest-declaration contract (``core/targeting.json:179``,
-``update-media-buy-request.json:64``): a seller whose adapter cannot
-compile ``targeting_overlay.property_list`` MUST reject the request with
-``UNSUPPORTED_FEATURE`` rather than silently drop the field.
+AdCP honest-declaration contract: a seller advertises property_list support
+via ``features.property_list_filtering`` in get_adcp_capabilities
+(get_products.mdx), and one that cannot compile
+``targeting_overlay.property_list`` rejects with ``UNSUPPORTED_FEATURE``
+(error-code.json) rather than silently ignoring it — the no-silent-ignore
+rule is a MUST for partially-supported targeting fields (targeting.mdx).
 
 The runtime guard fires once per request in ``_create_media_buy_impl`` /
 ``_update_media_buy_impl`` — right after adapter resolution, before any
@@ -120,7 +122,8 @@ def _build_property_list_create_request() -> CreateMediaBuyRequest:
 async def test_create_rejects_property_list_when_adapter_unsupported(capability_tenant):
     """Adapter with ``supports_property_list_targeting = False`` rejects with UNSUPPORTED_FEATURE.
 
-    Spec basis: ``error-code.json:189``, ``error-handling.mdx:467``. The wire
+    Spec basis: ``error-code.json`` UNSUPPORTED_FEATURE + the two-layer envelope
+    rules in ``error-handling.mdx``. The wire
     envelope must carry ``code=UNSUPPORTED_FEATURE``, ``recovery=correctable``,
     machine-actionable ``field`` and ``suggestion`` so the buyer agent can drop
     the field and retry without a human.

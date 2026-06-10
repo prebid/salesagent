@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
-from adcp.types import BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
+from adcp.types import BrandReference, ContextObject, Identifier, MediaBuyStatus, ReportingWebhook
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
@@ -125,6 +125,7 @@ from src.core.schemas import (
     CreateMediaBuyResult,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
+    Error,
     FormatId,
     MediaPackage,
     Package,
@@ -148,6 +149,7 @@ from src.core.tools.financial_validation import (
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
+from src.services.property_intersection import PropertyIntersection
 from src.services.targeting_capabilities import (
     collect_overlay_targeting_violations,
     raise_if_property_list_unsupported,
@@ -1472,13 +1474,14 @@ from src.services.setup_checklist_service import SetupIncompleteError, validate_
 from src.services.slack_notifier import get_slack_notifier
 
 
-async def _resolve_property_list_allowed_sets(packages: list | None) -> dict[tuple[str, str], set[str]]:
-    """Resolve each package's buyer ``property_list`` to its identifier-value set.
+async def _resolve_property_list_identifiers(packages: list | None) -> dict[tuple[str, str], list[Identifier]]:
+    """Resolve each package's buyer ``property_list`` to its typed identifiers.
 
     Runs BEFORE the create validation transaction opens, so the external HTTP
     fetch never holds a DB connection, and uses the async resolver so the event
-    loop is not blocked. Best-effort: a resolution failure is logged and that
-    list is omitted (the advisory then skips packages whose list didn't
+    loop is not blocked. Identifiers stay TYPED — ``.type`` participates in the
+    intersection's matching. Best-effort: a resolution failure is logged and
+    that list is omitted (the advisory then skips packages whose list didn't
     resolve). Keyed by ``(agent_url, list_id)`` so a list referenced by several
     packages is fetched once.
     """
@@ -1487,7 +1490,7 @@ async def _resolve_property_list_allowed_sets(packages: list | None) -> dict[tup
     # would bind a ref the patch can't reach).
     from src.core.property_list_resolver import resolve_property_list_typed
 
-    resolved: dict[tuple[str, str], set[str]] = {}
+    resolved: dict[tuple[str, str], list[Identifier]] = {}
     for package in packages or []:
         overlay = getattr(package, "targeting_overlay", None)
         ref = getattr(overlay, "property_list", None) if overlay else None
@@ -1507,25 +1510,26 @@ async def _resolve_property_list_allowed_sets(packages: list | None) -> dict[tup
                 exc_info=True,
             )
             continue
-        resolved[key] = {ident.value for ident in identifiers}
+        resolved[key] = identifiers
     return resolved
 
 
-def _emit_property_list_advisories(
+def _build_property_list_advisories(
     packages: list,
     product_map: dict,
     authorized_property_repo: "AuthorizedPropertyRepository",
-    resolved_allowed_sets: dict[tuple[str, str], set[str]],
-) -> None:
-    """Log an advisory when a buyer's property_list has zero overlap with a package's product.
+    resolved_identifiers: dict[tuple[str, str], list[Identifier]],
+) -> list[Error]:
+    """Buyer-visible advisories when a package's property_list has zero overlap.
 
-    Per the inventory-targeting plan SD2, ``inventory_list_no_match`` must be
-    accept-with-context, not reject. So this helper never raises — it only
-    logs at WARNING (greppable ``[INTERSECTION-ADVISORY]`` marker) so operators
-    can build log-based alerting on these mismatches; it is not wired to the
-    audit log or Slack. Downstream adapters emit the actual user-facing
-    envelope (Kevel resolves to empty siteIds; B4 adapters emit
-    UNSUPPORTED_FEATURE).
+    The ``inventory_list_no_match`` storyboard contract is accept-with-CONTEXT:
+    a zero-overlap buy proceeds, and the success envelope must carry a message
+    explaining the list mismatch — a silently-successful buy with normal
+    numbers is the storyboard's named not-acceptable outcome. This helper
+    never raises; it returns the per-package ``Error`` advisories the caller
+    attaches to the success response's ``errors[]``, and logs each one at
+    WARNING (greppable ``[INTERSECTION-ADVISORY]`` marker) for operator-side
+    alerting.
 
     Runs inside the create validation transaction so each ORM product can be
     converted to its schema form: ``convert_product_model_to_schema`` reads
@@ -1535,21 +1539,26 @@ def _emit_property_list_advisories(
     intersection reads — the SAME object get_products hands the intersection, so
     the two paths stay consistent (the ORM model has no ``publisher_properties``
     attribute). The buyer property_lists were resolved over HTTP by
-    ``_resolve_property_list_allowed_sets`` BEFORE the transaction opened and are
-    passed in via ``resolved_allowed_sets`` — so no network call is made while a
-    DB connection is held. Best-effort: the intersection is swallowed on error so
-    create_media_buy proceeds, and a list that failed to resolve is absent from
-    ``resolved_allowed_sets`` and skipped here.
+    ``_resolve_property_list_identifiers`` BEFORE the transaction opened and are
+    passed in via ``resolved_identifiers`` — so no network call is made while a
+    DB connection is held. Best-effort: ANY exception from the per-package
+    intersection (schema conversion errors incl. detached-ORM access, repo/DB
+    failures, malformed AuthorizedProperty.identifiers rows) is swallowed and
+    logged so create_media_buy proceeds — advisory computation must never veto
+    a booking. The cost is that a broken advisory pipeline degrades to the
+    silent-success the storyboard forbids, which is why the helper's RETURN
+    value is pinned by integration tests rather than only its logs. A list that
+    failed to resolve is absent from ``resolved_identifiers`` and skipped here.
     """
-    # Lazy imports: ``convert_product_model_to_schema`` is patched at its source
+    # Lazy import: ``convert_product_model_to_schema`` is patched at its source
     # module by the advisory unit/integration tests, so it must resolve at call
     # time (a module-top import would bind a ref the patch can't reach).
     from src.core.product_conversion import convert_product_model_to_schema
-    from src.services.property_intersection import PropertyIntersection
 
     intersection = PropertyIntersection(authorized_property_repo)
+    advisories: list[Error] = []
 
-    for package in packages:
+    for index, package in enumerate(packages):
         overlay = getattr(package, "targeting_overlay", None)
         ref = getattr(overlay, "property_list", None) if overlay else None
         if ref is None:
@@ -1557,8 +1566,8 @@ def _emit_property_list_advisories(
         product = product_map.get(package.product_id)
         if product is None:
             continue
-        allowed_set = resolved_allowed_sets.get((str(ref.agent_url), ref.list_id))
-        if allowed_set is None:
+        buyer_identifiers = resolved_identifiers.get((str(ref.agent_url), ref.list_id))
+        if buyer_identifiers is None:
             continue
         try:
             # The intersection reads ``publisher_properties`` (AdCP selector
@@ -1566,7 +1575,7 @@ def _emit_property_list_advisories(
             # so convert to the schema Product first — the same object get_products
             # hands the intersection.
             schema_product = convert_product_model_to_schema(product)
-            result = intersection.filter_products([schema_product], allowed_set)
+            result = intersection.filter_products([schema_product], buyer_identifiers)
         except Exception as exc:
             logger.warning(
                 "[INTERSECTION-ADVISORY] Intersection failed for package %s: %s",
@@ -1579,13 +1588,35 @@ def _emit_property_list_advisories(
             reason = result.dropped_products[0].reason.value if result.dropped_products else "zero_match"
             logger.warning(
                 "[INTERSECTION-ADVISORY] Buyer's property_list has zero overlap with product %s "
-                "for package %s (reason=%s, list=%s/%s). Buy proceeds per SD2 accept-with-context.",
+                "for package %s (reason=%s, list=%s/%s). Buy proceeds per accept-with-context.",
                 product.product_id,
                 getattr(package, "package_id", None),
                 reason,
                 ref.agent_url,
                 ref.list_id,
             )
+            advisories.append(
+                Error(  # structural-guard: advisory: zero-overlap is accept-with-context — the success envelope explains the mismatch
+                    code="PRODUCT_UNAVAILABLE",
+                    message=(
+                        f"Buyer property_list {ref.agent_url}/{ref.list_id} has zero overlap with "
+                        f"product {product.product_id}'s properties ({reason}); the buy proceeds "
+                        "but this package may deliver no matching inventory"
+                    ),
+                    field=f"packages[{index}].targeting_overlay.property_list",
+                    suggestion=(
+                        "Verify the referenced list targets this seller's properties, or choose a "
+                        "product whose publisher_properties overlap the list."
+                    ),
+                    details={
+                        "product_id": product.product_id,
+                        "package_id": getattr(package, "package_id", None),
+                        "reason": reason,
+                        "list_id": ref.list_id,
+                    },
+                )
+            )
+    return advisories
 
 
 def _build_idempotency_hit_result(
@@ -1918,7 +1949,10 @@ async def _create_media_buy_impl(
         # Resolve buyer property_lists (external HTTP) before opening the
         # validation transaction, so no DB connection is held across a network
         # call and the event loop isn't blocked. Best-effort; feeds the advisory.
-        property_list_allowed_sets = await _resolve_property_list_allowed_sets(req.packages)
+        property_list_identifiers = await _resolve_property_list_identifiers(req.packages)
+        # Zero-overlap advisories computed during validation; attached to every
+        # success envelope below so the buy is never silently successful.
+        property_list_advisories: list[Error] = []
 
         # Get products first to determine currency from pricing options
         with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
@@ -1963,17 +1997,16 @@ async def _create_media_buy_impl(
                 ]
                 raise_if_property_targeting_violations(property_targeting_violations)
 
-                # Faithful intersection advisory (B5): when the buyer's
+                # Faithful intersection advisory: when the buyer's
                 # property_list resolves to zero overlap with a product's
-                # publisher_properties, log a warning operators can build
-                # log-based alerting on. Do NOT reject — per the
-                # inventory-targeting plan SD2 the storyboard
-                # ``inventory_list_no_match`` contract requires accept-with-
-                # context, and downstream adapter compilation (Kevel via B3,
-                # raise UNSUPPORTED via B4) emits its own envelope shape.
+                # publisher_properties, do NOT reject — the storyboard
+                # ``inventory_list_no_match`` contract is accept-with-CONTEXT.
+                # The advisories ride the success envelope's errors[] (and are
+                # logged for operator alerting); a silently-successful buy is
+                # the storyboard's named not-acceptable outcome.
                 assert validation_uow.authorized_properties is not None
-                _emit_property_list_advisories(
-                    req.packages, product_map, validation_uow.authorized_properties, property_list_allowed_sets
+                property_list_advisories = _build_property_list_advisories(
+                    req.packages, product_map, validation_uow.authorized_properties, property_list_identifiers
                 )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
@@ -2771,7 +2804,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
                     workflow_step_id=step.step_id,  # Client can track approval via this ID
                     context=req.context,
-                    errors=None,
+                    errors=property_list_advisories or None,
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -2922,7 +2955,7 @@ async def _create_media_buy_impl(
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                     workflow_step_id=step.step_id,
                     context=req.context,
-                    errors=None,
+                    errors=property_list_advisories or None,
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -3257,7 +3290,7 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
-                errors=None,
+                errors=property_list_advisories or None,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3756,7 +3789,7 @@ async def _create_media_buy_impl(
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
-            errors=None,
+            errors=property_list_advisories or None,
         )
 
         # Log activity

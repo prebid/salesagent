@@ -3,44 +3,49 @@
 Replaces the legacy per-product filter in ``src/core/tools/products.py`` that
 silently dropped products whose only ``publisher_properties`` selector was
 ``by_tag``. The faithful version resolves all three AdCP selector variants to
-the concrete *identifier values* (e.g. domains) the covered properties expose,
-then intersects those against the buyer's resolved property_list values:
+the concrete AuthorizedProperty rows the product covers, then matches each
+covered property against the buyer's resolved property_list identifiers:
 
 - ``selection_type="all"``: the product covers every property under
   ``publisher_domain`` → product is unbounded; always include.
 - ``selection_type="by_id"``: ``property_ids`` are AuthorizedProperty IDs
-  (slugs matching ``^[a-z0-9_]+$``), NOT identifier values — they are resolved
-  via ``AuthorizedPropertyRepository.list_by_ids`` to the rows' identifier
-  values.
+  (slugs matching ``^[a-z0-9_]+$``) scoped to the selector's
+  ``publisher_domain`` — the spec makes ``publisher_domain`` required on the
+  by_id variant precisely because slugs are only publisher-unique. Resolved via
+  ``AuthorizedPropertyRepository.list_by_ids(publisher_domain, ids)``.
 - ``selection_type="by_tag"``: tags are resolved via
-  ``AuthorizedPropertyRepository.list_by_tags`` to the matching rows, then to
-  their identifier values.
+  ``AuthorizedPropertyRepository.list_by_tags`` to the matching rows.
 
-Both sides are compared in the identifier-value namespace (e.g. ``espn.com``),
-normalized for parity (lowercase, ``www.``/``m.``/``mobile.`` stripped). This is
-the crux of the resolution: the buyer's property_list resolves to identifier
-values, while an AdCP ``PropertyId`` is a slug that only maps to a domain
-through its AuthorizedProperty row — the two never overlap without it.
+Matching is per covered PROPERTY, type-aware, and honors the spec
+``Identifier.value`` grammar via the SDK matchers (see
+``src/services/identifier_matching.py``): the buyer's identifiers are the
+pattern side, so a buyer's ``*.espn.com`` selects a property identified by
+``sports.espn.com``, and ``ios_bundle:com.foo`` never collides with
+``domain:com.foo``.
 
 Strict mode preserves the existing semantic: when
 ``product.property_targeting_allowed == False``, the buyer must accept the
-entire product (every covered identifier value must be in the allowed set);
-otherwise any non-empty intersection is enough.
+entire product — EVERY covered property must match the buyer's list; otherwise
+any covered property matching is enough.
 
 Returns ``IntersectionResult`` carrying both the kept products and the
-``DroppedProduct`` reasons so callers (e.g. ``_create_media_buy_impl``) can
-log advisories on zero-match per the inventory-targeting plan's SD2
-(accept-with-context, not reject).
+``DroppedProduct`` reasons so callers can surface them to the buyer
+(``GetProductsResponse.errors`` advisories) or log them
+(``_create_media_buy_impl``'s zero-match advisory per the inventory-targeting
+plan's accept-with-context decision).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from adcp.types import Identifier
+
+from src.core.database.models import AuthorizedProperty
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
-from src.services.property_discovery_service import _normalize_domain
+from src.services.identifier_matching import identifier_dicts, property_matches_buyer_list
 
 
 class DropReason(StrEnum):
@@ -61,21 +66,21 @@ class DroppedProduct:
 
 @dataclass(frozen=True)
 class IntersectionResult:
-    """Outcome of intersecting products with a buyer's allowed-property set.
+    """Outcome of intersecting products with a buyer's property_list.
 
     Attributes:
         kept_products: Products that pass the intersection.
         dropped_products: Products excluded, paired with the reason. Callers
-            can log these as advisories (per SD2 — zero-match is not a
-            rejection condition) or surface them in operator UI.
+            surface these as buyer-visible advisories (zero-match is not a
+            rejection condition) or in operator logs.
     """
 
-    kept_products: list[Any] = field(default_factory=list)
-    dropped_products: list[DroppedProduct] = field(default_factory=list)
+    kept_products: tuple[Any, ...] = ()
+    dropped_products: tuple[DroppedProduct, ...] = ()
 
     @property
     def zero_match(self) -> bool:
-        """True when no products survived the intersection — useful for SD2 advisory logging."""
+        """True when no products survived the intersection — drives the advisory paths."""
         return len(self.kept_products) == 0
 
 
@@ -84,69 +89,73 @@ class PropertyIntersection:
 
     Args:
         authorized_property_repo: Tenant-scoped repo used to resolve ``by_id``
-            and ``by_tag`` selectors to AuthorizedProperty rows (and thence to
-            their identifier values).
+            and ``by_tag`` selectors to AuthorizedProperty rows.
     """
 
     def __init__(self, authorized_property_repo: AuthorizedPropertyRepository) -> None:
         self._repo = authorized_property_repo
 
-    def filter_products(self, products: list[Any], allowed_properties: set[str]) -> IntersectionResult:
+    def filter_products(self, products: list[Any], buyer_identifiers: list[Identifier]) -> IntersectionResult:
         """Apply the intersection across a product list.
 
-        ``allowed_properties`` are the buyer's resolved property_list identifier
-        values; they are normalized here so comparison with the products'
-        (also-normalized) covered identifier values is apples-to-apples.
+        ``buyer_identifiers`` are the buyer's resolved property_list
+        identifiers, typed — ``.type`` participates in matching (an
+        ``ios_bundle`` value never matches a ``domain`` value) and
+        ``domain``-type values keep their spec grammar (wildcards, bare-domain
+        www/m selection).
         """
-        allowed_normalized = {_normalize_domain(value) for value in allowed_properties if value}
+        buyer_dicts = identifier_dicts(buyer_identifiers)
         kept: list[Any] = []
         dropped: list[DroppedProduct] = []
         for product in products:
-            outcome = self._evaluate(product, allowed_normalized)
+            outcome = self._evaluate(product, buyer_dicts)
             if outcome is None:
                 kept.append(product)
             else:
                 dropped.append(DroppedProduct(product=product, reason=outcome))
-        return IntersectionResult(kept_products=kept, dropped_products=dropped)
+        return IntersectionResult(kept_products=tuple(kept), dropped_products=tuple(dropped))
 
-    def _evaluate(self, product: Any, allowed_properties: set[str]) -> DropReason | None:
+    def _evaluate(self, product: Any, buyer_dicts: list[dict[str, str]]) -> DropReason | None:
         """Return ``None`` to keep, or the drop reason to exclude.
 
-        ``allowed_properties`` is already normalized by ``filter_products``.
+        The unit of matching is the covered PROPERTY: a property is selected by
+        the buyer's list when any of its identifiers matches any buyer
+        identifier (the SDK's ``identifiers_match`` semantic). Strict mode
+        requires every covered property to be selected.
         """
-        covered = self._resolve_covered_identifier_values(product)
-        if covered is None:
+        rows = self._resolve_covered_rows(product)
+        if rows is None:
             # selection_type='all' on at least one selector — product is unbounded.
             return None
-        if not covered:
+        if not rows:
             return DropReason.NO_RESOLVABLE_PROPERTIES
-        if not covered & allowed_properties:
+        row_matches = [property_matches_buyer_list(row.identifiers, buyer_dicts) for row in rows]
+        if not any(row_matches):
             return DropReason.NO_PROPERTY_OVERLAP
         if not getattr(product, "property_targeting_allowed", False):
-            # Strict: every covered identifier value must be in the buyer's list.
-            if not covered.issubset(allowed_properties):
+            # Strict: every covered property must be in the buyer's list.
+            if not all(row_matches):
                 return DropReason.STRICT_MODE_VIOLATION
         return None
 
-    def _resolve_covered_identifier_values(self, product: Any) -> set[str] | None:
-        """Resolve a product's publisher_properties to the covered identifier values.
+    def _resolve_covered_rows(self, product: Any) -> list[AuthorizedProperty] | None:
+        """Resolve a product's publisher_properties to covered AuthorizedProperty rows.
 
         Returns ``None`` when at least one selector is ``selection_type='all'``
-        (the product is unbounded). Returns an empty set when the product has no
-        selectors, or only selectors that resolve to no AuthorizedProperty rows
-        (unknown ``by_id`` IDs, or ``by_tag`` tags that match nothing).
+        (the product is unbounded). Returns an empty list when the product has
+        no selectors, or only selectors that resolve to no AuthorizedProperty
+        rows (unknown ``by_id`` IDs, or ``by_tag`` tags that match nothing).
 
-        ``by_id`` ``property_ids`` are AuthorizedProperty IDs (slugs) and
-        ``by_tag`` resolves tags to rows; both are mapped to their rows'
-        normalized identifier values — the namespace the buyer's property_list
-        is expressed in.
+        ``by_id`` lookups are scoped to the selector's ``publisher_domain``:
+        ``PropertyId`` slugs are only unique per publisher, so an unscoped
+        lookup could resolve a slug authored for pub-a against pub-b's row.
         """
         selectors = getattr(product, "publisher_properties", None) or []
         if not selectors:
-            return set()
+            return []
 
-        by_id_ids: set[str] = set()
-        rows: list[Any] = []
+        by_id_groups: dict[str, set[str]] = {}
+        rows: list[AuthorizedProperty] = []
         for selector in selectors:
             inner = getattr(selector, "root", selector)
             selection_type = getattr(inner, "selection_type", None)
@@ -155,27 +164,14 @@ class PropertyIntersection:
                 return None
             if selection_type == "by_id":
                 # ``PropertyId`` is a ``RootModel[str]`` carrying an
-                # AuthorizedProperty ID (slug); resolved to identifier values below.
-                by_id_ids.update(pid.root for pid in inner.property_ids)
+                # AuthorizedProperty ID (slug), publisher-scoped by the selector.
+                by_id_groups.setdefault(inner.publisher_domain, set()).update(pid.root for pid in inner.property_ids)
             elif selection_type == "by_tag":
                 # ``PropertyTag`` is a ``RootModel[str]`` — direct ``.root`` access.
                 tags = [tag.root for tag in inner.property_tags]
                 rows.extend(self._repo.list_by_tags(inner.publisher_domain, tags))
 
-        if by_id_ids:
-            rows.extend(self._repo.list_by_ids(sorted(by_id_ids)))
+        for publisher_domain in sorted(by_id_groups):
+            rows.extend(self._repo.list_by_ids(publisher_domain, sorted(by_id_groups[publisher_domain])))
 
-        values: set[str] = set()
-        for row in rows:
-            values.update(self._identifier_values(row))
-        return values
-
-    @staticmethod
-    def _identifier_values(row: Any) -> set[str]:
-        """The normalized identifier values an AuthorizedProperty row exposes."""
-        values: set[str] = set()
-        for ident in getattr(row, "identifiers", None) or []:
-            value = ident.get("value") if isinstance(ident, dict) else getattr(ident, "value", None)
-            if value:
-                values.add(_normalize_domain(value))
-        return values
+        return rows

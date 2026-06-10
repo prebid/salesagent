@@ -39,18 +39,21 @@ class AuthorizedPropertyRepository:
         )
         return list(self._session.scalars(stmt).all())
 
-    def list_by_ids(self, property_ids: list[str]) -> list[AuthorizedProperty]:
-        """Return authorized properties whose ``property_id`` is in ``property_ids``.
+    def list_by_ids(self, publisher_domain: str, property_ids: list[str]) -> list[AuthorizedProperty]:
+        """Return ``publisher_domain``'s properties whose ``property_id`` is in ``property_ids``.
 
         Used by the faithful intersection to resolve a product's ``by_id``
         selectors — whose ``property_ids`` are AuthorizedProperty IDs (slugs),
-        not identifier values — to their concrete identifier values for
-        comparison against a buyer's resolved property_list.
+        not identifier values. The lookup is publisher-scoped because the spec
+        requires ``publisher_domain`` on the by_id selector: slugs like
+        ``homepage`` are only unique per publisher, so an unscoped lookup could
+        resolve a slug authored for one publisher against another's row.
         """
         if not property_ids:
             return []
         stmt = select(AuthorizedProperty).where(
             AuthorizedProperty.tenant_id == self._tenant_id,
+            AuthorizedProperty.publisher_domain == publisher_domain,
             AuthorizedProperty.property_id.in_(property_ids),
         )
         return list(self._session.scalars(stmt).all())

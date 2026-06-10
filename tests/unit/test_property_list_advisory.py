@@ -1,20 +1,20 @@
-"""Unit pins for the B5 property_list zero-overlap advisory in ``_create_media_buy_impl``.
+"""Unit pins for the property_list zero-overlap advisory in ``_create_media_buy_impl``.
 
-``_emit_property_list_advisories`` is accept-with-context (inventory-targeting
-plan SD2): it logs a WARNING when a buyer's ``property_list`` has zero overlap
-with a package's product, and it NEVER raises — intersection errors are
-swallowed so ``create_media_buy`` proceeds (the adapter boundary emits the
-user-facing envelope: Kevel resolves to empty siteIds, B4 adapters raise
-UNSUPPORTED_FEATURE).
+``_build_property_list_advisories`` is accept-with-CONTEXT: zero overlap
+between a buyer's ``property_list`` and a package's product RETURNS buyer-
+visible ``Error`` advisories (the caller attaches them to the create response)
+and logs an operator WARNING. It NEVER raises — intersection errors are
+swallowed so ``create_media_buy`` proceeds; advisory computation must never
+veto a booking.
 
 Buyer property_lists are resolved over HTTP by
-``_resolve_property_list_allowed_sets`` BEFORE the validation transaction opens
+``_resolve_property_list_identifiers`` BEFORE the validation transaction opens
 (so no DB connection is held across a network call, and the event loop isn't
 blocked). That pre-fetch is also best-effort — a failed resolution is logged
 and omitted, and the advisory simply skips a list it didn't receive.
 
-Without these pins, reverting the advisory to raise — or deleting the call —
-would not turn any test red.
+These pins cover the helper's return contract; the envelope attachment and
+wire shape are pinned by the create-side integration/wire tests.
 """
 
 from __future__ import annotations
@@ -23,13 +23,14 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from adcp.types import Identifier, PropertyIdentifierTypes, PropertyListReference
+from adcp.types import PropertyListReference
 
 from src.core.tools.media_buy_create import (
-    _emit_property_list_advisories,
-    _resolve_property_list_allowed_sets,
+    _build_property_list_advisories,
+    _resolve_property_list_identifiers,
 )
 from src.services.property_intersection import DroppedProduct, DropReason, IntersectionResult
+from tests.helpers.adcp_factories import create_test_identifiers as _buyers
 
 pytestmark = pytest.mark.unit
 
@@ -62,27 +63,38 @@ def _allowed_key(pkg: MagicMock) -> tuple[str, str]:
 
 
 class TestEmitPropertyListAdvisories:
-    def test_zero_overlap_logs_warning_and_does_not_raise(self, caplog):
-        """Zero-overlap is surfaced as an advisory WARNING, not a raise (SD2 accept-with-context)."""
+    def test_zero_overlap_returns_buyer_advisory_and_logs(self, caplog):
+        """Zero-overlap is accept-with-CONTEXT: a buyer-visible Error advisory is
+        returned (the caller attaches it to the success envelope's errors[]) and
+        the operator WARNING is still logged. Never a raise."""
         product = MagicMock()
         product.product_id = "p1"
         pkg = _package("p1")
         zero = IntersectionResult(
-            kept_products=[],
-            dropped_products=[DroppedProduct(product=product, reason=DropReason.NO_PROPERTY_OVERLAP)],
+            kept_products=(),
+            dropped_products=(DroppedProduct(product=product, reason=DropReason.NO_PROPERTY_OVERLAP),),
         )
         with (
             patch(_CONVERT, side_effect=lambda p: p),
             patch(_FILTER, return_value=zero),
             caplog.at_level(logging.WARNING, logger=_LOGGER),
         ):
-            # Must return None without raising.
-            assert (
-                _emit_property_list_advisories(
-                    [pkg], {"p1": product}, MagicMock(), {_allowed_key(pkg): {"nomatch.example"}}
-                )
-                is None
+            advisories = _build_property_list_advisories(
+                [pkg], {"p1": product}, MagicMock(), {_allowed_key(pkg): _buyers("nomatch.example")}
             )
+
+        assert len(advisories) == 1
+        advisory = advisories[0]
+        assert advisory.code == "PRODUCT_UNAVAILABLE"
+        assert "zero overlap" in advisory.message and "p1" in advisory.message
+        assert advisory.field == "packages[0].targeting_overlay.property_list"
+        assert advisory.suggestion is not None
+        assert advisory.details == {
+            "product_id": "p1",
+            "package_id": "pkg_p1",
+            "reason": "no_property_overlap",
+            "list_id": "L1",
+        }
 
         messages = [r.getMessage() for r in caplog.records]
         assert any(
@@ -99,9 +111,10 @@ class TestEmitPropertyListAdvisories:
             patch(_FILTER, side_effect=RuntimeError("intersection boom")),
             caplog.at_level(logging.WARNING, logger=_LOGGER),
         ):
-            # Must not raise despite the intersection blowing up.
+            # Must not raise despite the intersection blowing up; no advisory emitted.
             assert (
-                _emit_property_list_advisories([pkg], {"p1": product}, MagicMock(), {_allowed_key(pkg): {"x"}}) is None
+                _build_property_list_advisories([pkg], {"p1": product}, MagicMock(), {_allowed_key(pkg): _buyers("x")})
+                == []
             )
 
         messages = [r.getMessage() for r in caplog.records]
@@ -118,8 +131,8 @@ class TestEmitPropertyListAdvisories:
             patch(_FILTER) as filt,
             caplog.at_level(logging.WARNING, logger=_LOGGER),
         ):
-            # Empty resolved map → nothing to intersect, no filter call, no advisory log.
-            assert _emit_property_list_advisories([pkg], {"p1": product}, MagicMock(), {}) is None
+            # Empty resolved map → nothing to intersect, no filter call, no advisory.
+            assert _build_property_list_advisories([pkg], {"p1": product}, MagicMock(), {}) == []
         filt.assert_not_called()
         assert not [r for r in caplog.records if "INTERSECTION-ADVISORY" in r.getMessage()]
 
@@ -132,10 +145,10 @@ class TestEmitPropertyListAdvisories:
             caplog.at_level(logging.WARNING, logger=_LOGGER),
         ):
             assert (
-                _emit_property_list_advisories(
+                _build_property_list_advisories(
                     [_package("p1", with_property_list=False)], {"p1": product}, MagicMock(), {}
                 )
-                is None
+                == []
             )
         filt.assert_not_called()
         assert not [r for r in caplog.records if "INTERSECTION-ADVISORY" in r.getMessage()]
@@ -149,16 +162,14 @@ class TestResolvePropertyListAllowedSets:
         pkg = _package("p1")
         with patch(
             _RESOLVE_ASYNC,
-            new=AsyncMock(
-                return_value=[
-                    Identifier(type=PropertyIdentifierTypes.domain, value="espn.com"),
-                    Identifier(type=PropertyIdentifierTypes.domain, value="cnn.com"),
-                ]
-            ),
+            new=AsyncMock(return_value=_buyers("espn.com", "cnn.com")),
         ):
-            resolved = await _resolve_property_list_allowed_sets([pkg])
+            resolved = await _resolve_property_list_identifiers([pkg])
 
-        assert resolved == {_allowed_key(pkg): {"espn.com", "cnn.com"}}
+        assert {(i.type.value, i.value) for i in resolved[_allowed_key(pkg)]} == {
+            ("domain", "espn.com"),
+            ("domain", "cnn.com"),
+        }
 
     @pytest.mark.asyncio
     async def test_resolution_failure_is_swallowed_and_omitted(self, caplog):
@@ -168,7 +179,7 @@ class TestResolvePropertyListAllowedSets:
             patch(_RESOLVE_ASYNC, new=AsyncMock(side_effect=RuntimeError("agent unreachable"))),
             caplog.at_level(logging.WARNING, logger=_LOGGER),
         ):
-            resolved = await _resolve_property_list_allowed_sets([pkg])
+            resolved = await _resolve_property_list_identifiers([pkg])
 
         assert resolved == {}
         messages = [r.getMessage() for r in caplog.records]
@@ -180,7 +191,7 @@ class TestResolvePropertyListAllowedSets:
     async def test_no_property_list_yields_empty_without_fetch(self):
         """Packages without property_list trigger no resolver call and an empty result."""
         with patch(_RESOLVE_ASYNC, new=AsyncMock()) as resolve:
-            resolved = await _resolve_property_list_allowed_sets([_package("p1", with_property_list=False)])
+            resolved = await _resolve_property_list_identifiers([_package("p1", with_property_list=False)])
         assert resolved == {}
         resolve.assert_not_awaited()
 
@@ -189,9 +200,10 @@ class TestResolvePropertyListAllowedSets:
         """Two packages referencing the same list resolve it a single time."""
         pkg_a = _package("p1")
         pkg_b = _package("p2")  # same agent_url/list_id as pkg_a via _package defaults
-        resolve = AsyncMock(return_value=[Identifier(type=PropertyIdentifierTypes.domain, value="espn.com")])
+        resolve = AsyncMock(return_value=_buyers("espn.com"))
         with patch(_RESOLVE_ASYNC, new=resolve):
-            resolved = await _resolve_property_list_allowed_sets([pkg_a, pkg_b])
+            resolved = await _resolve_property_list_identifiers([pkg_a, pkg_b])
 
-        assert resolved == {_allowed_key(pkg_a): {"espn.com"}}
+        assert list(resolved) == [_allowed_key(pkg_a)]
+        assert [i.value for i in resolved[_allowed_key(pkg_a)]] == ["espn.com"]
         assert resolve.await_count == 1

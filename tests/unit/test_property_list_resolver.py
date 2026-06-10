@@ -85,12 +85,12 @@ def _make_mock_client(get_side_effect=None, get_return_value=None) -> AsyncMock:
 
 
 class TestResolvePropertyList:
-    """Tests for resolve_property_list()."""
+    """Tests for resolve_property_list_typed()."""
 
     @pytest.mark.asyncio
     async def test_successful_resolution(self):
         """Successful HTTP call returns identifier value strings."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
         response_json = _make_response_json(
@@ -105,14 +105,17 @@ class TestResolvePropertyList:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            result = await resolve_property_list(ref)
+            result = await resolve_property_list_typed(ref)
 
-        assert result == ["example.com", "test.org"]
+        assert [(ident.type.value, ident.value) for ident in result] == [
+            ("domain", "example.com"),
+            ("domain", "test.org"),
+        ]
 
     @pytest.mark.asyncio
     async def test_bearer_auth_header_sent(self):
         """When auth_token is present, Bearer header is sent."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(auth_token="my-secret-token")
         response_json = _make_response_json(
@@ -124,7 +127,7 @@ class TestResolvePropertyList:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
 
         call_kwargs = mock_client.get.call_args
         assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer my-secret-token"
@@ -132,7 +135,7 @@ class TestResolvePropertyList:
     @pytest.mark.asyncio
     async def test_no_auth_header_when_token_is_none(self):
         """When auth_token is None, no Authorization header is sent."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(auth_token=None)
         response_json = _make_response_json(
@@ -144,7 +147,7 @@ class TestResolvePropertyList:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
 
         call_kwargs = mock_client.get.call_args
         assert "Authorization" not in call_kwargs.kwargs["headers"]
@@ -152,7 +155,7 @@ class TestResolvePropertyList:
     @pytest.mark.asyncio
     async def test_correct_url_construction(self):
         """GET request is sent to {agent_url}/lists/{list_id}."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url="https://agent.example.com", list_id="my-list-42")
         response_json = _make_response_json(
@@ -164,7 +167,7 @@ class TestResolvePropertyList:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
 
         call_args = mock_client.get.call_args
         url = call_args.args[0] if call_args.args else call_args.kwargs.get("url")
@@ -173,7 +176,7 @@ class TestResolvePropertyList:
     @pytest.mark.asyncio
     async def test_empty_identifiers_returns_empty_list(self):
         """When identifiers is None in response, return empty list."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
         response_json = _make_response_json(identifiers=None)
@@ -183,7 +186,7 @@ class TestResolvePropertyList:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            result = await resolve_property_list(ref)
+            result = await resolve_property_list_typed(ref)
 
         assert result == []
 
@@ -194,7 +197,7 @@ class TestCaching:
     @pytest.mark.asyncio
     async def test_cached_result_avoids_http_call(self):
         """Second call with same ref returns cached result, no HTTP."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
         future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
@@ -208,17 +211,17 @@ class TestCaching:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            result1 = await resolve_property_list(ref)
-            result2 = await resolve_property_list(ref)
+            result1 = await resolve_property_list_typed(ref)
+            result2 = await resolve_property_list_typed(ref)
 
-        assert result1 == ["cached.com"]
-        assert result2 == ["cached.com"]
+        assert [ident.value for ident in result1] == ["cached.com"]
+        assert result2 == result1
         assert mock_client.get.call_count == 1  # Only one HTTP call
 
     @pytest.mark.asyncio
     async def test_expired_cache_causes_refetch(self):
         """Expired cache entry triggers a new HTTP call."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
         past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
@@ -232,15 +235,15 @@ class TestCaching:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            await resolve_property_list(ref)
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
+            await resolve_property_list_typed(ref)
 
         assert mock_client.get.call_count == 2  # Both calls hit HTTP
 
     @pytest.mark.asyncio
     async def test_no_cache_valid_until_uses_default_ttl(self):
         """When cache_valid_until is None, cache with default TTL."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
         response_json = _make_response_json(
@@ -253,17 +256,17 @@ class TestCaching:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            result1 = await resolve_property_list(ref)
-            result2 = await resolve_property_list(ref)
+            result1 = await resolve_property_list_typed(ref)
+            result2 = await resolve_property_list_typed(ref)
 
-        assert result1 == ["default-ttl.com"]
-        assert result2 == ["default-ttl.com"]
+        assert [ident.value for ident in result1] == ["default-ttl.com"]
+        assert result2 == result1
         assert mock_client.get.call_count == 1  # Cached despite no cache_valid_until
 
     @pytest.mark.asyncio
     async def test_different_list_ids_cached_separately(self):
         """Different list_ids have separate cache entries."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
@@ -297,11 +300,11 @@ class TestCaching:
             mock_client.get = mock_get
             mock_client_cls.return_value = mock_client
 
-            result_a = await resolve_property_list(ref1)
-            result_b = await resolve_property_list(ref2)
+            result_a = await resolve_property_list_typed(ref1)
+            result_b = await resolve_property_list_typed(ref2)
 
-        assert result_a == ["a.com"]
-        assert result_b == ["b.com"]
+        assert [ident.value for ident in result_a] == ["a.com"]
+        assert [ident.value for ident in result_b] == ["b.com"]
         assert call_count == 2
 
 
@@ -311,7 +314,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_http_error_raises_adcp_adapter_error(self):
         """HTTP 4xx/5xx errors are wrapped in AdCPAdapterError."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
 
@@ -328,12 +331,12 @@ class TestErrorHandling:
             mock_client_cls.return_value = mock_client
 
             with pytest.raises(AdCPAdapterError, match="property list"):
-                await resolve_property_list(ref)
+                await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     async def test_timeout_raises_adcp_adapter_error(self):
         """httpx.TimeoutException is wrapped in AdCPAdapterError."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
 
@@ -344,12 +347,12 @@ class TestErrorHandling:
             mock_client_cls.return_value = mock_client
 
             with pytest.raises(AdCPAdapterError, match="timed out"):
-                await resolve_property_list(ref)
+                await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     async def test_connection_error_raises_adcp_adapter_error(self):
         """httpx.ConnectError is wrapped in AdCPAdapterError."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
 
@@ -360,12 +363,12 @@ class TestErrorHandling:
             mock_client_cls.return_value = mock_client
 
             with pytest.raises(AdCPAdapterError, match="connection"):
-                await resolve_property_list(ref)
+                await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     async def test_failed_requests_are_not_cached(self):
         """Failed HTTP calls should not populate the cache."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
 
@@ -393,12 +396,12 @@ class TestErrorHandling:
             mock_client_cls.return_value = mock_client
 
             with pytest.raises(AdCPAdapterError):
-                await resolve_property_list(ref)
+                await resolve_property_list_typed(ref)
 
             # Second call should succeed (not return cached error)
-            result = await resolve_property_list(ref)
+            result = await resolve_property_list_typed(ref)
 
-        assert result == ["success.com"]
+        assert [ident.value for ident in result] == ["success.com"]
         assert call_count == 2
 
 
@@ -421,12 +424,12 @@ class TestSSRFProtection:
     )
     async def test_rejects_http_scheme(self, malicious_url, description):
         """HTTP URLs must be rejected regardless of destination (HTTPS required)."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url=malicious_url)
 
         with pytest.raises(AdCPAdapterError, match="HTTPS"):
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -441,7 +444,7 @@ class TestSSRFProtection:
     )
     async def test_rejects_private_ip_after_dns_resolution(self, malicious_url, resolved_ip, description):
         """HTTPS URLs that resolve to private/internal IPs must be rejected."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url=malicious_url)
 
@@ -450,7 +453,7 @@ class TestSSRFProtection:
             return_value=resolved_ip,
         ):
             with pytest.raises(AdCPAdapterError, match="[Bb]locked|[Pp]rivate|[Ii]nternal"):
-                await resolve_property_list(ref)
+                await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -459,37 +462,37 @@ class TestSSRFProtection:
     )
     async def test_rejects_blocked_hostnames(self, hostname):
         """Known internal hostnames must be rejected even with HTTPS."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url=f"https://{hostname}")
 
         with pytest.raises(AdCPAdapterError, match="blocked"):
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     async def test_rejects_non_https_url(self):
         """Plain HTTP agent_url must be rejected (HTTPS required)."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url="http://external-agent.example.com")
 
         with pytest.raises(AdCPAdapterError, match="HTTPS"):
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     async def test_rejects_non_http_schemes(self):
         """Non-HTTP schemes (file://, ftp://, etc.) must be rejected."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url="file:///etc/passwd")
 
         with pytest.raises(AdCPAdapterError, match="HTTPS"):
-            await resolve_property_list(ref)
+            await resolve_property_list_typed(ref)
 
     @pytest.mark.asyncio
     async def test_allows_valid_https_public_url(self):
         """A valid HTTPS URL to a public host must still work."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url="https://agent.example.com")
         response_json = _make_response_json(
@@ -501,20 +504,20 @@ class TestSSRFProtection:
             mock_client = _make_mock_client(get_return_value=mock_response)
             mock_client_cls.return_value = mock_client
 
-            result = await resolve_property_list(ref)
+            result = await resolve_property_list_typed(ref)
 
-        assert result == ["pub.com"]
+        assert [ident.value for ident in result] == ["pub.com"]
 
     @pytest.mark.asyncio
     async def test_validation_happens_before_http_request(self):
         """URL validation must reject BEFORE any network I/O."""
-        from src.core.property_list_resolver import resolve_property_list
+        from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url="http://evil.internal:9200")
 
         with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
             with pytest.raises(AdCPAdapterError, match="HTTPS"):
-                await resolve_property_list(ref)
+                await resolve_property_list_typed(ref)
 
             # AsyncClient should never have been instantiated
             mock_client_cls.assert_not_called()
