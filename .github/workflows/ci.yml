@@ -25,7 +25,6 @@ env:
   GOOGLE_CLIENT_SECRET: test_client_secret
   SUPER_ADMIN_EMAILS: test@example.com
   ADCP_TESTING: true
-  PYTEST_CURRENT_TEST: true
   ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
 
 jobs:
