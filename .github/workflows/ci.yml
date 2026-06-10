@@ -336,12 +336,16 @@ jobs:
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
-      - name: Run BDD tests
+      - uses: ./.github/actions/_pytest
         env:
+          # Separate data file so the artifact cannot collide with unit's .coverage.
           COVERAGE_FILE: .coverage.bdd
+        with:
+          paths: tests/bdd/
+          coverage_xml: coverage-bdd.xml
+          extra_args: -n auto --dist=loadfile --timeout=60
+      - name: Combine xdist coverage fragments
         run: |
-          uv run pytest tests/bdd/ -n auto --dist=loadfile -q --tb=line \
-            --cov=src --cov-report=xml:coverage-bdd.xml --cov-report= --timeout=60
           shopt -s nullglob
           fragments=(.coverage.bdd.*)
           if [ "${#fragments[@]}" -gt 0 ]; then
