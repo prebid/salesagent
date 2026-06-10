@@ -6,7 +6,7 @@
 **Grounding detail:** `grounding/A-spec-storyboard-contract.md`, `grounding/B-unravel-map.md`, `grounding/C-architecture-bdd-obligations.md`.
 
 ## The grounded contract (AdCP 3.0.1; OBSERVED unless noted)
-- Spec rule entered 3.0.0 (tagged 2026-04-22) / 3.0.1 (2026-04-28) — **predates #1312**. Not a spec change under us.
+- Spec rule entered 3.0.0 (tagged 2026-04-22) / 3.0.1 (2026-04-28) — **predates #1312**.
 - **SUCCESS-ONLY caching.** security.mdx rule 3 verbatim: *"Only successful responses are cached. On any error … the key is not stored. A retry re-executes."* #1312 built the inverse.
 - **idempotency_key REQUIRED** on every mutating request; missing → `INVALID_REQUEST` (storyboard also accepts `VALIDATION_ERROR`), at **schema-validation time, before cache lookup**. Format `^[A-Za-z0-9_.:-]{16,255}$`.
 - **`replayed`**: boolean, **top-level on the envelope** (REST/A2A) / top of the structured result (MCP); **injected at response time, NOT stored**; inner payload is the original success **verbatim**. Fresh = false/omitted.

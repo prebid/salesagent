@@ -2,11 +2,11 @@
 
 **Confirmed finding:** PR #1312's core model (cache + replay *rejection* envelopes; missing key = no-op) is the **inverse of AdCP spec 3.0.1** (our pin). Spec mandates: cache **successes only**; on any error the key is **NOT stored** and a retry **re-executes**; missing key → **INVALID_REQUEST**.
 
-**Timeline (airtight — the spec was NOT changed under us):**
+**Timeline (the spec predates the PR):**
 - Idempotency contract present in spec **3.0.0** (snapshot 2026-04-26) and **3.0.1** (2026-04-28) — verbatim "Only successful responses are cached" / "A retry re-executes" / missing key MUST → INVALID_REQUEST.
 - Salesagent pinned `adcp>=4.3.0` (= spec 3.0.1) by 2026-05-14.
 - #1303 filed 2026-05-14; #1312 started 2026-05-17 → spec rule predated the work by ~3 weeks; project was already on 3.0.1.
-- Divergence origin: internal contract **#1303 item 7** ("replay after rejection"), written contrary to the already-adopted spec. Implementation faithfully built the wrong contract.
+- Divergence origin: internal contract **#1303 item 7** ("replay after rejection"), written contrary to the already-adopted spec. The implementation built #1303 item 7 as written, which diverged from the adopted spec.
 - Corroboration: spec CHANGELOG logs a live conformance failure 2026-06-01 (`create_media_buy_replay: IDEMPOTENCY_CONFLICT`) — the success-caching model is actively enforced by the runner.
 
 **Spec-conformant target model (AdCP 3.0.1 §Idempotency, `dist/docs/3.0.1/building/implementation/security.mdx`) — 8 rules:**
@@ -24,22 +24,22 @@
 
 **Survives from the prior plan below:** Phase 0 merge of main (still required; empirically 6 conflicts, 1 real landmine [audit rename @ `media_buy_create.py:2320`, inside a conflict hunk], 1 guard fails [`no_error_code_kwarg` — add 2 keyed entries: `_raise_idempotency_rejection_replay`, `_create_media_buy_impl`]; no new migration head). The **F8 success-caching direction is now the CORE**, not an add-on (prior F8 design had a TOCTOU hole across 3 sites `:1748`/`:2563`/`:3462` → fix in `_build_idempotency_hit_result`; `replayed` belongs on `CreateMediaBuySuccess`, NOT the dead `ProtocolEnvelope.wrap`). ARCH-1 (delete the local hash fork for `adcp.server.idempotency`) still valid. Guard-audit constraints still apply.
 
-**POST-COMPACTION AGENDA (max-thinking):**
-1. **Ground in the spec, in-repo** — establish a repeatable mechanism so we plan from spec text, not assumptions. See `[[reference_adcp_spec_grounding]]`. Investigate what the installed `adcp` pkg bundles (codes/types only — NOT the behavioral contract); decide whether to vendor a pinned spec snapshot in-repo and/or add a docs pointer + CLAUDE.md gate.
+**AGENDA:**
+1. **Ground in the spec, in-repo** — establish a repeatable mechanism so we plan from spec text, not assumptions.  Investigate what the installed `adcp` pkg bundles (codes/types only — NOT the behavioral contract); decide whether to vendor a pinned spec snapshot in-repo and/or add a docs pointer + CLAUDE.md gate.
 2. **Map the unravel** — full inventory of every rejection-cache touchpoint (model, migrations, repo, `_impl` call sites, tests, BDD, capability claim, schema-field relaxation) to remove/repurpose.
 3. **Design the conformant rebuild** — success-caching across mutating tools; missing-key reject; conflict/expired/replayed; restore required key; rate-limit + clock-skew. Decide PR decomposition (now far bigger than contract item 7).
-4. **Escalate the lesson** — memory written (`[[feedback_ground_protocol_work_in_spec_not_assumptions]]`); propose CLAUDE.md gate: protocol-behavior PRs cite spec section+version before impl.
+4. **Escalate the lesson** — propose CLAUDE.md gate: protocol-behavior PRs cite spec section+version before impl.
 
 ---
 
-# PR #1312 — Idempotency Completion: Gold-Standard Execution Plan
+# PR #1312 — Idempotency Completion: Execution Plan
 > NOTE: the plan below (complete-the-expansion) is SUPERSEDED by the status block above. Retained for the parts that survive (Phase 0 merge mechanics, guard/harness constraints, F8 design + its TOCTOU fix).
 
 **Branch:** `feature/b6-idempotency-replay-table` · **Base:** `main` · **PR:** #1312
-**Status at planning:** DIRTY/CONFLICTING with main; HEAD `9a689f8c2` (= the commit Konstantine's 2026-06-08 round-3 review was written against).
+**Status at planning:** DIRTY/CONFLICTING with main; HEAD `9a689f8c2` (the commit the 2026-06-08 round-3 PR review was written against).
 **Direction (decided):** Complete the June-7 idempotency expansion to **full AdCP conformance**, not contract-item-7 minimum.
 
-This plan is the single source of truth for addressing Konstantine's round-3 review + the conformance gap his review did not cover. Every item is verified against code at HEAD; line refs are live unless noted.
+This plan is the single source of truth for addressing the round-3 PR review + the conformance gap that review did not cover. Every item is verified against code at HEAD; line refs are live unless noted.
 
 ---
 
@@ -175,7 +175,7 @@ Verified: `IDEMPOTENCY_CONFLICT` (409/terminal) and `IDEMPOTENCY_EXPIRED` (410/t
 - **TEST-2:** evidence it was FALSE-as-stated (synthesized envelope is `None` on MCP/A2A/REST; `assert is_error` at `:127` fails loud first) — and note we hardened the dead fallback anyway (4f). Mention the *real*, pre-existing, out-of-scope softness at `dispatchers.py:69` so the steelman is acknowledged.
 - **ARCH-4:** explain keep-the-builder: #1307 reinforced `build_two_layer_error_envelope` as the wire-shape SSOT and deprecated `to_adcp_error`; the cache stores a wire envelope for verbatim replay, a legitimate non-boundary use; hand-rolling a projection would duplicate the wire shape.
 - **`Union[...]` migration syntax:** push back — it's the repo-wide alembic template; modernizing only two migrations is inconsistent and we never edit committed migrations. Suggest a separate repo-wide chore if wanted.
-- **"three-copy seed block":** ask Konstantine to point at the exact block — could not locate a byte-identical 3× block (flagged unverified).
+- **"three-copy seed block":** the review comment did not specify the exact block — could not locate a byte-identical 3× block (flagged unverified).
 
 ---
 
@@ -202,10 +202,10 @@ no-model-dump-in-impl (keep wrapper outside `_impl`) · no-toolerror-in-impl (ra
 3. `tox -e unit` (catches import errors ruff misses)
 4. `tox -e integration` + `tox -e bdd` on a **fresh DB**
 5. `./run_all_tests.sh ci` (full suite — `make quality` skips uv-secure + network schema-alignment)
-6. **Two-phase audit:** after implementation, run an Opus audit subagent (explicit memory Read) over the diff before any push.
+6. **Two-phase audit:** after implementation, audit the diff before any push.
 
 ## Open / unverified
 
-- "three-copy seed block" location (ask Konstantine).
+- "three-copy seed block" location (unspecified in the review comment).
 - Redundant tenant FK removal (4d) — verify no query depends on it first.
 - `expire_old` caller (2f) — confirm document-and-defer vs wire.

@@ -4,7 +4,7 @@
 **Branch:** `feature/b6-idempotency-replay-table`.
 **Reads:** `SYNTHESIS.md` (contract + decisions), `grounding/{A,B,C}-*.md` (detail). This is the build plan.
 
-**▶ IMPLEMENTATION START HERE (post-compaction):** (1) Capture baseline — `tox -e bdd -- -k idempotency` + the create-flow idempotency tests (needs Docker/DB) — so we know green-vs-xfail BEFORE the breaking required-key change. (2) Implement on the commit-units in **"Review corrections § Sequencing fix"** at the END of this file — NOT the body's 9-step order. The **"Review corrections"** section OVERRIDES the body wherever they conflict. The CLAUDE.md spec-grounding gate is already added (CLAUDE.md § AdCP Spec Version). Branch is already `feature/b6-idempotency-replay-table` (no branch cut needed).
+**▶ IMPLEMENTATION START HERE:** (1) Capture baseline — `tox -e bdd -- -k idempotency` + the create-flow idempotency tests (needs Docker/DB) — so we know green-vs-xfail BEFORE the breaking required-key change. (2) Implement on the commit-units in **"Review corrections § Sequencing fix"** at the END of this file — NOT the body's 9-step order. The **"Review corrections"** section OVERRIDES the body wherever they conflict. The CLAUDE.md spec-grounding gate is already added (CLAUDE.md § AdCP Spec Version). Branch is already `feature/b6-idempotency-replay-table` (no branch cut needed).
 
 ## Settled decisions
 - **β (chosen):** repurpose `idempotency_attempts` as a generic SUCCESS-response cache (store envelope + hash + TTL; replay verbatim; conflict on hash mismatch). Wire `create_media_buy` now; substrate generalizes to other mutating tools (fast-follow).
