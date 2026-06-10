@@ -144,6 +144,33 @@ def create_product_with_empty_pricing(**overrides) -> Product:
     return create_test_product(pricing_options=[], **overrides)
 
 
+def create_test_property_list_create_params(product_id: str) -> dict[str, Any]:
+    """create_media_buy params (dict form) with one property_list-targeted package.
+
+    Shared by the property_list wire tests (reject + advisory sides) so the
+    request shape under test is defined once: a single package carrying
+    ``TEST_PROPERTY_LIST_TARGETING_OVERLAY`` over a future flight window.
+    Usable directly as A2A skill_params / MCP arguments, or splatted into
+    ``CreateMediaBuyRequest(**params)``.
+    """
+    from tests.utils.database_helpers import future_iso_date_range
+
+    start, end = future_iso_date_range()
+    return {
+        "brand": {"domain": "testbrand.com"},
+        "packages": [
+            create_test_package_request_dict(
+                product_id=product_id,
+                pricing_option_id="cpm_usd_fixed",
+                budget=5000.0,
+                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
+            )
+        ],
+        "start_time": start,
+        "end_time": end,
+    }
+
+
 def create_test_identifier(value: str, type_: str = "domain") -> Identifier:
     """Create a typed AdCP property ``Identifier``.
 

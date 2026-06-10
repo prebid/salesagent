@@ -94,3 +94,25 @@ def create_a2a_text_message(text: str) -> Message:
     )
     msg.parts.append(Part(text=text))
     return msg
+
+
+async def drive_a2a_skill(skill_name: str, skill_params: dict, headers: dict[str, str], auth_token: str):
+    """Drive a skill through the real A2A boundary (on_message_send + token->DB->identity).
+
+    Populates the AuthContext the SDK transport middleware would build from the
+    wire so the auth chain resolves with no mocked identity seams, then returns
+    the resulting Task (or Message) for envelope/artifact assertions.
+    """
+    from types import MappingProxyType
+
+    from a2a.server.context import ServerCallContext
+    from a2a.types import SendMessageRequest
+
+    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+    from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+
+    message = create_a2a_message_with_skill(skill_name, skill_params)
+    server_context = ServerCallContext(
+        state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=MappingProxyType(headers))}
+    )
+    return await AdCPRequestHandler().on_message_send(SendMessageRequest(message=message), server_context)

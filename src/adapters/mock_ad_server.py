@@ -1,7 +1,7 @@
 import logging
 import random
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,16 @@ class MockAdServer(AdServerAdapter):
         "provider": "mock",
         "notes": "Simulated delivery measurement for testing",
     }
+
+    # The mock's "compile path" is the simulation itself: targeting_overlay
+    # (property_list included) persists into package_config via _impl and
+    # round-trips through get_media_buys, and the simulated ad server has no
+    # native payload the field could be silently dropped FROM. Declaring
+    # support makes the spec storyboards (inventory_list_targeting/no_match)
+    # and the UC-002/003 round-trip obligations exercisable through the real
+    # tool path on test tenants; the honest-declaration REJECT path is pinned
+    # by tests that explicitly patch this back to False.
+    supports_property_list_targeting: ClassVar[bool] = True
     _media_buys: dict[str, dict[str, Any]] = {}
 
     # Schema and capabilities
@@ -477,11 +487,6 @@ class MockAdServer(AdServerAdapter):
         Returns:
             CreateMediaBuyResponse with simulated media buy
         """
-        # Honest-declaration property_list reject lives in
-        # ``_create_media_buy_impl``. Adapters declare capability via the
-        # ``supports_property_list_targeting`` ClassVar; the boundary raise
-        # happens once per request, before adapter execution.
-
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)

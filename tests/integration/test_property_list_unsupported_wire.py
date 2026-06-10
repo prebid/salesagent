@@ -34,23 +34,20 @@ Covers: UC-003 honest-declaration property_list reject — wire shape (update)
 
 from __future__ import annotations
 
-from types import MappingProxyType
-
 import pytest
-from a2a.server.context import ServerCallContext
-from a2a.types import Message, SendMessageRequest, Task
+from a2a.types import Message, Task
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.database.database_session import get_db_session
 from src.core.schemas import CreateMediaBuyRequest
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
-from tests.helpers.adcp_factories import TEST_PROPERTY_LIST_TARGETING_OVERLAY, create_test_package_request_dict
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+from tests.helpers.adcp_factories import (
+    TEST_PROPERTY_LIST_TARGETING_OVERLAY,
+    create_test_property_list_create_params,
+)
+from tests.utils.a2a_helpers import drive_a2a_skill, extract_data_from_artifact
 from tests.utils.database_helpers import (
-    future_iso_date_range,
     seed_media_buy_with_package,
     seed_property_list_capability_tenant,
 )
@@ -65,20 +62,7 @@ _FIELD = "packages[0].targeting_overlay.property_list"
 
 def _build_create_request() -> CreateMediaBuyRequest:
     """A create request whose single package carries property_list targeting."""
-    start, end = future_iso_date_range()
-    return CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        packages=[
-            create_test_package_request_dict(
-                product_id=PRODUCT_ID,
-                pricing_option_id="cpm_usd_fixed",
-                budget=5000.0,
-                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
-            )
-        ],
-        start_time=start,
-        end_time=end,
-    )
+    return CreateMediaBuyRequest(**create_test_property_list_create_params(PRODUCT_ID))
 
 
 def _build_update_packages(package_id: str) -> list[dict]:
@@ -130,17 +114,8 @@ def _seed_property_list_product(env: MediaBuyCreateEnv, tenant: object) -> None:
 
 
 async def _drive_a2a_skill(skill_name: str, skill_params: dict, headers: dict[str, str]) -> Task | Message:
-    """Drive a skill through the real A2A boundary (on_message_send + token->DB->identity).
-
-    Populates the AuthContext the SDK transport middleware would build from the
-    wire so the auth chain resolves with no mocked identity seams, then returns
-    the resulting Task for envelope/artifact assertions.
-    """
-    message = create_a2a_message_with_skill(skill_name, skill_params)
-    server_context = ServerCallContext(
-        state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=ACCESS_TOKEN, headers=MappingProxyType(headers))}
-    )
-    return await AdCPRequestHandler().on_message_send(SendMessageRequest(message=message), server_context)
+    """Drive a skill through the real A2A boundary with this module's token."""
+    return await drive_a2a_skill(skill_name, skill_params, headers, auth_token=ACCESS_TOKEN)
 
 
 def _assert_a2a_unsupported(result: object) -> None:
@@ -172,6 +147,18 @@ def wire_tenant(integration_db):
         )
         session.commit()
     yield TENANT_ID
+
+
+@pytest.fixture
+def non_compiling_adapter(monkeypatch):
+    """Pin the mock adapter to a no-compile-path declaration for reject-path legs.
+
+    (The REST leg's harness mocks ``get_adapter`` with a bare MagicMock whose
+    class lacks the attribute, so it is pin-independent by construction.)
+    """
+    from src.adapters.mock_ad_server import MockAdServer
+
+    monkeypatch.setattr(MockAdServer, "supports_property_list_targeting", False)
 
 
 @pytest.fixture
@@ -216,7 +203,7 @@ def test_rest_create_media_buy_property_list_unsupported_envelope(integration_db
 
 
 @pytest.mark.asyncio
-async def test_mcp_create_media_buy_property_list_unsupported_envelope(wire_tenant):
+async def test_mcp_create_media_buy_property_list_unsupported_envelope(wire_tenant, non_compiling_adapter):
     """MCP surfaces the two-layer UNSUPPORTED_FEATURE envelope through the real FastMCP Client.
 
     The harness ``call_mcp`` invokes the tool function directly, so the raised
@@ -235,25 +222,12 @@ async def test_mcp_create_media_buy_property_list_unsupported_envelope(wire_tena
 
     from src.core.main import mcp
 
-    start, end = future_iso_date_range()
     headers = {
         "x-adcp-auth": ACCESS_TOKEN,
         "x-adcp-tenant": TENANT_ID,
         "x-test-session-id": "prop-list-wire-mcp-session",
     }
-    arguments = {
-        "brand": {"domain": "testbrand.com"},
-        "packages": [
-            create_test_package_request_dict(
-                product_id=PRODUCT_ID,
-                pricing_option_id="cpm_usd_fixed",
-                budget=5000.0,
-                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
-            )
-        ],
-        "start_time": start,
-        "end_time": end,
-    }
+    arguments = create_test_property_list_create_params(PRODUCT_ID)
     # Each module binds get_http_headers via ``from … import`` so each needs its
     # own patch. testing_hooks is the one that turns x-test-session-id into
     # ``testing_ctx.test_session_id`` — the production-shaped setup-checklist
@@ -272,7 +246,7 @@ async def test_mcp_create_media_buy_property_list_unsupported_envelope(wire_tena
 
 
 @pytest.mark.asyncio
-async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tenant):
+async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tenant, non_compiling_adapter):
     """A2A create surfaces UNSUPPORTED_FEATURE as a failed-Task envelope artifact.
 
     Drives the real ``on_message_send`` -> auth chain -> skill dispatch. The
@@ -281,20 +255,7 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
     ``suggestion`` — pinning that the failed-Task framing does not drop them.
     ``x-test-session-id`` bypasses the create setup-checklist gate.
     """
-    start, end = future_iso_date_range()
-    skill_params = {
-        "brand": {"domain": "testbrand.com"},
-        "packages": [
-            create_test_package_request_dict(
-                product_id=PRODUCT_ID,
-                pricing_option_id="cpm_usd_fixed",
-                budget=5000.0,
-                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
-            )
-        ],
-        "start_time": start,
-        "end_time": end,
-    }
+    skill_params = create_test_property_list_create_params(PRODUCT_ID)
     headers = {
         "x-adcp-auth": ACCESS_TOKEN,
         "x-adcp-tenant": TENANT_ID,
@@ -305,7 +266,7 @@ async def test_a2a_create_media_buy_property_list_unsupported_envelope(wire_tena
 
 
 @pytest.mark.asyncio
-async def test_a2a_update_media_buy_property_list_unsupported_envelope(wire_media_buy):
+async def test_a2a_update_media_buy_property_list_unsupported_envelope(wire_media_buy, non_compiling_adapter):
     """A2A update surfaces UNSUPPORTED_FEATURE as a failed-Task envelope artifact.
 
     The update path has no setup-checklist gate, so no ``x-test-session-id`` is

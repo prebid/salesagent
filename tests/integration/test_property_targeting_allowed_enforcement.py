@@ -123,9 +123,9 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     """Product with property_targeting_allowed=True passes the product-flag validation.
 
     This test isolates the product-flag gate from the adapter-capability gate.
-    The mock adapter default declares ``supports_property_list_targeting=False``
-    so the adapter-capability gate would reject any property_list request.
-    Monkeypatching to True keeps the test focused on what it actually asserts:
+    MockAdServer now declares ``supports_property_list_targeting=True`` by
+    default; the explicit pin keeps this test independent of that default and
+    focused on what it actually asserts:
     that ``validate_property_targeting_allowed`` doesn't false-positive when the
     product permits property targeting. The adapter-capability reject is covered
     separately in ``test_property_list_unsupported_capability.py``.

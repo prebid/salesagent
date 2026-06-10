@@ -7,10 +7,12 @@ breaking the honest-declaration contract that ``_create_media_buy_impl`` /
 ``_update_media_buy_impl`` enforce by raising ``AdCPCapabilityNotSupportedError``.
 
 Until an adapter implements the compile path, its ClassVar must remain False
-so the boundary check fires. Kevel is the exception: it compiles
-``targeting_overlay.property_list`` to native ``siteIds`` (see
-``test_kevel_property_list_compilation.py``), so it legitimately declares
-``supports_property_list_targeting=True`` and is excluded from this pin.
+so the boundary check fires. Two adapters legitimately declare True: Kevel
+compiles ``targeting_overlay.property_list`` to native ``siteIds`` (see
+``test_kevel_property_list_compilation.py``), and MockAdServer's simulation
+IS its compile path (the overlay persists and round-trips; there is no native
+payload to drop the field from) — both are excluded from the False pin and
+positively pinned below.
 """
 
 from __future__ import annotations
@@ -32,7 +34,6 @@ from src.services.targeting_capabilities import raise_if_property_list_unsupport
 @pytest.mark.parametrize(
     "adapter_cls",
     [
-        MockAdServer,
         GoogleAdManager,
         XandrAdapter,
         BroadstreetAdapter,
@@ -51,10 +52,21 @@ def test_adapter_does_not_advertise_property_list_targeting_support(
     silently bypassed and buyers' property_list filters will be dropped.
     """
     assert adapter_cls.supports_property_list_targeting is False, (
-        f"{adapter_cls.__name__}.supports_property_list_targeting is True but no "
-        f"adapter currently compiles property_list into its ad-server payload. "
+        f"{adapter_cls.__name__}.supports_property_list_targeting is True but this "
+        f"adapter has no property_list compile path into its ad-server payload. "
         f"Implement the compile path before flipping this ClassVar."
     )
+
+
+def test_mock_adapter_declares_property_list_targeting_support() -> None:
+    """MockAdServer's simulation is its compile path — the declaration is honest.
+
+    The simulated server persists targeting_overlay.property_list via _impl and
+    round-trips it through get_media_buys; declaring support makes the
+    inventory_list storyboards and round-trip obligations exercisable through
+    the real tool path on test tenants.
+    """
+    assert MockAdServer.supports_property_list_targeting is True
 
 
 def _pkg(*, property_list: bool) -> MagicMock:

@@ -259,7 +259,7 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Honesty assertions: capabilities the seller can't actually fulfill
                 # MUST declare False so buyers see the gap at discovery time, not at
                 # task-dispatch time. property_list_filtering: no adapter compiles it
-                # yet — flips True via supports_property_list_targeting().
+                # here — no adapter is resolved for this principal-less call.
                 # catalog_management: no sync_catalogs tool ships in this codebase;
                 # admin product CRUD is NOT the spec's buyer-driven catalog sync.
                 assert response.media_buy.features.property_list_filtering is False
@@ -656,8 +656,9 @@ class TestResponseShapeCapabilities:
     def test_features_defaults_with_tenant(self):
         """Features defaults: inline_creative_management=True, property_list_filtering=False.
 
-        property_list_filtering is False until an adapter actually compiles
-        `targeting_overlay.property_list` into native ad-server targeting.
+        property_list_filtering is False here because this principal-less call
+        resolves no adapter; the flag is adapter-derived (Kevel and the mock
+        simulation declare True).
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 

@@ -13,10 +13,11 @@ The runtime guard fires once per request in ``_create_media_buy_impl`` /
 MCP) and every adapter (mock, broadstreet, xandr, triton, kevel, GAM)
 honors the contract uniformly.
 
-Pin-test: flip ``MockAdServer.supports_property_list_targeting`` to ``True``
-and ``test_create_rejects_property_list_when_adapter_unsupported`` must
-fail — that proves the boundary check is what's actually rejecting, not
-some upstream validation.
+MockAdServer now DECLARES support (its simulation persists the overlay and
+round-trips it), so the reject tests here pin the capability back to False
+via the ``non_compiling_adapter`` fixture — simulating an adapter with no
+compile path. The boundary check reads the adapter CLASS attribute, so the
+pin exercises the same production gate every non-compiling adapter hits.
 
 Covers: UC-002 honest-declaration property_list reject
 Covers: UC-003 honest-declaration property_list reject (update parity)
@@ -65,6 +66,17 @@ def _make_identity(dry_run: bool = True) -> ResolvedIdentity:
         protocol="mcp",
         dry_run=dry_run,
     )
+
+
+@pytest.fixture
+def non_compiling_adapter(monkeypatch):
+    """Pin the mock adapter to a no-compile-path declaration.
+
+    The reject contract under test belongs to adapters WITHOUT a property_list
+    compile path; MockAdServer declares support, so reject tests restore the
+    False declaration explicitly.
+    """
+    monkeypatch.setattr(MockAdServer, "supports_property_list_targeting", False)
 
 
 @pytest.fixture
@@ -119,7 +131,7 @@ def _build_property_list_create_request() -> CreateMediaBuyRequest:
 
 
 @pytest.mark.requires_db
-async def test_create_rejects_property_list_when_adapter_unsupported(capability_tenant):
+async def test_create_rejects_property_list_when_adapter_unsupported(capability_tenant, non_compiling_adapter):
     """Adapter with ``supports_property_list_targeting = False`` rejects with UNSUPPORTED_FEATURE.
 
     Spec basis: ``error-code.json`` UNSUPPORTED_FEATURE + the two-layer envelope
@@ -162,7 +174,7 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
 
 
 @pytest.mark.requires_db
-async def test_create_dry_run_false_path_also_rejects(capability_tenant):
+async def test_create_dry_run_false_path_also_rejects(capability_tenant, non_compiling_adapter):
     """Boundary check fires on the real-execution path, not just dry_run.
 
     The pre-refactor adapter-layer check fired AFTER the dry_run gate, so a
@@ -209,6 +221,8 @@ async def test_create_accepts_property_list_when_adapter_supports(capability_ten
     pair together prove the check is *gated* on the ClassVar, not
     always-on or always-off.
     """
+    # MockAdServer declares True by default now; the explicit pin keeps this
+    # test independent of that default (and of fixture ordering).
     monkeypatch.setattr(MockAdServer, "supports_property_list_targeting", True)
     request = _build_property_list_create_request()
 
@@ -233,7 +247,9 @@ async def test_create_accepts_property_list_when_adapter_supports(capability_ten
 
 
 @pytest.mark.requires_db
-async def test_create_accepts_request_without_property_list_on_unsupported_adapter(capability_tenant):
+async def test_create_accepts_request_without_property_list_on_unsupported_adapter(
+    capability_tenant, non_compiling_adapter
+):
     """No ``property_list`` on the request → boundary check does not fire.
 
     Negative-of-the-negative pin-test: if the check fired unconditionally
@@ -274,7 +290,7 @@ async def test_create_accepts_request_without_property_list_on_unsupported_adapt
 
 
 @pytest.mark.requires_db
-def test_update_rejects_property_list_when_adapter_unsupported(capability_tenant):
+def test_update_rejects_property_list_when_adapter_unsupported(capability_tenant, non_compiling_adapter):
     """``_update_media_buy_impl`` enforces the same boundary check as create.
 
     A buyer that snuck property_list past the original create (e.g.
