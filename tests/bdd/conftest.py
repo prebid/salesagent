@@ -2465,18 +2465,57 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
 
 
+@pytest.fixture(scope="session")
+def e2e_stack():
+    """Detect the live E2E stack; return an E2EConfig or None (never skips here).
+
+    Reads E2E_BASE_URL / E2E_POSTGRES_URL (set by the in-network runner /
+    run_all_tests via tox pass_env). Health-checks base_url so non-e2e transports
+    still run when the stack is absent (returns None; the ctx fixture skips the
+    e2e_* transport explicitly). The RestE2EDispatcher reads config off the env,
+    never the environment.
+    """
+    import httpx
+
+    from tests.harness.transport import E2EConfig
+
+    base_url = os.environ.get("E2E_BASE_URL")
+    postgres_url = os.environ.get("E2E_POSTGRES_URL")
+    if not base_url:
+        return None
+    try:
+        resp = httpx.get(f"{base_url}/health", timeout=5)
+        resp.raise_for_status()
+    except Exception:
+        return None
+    if not postgres_url:
+        postgres_url = (
+            f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
+        )
+    return E2EConfig(base_url=base_url, postgres_url=postgres_url)
+
+
 @pytest.fixture()
-def ctx(request: pytest.FixtureRequest) -> dict:
+def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
     """Per-scenario mutable context shared across Given/When/Then steps.
 
     When parametrized by pytest_generate_tests, ``request.param`` is a
     Transport enum injected as ctx["transport"]. Transport-specific
     scenarios (tagged @rest/@mcp/@a2a) are NOT parametrized and get
     an empty ctx (When steps handle dispatch explicitly).
+
+    For an e2e_* transport, stash the live-stack E2EConfig in ctx so
+    ``_harness_env`` passes it to the harness env (which then binds factories to
+    the server's DB and dispatches over real HTTP). Skip if the stack is absent.
     """
     d: dict = {}
     if hasattr(request, "param"):
         d["transport"] = request.param
+        t = request.param
+        if hasattr(t, "value") and str(t.value).startswith("e2e_"):
+            if e2e_stack is None:
+                pytest.skip("E2E stack not available — set E2E_BASE_URL or start the in-network stack")
+            d["e2e_config"] = e2e_stack
     return d
 
 
@@ -2554,7 +2593,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_account import MediaBuyAccountEnv
 
-            with MediaBuyAccountEnv() as env:
+            with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2568,7 +2607,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.creative_sync import CreativeSyncEnv
 
-            with CreativeSyncEnv() as env:
+            with CreativeSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2578,7 +2617,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        with CreativeFormatsEnv() as env:
+        with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
 
@@ -2590,14 +2629,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.account_list import AccountListEnv
 
-            with AccountListEnv() as env:
+            with AccountListEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         elif harness_type == "sync":
             request.getfixturevalue("integration_db")
             from tests.harness.account_sync import AccountSyncEnv
 
-            with AccountSyncEnv() as env:
+            with AccountSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2617,7 +2656,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv() as env:
+        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
 
@@ -2632,7 +2671,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # _ensure_media_buy_in_db creates media buys owned by the
             # scenario's "owner" (usually "buyer-001"), and _impl filters
             # by the identity's principal. They must match.
-            with DeliveryPollEnv(principal_id="buyer-001") as env:
+            with DeliveryPollEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
                 tenant, principal = env.setup_default_data()
                 ctx["env"] = env
                 ctx["db_tenant"] = tenant
@@ -2642,7 +2681,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.delivery_webhook import WebhookEnv
 
-            with WebhookEnv() as env:
+            with WebhookEnv(e2e_config=ctx.get("e2e_config")) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -2650,7 +2689,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
-            with CircuitBreakerEnv() as env:
+            with CircuitBreakerEnv(e2e_config=ctx.get("e2e_config")) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -2660,7 +2699,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv() as env:
+        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
     else:

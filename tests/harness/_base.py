@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from src.core.resolved_identity import ResolvedIdentity
-    from tests.harness.transport import Transport, TransportResult
+    from tests.harness.transport import E2EConfig, Transport, TransportResult
 
 
 def _adcp_error_from_code(
@@ -332,11 +332,19 @@ class BaseTestEnv:
         principal_id: str = "test_principal",
         tenant_id: str = "test_tenant",
         dry_run: bool = False,
+        database_url: str | None = None,
+        e2e_config: E2EConfig | None = None,
         **tenant_overrides: Any,
     ) -> None:
         self._principal_id = principal_id
         self._tenant_id = tenant_id
         self._dry_run = dry_run
+        # E2E mode: bind factories to the live server's DB so the HTTP-reached
+        # server sees Given-step data. Explicit database_url wins; else the
+        # e2e_config's postgres_url. None => normal cached/integration engine.
+        self._database_url = database_url or (e2e_config.postgres_url if e2e_config else None)
+        self.e2e_config: E2EConfig | None = e2e_config
+        self._e2e_engine: Any = None
         self._tenant_overrides = tenant_overrides
         self.mock: dict[str, MagicMock] = {}
         self._patchers: list[Any] = []
@@ -919,7 +927,20 @@ class BaseTestEnv:
                     "nested IntegrationEnv contexts are not supported"
                 )
 
-            engine = get_engine()
+            # E2E mode connects directly to the specified database (the live
+            # server's Postgres via e2e_config.postgres_url) instead of the cached
+            # engine, so factory writes land in the DB the HTTP server reads.
+            if self._database_url:
+                from sqlalchemy import create_engine
+
+                from src.core.database.database_session import _pydantic_json_serializer
+
+                self._e2e_engine = create_engine(
+                    self._database_url, echo=False, json_serializer=_pydantic_json_serializer
+                )
+                engine = self._e2e_engine
+            else:
+                engine = get_engine()
             self._session = SASession(bind=engine)
 
             for f in ALL_FACTORIES:

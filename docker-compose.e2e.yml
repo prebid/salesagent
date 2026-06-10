@@ -105,6 +105,14 @@ services:
       # tox e2e/ui envs override DATABASE_URL from this var (host path leaves it
       # unset and keeps its own DATABASE_URL).
       E2E_DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      # bdd 5th transport (E2E_REST): real HTTP through the proxy to the live
+      # server, with Given-step factory data written to the SERVER's DB so the
+      # server sees it. E2E_BASE_URL = the in-network proxy; E2E_POSTGRES_URL =
+      # the server DB (/adcp). BDD_E2E_ENABLED=true adds the e2e_rest transport to
+      # the bdd parametrization (was off everywhere — needs this Docker stack).
+      BDD_E2E_ENABLED: "true"
+      E2E_BASE_URL: http://proxy:8000
+      E2E_POSTGRES_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       # Suites that hit the running server reach it in-network (no host port).
       ADCP_SERVER_URL: http://proxy:8000
       ADCP_SALES_PORT: "8000"
