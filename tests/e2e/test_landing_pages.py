@@ -24,9 +24,16 @@ class TestLandingPages:
     """Test landing page routing for different domain types."""
 
     def _get_base_url(self) -> str:
-        """Get base URL for tests (supports dynamic ports via ADCP_SALES_PORT env var)."""
+        """Get base URL for tests (supports dynamic ports via ADCP_SALES_PORT env var).
+
+        Host path: localhost:<published-port>. In-network the server is reached by
+        service name (ADCP_TEST_HOST=proxy) — localhost inside the runner container
+        is the runner itself, not the server, which made these tests skip with
+        "Server not running" instead of executing.
+        """
+        host = os.getenv("ADCP_TEST_HOST", "localhost")
         port = os.getenv("ADCP_SALES_PORT", "8080")
-        return os.getenv("TEST_BASE_URL", f"http://localhost:{port}")
+        return os.getenv("TEST_BASE_URL", f"http://{host}:{port}")
 
     @pytest.mark.integration
     def test_admin_domain_redirects_to_login(self):
