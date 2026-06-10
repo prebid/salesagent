@@ -123,6 +123,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     Error,
@@ -1619,6 +1620,25 @@ def _build_property_list_advisories(
     return advisories
 
 
+def _advisory_message(advisories: list[Error]) -> str | None:
+    """Join advisory messages for the payload-level ``message`` channel."""
+    return " ".join(advisory.message for advisory in advisories) or None
+
+
+def _advisory_ext(advisories: list[Error]) -> dict | None:
+    """Machine-readable advisory detail for the spec-open ``ext`` slot.
+
+    The create-success variant forbids ``errors``; agents that want the
+    structured advisory (code/field/details) read it from
+    ``ext.property_list_advisories`` instead.
+    """
+    if not advisories:
+        return None
+    return {
+        "property_list_advisories": [advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories]
+    }
+
+
 def _build_idempotency_hit_result(
     tenant_id: str,
     idempotency_key: str | None,
@@ -1628,10 +1648,15 @@ def _build_idempotency_hit_result(
     """Re-query the winner of an idempotency race and return its result.
 
     Used both for the happy-path idempotency lookup and for the TOCTOU
-    race-condition recovery (IntegrityError on commit). The property_list
-    capability check raises ``AdCPCapabilityNotSupportedError`` at the boundary
-    on the first request, so a successful replay row is always against an
-    adapter that compiles the field — the replay result carries no advisory.
+    race-condition recovery (IntegrityError on commit).
+
+    Replay reconstruction is deliberately LOSSY: it rebuilds a minimal
+    completed-style envelope from the persisted row, so context the original
+    response carried — the zero-overlap property_list advisory message/ext,
+    and the submitted-variant shape for approval-pending creates — is not
+    reproduced. Buyers who missed the first response still get the ids they
+    need to proceed; full replay fidelity (persisting or recomputing the
+    original envelope) is a tracked follow-up.
     """
     from src.core.database.repositories import MediaBuyUoW
 
@@ -1660,7 +1685,6 @@ def _build_idempotency_hit_result(
                 status=adcp_status,
                 valid_actions=valid_actions_for_status(adcp_status.value),
                 context=context,
-                errors=None,
             ),
             status=AdcpTaskStatus.completed.value,
         )
@@ -2796,15 +2820,16 @@ async def _create_media_buy_impl(
 
             # Return success response with packages awaiting approval
             # The workflow_step_id in packages indicates approval is required
+            # Spec ``submitted`` variant: task_id (the workflow step id,
+            # resolvable via get_task) + message + the variant's advisory
+            # errors slot. media_buy_id/packages are FORBIDDEN here — they
+            # arrive on the completion artifact after approval.
             return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    creative_deadline=None,
-                    packages=pending_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
-                    workflow_step_id=step.step_id,  # Client can track approval via this ID
-                    context=req.context,
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message=_advisory_message(property_list_advisories),
                     errors=property_list_advisories or None,
+                    context=req.context,
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -2949,13 +2974,11 @@ async def _create_media_buy_impl(
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
             return CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    packages=response_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
-                    workflow_step_id=step.step_id,
-                    context=req.context,
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message=_advisory_message(property_list_advisories),
                     errors=property_list_advisories or None,
+                    context=req.context,
                 ),
                 status=AdcpTaskStatus.submitted.value,
             )
@@ -3290,7 +3313,7 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
-                errors=property_list_advisories or None,
+                ext=_advisory_ext(property_list_advisories),
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3789,7 +3812,7 @@ async def _create_media_buy_impl(
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             context=req.context,
-            errors=property_list_advisories or None,
+            ext=_advisory_ext(property_list_advisories),
         )
 
         # Log activity

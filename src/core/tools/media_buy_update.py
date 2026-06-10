@@ -341,11 +341,14 @@ def _update_media_buy_impl(
             # all transports + dry_run honor the contract uniformly.
             raise_if_property_list_unsupported(req.packages, adapter)
 
-            # The SD2 zero-overlap advisory (see ``_emit_property_list_advisories``)
-            # is create-only — it surfaces a buyer↔product property mismatch at
-            # initial buy creation. Update enforces the hard gates above (capability
-            # + property_targeting), which shape the response; the soft
-            # operator-visibility advisory is intentionally not duplicated here.
+            # The zero-overlap advisory (``_build_property_list_advisories``)
+            # is create-only today: create returns BUYER-VISIBLE advisories
+            # (message/ext on success, the submitted variant's errors slot),
+            # while update enforces only the hard gates above — a zero-overlap
+            # property_list update succeeds with no buyer context. The spec's
+            # update-success variant forbids ``errors`` and has no submitted
+            # variant, so update parity means a message-channel advisory; that
+            # is a tracked follow-up, not an oversight.
 
             # Dry-run mode: Return simulated response without any database writes
             # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated

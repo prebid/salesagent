@@ -466,6 +466,7 @@ class AdCPRequestHandler(RequestHandler):
             # Import response classes - for union types, import the concrete variants
             from src.core.schemas import (
                 CreateMediaBuyError,
+                CreateMediaBuySubmitted,
                 CreateMediaBuySuccess,
                 GetMediaBuyDeliveryResponse,
                 GetMediaBuysResponse,
@@ -483,13 +484,17 @@ class AdCPRequestHandler(RequestHandler):
             # For union types (CreateMediaBuyResponse, UpdateMediaBuyResponse),
             # determine which concrete class based on data content
             if skill_name == "create_media_buy":
-                # Success responses have media_buy_id, error responses have errors
+                # Discriminate on shape: the submitted variant carries task-status
+                # "submitted" and no media_buy_id; success carries media_buy_id
+                # (and may carry advisory message/ext); everything else is the
+                # error variant.
+                if data.get("status") == "submitted":
+                    return CreateMediaBuySubmitted(**data)
                 if "media_buy_id" in data:
                     return CreateMediaBuySuccess(**data)
-                else:
-                    return CreateMediaBuyError(**data)
+                return CreateMediaBuyError(**data)
             elif skill_name == "update_media_buy":
-                # Success responses have media_buy_id, error responses have errors
+                # Success responses have media_buy_id; the error variant doesn't.
                 if "media_buy_id" in data:
                     return UpdateMediaBuySuccess(**data)
                 else:
@@ -679,21 +684,15 @@ class AdCPRequestHandler(RequestHandler):
                         )
                         results.append(self._build_failed_skill_result(skill_name, e))
 
-                # Check for submitted status (manual approval required) - return early without artifacts
-                # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
-                for res in results:
-                    if res["success"] and isinstance(res["result"], dict):
-                        result_status = res["result"].get("status")
-                        if result_status == "submitted":
-                            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
-                            del task.artifacts[:]  # No artifacts for pending tasks
-                            logger.info(
-                                f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
-                            )
-                            # Send protocol-level webhook notification
-                            await self._send_protocol_webhook(task, status="submitted")
-                            self.tasks[task_id] = task
-                            return task
+                # Submitted status (manual approval required): the Task stays
+                # SUBMITTED but now CARRIES its artifact — the spec ``submitted``
+                # variant (task_id + message + advisory errors[]) is the buyer's
+                # tracking handle, so deleting artifacts here would strip the
+                # advisory context the payload exists to deliver.
+                has_submitted = any(
+                    res["success"] and isinstance(res["result"], dict) and res["result"].get("status") == "submitted"
+                    for res in results
+                )
 
                 # Create artifacts for all skill results with human-readable text
                 for i, res in enumerate(results):
@@ -737,6 +736,13 @@ class AdCPRequestHandler(RequestHandler):
                             parts=parts,
                         )
                     )
+
+                if has_submitted:
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+                    logger.info(f"Task {task_id} requires manual approval, returning status=submitted with artifact")
+                    await self._send_protocol_webhook(task, status="submitted")
+                    self.tasks[task_id] = task
+                    return task
 
                 # Check if any skills failed and determine task status
                 failed_skills = [res["skill"] for res in results if not res["success"]]
@@ -1346,13 +1352,23 @@ class AdCPRequestHandler(RequestHandler):
         response_data = response.model_dump(mode="json")
         response_data["message"] = str(response)
 
-        # Derive success from errors field if present, default True otherwise
-        if "errors" in response_data:
-            response_data["success"] = not bool(response_data["errors"])
-        else:
-            response_data.setdefault("success", True)
+        # Success reflects the TASK outcome, derived from the response TYPE —
+        # never from errors-presence: advisory errors[] legitimately ride
+        # success/submitted envelopes (delivery, creative formats, hydration,
+        # the create submitted variant) and must not flip the flag. Error-union
+        # members and failed-status results are the failures.
+        response_data["success"] = AdCPRequestHandler._response_indicates_success(response)
 
         return response_data
+
+    @staticmethod
+    def _response_indicates_success(response: BaseModel) -> bool:
+        """Type-based task outcome for the A2A ``success`` flag."""
+        from src.core.schemas import CreateMediaBuyError, CreateMediaBuyResult, UpdateMediaBuyError
+
+        if isinstance(response, CreateMediaBuyResult):
+            return not isinstance(response.response, CreateMediaBuyError) and response.status != "failed"
+        return not isinstance(response, (CreateMediaBuyError, UpdateMediaBuyError))
 
     async def _handle_explicit_skill(
         self,

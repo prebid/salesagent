@@ -530,6 +530,85 @@ class TestCrossTransportErrorConsistency:
         assert serialized["errors"][0]["code"] == "VALIDATION_ERROR"
         assert "message" in serialized  # Protocol message field added by serializer
 
+    @pytest.mark.asyncio
+    async def test_serialize_for_a2a_success_flag_is_type_based(self):
+        """The A2A ``success`` flag reflects the response TYPE, never errors-presence.
+
+        Advisory errors[] legitimately ride non-error envelopes (the create
+        submitted variant, delivery advisories, hydration advisories) — a
+        booked buy with a zero-overlap advisory must NOT wire as a failure,
+        or buyers retry and double-book.
+        """
+        from src.core.schemas import (
+            CreateMediaBuyError,
+            CreateMediaBuyResult,
+            CreateMediaBuySubmitted,
+            CreateMediaBuySuccess,
+            Error,
+            GetMediaBuysResponse,
+        )
+
+        advisory = Error(code="PRODUCT_UNAVAILABLE", message="zero overlap with product p1")
+
+        # Submitted (pending approval) carrying advisory errors → success True.
+        submitted = CreateMediaBuyResult(
+            status="submitted",
+            response=CreateMediaBuySubmitted(task_id="step_1", errors=[advisory], status="submitted"),
+        )
+        serialized = AdCPRequestHandler._serialize_for_a2a(submitted)
+        assert serialized["success"] is True
+        assert serialized["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
+        assert serialized["status"] == "submitted"
+        assert "media_buy_id" not in serialized  # spec forbids it on the submitted variant
+
+        # Completed success with advisory ext → success True, advisory in message.
+        completed = CreateMediaBuyResult(
+            status="completed",
+            response=CreateMediaBuySuccess(
+                media_buy_id="mb1",
+                packages=[],
+                ext={"property_list_advisories": [advisory.model_dump(mode="json", exclude_none=True)]},
+            ),
+        )
+        serialized = AdCPRequestHandler._serialize_for_a2a(completed)
+        assert serialized["success"] is True
+        assert "zero overlap" in serialized["message"]
+
+        # Error union member wrapped in the result → success False.
+        failed = CreateMediaBuyResult(
+            status="failed",
+            response=CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="bad")]),
+        )
+        assert AdCPRequestHandler._serialize_for_a2a(failed)["success"] is False
+
+        # Degraded-but-completed task (errors-only GetMediaBuysResponse, e.g.
+        # the AUTH_REQUIRED degradation) → success True: the task completed
+        # and returned a result with an advisory explaining the degradation.
+        degraded = GetMediaBuysResponse(
+            media_buys=[],
+            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
+        )
+        serialized = AdCPRequestHandler._serialize_for_a2a(degraded)
+        assert serialized["success"] is True
+        assert serialized["errors"][0]["code"] == "AUTH_REQUIRED"
+
+    @pytest.mark.asyncio
+    async def test_reconstruct_submitted_create_response(self):
+        """The artifact text-part reconstruction handles the submitted variant.
+
+        The envelope's ``status`` is the TASK status; ``CreateMediaBuySuccess``
+        would reject ``"submitted"`` (it is not a MediaBuyStatus) — the
+        discriminator must pick ``CreateMediaBuySubmitted`` first or the text
+        part is silently lost.
+        """
+        from src.core.schemas import CreateMediaBuySubmitted
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        data = {"status": "submitted", "task_id": "step_9", "message": "pending approval"}
+        obj = handler._reconstruct_response_object("create_media_buy", data)
+        assert isinstance(obj, CreateMediaBuySubmitted)
+        assert "step_9" in str(obj)
+
 
 # ---------------------------------------------------------------------------
 # Recovery field in MCP error responses

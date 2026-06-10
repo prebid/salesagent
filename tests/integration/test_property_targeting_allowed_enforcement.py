@@ -160,7 +160,10 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     assert not isinstance(response, CreateMediaBuyError), (
         f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     )
-    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
+    # The spec's create-success variant carries no ``errors`` field at all
+    # (structural discriminator); the submitted variant may carry advisories —
+    # neither may smuggle the property_targeting rejection.
+    assert all("property_targeting_allowed" not in err.message for err in (getattr(response, "errors", None) or []))
 
 
 @pytest.mark.requires_db
@@ -196,7 +199,10 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
     assert not isinstance(response, CreateMediaBuyError), (
         f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     )
-    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
+    # The spec's create-success variant carries no ``errors`` field at all
+    # (structural discriminator); the submitted variant may carry advisories —
+    # neither may smuggle the property_targeting rejection.
+    assert all("property_targeting_allowed" not in err.message for err in (getattr(response, "errors", None) or []))
 
 
 # ---------------------------------------------------------------------------

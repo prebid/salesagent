@@ -48,6 +48,9 @@ from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.enums.media_buy_valid_action import (
     MediaBuyValidAction,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.media_buy.create_media_buy_response import (
+    CreateMediaBuyResponse3 as AdCPCreateMediaBuySubmitted,
+)
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPNotFoundError
@@ -194,31 +197,26 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
 
 
 class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
-    """Successful create_media_buy response extending adcp v1.2.1 type.
+    """Successful create_media_buy response extending the adcp library type.
 
-    Extends the official adcp CreateMediaBuySuccess type with internal workflow tracking.
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+    Extends the official adcp CreateMediaBuySuccess type with internal workflow
+    tracking. Per AdCP PR #113, this response contains ONLY domain data;
+    protocol fields are added by the protocol layer per transport.
 
-    AdCP spec 3.0.0 ``error-handling.mdx`` allows non-fatal errors on the
-    success envelope ("populate only the payload... MUST NOT populate
-    ``adcp_error``"). The ``errors`` field below carries per-package
-    advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
-    cannot yet honor (e.g. ``property_list_filtering=False`` window). Mirrors
-    the pattern used by ``GetProductsResponse``, ``ListCreativeFormatsResponse``,
-    ``SyncAccountsResponse``.
+    The spec's create-success variant explicitly FORBIDS an ``errors`` key
+    (``create-media-buy-response.json`` ``not: {required: ["errors"]}`` — an
+    intentional success/error discriminator), so this class deliberately has
+    no errors field — and ``message`` stays protocol-layer per AdCP PR #113
+    (pinned by spec-compliance and webhook-regression tests). Non-fatal
+    context (e.g. a zero-overlap property_list advisory) rides the spec
+    payload field ``ext`` as machine detail, and ``__str__`` (each
+    transport's protocol-message source) derives the human-readable text from
+    it. Pending-approval creates use ``CreateMediaBuySubmitted``, whose
+    ``message``/``errors`` are genuine spec fields of that variant.
     """
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
-
-    # Non-fatal advisories — see class docstring for the spec basis.
-    errors: list[Error] | None = Field(
-        default=None,
-        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
-        "field is persisted but won't yet affect targeting). Absent on a fully-honored buy.",
-    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -257,8 +255,38 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         return self.model_dump(context={"include_internal": True}, **kwargs)
 
     def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope.
+
+        The A2A serializer uses ``str(response)`` as the wire ``message`` (and
+        MCP's content text is ``str(result)``), so the advisory context stored
+        under ``ext.property_list_advisories`` surfaces here — the payload
+        itself carries no protocol ``message`` field per AdCP PR #113.
+        """
+        base = f"Media buy {self.media_buy_id} created successfully."
+        ext_advisories = getattr(self.ext, "property_list_advisories", None) if self.ext else None
+        if ext_advisories:
+            joined = " ".join(
+                advisory.get("message", "") for advisory in ext_advisories if isinstance(advisory, dict)
+            ).strip()
+            if joined:
+                return f"{base} {joined}"
+        return base
+
+
+class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
+    """Pending create_media_buy response (the spec's ``submitted`` oneOf variant).
+
+    Carries the REQUIRED ``task_id`` (the workflow step id — resolvable via
+    ``get_task`` on MCP) plus optional ``message`` and non-blocking advisory
+    ``errors`` (the spec-blessed advisory slot on this variant). The spec
+    FORBIDS ``media_buy_id``/``packages`` here — they arrive on the completion
+    artifact once approval resolves, so buyers track the task, not the buy.
+    """
+
+    def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        return f"Media buy {self.media_buy_id} created successfully."
+        base = f"Media buy submitted for approval; track task {self.task_id}."
+        return f"{base} {self.message}" if self.message else base
 
 
 class CreateMediaBuyError(AdCPCreateMediaBuyError):
@@ -276,7 +304,10 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
             return "Media buy creation failed."
 
 
-# Union type for create_media_buy operation
+# Union type for create_media_buy operation — the ADAPTER contract: adapters
+# return success or error; the submitted variant exists only at the tool
+# envelope layer (CreateMediaBuyResult.response), produced by _impl's
+# approval paths, never by an ad server.
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
@@ -291,7 +322,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     """
 
     status: str
-    response: CreateMediaBuySuccess | CreateMediaBuyError
+    response: CreateMediaBuySuccess | CreateMediaBuySubmitted | CreateMediaBuyError
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):

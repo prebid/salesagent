@@ -446,9 +446,21 @@ class TestA2ASkillInvocation:
             # Verify the result has status=submitted (manual approval required)
             assert isinstance(result, Task)
             assert result.status.state == TaskState.TASK_STATE_SUBMITTED
-            # Per A2A spec, tasks requiring approval should not have artifacts until approved
-            # (protobuf uses empty repeated field [] instead of None)
-            assert not result.artifacts
+            # The submitted Task CARRIES its artifact: the spec's submitted
+            # variant is the buyer's tracking handle (task_id + message +
+            # advisory errors slot). media_buy_id/packages are FORBIDDEN on
+            # this variant — they arrive on the completion artifact after
+            # approval — and the type-derived success flag stays True (the
+            # task was accepted, not failed).
+            from tests.utils.a2a_helpers import extract_data_from_artifact
+
+            assert len(result.artifacts) == 1
+            payload = extract_data_from_artifact(result.artifacts[0])
+            assert payload["status"] == "submitted"
+            assert payload["task_id"], "submitted variant must carry the tracking task_id"
+            assert payload["success"] is True
+            assert "media_buy_id" not in payload
+            assert "packages" not in payload
 
     @pytest.mark.asyncio
     async def test_hybrid_invocation(
