@@ -1613,6 +1613,11 @@ def _cache_and_return(
                 protocol_status=result.status,
                 payload_hash=request_hash,
             )
+            # Opportunistic eviction: one indexed, tenant-scoped DELETE per
+            # successful keyed create keeps the cache bounded without a
+            # scheduler. Read-path TTL filtering already guarantees replay
+            # correctness; this only reclaims storage.
+            uow.idempotency_attempts.expire_old()
     except IntegrityError:
         logger.info(
             "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",

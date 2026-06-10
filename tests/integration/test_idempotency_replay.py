@@ -213,6 +213,81 @@ class TestImplReplaysCachedSuccess:
             assert cached.payload_hash is not None
 
 
+class TestOpportunisticEviction:
+    """A successful keyed create evicts the tenant's expired cache rows.
+
+    ``expire_old`` runs in the same UoW as the success-cache write — the
+    storage-growth bound for the cache without a scheduler (read-path TTL
+    filtering already keeps replay correctness independent of eviction).
+    """
+
+    def test_fresh_success_evicts_expired_rows(self, integration_db):
+        from datetime import timedelta
+
+        from adcp.server.helpers import valid_actions_for_status
+        from adcp.types import MediaBuyStatus
+
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas._base import CreateMediaBuySuccess
+        from tests.helpers import seed_cached_success
+
+        expired_key = f"evict-{uuid.uuid4().hex}"
+        fresh_key = f"fresh-{uuid.uuid4().hex}"
+        seeded_at = datetime(2020, 1, 1, tzinfo=UTC)
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+
+            expired_success = CreateMediaBuySuccess(
+                media_buy_id="mb_expired_row",
+                packages=[],
+                status=MediaBuyStatus.active,
+                valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
+            )
+            seed_cached_success(
+                env._tenant_id,
+                env._principal_id,
+                expired_key,
+                response_model=expired_success,
+                payload_hash="expired-row-hash",
+                ttl=timedelta(minutes=1),
+                now=seeded_at,
+            )
+
+            now = datetime.now(UTC)
+            result = env.call_impl(
+                brand={"domain": "evict-test.example.com"},
+                packages=[{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+                start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                po_number="EVICT-1",
+                idempotency_key=fresh_key,
+            )
+            assert result.status in {"completed", "submitted"}
+            tenant_id = env._tenant_id
+            principal_id = env._principal_id
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            # Physical-row probe: querying with a `now` from when the row was
+            # still valid bypasses the read-path TTL filter, so None here means
+            # the row was DELETED (evicted), not merely filtered.
+            evicted = uow.idempotency_attempts.find_by_key(
+                principal_id=principal_id,
+                tool_name="create_media_buy",
+                idempotency_key=expired_key,
+                now=seeded_at,
+            )
+            assert evicted is None, "the expired row must be deleted by the opportunistic eviction"
+            # The fresh success's own row was written and survives.
+            fresh = uow.idempotency_attempts.find_by_key(
+                principal_id=principal_id,
+                tool_name="create_media_buy",
+                idempotency_key=fresh_key,
+            )
+            assert fresh is not None
+
+
 class TestMissingKeyRejectedAtWire:
     """Storyboard ``missing_key``: a create without idempotency_key rejects as VALIDATION_ERROR.
 

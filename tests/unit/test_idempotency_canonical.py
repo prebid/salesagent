@@ -6,6 +6,8 @@ excluded fields not affecting the hash, and real payload differences changing it
 
 from __future__ import annotations
 
+import pytest
+
 from src.core.idempotency_canonical import canonical_payload_hash, strip_excluded_fields
 
 
@@ -92,3 +94,62 @@ def test_strip_excluded_fields_removes_closed_set() -> None:
     assert "credentials" not in stripped["push_notification_config"]["authentication"]
     assert stripped["push_notification_config"]["authentication"]["scheme"] == "bearer"
     assert stripped["brand"] == "acme"
+
+
+class TestSdkEquivalencePin:
+    """Our salesagent-native hasher stays byte-equivalent to the SDK reference.
+
+    The spec (security.mdx#idempotency) is the authority and the SDK's
+    ``adcp.server.idempotency`` is the cross-check — but a drift between the
+    two would silently change which retries replay vs conflict, so the parity
+    is pinned: the exclusion sets must match and a corpus spanning key
+    ordering, excluded fields (top-level and nested credential), unicode,
+    large ints, bools/nulls, and nested arrays must hash identically.
+    """
+
+    CORPUS = [
+        ("reordered-keys", {"b": 1, "a": 2, "z": {"y": [3, 2, 1]}}),
+        (
+            "excluded-fields-present",
+            {
+                "brand": {"domain": "acme.example"},
+                "idempotency_key": "pin-test-key-0001",
+                "context": {"trace": "t-1"},
+                "governance_context": {"g": 1},
+            },
+        ),
+        (
+            "nested-credential",
+            {
+                "packages": [{"product_id": "p1", "budget": 5000.0}],
+                "push_notification_config": {
+                    "url": "https://buyer.example/hook",
+                    "authentication": {"credentials": "s" * 40, "schemes": ["Bearer"]},
+                },
+            },
+        ),
+        ("unicode-and-numbers", {"name": "café — ünïcode", "big": 2**53 - 1, "neg": -0.5}),
+        ("bools-and-nulls", {"flag": True, "off": False, "nothing": None, "arr": [None, True]}),
+    ]
+
+    def test_excluded_fields_match_sdk(self) -> None:
+        from adcp.server.idempotency import EXCLUDED_FIELDS as SDK_EXCLUDED
+
+        from src.core.idempotency_canonical import _EXCLUDED_FIELDS
+
+        assert _EXCLUDED_FIELDS == SDK_EXCLUDED
+
+    @pytest.mark.parametrize(("name", "payload"), CORPUS, ids=[c[0] for c in CORPUS])
+    def test_hash_matches_sdk(self, name: str, payload: dict) -> None:
+        from adcp.server.idempotency import canonical_json_sha256
+
+        assert canonical_payload_hash(payload) == canonical_json_sha256(payload), name
+
+    def test_real_field_difference_diverges_on_both_sides(self) -> None:
+        """Both implementations agree a NON-excluded change is a different payload."""
+        from adcp.server.idempotency import canonical_json_sha256
+
+        base = {"po_number": "PO-1", "packages": [{"product_id": "p1"}]}
+        changed = {"po_number": "PO-2", "packages": [{"product_id": "p1"}]}
+        assert canonical_payload_hash(base) != canonical_payload_hash(changed)
+        assert canonical_json_sha256(base) != canonical_json_sha256(changed)
