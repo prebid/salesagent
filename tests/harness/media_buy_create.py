@@ -361,15 +361,19 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.
 
         ``CreateMediaBuyResult`` serializes flat: the response fields plus a
-        top-level protocol ``status``. The CreateMediaBuySuccess|CreateMediaBuyError
-        union discriminates on ``media_buy_id`` (present only on success) — not
-        on ``errors``, since a *successful* buy may also carry non-fatal advisory
-        ``errors``. An error body has ``errors`` and no ``media_buy_id``, so it
-        reconstructs as a CreateMediaBuyError.
+        top-level protocol ``status`` and, on a cached idempotency replay, the
+        spec's top-level ``replayed: true`` marker — both are popped back onto
+        the wrapper so wire tests can assert ``result.payload.replayed``. The
+        CreateMediaBuySuccess|CreateMediaBuyError union discriminates on
+        ``media_buy_id`` (present only on success) — not on ``errors``, since a
+        *successful* buy may also carry non-fatal advisory ``errors``. An error
+        body has ``errors`` and no ``media_buy_id``, so it reconstructs as a
+        CreateMediaBuyError.
         """
         status = data.pop("status", "completed")
+        replayed = data.pop("replayed", False)
         if data.get("media_buy_id") is not None:
             response: CreateMediaBuySuccess | CreateMediaBuyError = CreateMediaBuySuccess(**data)
         else:
             response = CreateMediaBuyError(**data)
-        return CreateMediaBuyResult(response=response, status=status)
+        return CreateMediaBuyResult(response=response, status=status, replayed=replayed)
