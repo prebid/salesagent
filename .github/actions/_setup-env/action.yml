@@ -32,7 +32,7 @@ runs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-v3-${{ hashFiles('uv.lock') }}
+        key: ${{ runner.os }}-uv-v4-py${{ inputs.python-version }}-${{ hashFiles('uv.lock') }}
 
     - name: Install dependencies
       shell: bash
