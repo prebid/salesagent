@@ -95,6 +95,9 @@ class PropertyIntersection:
     def __init__(self, authorized_property_repo: AuthorizedPropertyRepository) -> None:
         self._repo = authorized_property_repo
 
+    # ``Any`` products are deliberate: the intersection reads only
+    # ``publisher_properties``/``property_targeting_allowed`` duck-typed, so it
+    # accepts schema Products, converted ORM rows, and unit-test doubles alike.
     def filter_products(self, products: list[Any], buyer_identifiers: list[Identifier]) -> IntersectionResult:
         """Apply the intersection across a product list.
 

@@ -47,6 +47,15 @@ _cache: dict[tuple[str, str], tuple[list[Identifier], datetime]] = {}
 _cache_lock = threading.Lock()
 
 
+def loggable_list_id(list_id: str) -> str:
+    """Strip control characters from a buyer-supplied list_id before logging.
+
+    ``PropertyListReference.list_id`` has no charset constraint, so embedded
+    newlines would otherwise let a buyer forge operator log lines (CWE-117).
+    """
+    return "".join(ch for ch in list_id if ch.isprintable())[:128]
+
+
 def _validate_agent_url(agent_url: str) -> None:
     """Validate agent_url to prevent SSRF attacks.
 

@@ -676,8 +676,8 @@ class TestResponseShapeCapabilities:
         """Adapter that sets supports_property_list_targeting=True flips the
         ``MediaBuyFeatures.property_list_filtering`` wire flag to True.
 
-        This is the cross-boundary contract that lets Kevel (which will set
-        supports_property_list_targeting=True once the resolver lands) advertise
+        This is the cross-boundary contract that lets Kevel (which declares
+        supports_property_list_targeting=True) advertise
         the capability to buyers. Without this test, the True path is silent —
         only the False path (4 adapters in B4) is covered.
         """

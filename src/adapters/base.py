@@ -193,7 +193,8 @@ class AdServerAdapter(ABC):
     # Whether this adapter compiles AdCP targeting_overlay.property_list to native
     # ad-server targeting. Default is False — adapters that silently drop
     # property_list are explicitly unsupported per AdCP honest-declaration contract
-    # ("Each enabled adapter MUST translate OR raise UNSUPPORTED_FEATURE").
+    # (each enabled adapter either translates the field or raises
+    # UNSUPPORTED_FEATURE — the spec's Validate-Targeting MUST).
     # Override to True only when the adapter has a working property_list
     # compilation path (e.g. resolving the list to native publisher identifiers).
     supports_property_list_targeting: ClassVar[bool] = False

@@ -562,13 +562,11 @@ class TestCrossTransportErrorConsistency:
         assert "media_buy_id" not in serialized  # spec forbids it on the submitted variant
 
         # Completed success with advisory ext → success True, advisory in message.
+        from src.core.tools.media_buy_create import _advisory_ext
+
         completed = CreateMediaBuyResult(
             status="completed",
-            response=CreateMediaBuySuccess(
-                media_buy_id="mb1",
-                packages=[],
-                ext={"property_list_advisories": [advisory.model_dump(mode="json", exclude_none=True)]},
-            ),
+            response=CreateMediaBuySuccess(media_buy_id="mb1", packages=[], ext=_advisory_ext([advisory])),
         )
         serialized = AdCPRequestHandler._serialize_for_a2a(completed)
         assert serialized["success"] is True
@@ -591,6 +589,32 @@ class TestCrossTransportErrorConsistency:
         serialized = AdCPRequestHandler._serialize_for_a2a(degraded)
         assert serialized["success"] is True
         assert serialized["errors"][0]["code"] == "AUTH_REQUIRED"
+
+    def test_success_map_covers_every_error_union_member(self):
+        """Fitness function: a future response union's error member must not
+        silently default to success=True (fail-open) in the A2A flag map.
+
+        Enumerates every `*Response = A | B` union in the schemas package and
+        asserts the serializer reports False for each member whose name ends
+        in Error.
+        """
+        import typing
+
+        from src.core import schemas
+
+        error_members = []
+        for name in dir(schemas):
+            obj = getattr(schemas, name)
+            if typing.get_origin(obj) in (typing.Union, __import__("types").UnionType):
+                for member in typing.get_args(obj):
+                    if isinstance(member, type) and member.__name__.endswith("Error"):
+                        error_members.append(member)
+        assert error_members, "expected at least the create/update error unions"
+        for member in error_members:
+            instance = member.model_construct()
+            assert AdCPRequestHandler._response_indicates_success(instance) is False, (
+                f"{member.__name__} would wire success=True — add it to the type map"
+            )
 
     @pytest.mark.asyncio
     async def test_reconstruct_submitted_create_response(self):

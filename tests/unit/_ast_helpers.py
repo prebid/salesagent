@@ -86,7 +86,10 @@ def collect_error_aliases(tree: ast.AST) -> set[str]:
         if not isinstance(node, ast.ImportFrom):
             continue
         module = node.module or ""
-        if "error" not in module.split("."):
+        # Track the Error model from any error-named module AND from adcp's
+        # public packages: `from adcp.types import Error as X` has no "error"
+        # path component but binds the same construction surface.
+        if "error" not in module.split(".") and not module.startswith("adcp"):
             continue
         for alias in node.names:
             if alias.name == "Error":

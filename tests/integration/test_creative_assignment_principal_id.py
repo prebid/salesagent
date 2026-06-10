@@ -233,17 +233,9 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
         # through the workflow step the task_id names.
         task_id = getattr(result.response, "task_id", None)
         assert task_id is not None, "Submitted response should carry the tracking task_id"
-        from sqlalchemy import select
+        from tests.utils.database_helpers import media_buy_id_for_task
 
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import ObjectWorkflowMapping
-
-        with get_db_session() as session:
-            mapping = session.scalars(
-                select(ObjectWorkflowMapping).filter_by(step_id=task_id, object_type="media_buy")
-            ).one_or_none()
-            assert mapping is not None, "Workflow step should map to the persisted media buy"
-            media_buy_id = mapping.object_id
+        media_buy_id = media_buy_id_for_task(task_id)
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant_with_approval["tenant_id"], media_buy_id)

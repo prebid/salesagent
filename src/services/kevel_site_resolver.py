@@ -30,6 +30,8 @@ index.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -40,7 +42,7 @@ import httpx
 from adcp.types import Identifier, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError
-from src.core.property_list_resolver import resolve_property_list_typed_sync
+from src.core.property_list_resolver import loggable_list_id, resolve_property_list_typed_sync
 from src.services.identifier_matching import (
     buyer_identifier_matches_host,
     host_from_url_or_host,
@@ -92,7 +94,7 @@ class KevelSiteResolver:
     """
 
     # Module-level cache across resolver instances:
-    # (base_url, network_id, api_key) -> ({host: site_id}, expires_at).
+    # (base_url, network_id, sha256(api_key)[:16]) -> ({host: site_id}, expires_at).
     _site_cache: ClassVar[dict[tuple[str, str, str], tuple[dict[str, int], datetime]]] = {}
 
     # Guards reads/writes on ``_site_cache`` so concurrent ``create_media_buy``
@@ -160,7 +162,7 @@ class KevelSiteResolver:
         logger.debug(
             "Kevel resolve %s/%s → %d sites, %d unsupported types, %d unresolvable values",
             ref.agent_url,
-            ref.list_id,
+            loggable_list_id(ref.list_id),
             len(site_ids),
             len(unsupported_types),
             len(unresolvable_values),
@@ -181,7 +183,11 @@ class KevelSiteResolver:
         produce the same lookup), but the cache write back into ``_site_cache``
         is atomic and last-write-wins.
         """
-        cache_key = (self.base_url, self.network_id, self.api_key)
+        # Digest, not the raw credential: the key must isolate per-credential
+        # but the plaintext api_key has no business persisting in a process-
+        # global ClassVar beyond the instance that owns it.
+        api_key_digest = hashlib.sha256(self.api_key.encode()).hexdigest()[:16]
+        cache_key = (self.base_url, self.network_id, api_key_digest)
 
         with self._cache_lock:
             cached = self._site_cache.get(cache_key)
@@ -249,7 +255,17 @@ class KevelSiteResolver:
                         f"Failed to fetch Kevel site list (network {self.network_id}, page {page}): {exc}"
                     ) from exc
 
-                payload = response.json()
+                try:
+                    payload = response.json()
+                except json.JSONDecodeError as exc:
+                    raise AdCPAdapterError(
+                        f"Kevel site list returned a non-JSON response (network {self.network_id}, page {page})"
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise AdCPAdapterError(
+                        f"Malformed Kevel site list response (network {self.network_id}, page {page}): "
+                        f"expected an object, got {type(payload).__name__}"
+                    )
                 items = payload.get("items")
                 total_pages = payload.get("totalPages")
                 if items is None or total_pages is None:

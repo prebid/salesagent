@@ -245,9 +245,9 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
     declaration means a seller that cannot compile the field rejects it with
     UNSUPPORTED_FEATURE (error-code.json: "A requested feature or field is
     not supported by this seller") rather than silently ignoring it — the
-    spec states the no-silent-ignore rule as a MUST for partially-supported
-    targeting fields (targeting.mdx: "MUST return a validation error for
-    unsupported fields rather than silently ignoring them"). targeting.json's
+    spec's Implementation Requirements state the rule as a MUST ("Publishers
+    MUST: ... Validate Targeting: Reject media buys with targeting that
+    cannot be supported", targeting.mdx). targeting.json's
     property_list description carries a separate, product-level SHOULD
     (validation error when ``property_targeting_allowed`` is false), handled
     by ``raise_if_property_targeting_violations``, not here.

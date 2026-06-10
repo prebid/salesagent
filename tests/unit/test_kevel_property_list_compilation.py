@@ -23,12 +23,13 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import Identifier, PropertyIdentifierTypes, PropertyListReference
+from adcp.types import PropertyListReference
 
 from src.adapters.kevel import Kevel
 from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest, MediaPackage, Principal, Targeting
 from src.services.kevel_site_resolver import ResolvedSiteIds
+from tests.helpers.adcp_factories import create_test_identifier
 
 pytestmark = pytest.mark.unit
 
@@ -136,8 +137,8 @@ class TestRaiseIfUncompilableRejectsIncompatible:
         with patch(
             "src.adapters.kevel.resolve_property_list_typed_sync",
             return_value=[
-                Identifier(type=PropertyIdentifierTypes.ios_bundle, value="com.example.app"),
-                Identifier(type=PropertyIdentifierTypes.podcast_guid, value="abc-123"),
+                create_test_identifier("com.example.app", type_="ios_bundle"),
+                create_test_identifier("abc-123", type_="podcast_guid"),
             ],
         ):
             with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
@@ -152,7 +153,7 @@ class TestRaiseIfUncompilableRejectsIncompatible:
         adapter = _kevel(dry_run=True)
         with patch(
             "src.adapters.kevel.resolve_property_list_typed_sync",
-            return_value=[Identifier(type=PropertyIdentifierTypes.domain, value="espn.com")],
+            return_value=[create_test_identifier("espn.com")],
         ):
             assert adapter._raise_if_property_list_uncompilable([_package_with_ref(_ref())]) is None
 
@@ -272,7 +273,7 @@ class TestBuildTargetingCompilesPropertyList:
         adapter = _kevel(dry_run=True)
         with patch(
             "src.adapters.kevel.resolve_property_list_typed_sync",
-            return_value=[Identifier(type=PropertyIdentifierTypes.domain, value="espn.com")],
+            return_value=[create_test_identifier("espn.com")],
         ):
             result = adapter._build_targeting(self._make_overlay(_ref()))
 

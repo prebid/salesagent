@@ -4,8 +4,10 @@ AdCP honest-declaration contract: a seller advertises property_list support
 via ``features.property_list_filtering`` in get_adcp_capabilities
 (get_products.mdx), and one that cannot compile
 ``targeting_overlay.property_list`` rejects with ``UNSUPPORTED_FEATURE``
-(error-code.json) rather than silently ignoring it — the no-silent-ignore
-rule is a MUST for partially-supported targeting fields (targeting.mdx).
+(error-code.json) rather than silently ignoring it — the spec's
+Implementation Requirements make the rule a MUST ("Publishers MUST: ...
+Validate Targeting: Reject media buys with targeting that cannot be
+supported", targeting.mdx).
 
 The runtime guard fires once per request in ``_create_media_buy_impl`` /
 ``_update_media_buy_impl`` — right after adapter resolution, before any
@@ -37,7 +39,11 @@ from src.core.schemas import CreateMediaBuyRequest, UpdateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories import PrincipalFactory
-from tests.helpers.adcp_factories import TEST_PROPERTY_LIST_TARGETING_OVERLAY, create_test_package_request
+from tests.helpers.adcp_factories import (
+    TEST_PROPERTY_LIST_TARGETING_OVERLAY,
+    create_test_package_request,
+    create_test_property_list_create_params,
+)
 from tests.utils.database_helpers import (
     future_iso_date_range,
     seed_media_buy_with_package,
@@ -105,10 +111,10 @@ def non_compiling_adapter(monkeypatch):
 def capability_tenant(integration_db):
     """Tenant on the mock adapter with a property-targeting-allowed product.
 
-    The mock adapter declares ``supports_property_list_targeting = False``
-    (default), so the boundary check fires for any package whose
-    ``targeting_overlay.property_list`` is non-None. Tests that need the
-    True path monkeypatch the ClassVar. ``property_targeting_allowed=True``
+    MockAdServer declares ``supports_property_list_targeting = True`` (its
+    simulation is the compile path), so reject tests pair this tenant with
+    the ``non_compiling_adapter`` fixture to restore the False declaration
+    the boundary check fires on. ``property_targeting_allowed=True``
     on the product ensures the product-flag gate doesn't fire first and
     mask the adapter-capability rejection.
     """
@@ -130,26 +136,16 @@ def capability_tenant(integration_db):
 def _build_property_list_create_request() -> CreateMediaBuyRequest:
     """Canonical create request used across this file's reject/accept variants.
 
-    Centralizing the request body here keeps the test bodies focused on
+    Delegates the request shape to the shared
+    ``create_test_property_list_create_params`` factory so the wire and
+    capability files exercise one definition; test bodies stay focused on
     contract assertions (error code, recovery, field, suggestion, envelope
-    round-trip) and removes the structural overlap with
-    ``test_property_targeting_allowed_enforcement.py`` whose tests build a
-    nearly identical request to exercise the product-flag gate.
+    round-trip).
     """
-    start, end = future_iso_date_range()
     return CreateMediaBuyRequest(
-        idempotency_key=f"prop-list-cap-1-{uuid.uuid4().hex}",
-        brand={"domain": "testbrand.com"},
-        packages=[
-            create_test_package_request(
-                product_id="prod_property_targeting_allowed",
-                budget=5000.0,
-                pricing_option_id="cpm_usd_fixed",
-                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
-            )
-        ],
-        start_time=start,
-        end_time=end,
+        # per-call-unique: reused keys replay once the required-key change lands
+        idempotency_key=f"prop-list-cap-{uuid.uuid4().hex}",
+        **create_test_property_list_create_params("prod_property_targeting_allowed"),
     )
 
 

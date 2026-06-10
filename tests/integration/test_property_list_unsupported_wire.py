@@ -64,10 +64,10 @@ _FIELD = "packages[0].targeting_overlay.property_list"
 
 def _build_create_request() -> CreateMediaBuyRequest:
     """A create request whose single package carries property_list targeting."""
-    # Per-call-unique idempotency key: #1312 makes the field REQUIRED
-    # (min 16, charset [A-Za-z0-9_.:-]); unique-per-call matters because
-    # reused keys replay the cached response once that lands. The MCP/A2A
-    # wire dicts stay keyless until the wrappers accept the parameter.
+    # Idempotency keys are per-call-unique (reused keys replay the cached
+    # response once the required-key change lands; spec shape: min 16,
+    # charset [A-Za-z0-9_.:-]). The MCP/A2A wire dicts stay keyless until
+    # the wrappers accept the parameter.
     return CreateMediaBuyRequest(
         idempotency_key=f"prop-list-wire-{uuid.uuid4().hex}",
         **create_test_property_list_create_params(PRODUCT_ID),
@@ -199,7 +199,7 @@ def test_rest_create_media_buy_property_list_unsupported_envelope(integration_db
     _impl; ``wire_error_envelope`` is the real HTTP response body. The env mocks
     ``get_adapter`` (a MagicMock class lacks ``supports_property_list_targeting``
     → the boundary helper reads ``False`` → reject), and the seeded product sets
-    ``property_targeting_allowed=True`` so the #1276 product gate passes first.
+    ``property_targeting_allowed=True`` so the product-flag gate passes first.
     """
     with MediaBuyCreateEnv(tenant_id="proplistwire") as env:
         tenant, _principal = env.setup_default_data()

@@ -686,9 +686,11 @@ class AdCPRequestHandler(RequestHandler):
 
                 # Submitted status (manual approval required): the Task stays
                 # SUBMITTED but now CARRIES its artifact — the spec ``submitted``
-                # variant (task_id + message + advisory errors[]) is the buyer's
-                # tracking handle, so deleting artifacts here would strip the
-                # advisory context the payload exists to deliver.
+                # response variant (create-media-buy-response.json oneOf:
+                # required task_id + message + advisory errors[]) is the buyer's
+                # tracking handle, and the inventory_list_no_match storyboard
+                # requires the mismatch context to reach the buyer; deleting
+                # artifacts here would strip exactly that payload.
                 has_submitted = any(
                     res["success"] and isinstance(res["result"], dict) and res["result"].get("status") == "submitted"
                     for res in results
@@ -1350,7 +1352,14 @@ class AdCPRequestHandler(RequestHandler):
             return response
 
         response_data = response.model_dump(mode="json")
-        response_data["message"] = str(response)
+        # Only synthesize the protocol message when the payload didn't supply
+        # one: the submitted variant's ``message`` is a genuine spec field
+        # whose wire content must match REST/MCP — overwriting it here both
+        # diverged the transports and doubled the tracking sentence in the
+        # reconstructed text part. (model_dump emits message: None when the
+        # model has the field but no value, so setdefault is insufficient.)
+        if response_data.get("message") is None:
+            response_data["message"] = str(response)
 
         # Success reflects the TASK outcome, derived from the response TYPE —
         # never from errors-presence: advisory errors[] legitimately ride

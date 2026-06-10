@@ -413,3 +413,23 @@ def cleanup_test_data(session, tenant_id: str, principal_id: str = None):
 
     session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
     session.commit()
+
+
+def media_buy_id_for_task(task_id: str) -> str:
+    """Resolve the persisted media buy a submitted response's task_id names.
+
+    The spec submitted variant carries no media_buy_id (it arrives on the
+    completion artifact); tests that need the DB row follow the workflow
+    mapping the same way the approval machinery does.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import ObjectWorkflowMapping
+
+    with get_db_session() as session:
+        mapping = session.scalars(
+            select(ObjectWorkflowMapping).filter_by(step_id=task_id, object_type="media_buy")
+        ).one_or_none()
+        assert mapping is not None, "Workflow step should map to the persisted media buy"
+        return mapping.object_id

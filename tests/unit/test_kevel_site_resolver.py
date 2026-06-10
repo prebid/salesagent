@@ -13,6 +13,7 @@ shape and Kevel's native ``Site.Id`` integers. These tests cover:
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -44,7 +45,8 @@ def _resolver() -> KevelSiteResolver:
 
 
 def _site_cache_key(resolver: KevelSiteResolver) -> tuple[str, str, str]:
-    return (resolver.base_url, resolver.network_id, resolver.api_key)
+    digest = hashlib.sha256(resolver.api_key.encode()).hexdigest()[:16]
+    return (resolver.base_url, resolver.network_id, digest)
 
 
 def _kevel_site(site_id: int, url: str) -> dict:
@@ -439,6 +441,41 @@ class TestPaginationAndFetch:
         with (
             patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
             pytest.raises(AdCPAdapterError, match="Malformed Kevel site list"),
+        ):
+            resolver._fetch_all_sites()
+
+    def test_non_json_page_raises_adcp_adapter_error(self):
+        """A non-JSON 2xx page maps to the typed adapter error, mirroring the resolver."""
+        import json as _json
+
+        resolver = _resolver()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(side_effect=_json.JSONDecodeError("Expecting value", "<html>", 0))
+        mock_client.get = MagicMock(return_value=mock_response)
+
+        with (
+            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            pytest.raises(AdCPAdapterError, match="non-JSON response"),
+        ):
+            resolver._fetch_all_sites()
+
+    def test_non_object_payload_raises_adcp_adapter_error(self):
+        """A JSON array page is malformed — typed error, not AttributeError."""
+        resolver = _resolver()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_response = MagicMock(json=MagicMock(return_value=[1, 2, 3]))
+        mock_response.raise_for_status = MagicMock()
+        mock_client.get = MagicMock(return_value=mock_response)
+
+        with (
+            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            pytest.raises(AdCPAdapterError, match="expected an object"),
         ):
             resolver._fetch_all_sites()
 

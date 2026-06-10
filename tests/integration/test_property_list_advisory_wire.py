@@ -6,14 +6,18 @@ the capability-true mock adapter — the ``inventory_list_no_match`` storyboard'
 "a silently-successful buy with normal numbers" is the named not-acceptable
 outcome, so every channel the advisory rides is asserted at the wire:
 
-- create (completed): machine detail under ``ext.property_list_advisories``;
+- create (completed): machine detail under ``ext.prebid.property_list_advisories``;
   the human-readable text surfaces through ``str(response)`` (each transport's
-  protocol-message source). The A2A DataPart must carry ``success: true`` —
-  the serializer derives the flag from the response TYPE, and a booked buy
-  with an advisory wiring as a failure invited retry double-booking.
+  protocol-message source). Pinned at impl level for both completed sites
+  (adapter path and dry_run) and at the REAL A2A boundary, where the DataPart
+  must carry ``success: true`` — the serializer derives the flag from the
+  response TYPE, and a booked buy with an advisory wiring as a failure
+  invited retry double-booking.
 - create (pending approval): the spec ``submitted`` variant — ``task_id`` +
   advisory ``errors[]`` (the variant's spec-blessed slot), with
   ``media_buy_id``/``packages`` absent per the schema's ``not`` constraint.
+  Pinned at impl level for both submitted sites (tenant approval and
+  config approval) and at the real A2A boundary with the advisory present.
 - get_products: ``property_list_applied`` + per-product ``errors[]``
   advisories survive every transport's serialization.
 
@@ -104,10 +108,10 @@ def _patched_resolver():
 
 
 def _build_create_request() -> CreateMediaBuyRequest:
-    # Per-call-unique idempotency key: #1312 makes the field REQUIRED
-    # (min 16, charset [A-Za-z0-9_.:-]); unique-per-call matters because
-    # reused keys replay the cached response once that lands. The MCP/A2A
-    # wire dicts stay keyless until the wrappers accept the parameter.
+    # Idempotency keys are per-call-unique (reused keys replay the cached
+    # response once the required-key change lands; spec shape: min 16,
+    # charset [A-Za-z0-9_.:-]). The MCP/A2A wire dicts stay keyless until
+    # the wrappers accept the parameter.
     return CreateMediaBuyRequest(
         idempotency_key=f"prop-list-advisory-{uuid.uuid4().hex}",
         **create_test_property_list_create_params(PRODUCT_ID),
@@ -136,8 +140,9 @@ def _make_identity(*, human_review_required: bool = False):
 
 
 def _advisory_entries(ext) -> list[dict]:
-    entries = getattr(ext, "property_list_advisories", None)
-    assert entries, f"expected ext.property_list_advisories on the success payload; got ext={ext!r}"
+    vendor = getattr(ext, "prebid", None)
+    entries = vendor.get("property_list_advisories") if isinstance(vendor, dict) else None
+    assert entries, f"expected ext.prebid.property_list_advisories on the success payload; got ext={ext!r}"
     return entries
 
 
@@ -188,6 +193,100 @@ class TestCreateAdvisoryAttachment:
         assert "packages" not in dumped
 
     @pytest.mark.asyncio
+    async def test_dry_run_create_carries_ext_advisory(self, advisory_tenant):
+        """The dry_run simulated response carries the same ext advisory.
+
+        A dry-run probe is exactly where a buyer checks what a real buy would
+        return; the advisory silently vanishing there is the storyboard's
+        named not-acceptable outcome. Kills the dry_run-site attachment
+        mutation.
+        """
+        from src.core.testing_hooks import AdCPTestContext
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+        from tests.factories import PrincipalFactory
+
+        identity = PrincipalFactory.make_identity(
+            principal_id="test_adv",
+            tenant_id=TENANT_ID,
+            protocol="mcp",
+            testing_context=AdCPTestContext(dry_run=True, test_session_id="prop-list-advisory-dryrun"),
+            human_review_required=False,
+        )
+        with _patched_resolver():
+            result = await _create_media_buy_impl(req=_build_create_request(), identity=identity)
+
+        assert result.status == "completed"
+        assert result.response.media_buy_id.startswith("dry_run_")
+        entries = _advisory_entries(result.response.ext)
+        assert entries[0]["details"]["reason"] == "no_property_overlap"
+
+    @pytest.mark.asyncio
+    async def test_config_approval_create_returns_submitted_with_advisory(self, advisory_tenant):
+        """The auto_create-disabled path returns the same submitted contract.
+
+        This is the second Submitted construction site; without this pin the
+        branch is dead in the suite and its shape can drift from the spec
+        variant unnoticed.
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        identity = _make_identity()
+        identity.tenant["auto_create_media_buys"] = False
+
+        with _patched_resolver():
+            result = await _create_media_buy_impl(req=_build_create_request(), identity=identity)
+
+        assert result.status == "submitted"
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id
+        assert result.response.errors and result.response.errors[0].code == "PRODUCT_UNAVAILABLE"
+        dumped = result.response.model_dump(mode="json", exclude_none=True)
+        assert "media_buy_id" not in dumped and "packages" not in dumped
+
+    @pytest.mark.asyncio
+    async def test_a2a_submitted_create_wire_carries_advisory(self, advisory_tenant):
+        """The submitted variant WITH advisory crosses the real A2A boundary intact.
+
+        Pins the converged ``message`` contract: the serializer must not
+        clobber the payload's own message (REST/MCP and A2A carry the same
+        advisory text), and the artifact's errors[] slot survives framing.
+        """
+        with get_db_session() as session:
+            tenant = session.get(TenantModel, TENANT_ID)
+            tenant.human_review_required = True
+            session.commit()
+        try:
+            headers = {
+                "x-adcp-auth": ACCESS_TOKEN,
+                "x-adcp-tenant": TENANT_ID,
+                "x-test-session-id": "prop-list-advisory-a2a-submitted",
+            }
+            with _patched_resolver():
+                result = await drive_a2a_skill(
+                    "create_media_buy",
+                    create_test_property_list_create_params(PRODUCT_ID),
+                    headers,
+                    auth_token=ACCESS_TOKEN,
+                )
+        finally:
+            with get_db_session() as session:
+                tenant = session.get(TenantModel, TENANT_ID)
+                tenant.human_review_required = False
+                session.commit()
+
+        assert result.artifacts, "submitted Task must carry its tracking artifact"
+        payload = extract_data_from_artifact(result.artifacts[0])
+        assert payload["status"] == "submitted"
+        assert payload["task_id"]
+        assert payload["success"] is True
+        assert payload["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
+        # Converged message: the payload's own advisory text, NOT the
+        # serializer-synthesized tracking sentence.
+        assert "zero overlap" in payload["message"]
+        assert not payload["message"].startswith("Media buy submitted for approval")
+        assert "media_buy_id" not in payload and "packages" not in payload
+
+    @pytest.mark.asyncio
     async def test_a2a_completed_create_wire_success_true_with_advisory(self, advisory_tenant):
         """The booked-buy artifact wires success:true WITH the advisory present.
 
@@ -209,7 +308,7 @@ class TestCreateAdvisoryAttachment:
         assert payload["success"] is True, "advisory-bearing booked buy must not wire as a failure"
         assert payload["media_buy_id"]
         assert "zero overlap" in payload["message"]
-        assert payload["ext"]["property_list_advisories"][0]["code"] == "PRODUCT_UNAVAILABLE"
+        assert payload["ext"]["prebid"]["property_list_advisories"][0]["code"] == "PRODUCT_UNAVAILABLE"
 
 
 class TestGetProductsAdvisoryWire:
@@ -220,6 +319,44 @@ class TestGetProductsAdvisoryWire:
         assert payload.errors, "dropped products must surface as errors[] advisories"
         assert payload.errors[0].code == "PRODUCT_UNAVAILABLE"
         assert payload.products == []
+
+    def test_applied_true_with_zero_drops_and_absent_without_list(self, integration_db):
+        """property_list_applied reflects that the filter RAN, not that it dropped.
+
+        Spec: "True if the agent filtered products based on the provided
+        property_list. Absent or false if property_list was not provided."
+        """
+        with ProductEnv(tenant_id="adv-flag-gp", principal_id="adv-flag-gp-p") as env:
+            from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+
+            tenant = TenantFactory(tenant_id="adv-flag-gp", subdomain="adv-flag-gp")
+            PrincipalFactory(tenant=tenant, principal_id="adv-flag-gp-p")
+            AuthorizedPropertyFactory(
+                tenant=tenant,
+                property_id="flag_site",
+                publisher_domain="adv-flag-gp.example.com",
+                identifiers=[{"type": "domain", "value": _PROPERTY_DOMAIN}],
+                tags=["all_inventory"],
+            )
+            product = ProductFactory(tenant=tenant, product_id="flag_prod", name="Flag Product")
+            PricingOptionFactory(product=product, pricing_model="cpm", is_fixed=True)
+
+            # Overlapping list: the filter runs, nothing drops → applied True, no advisories.
+            env.set_property_list([_PROPERTY_DOMAIN])
+            kept = env.call_via(
+                Transport.REST,
+                brief="flag test",
+                property_list={"agent_url": "https://propertylist.example.com", "list_id": "flag_list"},
+            )
+            assert kept.is_success
+            assert kept.payload.property_list_applied is True
+            assert kept.payload.errors is None
+            assert [p.product_id for p in kept.payload.products] == ["flag_prod"]
+
+            # No property_list in the request → the field stays absent.
+            plain = env.call_via(Transport.REST, brief="flag test")
+            assert plain.is_success
+            assert plain.payload.property_list_applied is None
 
     @pytest.mark.parametrize("transport", [Transport.REST, Transport.MCP, Transport.A2A])
     def test_get_products_advisory_fields_survive_transport(self, integration_db, transport):

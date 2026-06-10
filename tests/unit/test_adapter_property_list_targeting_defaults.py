@@ -22,23 +22,28 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.adapters.base import AdServerAdapter
-from src.adapters.broadstreet import BroadstreetAdapter
-from src.adapters.google_ad_manager import GoogleAdManager
+from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer
-from src.adapters.triton_digital import TritonDigital
-from src.adapters.xandr import XandrAdapter
 from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.services.targeting_capabilities import raise_if_property_list_unsupported
+
+# Positively-declared adapters (compile path exists): Kevel compiles to
+# siteIds; MockAdServer's simulation is its compile path.
+_DECLARED_CAPABLE = {Kevel, MockAdServer}
+
+
+def _non_compiling_adapters() -> list[type[AdServerAdapter]]:
+    """Every concrete adapter without a declared compile path — derived, not
+    hand-enumerated, so adapter #7 joins the False pin automatically."""
+    return sorted(
+        (cls for cls in AdServerAdapter.__subclasses__() if cls not in _DECLARED_CAPABLE),
+        key=lambda cls: cls.__name__,
+    )
 
 
 @pytest.mark.parametrize(
     "adapter_cls",
-    [
-        GoogleAdManager,
-        XandrAdapter,
-        BroadstreetAdapter,
-        TritonDigital,
-    ],
+    _non_compiling_adapters(),
     ids=lambda cls: cls.__name__,
 )
 def test_adapter_does_not_advertise_property_list_targeting_support(

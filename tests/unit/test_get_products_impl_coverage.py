@@ -333,7 +333,44 @@ class TestPropertyListResolution:
 
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(AdCPValidationError, match="invalid response"):
+            with pytest.raises(AdCPValidationError, match="invalid response") as excinfo:
+                await _get_products_impl(req, identity)
+            assert excinfo.value.error_code == "VALIDATION_ERROR"
+            assert excinfo.value.recovery == "correctable"
+
+    @pytest.mark.asyncio
+    async def test_db_programming_error_propagates_to_boundary(self):
+        """DB-API programming errors are bugs, not retryable outages.
+
+        Pins the inner boundary of the transient tuple: widening the catch
+        back to SQLAlchemyError would mislabel a ProgrammingError as
+        SERVICE_UNAVAILABLE/transient and turn this red.
+        """
+        from adcp.types import PropertyListReference
+        from sqlalchemy.exc import ProgrammingError
+
+        tenant = _make_tenant()
+        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
+        req = _make_request()
+        req.property_list = PropertyListReference(agent_url="https://example.com", list_id="test-list")
+
+        mock_uow = _mock_uow_with_products([])
+        patches = _standard_patches(mock_uow)
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(
+                patch(
+                    "src.core.property_list_resolver.resolve_property_list_typed",
+                    new_callable=AsyncMock,
+                    side_effect=ProgrammingError("SELECT nope", {}, Exception("syntax error")),
+                )
+            )
+
+            from src.core.tools.products import _get_products_impl
+
+            with pytest.raises(ProgrammingError):
                 await _get_products_impl(req, identity)
 
     @pytest.mark.asyncio

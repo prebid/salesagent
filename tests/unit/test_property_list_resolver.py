@@ -1,5 +1,6 @@
 """Unit tests for property list resolver with caching."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -189,6 +190,49 @@ class TestResolvePropertyList:
             result = await resolve_property_list_typed(ref)
 
         assert result == []
+
+
+class TestNonJsonPayload:
+    """A non-JSON 2xx maps to a typed AdCPAdapterError naming the list service."""
+
+    @pytest.mark.asyncio
+    async def test_async_non_json_2xx_raises_typed_adapter_error(self):
+        from src.core.property_list_resolver import resolve_property_list_typed
+
+        ref = _make_ref()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "<html>", 0)
+
+        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
+            mock_client = _make_mock_client(get_return_value=mock_response)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(AdCPAdapterError, match="non-JSON response"):
+                await resolve_property_list_typed(ref)
+
+    def test_sync_non_json_2xx_raises_typed_adapter_error_and_is_not_cached(self):
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed_sync
+
+        clear_cache()
+        ref = _make_ref()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "<html>", 0)
+
+        sync_client = MagicMock()
+        sync_client.__enter__ = MagicMock(return_value=sync_client)
+        sync_client.__exit__ = MagicMock(return_value=False)
+        sync_client.get.return_value = mock_response
+
+        with patch("src.core.property_list_resolver.httpx.Client", return_value=sync_client):
+            with pytest.raises(AdCPAdapterError, match="non-JSON response"):
+                resolve_property_list_typed_sync(ref)
+            # The failed decode must not poison the cache.
+            with pytest.raises(AdCPAdapterError, match="non-JSON response"):
+                resolve_property_list_typed_sync(ref)
+        assert sync_client.get.call_count == 2
+        clear_cache()
 
 
 class TestCaching:
@@ -571,7 +615,7 @@ class TestThreadSafety:
                 res = resolve_property_list_typed_sync(ref)
                 with results_lock:
                     results.append(res)
-            except BaseException as exc:  # noqa: BLE001 — captured for assertion
+            except Exception as exc:  # noqa: BLE001 — captured for assertion
                 with results_lock:
                     errors.append(exc)
 

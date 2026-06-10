@@ -1489,7 +1489,7 @@ async def _resolve_property_list_identifiers(packages: list | None) -> dict[tupl
     # Lazy import: the prefetch unit tests patch ``resolve_property_list_typed``
     # at its source module, so it must resolve at call time (a module-top import
     # would bind a ref the patch can't reach).
-    from src.core.property_list_resolver import resolve_property_list_typed
+    from src.core.property_list_resolver import loggable_list_id, resolve_property_list_typed
 
     resolved: dict[tuple[str, str], list[Identifier]] = {}
     for package in packages or []:
@@ -1506,7 +1506,7 @@ async def _resolve_property_list_identifiers(packages: list | None) -> dict[tupl
             logger.warning(
                 "[INTERSECTION-ADVISORY] Failed to resolve property_list %s/%s: %s",
                 ref.agent_url,
-                ref.list_id,
+                loggable_list_id(ref.list_id),
                 exc,
                 exc_info=True,
             )
@@ -1528,7 +1528,8 @@ def _build_property_list_advisories(
     explaining the list mismatch — a silently-successful buy with normal
     numbers is the storyboard's named not-acceptable outcome. This helper
     never raises; it returns the per-package ``Error`` advisories the caller
-    attaches to the success response's ``errors[]``, and logs each one at
+    attaches to the response (completed success: ``ext`` + protocol message;
+    the submitted variant: its spec ``errors[]`` slot), and logs each one at
     WARNING (greppable ``[INTERSECTION-ADVISORY]`` marker) for operator-side
     alerting.
 
@@ -1555,6 +1556,7 @@ def _build_property_list_advisories(
     # module by the advisory unit/integration tests, so it must resolve at call
     # time (a module-top import would bind a ref the patch can't reach).
     from src.core.product_conversion import convert_product_model_to_schema
+    from src.core.property_list_resolver import loggable_list_id
 
     intersection = PropertyIntersection(authorized_property_repo)
     advisories: list[Error] = []
@@ -1594,7 +1596,7 @@ def _build_property_list_advisories(
                 getattr(package, "package_id", None),
                 reason,
                 ref.agent_url,
-                ref.list_id,
+                loggable_list_id(ref.list_id),
             )
             advisories.append(
                 Error(  # structural-guard: advisory: zero-overlap is accept-with-context — the success envelope explains the mismatch
@@ -1620,9 +1622,23 @@ def _build_property_list_advisories(
     return advisories
 
 
+# The submitted variant's spec ``message`` field enforces maxLength 2000; an
+# over-long join would raise at response construction AFTER the buy persisted.
+_ADVISORY_MESSAGE_MAX = 2000
+
+
 def _advisory_message(advisories: list[Error]) -> str | None:
-    """Join advisory messages for the payload-level ``message`` channel."""
-    return " ".join(advisory.message for advisory in advisories) or None
+    """Join advisory messages for the payload-level ``message`` channel, bounded.
+
+    Full per-advisory detail always rides ``errors[]``/``ext``; the message is
+    the human-readable summary and truncates with an ellipsis at the spec cap.
+    """
+    joined = " ".join(advisory.message for advisory in advisories)
+    if not joined:
+        return None
+    if len(joined) > _ADVISORY_MESSAGE_MAX:
+        return joined[: _ADVISORY_MESSAGE_MAX - 1] + "…"
+    return joined
 
 
 def _advisory_ext(advisories: list[Error]) -> dict | None:
@@ -1630,12 +1646,16 @@ def _advisory_ext(advisories: list[Error]) -> dict | None:
 
     The create-success variant forbids ``errors``; agents that want the
     structured advisory (code/field/details) read it from
-    ``ext.property_list_advisories`` instead.
+    ``ext.prebid.property_list_advisories`` instead.
     """
     if not advisories:
         return None
+    # Vendor-namespaced per the spec's ExtensionObject description ("must be
+    # namespaced under a vendor/platform key").
     return {
-        "property_list_advisories": [advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories]
+        "prebid": {
+            "property_list_advisories": [advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories]
+        }
     }
 
 
@@ -2025,9 +2045,10 @@ async def _create_media_buy_impl(
                 # property_list resolves to zero overlap with a product's
                 # publisher_properties, do NOT reject — the storyboard
                 # ``inventory_list_no_match`` contract is accept-with-CONTEXT.
-                # The advisories ride the success envelope's errors[] (and are
-                # logged for operator alerting); a silently-successful buy is
-                # the storyboard's named not-acceptable outcome.
+                # The advisories ride the response (completed success: ext +
+                # protocol message; submitted variant: its errors[] slot) and
+                # are logged for operator alerting; a silently-successful buy
+                # is the storyboard's named not-acceptable outcome.
                 assert validation_uow.authorized_properties is not None
                 property_list_advisories = _build_property_list_advisories(
                     req.packages, product_map, validation_uow.authorized_properties, property_list_identifiers

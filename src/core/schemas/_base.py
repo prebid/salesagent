@@ -48,7 +48,7 @@ from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.enums.media_buy_valid_action import (
     MediaBuyValidAction,
 )  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.media_buy.create_media_buy_response import (
+from adcp.types.generated_poc.media_buy.create_media_buy_response import (  # TODO: no stable alias in adcp.types
     CreateMediaBuyResponse3 as AdCPCreateMediaBuySubmitted,
 )
 
@@ -263,7 +263,8 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         itself carries no protocol ``message`` field per AdCP PR #113.
         """
         base = f"Media buy {self.media_buy_id} created successfully."
-        ext_advisories = getattr(self.ext, "property_list_advisories", None) if self.ext else None
+        vendor_ext = getattr(self.ext, "prebid", None) if self.ext else None
+        ext_advisories = vendor_ext.get("property_list_advisories") if isinstance(vendor_ext, dict) else None
         if ext_advisories:
             joined = " ".join(
                 advisory.get("message", "") for advisory in ext_advisories if isinstance(advisory, dict)
@@ -371,11 +372,12 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
 
-    Carries an optional ``errors`` field for non-fatal advisories on the
-    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.0 error-handling
-    "non-fatal in payload" rule). Used today for per-package
-    ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
-    not yet compiled by the adapter.
+    Like the create variant, the spec's update-success schema explicitly
+    FORBIDS an ``errors`` key (``not: {required: ["errors"]}`` — the
+    success/error discriminator), so this class deliberately has no errors
+    field; a populated one would match no oneOf variant on the wire. The
+    update-side zero-overlap advisory (message-channel, since update has no
+    submitted variant) is a tracked follow-up.
     """
 
     # Override affected_packages to use our extended AffectedPackage type
@@ -386,13 +388,6 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
-
-    # Non-fatal advisories — see class docstring for the spec basis.
-    errors: list[Error] | None = Field(
-        default=None,
-        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
-        "field is persisted but won't yet affect targeting). Absent when fully honored.",
-    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):

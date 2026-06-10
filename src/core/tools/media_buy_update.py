@@ -378,7 +378,6 @@ def _update_media_buy_impl(
                     affected_packages=simulated_affected,
                     valid_actions=valid_actions_for_status(_dry_run_status),
                     context=req.context,
-                    errors=None,
                 )
 
                 return dry_run_response
@@ -402,7 +401,6 @@ def _update_media_buy_impl(
                     affected_packages=[],  # Not yet applied — pending approval
                     valid_actions=valid_actions_for_status(_approval_status),
                     context=req.context,
-                    errors=None,
                 )
                 ctx_manager.audit_workflow_step_result(
                     step.step_id,
@@ -550,7 +548,6 @@ def _update_media_buy_impl(
                         media_buy_id=media_buy_id,
                         affected_packages=affected_pkgs,
                         valid_actions=valid_actions_for_status(_post_action_status),
-                        errors=None,
                     )
                     # Log successful update_media_buy (pause/resume)
                     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -1246,7 +1243,6 @@ def _update_media_buy_impl(
                 affected_packages=affected_packages_list,
                 valid_actions=valid_actions_for_status(_final_status),
                 context=req.context,
-                errors=None,
             )
 
             # Log successful update_media_buy call
