@@ -130,6 +130,11 @@ services:
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
       # Playwright chromium is pre-installed in Dockerfile.test at this path.
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # bdd runs truly serial in-network: -n0 (no xdist subprocess). Two reasons:
+      # (1) all bdd workers share ONE live Postgres in e2e mode -> xdist races; and
+      # (2) under xdist BDD_E2E_ENABLED doesn't reach the worker's collection, so
+      # the e2e_rest 5th transport is silently dropped. -n0 collects in-process.
+      BDD_XDIST_N: "0"
       # bdd is the only suite using `pytest -n auto`. It MUST run serial in-network:
       # all bdd workers share ONE Postgres (postgres:5432/adcp_test), and the
       # factory-boy fixtures create tenants/principals with fixed IDs, so >1 worker
