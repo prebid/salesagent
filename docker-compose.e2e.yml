@@ -54,6 +54,10 @@ services:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Same Docker embedded-DNS concurrent-lookup race fix as the runner — the
+    # server resolves postgres/creative-agent and the webhook callback host.
+    dns_opt:
+      - single-request-reopen
     volumes:
       - .:/app
       - /app/.venv  # exclude local .venv — container uses its own
@@ -139,6 +143,15 @@ services:
         condition: service_healthy
       creative-agent:
         condition: service_healthy
+    # Fix the Docker embedded-DNS concurrent-lookup race (moby/moby#22142): under
+    # the e2e suite's connection churn, glibc fires the A and AAAA queries in
+    # parallel over one UDP socket to 127.0.0.11 and one response gets dropped,
+    # so getaddrinfo('proxy') intermittently returns EAI_NONAME ("Name or service
+    # not known") — the flaky tenant-isolation failures. single-request-reopen
+    # makes glibc issue the two queries sequentially on separate sockets, removing
+    # the race. (Host runs use localhost, so they never hit DNS at all.)
+    dns_opt:
+      - single-request-reopen
     volumes:
       - .:/app
       - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
