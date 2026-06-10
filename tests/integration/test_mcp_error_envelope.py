@@ -34,7 +34,8 @@ from fastmcp import Client
 from src.core.main import mcp
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
-from tests.helpers.adcp_factories import create_test_package_request_dict, make_real_tenant_identity
+from tests.helpers.adcp_factories import create_test_package_request_dict
+from tests.integration.conftest import seed_error_test_tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -48,15 +49,18 @@ _PRODUCT_ID = "mcp_envelope_product"
 @pytest.fixture
 def mcp_real_tenant_setup(integration_db):
     """Real-DB ResolvedIdentity for end-to-end MCP wire tests against production validators."""
-    yield from make_real_tenant_identity(
-        tenant_id=_TENANT_ID,
-        principal_id=_PRINCIPAL_ID,
-        access_token=_ACCESS_TOKEN,
-        product_id=_PRODUCT_ID,
-        subdomain="mcpenv",
-        tenant_name="MCP Envelope Test Tenant",
-        advertiser_id="mock_adv_456",
-    )
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv():
+        yield seed_error_test_tenant(
+            tenant_id=_TENANT_ID,
+            principal_id=_PRINCIPAL_ID,
+            access_token=_ACCESS_TOKEN,
+            product_id=_PRODUCT_ID,
+            subdomain="mcpenv",
+            tenant_name="MCP Envelope Test Tenant",
+            advertiser_id="mock_adv_456",
+        )["identity"]
 
 
 @pytest.mark.integration
@@ -110,9 +114,8 @@ class TestMcpWireErrorEnvelope:
             message_substr="mb_does_not_exist_mcp_wire",
         )
         # Two-layer invariant: errors[0].message is byte-identical to adcp_error.message.
-        assert envelope["errors"][0]["message"] == envelope["adcp_error"]["message"], (
-            "errors[0].message must be byte-identical to adcp_error.message in single-error case"
-        )
+        single_error_msg = "errors[0].message must be byte-identical to adcp_error.message in single-error case"
+        assert envelope["errors"][0]["message"] == envelope["adcp_error"]["message"], single_error_msg
 
     def _call_mcp_tool_capturing_envelope(self, tool_name: str, params: dict, identity) -> tuple[bool, dict | None]:
         """Shared helper: invoke an MCP tool and return (is_error, parsed_envelope).
@@ -222,9 +225,8 @@ class TestMcpWireErrorEnvelope:
         assert envelope is not None, "Error must include content text carrying the envelope"
         assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
         msg_lower = envelope["adcp_error"]["message"].lower()
-        assert "past" in msg_lower or "start" in msg_lower, (
-            f"Envelope message must explain the failure, got: {envelope['adcp_error']['message']}"
-        )
+        past_or_start_msg = f"Envelope message must explain the failure, got: {envelope['adcp_error']['message']}"
+        assert "past" in msg_lower or "start" in msg_lower, past_or_start_msg
 
     def test_get_media_buy_delivery_missing_identity_emits_auth_envelope_on_wire(self, integration_db):
         """Missing identity in get_media_buy_delivery surfaces AUTH_TOKEN_INVALID on the MCP wire.
@@ -286,6 +288,7 @@ class TestMcpWireErrorEnvelope:
         assert is_error, "Unsupported account_id filter must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
         assert_envelope_shape(envelope, "UNSUPPORTED_FEATURE", recovery="correctable")
-        assert "account" in envelope["adcp_error"]["message"].lower(), (
+        account_msg = (
             f"Envelope message must explain the unsupported parameter, got: {envelope['adcp_error']['message']}"
         )
+        assert "account" in envelope["adcp_error"]["message"].lower(), account_msg

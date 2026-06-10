@@ -1,4 +1,4 @@
-"""Unit tests for ``ContextManager.fail_workflow_step_for_exception``.
+"""Unit tests for ``ContextManager.audit_workflow_step_failure``.
 
 Validates the two contracts the helper exists to enforce:
 
@@ -63,7 +63,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
             details={"violations": ["below minimum"]},
         )
 
-        cm.fail_workflow_step_for_exception("step_abc", exc)
+        cm.audit_workflow_step_failure("step_abc", exc)
 
         # Helper must call update_workflow_step with the exact wire-shape
         # payload subscribers will read off the webhook. Single
@@ -92,7 +92,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         """
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
-        cm.fail_workflow_step_for_exception("step_abc", RuntimeError("kaboom"))
+        cm.audit_workflow_step_failure("step_abc", RuntimeError("kaboom"))
 
         mock_update.assert_called_once_with(
             "step_abc",
@@ -104,7 +104,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
     def test_empty_exception_message_falls_back_to_type_name(self):
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
-        cm.fail_workflow_step_for_exception("step_abc", RuntimeError())
+        cm.audit_workflow_step_failure("step_abc", RuntimeError())
 
         # Empty message is replaced with type name so the wire envelope and
         # error_message never carry blank strings.
@@ -132,7 +132,7 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
         original = AdCPValidationError("real error the buyer should see")
 
         # Helper must return normally so the caller's `raise` propagates `original`.
-        cm.fail_workflow_step_for_exception("step_abc", original)
+        cm.audit_workflow_step_failure("step_abc", original)
 
         # Audit failure must be logged so SREs can correlate, but the caller
         # never knows it happened — original exception will be re-raised.
@@ -151,7 +151,7 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
                 # Simulate the body raising
                 raise original
             except AdCPValidationError as e:
-                cm.fail_workflow_step_for_exception("step_abc", e)
+                cm.audit_workflow_step_failure("step_abc", e)
                 raise
 
         with pytest.raises(AdCPValidationError) as excinfo:

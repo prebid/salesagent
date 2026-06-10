@@ -896,7 +896,7 @@ class TestCreativeValidation:
         creative = _make_creative_asset(name="")
         mock_registry = MagicMock()
 
-        with pytest.raises(ValueError, match="Creative name cannot be empty"):
+        with pytest.raises(AdCPValidationError, match="Creative name cannot be empty"):
             _validate_creative_input(creative, mock_registry, "p1")
 
     def test_whitespace_only_name_rejected(self):
@@ -910,7 +910,7 @@ class TestCreativeValidation:
         creative = _make_creative_asset(name="   ")
         mock_registry = MagicMock()
 
-        with pytest.raises(ValueError, match="Creative name cannot be empty"):
+        with pytest.raises(AdCPValidationError, match="Creative name cannot be empty"):
             _validate_creative_input(creative, mock_registry, "p1")
 
     def test_missing_format_id_rejected_at_schema_level(self):
@@ -963,7 +963,7 @@ class TestCreativeValidation:
             "src.core.tools.creatives._validation.run_async_in_sync_context",
             side_effect=ConnectionError("Agent down"),
         ):
-            with pytest.raises(ValueError, match="unreachable"):
+            with pytest.raises(AdCPAdapterError, match="unreachable"):
                 _validate_creative_input(creative, mock_registry, "p1")
 
     def test_unknown_format_raises_with_discovery_hint(self):
@@ -981,7 +981,7 @@ class TestCreativeValidation:
             "src.core.tools.creatives._validation.run_async_in_sync_context",
             return_value=None,  # Format not found
         ):
-            with pytest.raises(ValueError, match="list_creative_formats"):
+            with pytest.raises(AdCPValidationError, match="list_creative_formats"):
                 _validate_creative_input(creative, mock_registry, "p1")
 
 

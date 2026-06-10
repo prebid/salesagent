@@ -102,24 +102,21 @@ class TestIdentityValidation:
     """Test _get_products_impl identity validation error paths.
 
     Intent: _get_products_impl must refuse requests where tenant context
-    cannot be determined. Two cases:
-    1. Principal authenticated but tenant mapping failed → bug, not user error
-    2. No credentials at all → user needs to authenticate
+    cannot be determined. The require_tenant guard rejects any missing tenant
+    (None or empty dict) with AdCPAuthenticationError, regardless of whether a
+    principal is present.
     """
 
     @pytest.mark.asyncio
-    async def test_principal_without_tenant_raises_validation_error(self):
-        """Principal present but no tenant → AdCPValidationError with 'bug' indication."""
+    async def test_principal_without_tenant_raises_auth_error(self):
+        """Principal present but no tenant → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="user-123", tenant=None)
         req = _make_request()
 
         from src.core.tools.products import _get_products_impl
 
-        with pytest.raises(AdCPValidationError, match="tenant context missing") as exc_info:
+        with pytest.raises(AdCPAuthenticationError, match="No tenant context available"):
             await _get_products_impl(req, identity)
-
-        assert "user-123" in str(exc_info.value)
-        assert "bug" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_no_principal_no_tenant_raises_authentication_error(self):
@@ -129,7 +126,7 @@ class TestIdentityValidation:
 
         from src.core.tools.products import _get_products_impl
 
-        with pytest.raises(AdCPAuthenticationError, match="Cannot determine tenant context"):
+        with pytest.raises(AdCPAuthenticationError, match="No tenant context available"):
             await _get_products_impl(req, identity)
 
     @pytest.mark.asyncio
@@ -140,7 +137,7 @@ class TestIdentityValidation:
 
         from src.core.tools.products import _get_products_impl
 
-        with pytest.raises(AdCPValidationError, match="tenant context missing"):
+        with pytest.raises(AdCPAuthenticationError, match="No tenant context available"):
             await _get_products_impl(req, identity)
 
 
@@ -153,8 +150,10 @@ class TestProductConversionError:
     """
 
     @pytest.mark.asyncio
-    async def test_convert_failure_raises_valueerror_with_product_id(self):
-        """convert_product_model_to_schema raises → ValueError with product_id."""
+    async def test_convert_failure_raises_adapter_error_with_product_id(self):
+        """convert_product_model_to_schema raises → AdCPAdapterError with product_id."""
+        from src.core.exceptions import AdCPAdapterError
+
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()
@@ -174,7 +173,7 @@ class TestProductConversionError:
         ):
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(ValueError, match="corrupt-product-42") as exc_info:
+            with pytest.raises(AdCPAdapterError, match="corrupt-product-42") as exc_info:
                 await _get_products_impl(req, identity)
 
             assert "missing required field" in str(exc_info.value)
@@ -182,6 +181,8 @@ class TestProductConversionError:
     @pytest.mark.asyncio
     async def test_convert_failure_is_not_silently_swallowed(self):
         """Unlike get_product_catalog, _get_products_impl must raise on conversion error."""
+        from src.core.exceptions import AdCPAdapterError
+
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
         req = _make_request()
@@ -208,7 +209,7 @@ class TestProductConversionError:
         ):
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(ValueError, match="bad-1"):
+            with pytest.raises(AdCPAdapterError, match="bad-1"):
                 await _get_products_impl(req, identity)
 
 

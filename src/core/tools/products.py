@@ -19,11 +19,13 @@ from pydantic import Field, ValidationError
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.exceptions import (
+    AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
-    AdCPAuthRequiredError,
+    AdCPError,
+    AdCPPolicyViolationError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -35,6 +37,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -168,30 +171,12 @@ async def _get_products_impl(
         raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
     # Extract identity fields
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
-        )
+    identity = require_identity(identity, context=req.context)
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id
-    tenant: dict[str, Any] = identity.tenant if identity.tenant else {}
-
-    if tenant:
-        logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
-    elif principal_id:
-        # If we have principal but no tenant, something went wrong
-        logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
-        raise AdCPValidationError(
-            f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}",
-            recovery="terminal",
-        )
-    else:
-        # No tenant context and no principal - cannot determine which tenant's products to return
-        logger.error("[GET_PRODUCTS] No tenant context available - cannot determine which products to return")
-        raise AdCPAuthenticationError(
-            "Cannot determine tenant context. Please provide valid authentication or ensure tenant can be identified from request headers."
-        )
+    tenant = require_tenant(identity, context=req.context)
+    logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
 
     # Get the Principal object with ad server mappings
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
@@ -308,9 +293,7 @@ async def _get_products_impl(
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
         # Raise ToolError to properly signal failure to client
-        raise AdCPAuthorizationError(
-            policy_result.reason or "Blocked by policy", details={"error_code": "POLICY_VIOLATION"}
-        )
+        raise AdCPPolicyViolationError(policy_result.reason or "Blocked by policy")
 
     # If restricted and manual review is required, create a task
     if (
@@ -338,9 +321,8 @@ async def _get_products_impl(
 
         # Raise error for policy violations - explicit failure, not silent return
         restrictions_list = policy_result.restrictions if policy_result.restrictions else []
-        raise AdCPAuthorizationError(
-            f"Request violates content policy: {policy_result.reason}. Restrictions: {', '.join(restrictions_list)}",
-            details={"error_code": "POLICY_VIOLATION"},
+        raise AdCPPolicyViolationError(
+            f"Request violates content policy: {policy_result.reason}. Restrictions: {', '.join(restrictions_list)}"
         )
 
     # Resolve adapter type for delivery_measurement defaults
@@ -363,13 +345,15 @@ async def _get_products_impl(
                 validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
+            except AdCPError:
+                raise
             except Exception as e:
                 error_msg = (
                     f"Product '{product_obj.product_id}' failed to convert to AdCP schema. "
                     f"This indicates data corruption or migration issue. Error: {e}"
                 )
                 logger.error(error_msg)
-                raise ValueError(error_msg) from e
+                raise AdCPAdapterError(error_msg) from e
 
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant['tenant_id']}")
 
@@ -421,11 +405,9 @@ async def _get_products_impl(
                 f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
                 f"(allowed {len(allowed_set)} properties)"
             )
+        except AdCPError:
+            raise
         except Exception as e:
-            from src.core.exceptions import AdCPAdapterError
-
-            if isinstance(e, AdCPAdapterError):
-                raise
             logger.error(f"Property list resolution failed: {e}")
             raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
 
@@ -620,7 +602,7 @@ async def _get_products_impl(
             filtered_products.append(product)
 
         products = filtered_products
-        logger.info(f"Applied filters: {req.filters.model_dump(exclude_none=True)}. {len(products)} products remain.")
+        logger.info("Applied filters: %s. %d products remain.", req.filters, len(products))
 
     # Filter products based on policy compliance (if policy checks are enabled)
     eligible_products = []
@@ -876,8 +858,6 @@ async def get_products_raw(
     """
     # Resolve identity from transport context if not provided
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
 
     # Create request object - adcp library validates schema

@@ -341,12 +341,17 @@ assert_envelope_shape(
 
 ### What to assert
 
+`recovery` is a **required** keyword argument — every call pins the buyer-facing
+retry semantics (`correctable` / `transient` / `terminal`). Omitting it is a
+`TypeError`, not a soft default: silent drift between a typed exception's recovery
+and the wire is exactly the regression this helper exists to catch.
+
 | Layer | What to check | How |
 |-------|--------------|-----|
-| Wire shape | Two-layer envelope structure | `assert_envelope_shape(envelope, code, recovery=...)` |
+| Wire shape | Two-layer envelope structure | `assert_envelope_shape(envelope, code, recovery="correctable")` |
 | HTTP status | REST status code | `assert result.envelope["status_code"] == 400` |
-| Error code | Machine-readable wire code | `assert_envelope_shape(envelope, "VALIDATION_ERROR")` |
-| Message | Human-readable content | `assert_envelope_shape(envelope, code, message_substr="...")` |
+| Error code | Machine-readable wire code | `assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")` |
+| Message | Human-readable content | `assert_envelope_shape(envelope, code, recovery=..., message_substr="...")` |
 | Recovery | Buyer retry semantics | `assert_envelope_shape(envelope, code, recovery="correctable")` |
 
 ### What NOT to assert on (in new error tests)

@@ -253,6 +253,8 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
     return asgn.assignment_id
 
 
+# Patch at the use site: creatives.py binds this name via `from ... import`, so the
+# definition module (src.core.tools.media_buy_create) is not where the call resolves.
 _PUSH_PATCH = "src.admin.blueprints.creatives.push_creative_to_existing_buy"
 
 

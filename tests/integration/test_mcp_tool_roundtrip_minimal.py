@@ -14,6 +14,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers import assert_envelope_shape
 
 
 @pytest.mark.integration
@@ -141,27 +142,27 @@ class TestMCPToolRoundtripMinimal:
         assert "deliveries" in content or "aggregated_totals" in content
 
     async def test_get_media_buy_delivery_invalid_date_range(self, mcp_client):
-        """Test get_media_buy_delivery returns an error for invalid date ranges.
+        """Test get_media_buy_delivery raises ToolError with spec-compliant envelope for invalid date ranges.
 
-        This exercises the date range validation branch where start_date >= end_date
-        should return an AdCP-compliant error response with zeroed totals.
+        After the error-emission architecture migration, _impl raises AdCPValidationError; the MCP boundary
+        translator emits a ToolError whose message is the JSON envelope
+        ``{adcp_error: {...}, errors: [...]}`` per the AdCP 3.0.6 spec.
         """
+        import json
+
+        from fastmcp.exceptions import ToolError
+
         # Use a start_date that is after end_date to trigger the validation error
         params = {
             "start_date": "2025-01-31",
             "end_date": "2025-01-01",
         }
 
-        result = await mcp_client.call_tool("get_media_buy_delivery", params)
+        with pytest.raises(ToolError) as exc_info:
+            await mcp_client.call_tool("get_media_buy_delivery", params)
 
-        assert result is not None
-        content = result.structured_content if hasattr(result, "structured_content") else result
-
-        # Errors array should be present with the invalid_date_range code
-        assert "errors" in content
-        assert isinstance(content["errors"], list)
-        assert len(content["errors"]) >= 1
-        assert content["errors"][0]["code"] == "VALIDATION_ERROR"
+        envelope = json.loads(str(exc_info.value))
+        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
 
     async def test_sync_creatives_minimal(self, mcp_client):
         """Test sync_creatives with minimal required parameters.
@@ -185,9 +186,7 @@ class TestMCPToolRoundtripMinimal:
                             "width": 300,
                             "height": 250,
                         },
-                        "assets": build_assets(
-                            image_spec("image", url="https://example.com/preview.jpg")
-                        ),
+                        "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
                     }
                 ]
             },

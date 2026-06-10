@@ -211,5 +211,3 @@ def then_no_field(ctx: dict, field: str) -> None:
         assert field not in inner, f"Field {field!r} should not be present, got {inner}"
     else:
         assert not hasattr(inner, field), f"Field {field!r} should not be present on {type(inner).__name__}"
-
-

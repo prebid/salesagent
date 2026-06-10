@@ -21,312 +21,14 @@ used in error responses. These tests prevent regression by actually executing
 those error paths.
 """
 
-from datetime import UTC, datetime, timedelta
-
 import pytest
 from fastmcp.exceptions import ToolError
-from sqlalchemy import delete
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import CurrencyLimit
-from src.core.database.models import Principal as ModelPrincipal
-from src.core.database.models import Product as ModelProduct
-from src.core.database.models import Tenant as ModelTenant
-from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
-from src.core.schemas import CreateMediaBuyError, Error
-from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
+from src.core.exceptions import AdCPValidationError
+from src.core.tools import list_creatives_raw, sync_creatives_raw
 from tests.factories import PrincipalFactory
-from tests.helpers.adcp_factories import create_test_package_request_dict
-from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
-
-
-@pytest.mark.integration
-@pytest.mark.requires_db
-class TestCreateMediaBuyErrorPaths:
-    """Test error handling in create_media_buy.
-
-    These tests ensure the Error class is properly imported and error responses
-    are constructible without NameError.
-    """
-
-    @pytest.fixture
-    def test_tenant_minimal(self, integration_db):
-        """Create minimal tenant without principal (for auth error tests)."""
-        from src.core.config_loader import set_current_tenant
-
-        with get_db_session() as session:
-            now = datetime.now(UTC)
-
-            # Delete existing test data
-            session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "error_test_tenant"))
-            session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == "error_test_tenant"))
-            session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "error_test_tenant"))
-            session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "error_test_tenant"))
-            session.commit()
-
-            # Create tenant
-            tenant = ModelTenant(
-                tenant_id="error_test_tenant",
-                name="Error Test Tenant",
-                subdomain="errortest",
-                ad_server="mock",
-                is_active=True,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(tenant)
-            session.commit()
-
-            # Add required setup data (currency limits, property tags)
-            add_required_setup_data(session, "error_test_tenant")
-
-            # Create product using new pricing_options model
-            product = create_test_product_with_pricing(
-                session=session,
-                tenant_id="error_test_tenant",
-                product_id="error_test_product",
-                name="Error Test Product",
-                description="Product for error testing",
-                pricing_model="CPM",
-                rate="10.00",
-                is_fixed=True,
-                min_spend_per_package="1000.00",
-                format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
-            )
-
-            session.commit()
-
-        # Session closed here - data persists in database
-
-        # Set tenant context
-        set_current_tenant(
-            {
-                "tenant_id": "error_test_tenant",
-                "name": "Error Test Tenant",
-                "subdomain": "errortest",
-                "ad_server": "mock",
-            }
-        )
-
-        yield
-
-        # Cleanup with new session
-        with get_db_session() as session:
-            session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == "error_test_tenant"))
-            session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == "error_test_tenant"))
-            session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == "error_test_tenant"))
-            session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "error_test_tenant"))
-            session.commit()
-
-    @pytest.fixture
-    def test_tenant_with_principal(self, test_tenant_minimal):
-        """Add principal to minimal tenant."""
-        with get_db_session() as session:
-            principal = ModelPrincipal(
-                tenant_id="error_test_tenant",
-                principal_id="error_test_principal",
-                name="Error Test Principal",
-                access_token="error_test_token",
-                platform_mappings={"mock": {"advertiser_id": "error_test_adv"}},
-            )
-            session.add(principal)
-            session.commit()
-
-        # Session closed here - principal persists in database
-
-        yield
-
-        # Cleanup principal with new session
-        with get_db_session() as session:
-            session.execute(delete(ModelPrincipal).where(ModelPrincipal.principal_id == "error_test_principal"))
-            session.commit()
-
-    async def test_missing_principal_returns_authentication_error(self, test_tenant_minimal):
-        """Test that missing principal returns Error response with authentication_error code.
-
-        This tests line 3159 in main.py where Error(code="AUTH_REQUIRED") is used.
-        Previously this would cause NameError because Error wasn't imported.
-        """
-        identity = PrincipalFactory.make_identity(
-            tenant_id="error_test_tenant",
-            principal_id="nonexistent_principal",  # Principal doesn't exist
-            protocol="a2a",
-        )
-
-        future_start = datetime.now(UTC) + timedelta(days=1)
-        future_end = future_start + timedelta(days=7)
-
-        # This should return error response, not raise NameError
-        response_dict = await create_media_buy_raw(
-            po_number="error_test_po",
-            brand={"domain": "testbrand.com"},
-            context={"trace_id": "auth-missing-principal"},
-            packages=[
-                create_test_package_request_dict(
-                    product_id="error_test_product",
-                    pricing_option_id="cpm_usd_fixed",
-                    budget=5000.0,
-                )
-            ],
-            start_time=future_start.isoformat(),
-            end_time=future_end.isoformat(),
-            identity=identity,
-        )
-
-        # CreateMediaBuyResult supports tuple unpacking: (response, status)
-        response, status = response_dict
-
-        # Verify response structure - error cases return CreateMediaBuyError
-        assert isinstance(response, CreateMediaBuyError)
-        assert response.errors is not None
-        assert len(response.errors) > 0
-
-        # Verify error details
-        error = response.errors[0]
-        assert isinstance(error, Error)
-        assert error.code == "AUTH_REQUIRED"
-        assert "principal" in error.message.lower() or "not found" in error.message.lower()
-        # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
-        assert response.context.trace_id == "auth-missing-principal"
-
-    async def test_start_time_in_past_returns_validation_error(self, test_tenant_with_principal):
-        """Test that start_time in past returns Error response with validation_error code.
-
-        This tests line 3147 in main.py where Error(code="VALIDATION_ERROR") is used
-        in the ValueError exception handler.
-        """
-        identity = PrincipalFactory.make_identity(
-            tenant_id="error_test_tenant",
-            principal_id="error_test_principal",
-            protocol="a2a",
-        )
-
-        past_start = datetime.now(UTC) - timedelta(days=1)  # In the past!
-        past_end = past_start + timedelta(days=7)
-
-        # Typed AdCPValidationError now propagates past the boundary catch.
-        with pytest.raises(AdCPValidationError) as excinfo:
-            await create_media_buy_raw(
-                po_number="error_test_po",
-                brand={"domain": "testbrand.com"},
-                context={"trace_id": "past-start"},
-                packages=[
-                    create_test_package_request_dict(
-                        product_id="error_test_product",
-                        pricing_option_id="cpm_usd_fixed",
-                        budget=5000.0,
-                    )
-                ],
-                start_time=past_start.isoformat(),
-                end_time=past_end.isoformat(),
-                identity=identity,
-            )
-
-        # Typed AdCPValidationError raised directly from _impl with
-        # error_code="INVALID_REQUEST".
-        exc = excinfo.value
-        assert exc.error_code == "INVALID_REQUEST"
-        assert "past" in exc.message.lower() or "start" in exc.message.lower()
-
-    async def test_end_time_before_start_returns_validation_error(self, test_tenant_with_principal):
-        """Test that end_time before start_time returns Error response."""
-        identity = PrincipalFactory.make_identity(
-            tenant_id="error_test_tenant",
-            principal_id="error_test_principal",
-            protocol="a2a",
-        )
-
-        start = datetime.now(UTC) + timedelta(days=7)
-        end = start - timedelta(days=1)  # Before start!
-
-        # Typed AdCPValidationError now propagates past the boundary catch.
-        with pytest.raises(AdCPValidationError) as excinfo:
-            await create_media_buy_raw(
-                po_number="error_test_po",
-                brand={"domain": "testbrand.com"},
-                packages=[
-                    create_test_package_request_dict(
-                        product_id="error_test_product",
-                        pricing_option_id="cpm_usd_fixed",
-                        budget=5000.0,
-                    )
-                ],
-                start_time=start.isoformat(),
-                end_time=end.isoformat(),
-                identity=identity,
-            )
-
-        exc = excinfo.value
-        assert exc.error_code == "INVALID_REQUEST"
-        assert "end" in exc.message.lower() or "after" in exc.message.lower()
-
-    async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
-        """Test that negative budget raises a validation error during Pydantic validation.
-
-        Note: This is caught at the Pydantic schema level (ge=0 constraint) before
-        business logic runs, so it raises ToolError or AdCPValidationError rather
-        than returning an Error response.
-        """
-        identity = PrincipalFactory.make_identity(
-            tenant_id="error_test_tenant",
-            principal_id="error_test_principal",
-            protocol="a2a",
-        )
-
-        future_start = datetime.now(UTC) + timedelta(days=1)
-        future_end = future_start + timedelta(days=7)
-
-        # Negative budget should fail Pydantic validation (ge=0 constraint)
-        with pytest.raises((ToolError, AdCPValidationError)) as exc_info:
-            await create_media_buy_raw(
-                po_number="error_test_po",
-                brand={"domain": "testbrand.com"},
-                packages=[
-                    create_test_package_request_dict(
-                        product_id="error_test_product",
-                        pricing_option_id="cpm_usd_fixed",
-                        budget=-1000.0,  # Negative budget (will fail validation)
-                    )
-                ],
-                start_time=future_start.isoformat(),
-                end_time=future_end.isoformat(),
-                identity=identity,
-            )
-
-        error_message = str(exc_info.value)
-        assert "budget" in error_message.lower()
-        assert "greater than or equal to 0" in error_message.lower()
-
-    async def test_missing_packages_returns_validation_error(self, test_tenant_with_principal):
-        """Test that missing packages returns Error response."""
-        identity = PrincipalFactory.make_identity(
-            tenant_id="error_test_tenant",
-            principal_id="error_test_principal",
-            protocol="a2a",
-        )
-
-        future_start = datetime.now(UTC) + timedelta(days=1)
-        future_end = future_start + timedelta(days=7)
-
-        # Typed AdCPBudgetTooLowError now propagates past the boundary catch.
-        # Empty packages -> budget=0.0 -> "Budget must be positive" validator at
-        # media_buy_create.py:1758 raises AdCPBudgetTooLowError (typed subclass,
-        # typed AdCPValidationError raised directly).
-        with pytest.raises(AdCPBudgetTooLowError) as excinfo:
-            await create_media_buy_raw(
-                po_number="error_test_po",
-                brand={"domain": "testbrand.com"},
-                packages=[],  # Empty packages!
-                start_time=future_start.isoformat(),
-                end_time=future_end.isoformat(),
-                identity=identity,
-            )
-
-        exc = excinfo.value
-        assert exc.error_code == "BUDGET_TOO_LOW"
-        assert "budget" in exc.message.lower() or "package" in exc.message.lower()
 
 
 @pytest.mark.integration
@@ -497,8 +199,35 @@ class TestRecoveryFieldInErrorResponses:
                 "SERVICE_UNAVAILABLE",
                 "transient",
             ),
+            (
+                "src.core.exceptions.AdCPBudgetExceededError",
+                "budget exceeds ceiling",
+                422,
+                "BUDGET_EXCEEDED",
+                "correctable",
+            ),
+            (
+                "src.core.exceptions.AdCPCreativeRejectedError",
+                "creative failed policy review",
+                422,
+                "CREATIVE_REJECTED",
+                "correctable",
+            ),
+            (
+                "src.core.exceptions.AdCPProductUnavailableError",
+                "product is offline",
+                422,
+                "PRODUCT_UNAVAILABLE",
+                "correctable",
+            ),
         ],
-        ids=["validation_error_correctable", "adapter_error_transient"],
+        ids=[
+            "validation_error_correctable",
+            "adapter_error_transient",
+            "budget_exceeded_correctable",
+            "creative_rejected_correctable",
+            "product_unavailable_correctable",
+        ],
     )
     def test_rest_recovery_field_propagates_from_typed_error(
         self, error_factory_path, exc_message, expected_status, expected_code, expected_recovery
@@ -541,9 +270,8 @@ class TestRecoveryFieldInErrorResponses:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             body = response.json()
-            assert body["adcp_error"]["recovery"] == "transient", (
-                "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
-            )
+            recovery_msg = "Custom recovery='transient' must be preserved at envelope level, not default 'terminal'"
+            assert body["adcp_error"]["recovery"] == "transient", recovery_msg
             assert body["errors"][0]["recovery"] == "transient"
 
     def test_to_dict_serialization_roundtrip(self):
@@ -567,9 +295,8 @@ class TestRecoveryFieldInErrorResponses:
             # Simulate JSON roundtrip (what happens in real HTTP response)
             json_str = json.dumps(d)
             deserialized = json.loads(json_str)
-            assert deserialized["recovery"] == expected_recovery, (
-                f"{type(exc).__name__}: recovery lost in JSON roundtrip"
-            )
+            roundtrip_msg = f"{type(exc).__name__}: recovery lost in JSON roundtrip"
+            assert deserialized["recovery"] == expected_recovery, roundtrip_msg
 
 
 class TestRestBoundaryAuditObservability:

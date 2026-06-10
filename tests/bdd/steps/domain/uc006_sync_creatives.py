@@ -13,6 +13,7 @@ beads: salesagent-71q, salesagent-99w
 from __future__ import annotations
 
 import json
+from unittest.mock import ANY
 
 import pytest
 from pytest_bdd import given, parsers, then, when
@@ -689,16 +690,14 @@ def then_review_workflow_with_slack(ctx: dict) -> None:
     assert mock_notify is not None, (
         "send_notifications mock must be wired in CreativeSyncEnv to verify Slack notification (INV-3)"
     )
-    mock_notify.assert_called_once()
-    # Verify call_args: approval_mode is "require-human" and creative is in the list
-    call_args = mock_notify.call_args
-    creatives_arg = call_args[0][0] if call_args[0] else call_args[1].get("creatives_needing_approval", [])
-    approval_mode_arg = call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("approval_mode")
-    assert approval_mode_arg == "require-human", (
-        f"INV-3: Slack notification should be for require-human mode, got '{approval_mode_arg}'"
+    mock_notify.assert_called_once_with(
+        creatives_needing_approval=ANY,
+        tenant=ANY,
+        approval_mode="require-human",
+        principal_id=ANY,
     )
     creative_id = ctx["creatives"][-1]["creative_id"]
-    notified_ids = {c.get("creative_id") for c in creatives_arg}
+    notified_ids = {c.get("creative_id") for c in mock_notify.call_args.kwargs["creatives_needing_approval"]}
     assert creative_id in notified_ids, (
         f"INV-3: Slack notification should reference creative '{creative_id}', "
         f"but notified creatives were: {notified_ids}"

@@ -97,7 +97,7 @@ class TestCreateNamingAgent:
 
     def test_creates_agent_with_model(self):
         """Creates agent with specified model."""
-        agent = create_naming_agent("google-gla:gemini-2.0-flash")
+        agent = create_naming_agent("google:gemini-2.0-flash")
 
         # Model is converted to a GoogleModel object internally
         assert agent.model is not None
@@ -106,7 +106,7 @@ class TestCreateNamingAgent:
 
     def test_creates_agent_with_max_length(self):
         """Max length is incorporated into system prompt."""
-        agent = create_naming_agent("google-gla:gemini-2.0-flash", max_length=80)
+        agent = create_naming_agent("google:gemini-2.0-flash", max_length=80)
 
         # The system prompt should mention the max length
         assert "80 characters" in agent._system_prompts[0]

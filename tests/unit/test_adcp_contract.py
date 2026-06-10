@@ -122,9 +122,11 @@ class TestSchemaMatchesLibrary:
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         # product_selectors — internal-only field (not in AdCP spec)
+        # push_notification_config — in JSON schema but not yet in adcp library's
+        #   GetProductsWholesaleRequest (library gap); declared locally per Pattern #1
         # buying_mode and account are now in the library (adcp 3.9) but overridden locally
         # (buying_mode widened to str|None, account made optional)
-        local_extensions = {"product_selectors"}
+        local_extensions = {"product_selectors", "push_notification_config"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )

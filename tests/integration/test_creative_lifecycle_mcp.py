@@ -1035,7 +1035,7 @@ class TestCreativeLifecycleMCP:
         )
 
         with (
-            patch("src.core.tools.media_buy_create.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
             patch("src.core.tools.products.get_product_catalog") as mock_catalog,
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
@@ -1136,9 +1136,8 @@ class TestCreativeLifecycleMCP:
             print(f"DEBUG create_media_buy response: {domain_response}")
             if hasattr(domain_response, "errors") and domain_response.errors:
                 print(f"DEBUG errors: {domain_response.errors}")
-            assert hasattr(domain_response, "media_buy_id"), (
-                f"Expected CreateMediaBuySuccess, got: {type(domain_response).__name__}"
-            )
+            msg = f"Expected CreateMediaBuySuccess, got: {type(domain_response).__name__}"
+            assert hasattr(domain_response, "media_buy_id"), msg
             assert domain_response.media_buy_id  # Just verify it exists
             actual_media_buy_id = domain_response.media_buy_id
             # Protocol envelope adds status field - domain response just has media_buy_id

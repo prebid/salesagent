@@ -439,4 +439,3 @@ Feature: BR-UC-012 Manage Content Standards
       | critical | valid    |
       | urgent   | invalid  |
       | INFO     | invalid  |
-

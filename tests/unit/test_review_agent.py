@@ -106,7 +106,7 @@ class TestCreateReviewAgent:
 
     def test_creates_agent_with_model(self):
         """Creates agent with specified model."""
-        agent = create_review_agent("google-gla:gemini-2.0-flash")
+        agent = create_review_agent("google:gemini-2.0-flash")
 
         assert agent.model is not None
         assert agent._output_type == CreativeReviewResult

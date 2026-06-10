@@ -1026,4 +1026,3 @@ Feature: BR-UC-020 Build Creative
     # traffic to ad servers. This anchors the post-sync build flow as distinct
     # from inline pure-generation scenarios.
     # build_video_tag: post-sync build by creative_id produces a target-format serving tag
-

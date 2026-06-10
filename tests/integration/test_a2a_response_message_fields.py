@@ -128,9 +128,7 @@ class TestA2AMessageFieldValidation:
                         "creative_id": "creative_test_001",  # Changed from buyer_ref to creative_id per adcp library
                         "format_id": "display_300x250",
                         "name": "Test Creative",
-                        "assets": build_assets(
-                            image_spec("main_image", url="https://example.com/image.jpg")
-                        ),
+                        "assets": build_assets(image_spec("main_image", url="https://example.com/image.jpg")),
                     }
                 ],
                 "validation_mode": "strict",

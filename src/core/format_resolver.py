@@ -11,7 +11,7 @@ creative agent-based format discovery per AdCP v2.4.
 import json
 
 from src.core.database.database_session import get_db_session
-from src.core.exceptions import AdCPNotFoundError
+from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
 from src.core.schemas import Format
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -31,7 +31,7 @@ def get_format(
         Format object with all configuration
 
     Raises:
-        AdCPNotFoundError: If format_id not found in any source
+        AdCPFormatNotFoundError: If format_id not found in any source
     """
     # Check product override first
     if product_id and tenant_id:
@@ -63,7 +63,7 @@ def get_format(
         error_msg += f" from agent {agent_url}"
     if tenant_id:
         error_msg += f" for tenant {tenant_id}"
-    raise AdCPNotFoundError(error_msg)
+    raise AdCPFormatNotFoundError(error_msg)
 
 
 def _get_product_format_override(
