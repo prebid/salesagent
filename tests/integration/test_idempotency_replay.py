@@ -358,6 +358,9 @@ class TestErrorsAreNeverCached:
                 )
                 assert result.status == "failed"
             except AdCPError:
+                # The adapter failure may surface as a raised typed error rather
+                # than a failed result — both are valid emission shapes here. The
+                # assertion that matters is below: no cache row exists either way.
                 pass
             tenant_id = env._tenant_id
             principal_id = env._principal_id
