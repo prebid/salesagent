@@ -9,7 +9,12 @@
 # SERVICE NAME (postgres:5432, proxy:8000) — so it needs no published host ports,
 # which is what eliminates the cross-stack host-port collisions (see
 # docker-compose.e2e.yml `tests` service + scripts/test-in-network.sh).
-FROM python:3.12-slim
+# Pin to bookworm (Debian 12), NOT the bare `python:3.12-slim` tag which has
+# rolled to trixie (Debian 13). Playwright 1.60's `install --with-deps` apt-installs
+# bookworm-era font packages (ttf-unifont, ttf-ubuntu-font-family) that trixie
+# renamed (fonts-*), so a cold build on trixie fails at the chromium dep step.
+# Bookworm keeps the cold build reproducible (CI + fresh worktrees).
+FROM python:3.12-slim-bookworm
 
 RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc \
     && apt-get update \
