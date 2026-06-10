@@ -122,10 +122,15 @@ services:
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
       # Playwright chromium is pre-installed in Dockerfile.test at this path.
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
-      # bdd uses `pytest -n auto`, which sizes to the host CPU count (~17 here) —
-      # far too many app-loading workers for one container (OOM + xdist loadscope
-      # KeyError). Cap `auto` to a memory-safe worker count in-network.
-      PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
+      # bdd is the only suite using `pytest -n auto`. It MUST run serial in-network:
+      # all bdd workers share ONE Postgres (postgres:5432/adcp_test), and the
+      # factory-boy fixtures create tenants/principals with fixed IDs, so >1 worker
+      # races on shared rows -> a large block of setup ERRORS (non-deterministic;
+      # it happened to pass with 4 workers on the dev branch, then failed hard on a
+      # clean main run). Pinning auto=1 serializes DB access -> deterministic green
+      # (verified: 1451 passed / 5122 xfailed / 0 errors). Also keeps memory bounded
+      # (the bare `-n auto` would otherwise spawn ~17 app-loading workers -> OOM).
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "1"
       ADCP_TESTING: "true"
       ADCP_AUTH_TEST_MODE: "true"
       CREATE_SAMPLE_DATA: "true"
