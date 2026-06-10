@@ -45,6 +45,10 @@ jobs:
       - name: Run pre-commit
         run: make quality-ci
 
+  # mypy also runs inside Quality Gate via `make quality-ci` (the unified local
+  # target — removing it there would drift local from CI). The dedicated job is
+  # kept as a separate required-check signal; jobs run in parallel, so the
+  # overlap costs runner minutes, not wall-clock time.
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
