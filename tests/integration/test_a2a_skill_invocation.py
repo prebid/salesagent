@@ -25,7 +25,11 @@ try:
 except ImportError:
     SCHEMA_VALIDATION_AVAILABLE = False
     AdCPSchemaValidator: type[AdCPSchemaValidator] | None = None  # type: ignore[no-redef]
-    SchemaValidationError: type[SchemaValidationError] | None = None  # type: ignore[no-redef]
+
+    class SchemaValidationError(Exception):
+        """Fallback exception type when schema validator is unavailable."""
+
+        pass
 
 # Configure logging for tests
 logging.basicConfig(level=logging.DEBUG)
