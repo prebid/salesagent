@@ -2495,6 +2495,37 @@ def e2e_stack():
     return E2EConfig(base_url=base_url, postgres_url=postgres_url)
 
 
+def _reset_e2e_db(e2e_config) -> None:
+    """Flush the live server DB to a clean baseline before an e2e scenario.
+
+    Live-server e2e shares ONE database and the server process commits
+    independently, so the transaction-rollback isolation the in-process
+    transports get (via the per-test integration_db) is impossible here. Instead
+    TRUNCATE every data table CASCADE so each scenario's harness setup recreates
+    exactly the rows it needs into a clean DB. The server reads the DB live, so it
+    observes the reset immediately. alembic_version is preserved (schema stays).
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(e2e_config.postgres_url)
+    try:
+        with engine.begin() as conn:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables "
+                        "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+                    )
+                )
+            ]
+            if tables:
+                joined = ", ".join(f'"{t}"' for t in tables)
+                conn.execute(text(f"TRUNCATE TABLE {joined} RESTART IDENTITY CASCADE"))
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture()
 def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
     """Per-scenario mutable context shared across Given/When/Then steps.
@@ -2585,6 +2616,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - Unknown UC → no harness (yields immediately)
     """
     uc = _detect_uc(request)
+
+    # E2E shares one live DB across all scenarios; flush it to a clean baseline so
+    # this scenario's harness setup starts fresh (no cross-scenario tenant_id
+    # collisions). No-op for the in-process transports (they use per-test DBs).
+    if ctx.get("e2e_config") is not None:
+        _reset_e2e_db(ctx["e2e_config"])
 
     if uc == "UC-002":
         marker_names = {m.name for m in request.node.iter_markers()}
