@@ -580,4 +580,3 @@ Feature: BR-UC-030 Manage Governance Binding
     # specific governance URL persisted at sync time MUST be the URL the
     # seller calls at create_media_buy time.
     # governance binding integration: sync_governance URL is the only URL invoked at create_media_buy time
-

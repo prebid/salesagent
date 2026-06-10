@@ -971,4 +971,3 @@ Feature: BR-UC-009 Update Performance Index
       | Present with uppercase domain                   | validation error |
       | Present with unknown additional property        | validation error |
       | Sent as a bare string                           | validation error |
-

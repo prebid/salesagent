@@ -1610,4 +1610,3 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | too_short_key       | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
       | too_long_key        | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
       | pattern_violation   | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
-

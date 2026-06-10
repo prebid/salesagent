@@ -1825,4 +1825,3 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | pricing_model = 'cpm' (in enum)             | valid    |
       | pricing_model = 'time' (last enum value)    | valid    |
       | delivery_status = 'goal_met' (last enum value) | valid    |
-

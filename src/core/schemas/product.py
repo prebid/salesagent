@@ -239,6 +239,7 @@ class GetProductsRequest(LibraryGetProductsRequest):
     Library provides: account, brand, brief, buyer_campaign_ref, catalog,
     context, ext, fields, filters, pagination, property_list, refine.
 
+    Spec field not yet in adcp library: push_notification_config (online schema).
     Internal-only: product_selectors (excluded from external serialization).
     """
 

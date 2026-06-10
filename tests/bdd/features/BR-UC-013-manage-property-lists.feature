@@ -802,4 +802,3 @@ Feature: BR-UC-013 Manage Property Lists
       | webhook_url is configured                       | emitted     |
       | webhook_url was cleared by setting empty string | not emitted |
       | webhook_url was never configured                | not emitted |
-

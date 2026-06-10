@@ -841,4 +841,3 @@ Feature: BR-UC-018 List Creatives
       | sandbox: true in response (sandbox account)     | a sandbox account                     | the response should include sandbox equals true   |
       | sandbox absent in response (production account) | a production account                  | the response should not include a sandbox field   |
       | sandbox: false in response (explicit production) | a production account with sandbox false | the response should include sandbox equals false  |
-

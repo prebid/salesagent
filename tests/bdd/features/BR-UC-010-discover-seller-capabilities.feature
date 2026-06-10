@@ -1154,4 +1154,3 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | x decodes to 31 or 33 bytes                          | invalid  |
       | kid = opaque token (e.g. 'k1')                       | valid    |
       | kid = geographic/deployment token (e.g. 'us-east1')  | invalid  |
-
