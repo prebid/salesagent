@@ -230,6 +230,23 @@ class TestCreateMediaBuyCurrencyValidation:
         assert "currency" in msg or "eur" in msg
 
 
+def _media_buy_id_for_task(task_id: str) -> str:
+    """Resolve the persisted media buy a submitted response's task_id names.
+
+    The spec submitted variant carries no media_buy_id (it arrives on the
+    completion artifact); tests that need the DB row follow the workflow
+    mapping the same way the approval machinery does.
+    """
+    from src.core.database.models import ObjectWorkflowMapping
+
+    with get_db_session() as session:
+        mapping = session.scalars(
+            select(ObjectWorkflowMapping).filter_by(step_id=task_id, object_type="media_buy")
+        ).one_or_none()
+        assert mapping is not None, "Workflow step should map to the persisted media buy"
+        return mapping.object_id
+
+
 class TestCreateMediaBuyManualApproval:
     """UC-002-MA01..MA03: manual approval / HITL workflow."""
 
@@ -298,9 +315,10 @@ class TestCreateMediaBuyManualApproval:
 
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
+        media_buy_id = _media_buy_id_for_task(result.response.task_id)
 
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None, "Media buy record should exist in DB"
             assert mb.raw_request is not None, "raw_request should be stored"
 
@@ -335,7 +353,7 @@ class TestCreateMediaBuyManualApproval:
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
 
-        media_buy_id = result.response.media_buy_id
+        media_buy_id = _media_buy_id_for_task(result.response.task_id)
 
         success, error = execute_approved_media_buy(
             media_buy_id=media_buy_id,
