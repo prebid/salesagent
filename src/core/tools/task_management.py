@@ -14,11 +14,10 @@ from typing import Any
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
-    AdCPAuthenticationError,
     AdCPConflictError,
-    AdCPNotFoundError,
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
@@ -52,13 +51,9 @@ async def list_tasks(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
-
-    if not identity.is_authenticated:
-        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
-
-    tenant = identity.tenant
+    identity = require_identity(identity)
+    tenant = require_tenant(identity)
+    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -142,21 +137,14 @@ async def get_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
-
-    if not identity.is_authenticated:
-        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
-
-    tenant = identity.tenant
+    identity = require_identity(identity)
+    tenant = require_tenant(identity)
+    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
-        task = uow.workflows.get_by_step_id(task_id)
-
-        if not task:
-            raise AdCPNotFoundError(f"Task {task_id} not found")
+        task = uow.workflows.get_by_step_id_or_raise(task_id)
 
         mappings = uow.workflows.get_mappings_for_step(task_id)
 
@@ -214,14 +202,9 @@ async def complete_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
-
-    if not identity.is_authenticated:
-        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to complete tasks.")
-
-    principal_id = identity.principal_id
-    tenant = identity.tenant
+    identity = require_identity(identity)
+    tenant = require_tenant(identity)
+    principal_id = require_principal_id(identity)  # F-03: an authenticated principal is required
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(
@@ -232,10 +215,7 @@ async def complete_task(
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
-        task = uow.workflows.get_by_step_id(task_id)
-
-        if not task:
-            raise AdCPNotFoundError(f"Task {task_id} not found")
+        task = uow.workflows.get_by_step_id_or_raise(task_id)
 
         if task.status not in ["pending", "in_progress", "requires_approval"]:
             raise AdCPConflictError(f"Task {task_id} is already {task.status} and cannot be completed")

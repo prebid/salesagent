@@ -18,10 +18,10 @@ from a2a.server.routes.common import ServerCallContext
 from a2a.types import Message, SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.database.database_session import get_db_session
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
-from tests.helpers.adcp_factories import create_test_package_request_dict, setup_error_test_tenant_chain
+from tests.helpers.adcp_factories import create_test_package_request_dict
+from tests.integration.conftest import seed_error_test_tenant
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -38,17 +38,18 @@ class TestA2AErrorPropagation:
     """Test that errors from core tools are properly propagated through A2A handlers."""
 
     @pytest.fixture
-    def test_tenant(self, integration_db):
-        """Create test tenant + principal + product via the shared error-test chain helper.
+    def _seeded(self, integration_db):
+        """Seed the A2A error-test tenant/principal/product via factories.
 
-        Note: human_review_required=False ensures media buy runs immediately
-        rather than going to approval workflow (needed for response field tests).
+        Opens a single ``IntegrationEnv`` (factory session binding) for the test's
+        lifetime so dependent fixtures (test_tenant, test_principal, active_media_buy)
+        share it without nesting. ``human_review_required=False`` lets media buys run
+        immediately rather than entering the approval workflow.
         """
-        from src.core.config_loader import set_current_tenant
+        from tests.harness._base import IntegrationEnv
 
-        with get_db_session() as session:
-            result = setup_error_test_tenant_chain(
-                session,
+        with IntegrationEnv():
+            yield seed_error_test_tenant(
                 tenant_id="a2a_error_test",
                 principal_id="a2a_error_principal",
                 access_token="a2a_error_token_123",
@@ -56,16 +57,20 @@ class TestA2AErrorPropagation:
                 subdomain="a2aerror",
                 tenant_name="A2A Error Test Tenant",
                 advertiser_id="mock_adv_123",
+                protocol="a2a",
             )
-            set_current_tenant(result["tenant_dict"])
-            yield result["tenant_dict"]
 
     @pytest.fixture
-    def test_principal(self, integration_db, test_tenant):
-        """Test principal info (created by the shared chain helper in test_tenant)."""
-        yield {
-            "principal_id": "a2a_error_principal",
-            "access_token": "a2a_error_token_123",
+    def test_tenant(self, _seeded):
+        """Tenant dict for the A2A error-test chain (current tenant already set)."""
+        return _seeded["tenant_dict"]
+
+    @pytest.fixture
+    def test_principal(self, _seeded):
+        """Principal info created by the shared seed helper."""
+        return {
+            "principal_id": _seeded["principal_id"],
+            "access_token": _seeded["access_token"],
             "name": "A2A Error Test Principal",
         }
 
@@ -133,10 +138,11 @@ class TestA2AErrorPropagation:
             artifact_data,
             "VALIDATION_ERROR",
             message_substr="Missing required AdCP parameters",
+            recovery="correctable",
         )
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
-        """Test that authentication errors include errors field in A2A response."""
+        """Principal-not-found surfaces AUTH_TOKEN_INVALID as a two-layer envelope on the A2A wire."""
         # Mock identity with non-existent principal — simulates resolved but invalid principal
         identity = PrincipalFactory.make_identity(
             principal_id="nonexistent_principal",
@@ -178,31 +184,113 @@ class TestA2AErrorPropagation:
         artifact = result.artifacts[0]
         artifact_data = self.extract_data_from_artifact(artifact)
 
-        # "Principal not found" is an established Pattern A site — the
-        # impl returns a CreateMediaBuyError variant carrying the
-        # Error(code=AUTH_REQUIRED) inside its ``errors`` list, NOT a raised
-        # AdCPAuthorizationError producing the two-layer envelope. The
-        # advisory pattern is documented in
-        # test_media_buy.py::test_principal_not_found_returns_error_response
-        # and is allowlist-permanent per the error-emission design decisions.
-        assert "errors" in artifact_data, "Response must include 'errors' field for auth errors"
-        assert len(artifact_data["errors"]) > 0, "errors array must not be empty"
-
-        # Verify error is about authentication
-        error = artifact_data["errors"][0]
-        assert "code" in error, "Error must include code"
-        assert error["code"] == "AUTH_REQUIRED"
-
-        # Pin the envelope-level side: Pattern A advisory-on-success
-        # responses do NOT carry the ``adcp_error`` envelope key (no
-        # AdCPError was raised — the impl returned errors[] directly).
-        # Asserting absence guards against a future regression that
-        # accidentally wraps this advisory in a two-layer envelope (which
-        # would change the wire shape for an allowlist-permanent site).
-        assert "adcp_error" not in artifact_data, (
-            "Pattern A advisory site emits errors[] only; the envelope-level "
-            "adcp_error key is reserved for raised-AdCPError two-layer envelopes"
+        # Principal-not-found raises AdCPAuthenticationError from _impl; the A2A
+        # dispatcher catches the typed error and builds the two-layer envelope on
+        # a failed Task. AUTH_TOKEN_INVALID is a STANDARD_ERROR_CODES entry
+        # (passthrough — not rewritten by ERROR_CODE_MAPPING); recovery=terminal.
+        assert_envelope_shape(
+            artifact_data,
+            "AUTH_TOKEN_INVALID",
+            recovery="terminal",
+            message_substr="not found",
         )
+
+    async def test_create_media_buy_end_before_start_wire_envelope(self, handler, test_tenant, test_principal):
+        """end_time before start_time surfaces INVALID_REQUEST on the A2A wire.
+
+        Drives the production date-order validator through the real on_message_send
+        pipeline and asserts the two-layer DataPart envelope, not a raw-shim
+        exception. INVALID_REQUEST is a STANDARD code (passthrough); recovery=correctable.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        start = datetime.now(UTC) + timedelta(days=7)
+        end = start - timedelta(days=1)  # end before start
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            "packages": [
+                create_test_package_request_dict(
+                    product_id="a2a_error_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=5000.0,
+                )
+            ],
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "INVALID_REQUEST", recovery="correctable")
+
+    async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
+        """A negative package budget surfaces VALIDATION_ERROR on the A2A wire.
+
+        The Pydantic ``ge=0`` budget constraint fails when the create_media_buy skill
+        builds CreateMediaBuyRequest; the boundary converts that Pydantic
+        ValidationError to AdCPValidationError (VALIDATION_ERROR) and emits the
+        two-layer envelope. Drives on_message_send, not the raw shim.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        skill_params = {
+            "brand": {"domain": "testbrand.com"},
+            "packages": [
+                create_test_package_request_dict(
+                    product_id="a2a_error_product",
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=-1000.0,  # fails Pydantic ge=0 budget constraint
+                )
+            ],
+            "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            "end_time": (datetime.now(UTC) + timedelta(days=31)).isoformat(),
+        }
+        message = self.create_message_with_skill("create_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="budget", recovery="correctable")
+        # The structured field path is propagated from the Pydantic error (drift-proof
+        # vs the rendered message substring) — both envelope layers carry it.
+        wire_field = artifact_data["errors"][0].get("field") or ""
+        assert "budget" in wire_field, f"expected a budget field path on the wire, got {wire_field!r}"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
@@ -248,9 +336,8 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
-            "errors field must be None or empty array for success"
-        )
+        msg = "errors field must be None or empty array for success"
+        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, msg
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -296,6 +383,7 @@ class TestA2AErrorPropagation:
             artifact_data,
             "VALIDATION_ERROR",
             message_substr="creatives",
+            recovery="correctable",
         )
 
     async def test_create_media_buy_response_includes_all_adcp_fields(self, handler, test_tenant, test_principal):
@@ -405,12 +493,11 @@ class TestA2AErrorPropagation:
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
 
         # Full two-layer envelope on the wire.
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", recovery="correctable")
         # Per-error message enumerates the missing required fields.
         msg = artifact_data["errors"][0]["message"]
-        assert "format_id" in msg and "content_uri" in msg and "name" in msg, (
-            f"Per-error message must name all missing required fields, got: {msg}"
-        )
+        detail = f"Per-error message must name all missing required fields, got: {msg}"
+        assert "format_id" in msg and "content_uri" in msg and "name" in msg, detail
 
     async def test_assign_creative_missing_required_params_wire_envelope(self, handler, test_tenant, test_principal):
         """assign_creative missing required params → two-layer envelope on the A2A wire.
@@ -448,7 +535,7 @@ class TestA2AErrorPropagation:
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
 
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", recovery="correctable")
         # Per-error message enumerates ONLY the missing fields (not the provided media_buy_id).
         msg = artifact_data["errors"][0]["message"]
         assert "package_id" in msg and "creative_id" in msg, f"Per-error message must name missing fields, got: {msg}"
@@ -461,7 +548,7 @@ class TestA2AErrorPropagation:
             update_media_buy_raw → _update_media_buy_impl → _verify_principal
                 → repo.get_by_id returns None
                 → raise AdCPMediaBuyNotFoundError
-                → audit_step_failure re-raises (step is None at this point)
+                → audit_workflow_step_failure_ctx re-raises (step is None at this point)
                 → A2A dispatcher's _handle_explicit_skill catches the typed AdCPError
                 → _build_failed_skill_result builds the two-layer envelope
                 → DataPart on a failed Task
@@ -505,6 +592,148 @@ class TestA2AErrorPropagation:
             recovery="correctable",
             message_substr="mb_does_not_exist_a2a_wire",
         )
+
+    async def test_update_media_buy_missing_media_buy_id_wire_envelope(self, handler, test_tenant, test_principal):
+        """update_media_buy skill with no media_buy_id surfaces VALIDATION_ERROR on the A2A wire.
+
+        Pins the skill-handler required-param guard: a missing field raises a typed
+        AdCPValidationError so the dispatcher emits the two-layer envelope — not a raw
+        JSON-RPC InvalidParamsError that erases the wire code. The create_media_buy skill
+        already does this; this locks update_media_buy to the same contract.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        # No media_buy_id — the skill handler's required-param guard must fire.
+        message = self.create_message_with_skill("update_media_buy", {"paused": True})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None and len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="media_buy_id", recovery="correctable")
+
+    @pytest.fixture
+    def active_media_buy(self, _seeded):
+        """Persist an active media buy for the chain tenant/principal via MediaBuyFactory.
+
+        The financial validators in ``_update_media_buy_impl`` run only after the
+        media-buy lookup succeeds; an active (non-terminal) buy lets the
+        budget-update path reach them rather than short-circuiting on
+        MEDIA_BUY_NOT_FOUND. Returns the media_buy_id.
+        """
+        from datetime import UTC, datetime, timedelta
+        from decimal import Decimal
+
+        from tests.factories import MediaBuyFactory
+
+        now = datetime.now(UTC)
+        media_buy = MediaBuyFactory(
+            tenant=_seeded["tenant"],
+            principal=_seeded["principal"],
+            media_buy_id="mb_a2a_budget_wire",
+            status="active",
+            budget=Decimal("1000.0"),
+            currency="USD",
+            start_date=now.date(),
+            end_date=(now + timedelta(days=30)).date(),
+            start_time=now,
+            end_time=now + timedelta(days=30),
+        )
+        return media_buy.media_buy_id
+
+    async def test_update_media_buy_campaign_budget_exceeded_wire_envelope(
+        self, handler, test_tenant, test_principal, active_media_buy
+    ):
+        """An over-ceiling campaign budget surfaces BUDGET_EXCEEDED on the A2A wire.
+
+        Drives ``AdCPBudgetExceededError`` (campaign budget > MAX_CAMPAIGN_BUDGET)
+        through the real ``on_message_send`` pipeline and asserts the two-layer
+        DataPart envelope, not just the raised exception. BUDGET_EXCEEDED is a
+        STANDARD_ERROR_CODES entry (passthrough); recovery=correctable.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        skill_params = {"media_buy_id": active_media_buy, "budget": 888_888_888.0, "currency": "USD"}
+        message = self.create_message_with_skill("update_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "BUDGET_EXCEEDED", recovery="correctable")
+
+    async def test_update_media_buy_package_budget_below_minimum_wire_envelope(
+        self, handler, test_tenant, test_principal, active_media_buy
+    ):
+        """An under-minimum package budget surfaces BUDGET_TOO_LOW on the A2A wire.
+
+        Drives ``AdCPBudgetTooLowError`` (package budget below the currency's
+        ``min_package_budget``) through the real ``on_message_send`` pipeline and
+        asserts the two-layer DataPart envelope. The chain's USD currency limit
+        sets min_package_budget=1.00, so a 0.50 package budget is below the
+        floor. BUDGET_TOO_LOW is a STANDARD_ERROR_CODES entry (passthrough);
+        recovery=correctable.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        skill_params = {
+            "media_buy_id": active_media_buy,
+            "packages": [{"package_id": "pkg-1", "budget": 0.50}],
+        }
+        message = self.create_message_with_skill("update_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "BUDGET_TOO_LOW", recovery="correctable")
 
 
 @pytest.mark.integration
@@ -643,9 +872,8 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
-            assert error.recovery == "transient", (
-                "Custom recovery='transient' override must be preserved, not default 'terminal'"
-            )
+            msg = "Custom recovery='transient' override must be preserved, not default 'terminal'"
+            assert error.recovery == "transient", msg
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
 
@@ -695,6 +923,8 @@ class TestA2AErrorResponseStructure:
 
             assert "tenant scope mismatch" in str(exc_info.value)
             assert exc_info.value.error_code == "AUTH_REQUIRED"
+            # AdCPAuthorizationError class default, preserved through the wrap (matches the docstring).
+            assert exc_info.value.recovery == "terminal"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 
     async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):
@@ -765,8 +995,8 @@ class TestA2AContextEcho:
         )
 
         async def raise_with_context(params, identity):
-            # @_a2a_skill decorator passes AdCPError through unchanged so the
-            # dispatcher catches it and builds the envelope.
+            # AdCPError raised from a skill handler propagates to the dispatcher,
+            # which catches it and builds the envelope.
             raise AdCPValidationError(
                 "Synthetic validation error to verify context echo",
                 context=echoed_context,
@@ -791,7 +1021,7 @@ class TestA2AContextEcho:
         artifact_data = extract_data_from_artifact(result.artifacts[0])
 
         # Two-layer envelope present
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR")
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", recovery="correctable")
 
         # CRITICAL: context echoes at top-level of the envelope (NOT nested under errors[]).
         assert "context" in artifact_data, (
@@ -799,10 +1029,8 @@ class TestA2AContextEcho:
             f"Got keys: {sorted(artifact_data.keys())}"
         )
         echoed = artifact_data["context"]
-        assert echoed.get("session_id") == "sess_a2a_context_echo", (
-            f"session_id must round-trip unchanged, got: {echoed}"
-        )
-        assert echoed.get("workflow_step") == "echo_validation", (
-            f"workflow_step must round-trip unchanged, got: {echoed}"
-        )
+        msg = f"session_id must round-trip unchanged, got: {echoed}"
+        assert echoed.get("session_id") == "sess_a2a_context_echo", msg
+        msg = f"workflow_step must round-trip unchanged, got: {echoed}"
+        assert echoed.get("workflow_step") == "echo_validation", msg
         assert echoed.get("request_id") == "req_abc_42", f"request_id must round-trip unchanged, got: {echoed}"

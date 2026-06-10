@@ -400,14 +400,11 @@ def _build_error_code_to_status() -> dict[str, int]:
     table: dict[str, int] = {"INVALID_REQUEST": 400}
     _GENERIC_CATCHALLS = {"INVALID_REQUEST"}
 
-    stack = list(AdCPError.__subclasses__())
-    while stack:
-        cls = stack.pop()
-        stack.extend(cls.__subclasses__())
-        # Class-level identity lives on the _default_* ClassVar slots — option-A
-        # refactor (salesagent-fnk9). error_code/status_code are instance attrs
-        # set in __init__; reading them off the class would return descriptor
-        # objects, not strings/ints.
+    # iter_concrete_subclasses() is the single source of truth for the subclass
+    # walk — shared with the error-code compliance tests. Class-level identity
+    # lives on the _default_* ClassVar slots; error_code/status_code are instance
+    # attrs set in __init__, so read the _default_* slots off the class object.
+    for cls in AdCPError.iter_concrete_subclasses():
         code = getattr(cls, "_default_error_code", None)
         status = getattr(cls, "_default_status_code", None)
         if not code or not status:

@@ -12,18 +12,6 @@ from adcp.server.helpers import STANDARD_ERROR_CODES
 from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, AdCPError
 
 
-def _all_adcp_error_subclasses() -> list[type]:
-    """Collect all concrete AdCPError subclasses."""
-    result = []
-    queue = [AdCPError]
-    while queue:
-        cls = queue.pop()
-        for sub in cls.__subclasses__():
-            result.append(sub)
-            queue.append(sub)
-    return result
-
-
 class TestErrorCodeMapping:
     """Verify the mapping dict is complete and correct."""
 
@@ -67,7 +55,7 @@ class TestErrorCodeMapping:
         spec_codes = {"AUTH_TOKEN_INVALID", "BILLING_NOT_SUPPORTED"}
         allowed = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | spec_codes
         violations = []
-        for cls in _all_adcp_error_subclasses():
+        for cls in AdCPError.iter_concrete_subclasses():
             code = cls._default_error_code
             if code not in allowed:
                 violations.append(f"{cls.__name__}._default_error_code = {code!r}")

@@ -58,15 +58,23 @@ def test_health_check_caching(integration_db):
 
 def test_health_check_failure():
     """Test health check when database is unavailable."""
-    with patch("src.core.database.database_session.get_db_session") as mock_session:
-        # Simulate database error
-        mock_session.side_effect = OperationalError("Connection failed", None, None)
+    from src.core.database.database_session import reset_health_state
 
-        healthy, message = check_database_health(force=True)
+    try:
+        with patch("src.core.database.database_session.get_db_session") as mock_session:
+            # Simulate database error
+            mock_session.side_effect = OperationalError("Connection failed", None, None)
 
-        assert healthy is False
-        assert "unhealthy" in message.lower()
-        assert "OperationalError" in message
+            healthy, message = check_database_health(force=True)
+
+            assert healthy is False
+            assert "unhealthy" in message.lower()
+            assert "OperationalError" in message
+    finally:
+        # Reset circuit-breaker state so subsequent tests are not poisoned.
+        # Without this, any test that calls get_db_session() within the 10-second
+        # fail-fast window will see RuntimeError("Database is unhealthy").
+        reset_health_state()
 
 
 @pytest.mark.requires_db

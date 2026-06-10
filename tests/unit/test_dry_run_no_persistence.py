@@ -90,7 +90,7 @@ class TestUpdateMediaBuyDryRunNoPersistence:
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context") as mock_tenant,
-            patch("src.core.tools.media_buy_update.get_principal_object") as mock_principal,
+            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_manager,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,

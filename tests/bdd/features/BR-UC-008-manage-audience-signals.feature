@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 @signals @BR-UC-008
 Feature: BR-UC-008 Manage Audience Signals
@@ -28,6 +28,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And at least one signals agent is registered for the tenant
 
 
+
   @T-UC-008-main-mcp @main-flow @mcp
   Scenario: Signal discovery via MCP tool call
     Given the Buyer provides a valid signal_spec "audience segments for auto intenders"
@@ -35,6 +36,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And countries includes "US"
     When the Buyer Agent calls the get_signals MCP tool
     Then the response contains a non-empty signals array
+    And each signal includes signal_id
     And each signal includes signal_agent_segment_id, name, description
     And each signal includes signal_type from [marketplace, custom, owned]
     And each signal includes data_provider name
@@ -212,10 +214,40 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent sends an activate_signal request
     Then the system returns an error "Authentication required for signal activation"
+    And the error code should be "AUTH_REQUIRED"
     And the error should include "suggestion" field
     And the suggestion should contain "provide authentication credentials"
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
+
+  @T-UC-008-ext-b-idempotency-replay @extension @activation @idempotency
+  Scenario: Repeat activation with same idempotency_key replays original outcome
+    Given the Buyer is authenticated with a valid principal_id
+    And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
+    And destinations include "dv360"
+    And idempotency_key is "activate-req-0001-abcdef"
+    And the Buyer Agent sends an activate_signal request
+    And the response contains deployments array (success variant)
+    When the Buyer Agent resends the activate_signal request with the same idempotency_key
+    Then the response equals the original activation outcome
+    And no second deployment is performed
+    And no second charge is recorded
+    # BR-RULE-048 INV-3: at-most-once execution (v3.1 idempotency_key)
+    # idempotency_key format/required governed by BR-RULE-081; this covers replay semantics only
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
+
+  @T-UC-008-ext-b-idempotency-distinct-key @extension @activation @idempotency
+  Scenario: Activation with a different idempotency_key performs a new deployment
+    Given the Buyer is authenticated with a valid principal_id
+    And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
+    And destinations include "dv360"
+    And idempotency_key is "activate-req-0001-abcdef"
+    And the Buyer Agent sends an activate_signal request
+    When the Buyer Agent sends an activate_signal request with idempotency_key "activate-req-0002-ghijkl"
+    Then a new deployment is performed
+    And the response contains deployments array (success variant)
+    # BR-RULE-048 INV-3 (counter): dedup is scoped to the key; a distinct key is not a replay
 
   @T-UC-008-ext-c-rest @extension @ext-c @rest @a2a @activation @error
   Scenario: Premium signal requires approval via REST
@@ -323,16 +355,6 @@ Feature: BR-UC-008 Manage Audience Signals
     And the suggestion should contain "contact the Seller for approval"
     # POST-F3: Context echoed
 
-  @T-UC-008-graceful-degradation @main-flow @aggregation
-  Scenario: Graceful degradation when one signals agent fails
-    Given the tenant has 3 enabled signals agents
-    And one signals agent returns an error
-    And the Buyer Agent provides signal_spec "audience"
-    When the Buyer Agent sends a get_signals request
-    Then the response contains signals from the 2 healthy agents
-    And the failing agent's error is logged but not returned to Buyer
-    # POST-S1: Buyer still gets signals from healthy agents
-
   @T-UC-008-inv-047-1-holds @invariant @BR-RULE-047
   Scenario: INV-1 holds -- no filters returns all signals
     Given the Buyer provides signal_spec "audience"
@@ -372,6 +394,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And max_results is 0
     When the Buyer Agent sends a get_signals request
     Then the request is rejected
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "max_results must be >= 1"
 
@@ -932,6 +955,22 @@ Feature: BR-UC-008 Manage Audience Signals
       | pricing_option_id='opt-003', model='flat_fee', amount=500, period='monthly', currency='EUR' | valid |
       | No pricing_option_id                                                               | invalid |
 
+  @T-UC-008-boundary-sandbox-response @boundary @sandbox @br-rule-209
+  Scenario Outline: Sandbox response-semantics boundary validation -- <boundary_point>
+    Given the Buyer provides signal_spec "audience"
+    And account resolution matches "<boundary_point>"
+    When the Buyer Agent sends a get_signals request
+    Then the result should be <outcome>
+    # BR-RULE-209: sandbox is a payload-level response echo determined by the
+    # resolved account; success responses on a sandbox account carry sandbox: true,
+    # production accounts omit it. get_signals echoes this per POST-S6b.
+
+    Examples: Boundary values
+      | boundary_point                                  | outcome                          |
+      | sandbox: true in response (sandbox account)     | success with sandbox echoed true |
+      | sandbox absent in response (production account) | success with sandbox omitted     |
+      | sandbox: false in response (explicit production) | success with sandbox false      |
+
   @T-UC-008-gap-missing-segment-id @extension @ext-b @activation @error
   Scenario: Activation rejected -- missing signal_agent_segment_id
     Given the Buyer is authenticated with a valid principal_id
@@ -939,11 +978,13 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent sends an activate_signal request
     Then the request is rejected with a validation error
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "provide signal_agent_segment_id"
     # PRE-B7 violation: signal_agent_segment_id required
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-gap-empty-activate-destinations @extension @ext-b @activation @error
   Scenario: Activation rejected -- empty destinations array
@@ -952,11 +993,13 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations is an empty array
     When the Buyer Agent sends an activate_signal request
     Then the request is rejected with a validation error
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "provide at least one destination"
     # PRE-B8 violation: destinations minItems: 1
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-gap-invalid-action @extension @ext-b @activation @error
   Scenario: Activation rejected -- invalid action value
@@ -966,11 +1009,13 @@ Feature: BR-UC-008 Manage Audience Signals
     And action is "invalid_action"
     When the Buyer Agent sends an activate_signal request
     Then the request is rejected with a validation error
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "action must be activate or deactivate"
     # PRE-B8a violation: action must be "activate" or "deactivate"
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-gap-default-action @extension @activation
   Scenario: Activation with omitted action defaults to activate
@@ -1020,3 +1065,90 @@ Feature: BR-UC-008 Manage Audience Signals
       | countries_only       | omitted      | ["US"]    | signals filtered by country only   |
       | neither_provided     | omitted      | omitted   | all signals returned               |
 
+  @T-UC-008-v31-signal-definition-governance-fields @v3-1 @signal-definition @governance
+  Scenario: signal-definition surfaces restricted_attributes and policy_categories for structural governance match
+    Given a data provider publishes signal "auto_intender_v2"
+    And the signal declares restricted_attributes ["age"]
+    And the signal declares policy_categories ["children_directed"]
+    When the Buyer Agent calls get_signals filtered to that provider
+    Then the response signal entry should include "restricted_attributes" with value ["age"]
+    And the response signal entry should include "policy_categories" with value ["children_directed"]
+    # v3.1: governance agents match restricted_attributes structurally, not by name inference
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
+
+  @T-UC-008-v31-signal-source-catalog @v3-1 @signal-source
+  Scenario: signal_id.source "catalog" carries (data_provider_domain, id) and is externally verifiable
+    Given a Buyer Agent requests signals from "provider.example.com"
+    When the Seller Agent returns signals from the provider's published catalog
+    Then each response signal entry should include "signal_id.source" with value "catalog"
+    And each entry's signal_id should reference "data_provider_domain" "provider.example.com"
+    And the Buyer Agent should be able to verify authorization via "provider.example.com/adagents.json"
+    # v3.1: catalog source -> keyed by (data_provider_domain, id); adagents.json-verifiable
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
+
+  @T-UC-008-v31-signal-source-agent @v3-1 @signal-source
+  Scenario: signal_id.source "agent" carries (agent_url, id) and is not externally verifiable
+    Given a Buyer Agent requests signals from a signals-native agent at "https://signals.example.com"
+    When the Seller Agent returns agent-native signals
+    Then each response signal entry should include "signal_id.source" with value "agent"
+    And each entry's signal_id should reference "agent_url" "https://signals.example.com"
+    And the response payload should NOT advertise external verifiability for those signals
+    # v3.1: agent source -> keyed by (agent_url, id); buyer trusts agent claim
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/signals/get-signals-response.json
+
+  @T-UC-008-v31-error-audience-too-small @v3-1 @error-details
+  Scenario: AUDIENCE_TOO_SMALL error carries v3.1 details shape (minimum_size + current_size)
+    Given the Buyer Agent requests activation of signal "narrow_lookalike_v3"
+    And the resolved audience size is 800
+    And the seller's minimum audience size is 5000
+    When the Buyer Agent sends the activate_signal request
+    Then the operation should fail
+    And the error code should be "AUDIENCE_TOO_SMALL"
+    And the error "details" object should include "minimum_size" with value 5000
+    And the error "details" object should include "current_size" with value 800
+    # v3.1: AUDIENCE_TOO_SMALL details enable buyer-side broadening without re-query
+
+  @T-UC-008-storyboard-baseline-end-to-end @storyboard-v3.1 @v3-1 @baseline-conformance
+  Scenario: Signals baseline conformance -- discovery propagates signal_agent_segment_id into activation
+    Given the Buyer Agent calls get_signals with signal_spec "Adults interested in electric vehicles"
+    And the response carries at least one signal entry
+    And the first signal carries a signal_agent_segment_id and at least one pricing_option_id
+    When the Buyer Agent calls activate_signal with the captured signal_agent_segment_id and pricing_option_id
+    Then the activation response should be schema-valid against activate-signal-response.json
+    And the deployments array should carry at least one entry with a type discriminator
+    And the signal_agent_segment_id on the activation request should match the value captured from discovery
+    # signals_baseline storyboard exercises a single end-to-end happy path:
+    # get_signals returns >=1 signal with signal_agent_segment_id + pricing_options,
+    # buyer then calls activate_signal carrying that segment_id and a pricing_option_id.
+    # The runner asserts the captured signal_agent_segment_id from discovery is the
+    # same value sent on activation -- a regression here means signal IDs do not roundtrip.
+    # signals_baseline: signal IDs roundtrip from discovery to activation without modification
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/signals/index.yaml
+
+  @T-UC-008-storyboard-activate-agent-destination @storyboard-v3.1 @v3-1 @activation @agent-destination
+  Scenario: Signals baseline activation -- agent destination type returns schema-valid deployment
+    Given the Buyer Agent holds a signal_agent_segment_id and pricing_option_id from get_signals
+    When the Buyer Agent sends activate_signal with destinations of type "agent" and agent_url "https://wonderstruck.salesagents.example"
+    Then the response should be schema-valid against activate-signal-response.json
+    And the deployments array should carry at least one entry whose type is "agent"
+    And a live deployment should carry an activation_key
+    And an async deployment may carry is_live false with estimated_activation_duration_minutes
+    # Every signals agent MUST accept destinations of type "agent" per signals spec.
+    # The seller records the activation internally and applies targeting in subsequent
+    # media-buy calls. Deployment may be live (carries activation_key) or async
+    # (is_live: false with estimated_activation_duration_minutes).
+    # signals_baseline: agent-destination activation contract
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/signals/index.yaml
+
+  @T-UC-008-storyboard-activate-platform-destination @storyboard-v3.1 @v3-1 @activation @platform-destination
+  Scenario: Signals baseline activation -- platform destination returns activation_key of type segment_id
+    Given the Buyer Agent holds a signal_agent_segment_id and pricing_option_id from get_signals
+    When the Buyer Agent sends activate_signal with destinations of type "platform", platform "the-trade-desk", and account "agency-123-ttd"
+    Then the response should be schema-valid against activate-signal-response.json
+    And the deployments array should carry at least one entry whose type is "platform"
+    And a live deployment should carry an activation_key with type "segment_id"
+    And an async deployment may report is_live false with estimated_activation_duration_minutes
+    # Every signals agent MUST accept destinations of type "platform" per signals spec.
+    # The agent pushes the segment to the platform and returns a deployment record.
+    # When live, the activation_key carries type "segment_id".
+    # signals_baseline: platform-destination activation contract

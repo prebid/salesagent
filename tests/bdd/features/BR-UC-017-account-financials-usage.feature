@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-017 Account Financials & Usage Reporting
   As a Buyer
@@ -273,6 +273,20 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-F3: Context echoed
 
+  @T-UC-017-ext-f-usage-missing-idempotency-key @extension @ext-f @error @report-usage @post-f1 @post-f2 @post-f3 @v3-1
+  Scenario: Report usage -- missing required idempotency_key returns INVALID_REQUEST
+    Given a valid reporting period
+    And an operator-billed account "acct_001" exists
+    When the Buyer Agent invokes report_usage without an idempotency_key
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error field path should reference "idempotency_key"
+    And the error should include "suggestion" field
+    And the suggestion should contain "idempotency_key is required"
+    # POST-F1: No state change (request rejected at schema validation gate)
+    # POST-F2: Buyer knows specific error (idempotency_key is now required at request level)
+    # POST-F3: Context echoed
+
   @T-UC-017-ext-g @extension @ext-g @report-usage @post-s9 @post-s12 @post-s13
   Scenario: Report usage -- partial acceptance stores valid records and reports errors
     Given an operator-billed account "acct_001" exists
@@ -530,13 +544,14 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # INV-2: New key -> processed normally, key stored
 
   @T-UC-017-r140-inv3 @invariant @br-rule-140 @report-usage
-  Scenario: BR-RULE-140 INV-3 holds -- absent key means not idempotent
+  Scenario: BR-RULE-140 INV-3 holds -- absent key is rejected
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
     When the Buyer Agent submits report_usage without an idempotency_key
-    Then the request is processed normally
-    And resubmission would create duplicate records
-    # INV-3: No key -> not idempotent
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error field path should reference "idempotency_key"
+    # INV-3: No key -> rejected with INVALID_REQUEST (schema-required field)
 
   @T-UC-017-r141-inv1 @invariant @br-rule-141 @report-usage
   Scenario: BR-RULE-141 INV-1 holds -- each record carries its own account
@@ -558,9 +573,9 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
   Scenario: BR-RULE-141 INV-3 holds -- single request spans multiple campaigns
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
-    When the Buyer Agent submits 2 records with buyer_campaign_ref "camp_A" and "camp_B"
+    When the Buyer Agent submits 2 records with media_buy_id "mb_A" and "mb_B"
     Then the response contains accepted count of 2
-    # INV-3: Single request may contain records for different campaigns
+    # INV-3: Single request may contain records for different campaigns, each linked via its own vendor-specific link field
 
   @T-UC-017-r142-inv1 @invariant @br-rule-142 @report-usage
   Scenario: BR-RULE-142 INV-1 holds -- record with all three required fields accepted
@@ -775,10 +790,50 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And a valid reporting period
     And a previous report_usage with idempotency_key "key-dup-001" was processed
     When the Buyer Agent submits report_usage with idempotency_key "key-dup-001" but different records
-    Then the error code should be "DUPLICATE_REQUEST"
+    Then the error code should be "IDEMPOTENCY_CONFLICT"
     And the error should include "suggestion" field
     And the suggestion should contain "use a new idempotency_key"
     # Gap fill: DUPLICATE_REQUEST error code needs explicit assertion
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-main-usage-creative-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
+  Scenario: Report usage -- creative agent record links to creative_id
+    Given an operator-billed account "acct_acme_creative" exists
+    And a valid reporting period
+    When the Buyer Agent submits a usage record with creative_id "cr_88201" and pricing_option_id "po_video_cpm"
+    Then the response contains accepted count of 1
+    And the response does not contain an errors array
+    # Per RFC: creative_id required for creative agents; links usage to a specific creative for billing verification
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-main-usage-property-list-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
+  Scenario: Report usage -- property list agent record links to property_list_id
+    Given an operator-billed account "acct_001" exists
+    And a valid reporting period
+    When the Buyer Agent submits a usage record with property_list_id "plist_premium" and pricing_option_id "po_plist_flat"
+    Then the response contains accepted count of 1
+    And the response does not contain an errors array
+    # Per RFC: property_list_id required for property list agents; links usage to a specific property list for billing verification
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-main-usage-rights-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
+  Scenario: Report usage -- brand rights agent record links to rights_id
+    Given an operator-billed account "acct_001" exists
+    And a valid reporting period
+    When the Buyer Agent submits a usage record with rights_id "rg_acme_q1" and pricing_option_id "po_rights_cap"
+    Then the response contains accepted count of 1
+    And the response does not contain an errors array
+    # Per schema: rights_id required for brand/rights agents; links usage records to specific rights grants for cap tracking and overage calculation
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-main-usage-media-buy-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
+  Scenario: Report usage -- usage record links to media_buy_id for campaign attribution
+    Given an operator-billed account "acct_001" exists
+    And a valid reporting period
+    When the Buyer Agent submits a usage record with media_buy_id "mb_camp_001" and signal_agent_segment_id "luxury_auto_intenders"
+    Then the response contains accepted count of 1
+    And the response does not contain an errors array
+    # Per schema: media_buy_id links each usage record to the specific seller-assigned media buy that consumed the vendor service
 
   @T-UC-017-part-cap-gate @partition @cap-gate @get-financials
   Scenario Outline: Capability gate partition -- <partition>
@@ -935,8 +990,11 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Examples: Valid partitions
       | partition   | key_scenario                           | outcome                                     |
       | new_key     | a new idempotency_key                  | request processed normally                   |
-      | no_key      | no idempotency_key                     | request processed (not idempotent)           |
       | replay_key  | a previously used idempotency_key      | original response returned without re-processing |
+
+    Examples: Invalid partitions
+      | partition   | key_scenario                           | outcome                                     |
+      | no_key      | no idempotency_key                     | request rejected with INVALID_REQUEST        |
 
     Examples: Invalid partitions
       | partition                    | key_scenario                           | outcome                                         |
@@ -1127,7 +1185,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Examples: Boundary values
       | boundary_point                         | outcome                                     |
       | new idempotency key (first submission) | processed normally                           |
-      | no idempotency key provided            | processed (not idempotent)                   |
+      | no idempotency key provided            | rejected with INVALID_REQUEST                |
       | same key same payload (retry)          | original response returned                   |
       | same key different payload             | DUPLICATE_REQUEST error with suggestion       |
 
@@ -1202,3 +1260,63 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | sandbox field absent (production)  | accepted without sandbox flag                |
       | sandbox: true with errors          | partial acceptance with sandbox: true         |
 
+  @T-UC-017-billing-not-supported-capability-scope @v31 @billing-not-supported @error-details @schema @br-18
+  Scenario: BILLING_NOT_SUPPORTED at capability scope echoes supported_billing
+    Given the seller's capability declares supported_billing = ["operator", "agent"]
+    When the Buyer Agent submits report_usage with billing = "advertiser"
+    Then the Seller Agent returns error code "BILLING_NOT_SUPPORTED"
+    And error.details conforms to /schemas/error-details/billing-not-supported.json
+    And error.details.scope equals "capability"
+    And error.details.supported_billing equals ["operator", "agent"]
+    # Caller can pick a permitted value without re-fetching capabilities
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-billing-not-supported-account-scope @v31 @billing-not-supported @error-details @schema @br-18
+  Scenario: BILLING_NOT_SUPPORTED at account scope omits supported_billing
+    Given the seller's capability declares supported_billing = ["operator", "agent"]
+    And the seller declines "agent" for this specific operator account
+    When the Buyer Agent submits report_usage with billing = "agent"
+    Then the Seller Agent returns error code "BILLING_NOT_SUPPORTED"
+    And error.details.scope equals "account"
+    And error.details may omit supported_billing
+    # Advice: try the next-most-permissive value the capability allows
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-billing-not-supported-uniform-response @v31 @billing-not-supported @uniform-response @security @br-18
+  Scenario: BILLING_NOT_SUPPORTED uniform response omits scope when agent identity is not established
+    Given the calling agent's identity has not been established via signed request or credential mapping
+    When the Seller Agent returns BILLING_NOT_SUPPORTED
+    Then error.details.scope is omitted
+    # Emitting scope "account" to an unauthenticated caller would itself act as a per-account oracle
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-billing-not-permitted-for-agent-with-suggestion @v31 @billing-not-permitted-for-agent @error-details @schema @br-19
+  Scenario: BILLING_NOT_PERMITTED_FOR_AGENT with retryable suggestion -- agent may retry autonomously
+    Given the buyer agent is onboarded as passthrough-only with this seller
+    When the Buyer Agent submits report_usage with billing = "agent"
+    Then the Seller Agent returns error code "BILLING_NOT_PERMITTED_FOR_AGENT"
+    And error.details conforms to /schemas/error-details/billing-not-permitted-for-agent.json
+    And error.details.rejected_billing equals "agent"
+    And error.details.suggested_billing equals "operator"
+    And the buyer agent MAY retry report_usage autonomously with billing = "operator"
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-billing-not-permitted-for-agent-terminal @v31 @billing-not-permitted-for-agent @error-details @schema @br-19
+  Scenario: BILLING_NOT_PERMITTED_FOR_AGENT without suggestion is terminal-pending-onboarding
+    Given no billing value the buyer agent may use is permitted under its current commercial relationship
+    When the Seller Agent returns BILLING_NOT_PERMITTED_FOR_AGENT for billing = "advertiser"
+    Then error.details.rejected_billing equals "advertiser"
+    And error.details.suggested_billing is absent
+    And the rejection is terminal-pending-onboarding for the agent
+    And a human at the buyer must complete payments-relationship onboarding offline before retry succeeds
+    And error.details MUST NOT carry the agent's permitted-billing subset or other per-account commercial state
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/get-account-financials-request.json
+
+  @T-UC-017-account-setup-required-details @v31 @account-setup-required @error-details @schema @br-20
+  Scenario: ACCOUNT_SETUP_REQUIRED carries setup_url and setup_steps so buyer can finish onboarding
+    Given the buyer's account is recognized but missing required setup steps
+    When the Buyer Agent submits a get_account_financials request
+    Then the Seller Agent returns error code "ACCOUNT_SETUP_REQUIRED"
+    And error.details conforms to /schemas/error-details/account-setup-required.json
+    And error.details.setup_url is an absolute URI
+    And error.details.setup_steps is a non-empty array of human-readable step descriptions

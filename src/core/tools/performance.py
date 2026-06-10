@@ -12,13 +12,13 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object
+from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -56,25 +56,17 @@ def _update_performance_index_impl(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
-    if identity is None:
-        raise ValueError("Identity is required for update_performance_index")
+    identity = require_identity(identity, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity, context=req.context)
 
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
-        _verify_principal(req.media_buy_id, identity, uow.media_buys)
-    principal_id = identity.principal_id
-    if principal_id is None:
-        raise AdCPAuthenticationError("Principal ID not found in identity - authentication required")
+        _verify_principal(req.media_buy_id, identity, uow.media_buys, context=req.context)
+    principal_id = require_principal_id(identity, context=req.context)
 
-    # Get the Principal object
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
-    if not principal:
-        raise AdCPNotFoundError(f"Principal {principal_id} not found")
+    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
     # Get the appropriate adapter (no dry_run support for performance updates)
     adapter = get_adapter(principal, dry_run=False, tenant=tenant)

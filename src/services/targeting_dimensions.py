@@ -11,12 +11,12 @@ Note: AXE signals are specifically limited to three types and can use custom
 key names in the ad server. AXE is not used beyond include/exclude/macros.
 """
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class Channel(str, Enum):
+class Channel(StrEnum):
     """Advertising channels."""
 
     AUDIO = "audio"

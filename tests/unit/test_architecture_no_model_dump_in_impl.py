@@ -24,45 +24,11 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto;
-# 1 retired by switching property_targeting validation
-# to `raise AdCPValidationError` — boundary now handles the audit write).
-# Line numbers reflect merged state after the property_targeting validation
-# refactor (raise instead of return-envelope) and the property_list capability
-# collapse (enforcement moved to raise_if_property_list_unsupported at the _impl
-# boundary; the per-adapter advisory helper was deleted).
-KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 22 violations (workflow step response_data).
-    # Line numbers regenerated from the AST after merge with origin/main.
-    # Regenerate from the current AST, don't hand-edit —
-    # see feedback_precommit_black_shifts_line_allowlists.
-    ("media_buy_update.py", 307),
-    ("media_buy_update.py", 428),
-    ("media_buy_update.py", 429),
-    ("media_buy_update.py", 486),
-    ("media_buy_update.py", 543),
-    ("media_buy_update.py", 566),
-    ("media_buy_update.py", 609),
-    ("media_buy_update.py", 638),
-    ("media_buy_update.py", 655),
-    ("media_buy_update.py", 711),
-    ("media_buy_update.py", 741),
-    ("media_buy_update.py", 758),
-    ("media_buy_update.py", 784),
-    ("media_buy_update.py", 962),
-    ("media_buy_update.py", 991),
-    ("media_buy_update.py", 1021),
-    ("media_buy_update.py", 1193),
-    ("media_buy_update.py", 1211),
-    ("media_buy_update.py", 1264),
-    ("media_buy_update.py", 1357),
-    ("media_buy_update.py", 1391),
-    ("media_buy_update.py", 1453),
-    # _get_products_impl: 1 violation (logging)
-    ("products.py", 550),
-    # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
-}
+# Now EMPTY: _update_media_buy_impl moved workflow-step serialization into
+# ContextManager.audit_workflow_step_result; _get_products_impl logs the model
+# directly (no model_dump); _list_creatives_impl's internal filter merge moved
+# into the module-level _merge_structured_filters helper.
+KNOWN_VIOLATIONS: set[tuple[str, int]] = set()
 
 
 def _find_model_dump_in_impl() -> list[tuple[str, int, str, str]]:

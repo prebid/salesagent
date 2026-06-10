@@ -631,12 +631,13 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # Uses standard wire code ``INTERNAL_ERROR`` (seller-side data integrity)
-        # with the rehydration detail in the message.
+        # Uses the standard ``SERVICE_UNAVAILABLE`` wire code (seller-side data
+        # integrity, matching the sibling per-creative advisory) with the
+        # rehydration detail in the message.
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "INTERNAL_ERROR"
+        assert err.code == "SERVICE_UNAVAILABLE"
         assert "TARGETING_REHYDRATION_FAILED" in err.message
         assert err.field is not None and "targeting_overlay" in err.field
 

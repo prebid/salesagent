@@ -309,7 +309,7 @@ class TestPolicyBlockedPipelineRejection:
             with pytest.raises(AdCPAuthorizationError) as exc_info:
                 await env.call_impl(brief="Online gambling")
 
-        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
+        assert exc_info.value.error_code == "POLICY_VIOLATION"
         assert "gambling" in str(exc_info.value).lower()
 
 
@@ -348,7 +348,7 @@ class TestRestrictedBriefManualReviewRejection:
             with pytest.raises(AdCPAuthorizationError) as exc_info:
                 await env.call_impl(brief="Craft beer festival")
 
-        assert exc_info.value.details.get("error_code") == "POLICY_VIOLATION"
+        assert exc_info.value.error_code == "POLICY_VIOLATION"
         assert "alcohol" in str(exc_info.value).lower()
 
 
@@ -629,8 +629,7 @@ class TestBriefPolicyComplianceMatrix:
                 with pytest.raises(AdCPError) as exc_info:
                     await env.call_impl(brief="test")
                 error_str = str(exc_info.value)
-                details = getattr(exc_info.value, "details", {}) or {}
-                assert error_substring in error_str or details.get("error_code") == error_substring
+                assert error_substring in error_str or exc_info.value.error_code == error_substring
             else:
                 response = await env.call_impl(brief="test")
                 assert response is not None

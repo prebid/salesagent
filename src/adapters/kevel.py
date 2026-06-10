@@ -7,7 +7,11 @@ import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPCapabilityNotSupportedError,
+    AdCPPackageNotFoundError,
+)
 from src.core.property_list_resolver import resolve_property_list_typed_sync
 from src.core.schemas import *
 from src.services.kevel_site_resolver import (
@@ -42,9 +46,11 @@ class Kevel(AdServerAdapter):
         super().__init__(config, principal, dry_run, creative_engine, tenant_id)
 
         # Get Kevel-specific principal ID
-        self.advertiser_id = self.principal.get_adapter_id("kevel")
-        if not self.advertiser_id:
-            raise ValueError(f"Principal {principal.principal_id} does not have a Kevel advertiser ID")
+        self.advertiser_id = self._require_config(
+            self.principal.get_adapter_id("kevel"),
+            field="advertiser_id",
+            message=f"Principal {principal.principal_id} does not have a Kevel advertiser ID",
+        )
 
         # Get Kevel configuration
         self.network_id = self.config.get("network_id")
@@ -61,9 +67,13 @@ class Kevel(AdServerAdapter):
         self._site_resolver: KevelSiteResolver | None = None
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
-        elif not self.network_id or not self.api_key:
-            raise ValueError("Kevel config is missing 'network_id' or 'api_key'")
         else:
+            self.network_id = self._require_config(
+                self.network_id, field="network_id", message="Kevel config is missing 'network_id'"
+            )
+            self.api_key = self._require_config(
+                self.api_key, field="api_key", message="Kevel config is missing 'api_key'"
+            )
             self.headers = {"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"}
             self._site_resolver = KevelSiteResolver(
                 network_id=self.network_id, api_key=self.api_key, base_url=self.base_url
@@ -357,13 +367,9 @@ class Kevel(AdServerAdapter):
                     unsupported_features.extend(features)
 
         if unsupported_features:
-            from src.core.schemas import Error
-
             error_msg = f"Unsupported targeting features for Kevel: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
-            return CreateMediaBuyError(
-                errors=[Error(code="UNSUPPORTED_FEATURE", message=error_msg, details=None)],
-            )
+            raise AdCPCapabilityNotSupportedError(error_msg, details={"features": unsupported_features})
 
         # Generate a media buy ID
         media_buy_id = f"kevel_{request.po_number}" if request.po_number else f"kevel_{uuid.uuid4().hex[:8]}"
@@ -741,19 +747,12 @@ class Kevel(AdServerAdapter):
         today: datetime,
     ) -> UpdateMediaBuyResponse:
         """Updates a media buy in Kevel using standardized actions."""
-        from src.core.schemas import Error
 
         self.log(f"Kevel.update_media_buy for {media_buy_id} with action {action}", dry_run_prefix=False)
 
         if action not in REQUIRED_UPDATE_ACTIONS:
-            return UpdateMediaBuyError(
-                errors=[
-                    Error(
-                        code="UNSUPPORTED_FEATURE",
-                        message=f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
-                        details=None,
-                    )
-                ],
+            raise AdCPCapabilityNotSupportedError(
+                f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
             )
 
         if self.dry_run:
@@ -839,11 +838,7 @@ class Kevel(AdServerAdapter):
 
                     flight = next((f for f in flights if f["Name"] == package_id), None)
                     if not flight:
-                        return UpdateMediaBuyError(
-                            errors=[
-                                Error(code="FLIGHT_NOT_FOUND", message=f"Flight '{package_id}' not found", details=None)
-                            ],
-                        )
+                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
 
                     # Update flight status
                     is_resume = action == "resume_package"
@@ -881,11 +876,7 @@ class Kevel(AdServerAdapter):
 
                     flight = next((f for f in flights if f["Name"] == package_id), None)
                     if not flight:
-                        return UpdateMediaBuyError(
-                            errors=[
-                                Error(code="FLIGHT_NOT_FOUND", message=f"Flight '{package_id}' not found", details=None)
-                            ],
-                        )
+                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
 
                     # Calculate impressions based on action
                     if action == "update_package_budget":
@@ -910,6 +901,4 @@ class Kevel(AdServerAdapter):
 
             except requests.exceptions.RequestException as e:
                 self.log(f"Error updating Kevel flight: {e}")
-                return UpdateMediaBuyError(
-                    errors=[Error(code="API_ERROR", message=str(e), details=None)],
-                )
+                raise AdCPAdapterError(str(e)) from e
