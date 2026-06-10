@@ -25,6 +25,8 @@ Covers: UC-003 honest-declaration property_list reject (update parity)
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from src.adapters.mock_ad_server import MockAdServer
@@ -66,6 +68,26 @@ def _make_identity(dry_run: bool = True) -> ResolvedIdentity:
         protocol="mcp",
         dry_run=dry_run,
     )
+
+
+@pytest.fixture
+def capability_media_buy(capability_tenant):
+    """Seed a media buy + package under the capability tenant for the update test.
+
+    Data setup lives in the fixture (CLAUDE.md Pattern #8), not the test body.
+    """
+    media_buy_id = "mb_test_plcap"
+    with get_db_session() as session:
+        seed_media_buy_with_package(
+            session,
+            tenant_id=capability_tenant,
+            principal_id="test_adv",
+            product_id="prod_property_targeting_allowed",
+            media_buy_id=media_buy_id,
+            package_id="pkg_test_plcap",
+        )
+        session.commit()
+    return media_buy_id
 
 
 @pytest.fixture
@@ -116,6 +138,7 @@ def _build_property_list_create_request() -> CreateMediaBuyRequest:
     """
     start, end = future_iso_date_range()
     return CreateMediaBuyRequest(
+        idempotency_key=f"prop-list-cap-1-{uuid.uuid4().hex}",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -260,6 +283,7 @@ async def test_create_accepts_request_without_property_list_on_unsupported_adapt
     """
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
+        idempotency_key=f"prop-list-cap-2-{uuid.uuid4().hex}",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -290,7 +314,7 @@ async def test_create_accepts_request_without_property_list_on_unsupported_adapt
 
 
 @pytest.mark.requires_db
-def test_update_rejects_property_list_when_adapter_unsupported(capability_tenant, non_compiling_adapter):
+def test_update_rejects_property_list_when_adapter_unsupported(capability_media_buy, non_compiling_adapter):
     """``_update_media_buy_impl`` enforces the same boundary check as create.
 
     A buyer that snuck property_list past the original create (e.g.
@@ -301,17 +325,7 @@ def test_update_rejects_property_list_when_adapter_unsupported(capability_tenant
     Note: ``_update_media_buy_impl`` is synchronous (no ``async def``); the
     sibling create tests are ``async`` because ``_create_media_buy_impl`` is.
     """
-    media_buy_id = "mb_test_plcap"
-    with get_db_session() as session:
-        seed_media_buy_with_package(
-            session,
-            tenant_id=capability_tenant,
-            principal_id="test_adv",
-            product_id="prod_property_targeting_allowed",
-            media_buy_id=media_buy_id,
-            package_id="pkg_test_plcap",
-        )
-        session.commit()
+    media_buy_id = capability_media_buy
     request = UpdateMediaBuyRequest(
         media_buy_id=media_buy_id,
         packages=[

@@ -18,6 +18,7 @@ These tests pin the three observable behaviors:
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -320,6 +321,7 @@ class TestEndToEndWiringSiteIdsLandInFlightPayload:
         start = datetime.now(UTC) + timedelta(days=1)
         end = start + timedelta(days=30)
         request = CreateMediaBuyRequest(
+            idempotency_key=f"kevel-compile-{uuid.uuid4().hex}",
             brand={"domain": "wiretest.example.com"},
             packages=[],  # adapter takes packages separately
             start_time=start.isoformat(),
