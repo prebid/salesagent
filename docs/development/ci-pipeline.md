@@ -29,7 +29,7 @@ must stay in sync.
 | `CI / Quality Gate` | Static analysis (ruff, mypy, duplication) — **no pytest** |
 | `CI / Type Check` | mypy |
 | `CI / Schema Contract` | AdCP contract tests |
-| `CI / Security Audit` | pip-audit + uv-secure |
+| `CI / Security Audit` | uv-secure against `uv.lock` |
 | `CI / Quickstart` | docker compose health |
 | `CI / Smoke Tests` | import smoke + skip-decorator guard |
 | `CI / Unit Tests` | unit + harness with coverage artifact |
@@ -42,7 +42,7 @@ must stay in sync.
 | `CI / Admin UI Tests` | admin suite |
 | `CI / BDD Tests` | BDD suite (single job in PR3; sharding is PR #1379) |
 | `CI / Migration Roundtrip` | alembic upgrade |
-| `CI / Coverage` | `--fail-under` from `.coverage-baseline` using unit artifact |
+| `CI / Coverage` | `--fail-under` from `.coverage-baseline` using unit + BDD artifacts |
 | `CI / Summary` | aggregation gate |
 
 ## Integration Test Shards
@@ -112,9 +112,11 @@ creative-net:
 
 ## Security Audit
 
-The `Security Audit` job runs `uv run pip-audit` against pinned dependencies.
-Any known vulnerability in a direct dependency fails the build. Fix by bumping
-the affected package in `pyproject.toml` and running `uv lock`.
+The `Security Audit` job runs `scripts/security-audit.sh`, which invokes
+`uv-secure` against `uv.lock`. Any known vulnerability in a pinned dependency
+fails the build unless explicitly ignored with documented rationale in the
+script. Fix by bumping the affected package in `pyproject.toml` and running
+`uv lock`.
 
 ## Postgres Health Check
 
