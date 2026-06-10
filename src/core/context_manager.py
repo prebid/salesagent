@@ -802,7 +802,7 @@ class ContextManager(DatabaseManager):
                     f"[cyan]📦 Processing mapping: {mapping.object_type} {mapping.object_id} action={mapping.action}[/cyan]"
                 )
 
-                for _webhook_config in webhooks:
+                for _ in webhooks:
                     # build push notification config from step request data
                     from uuid import uuid4
 
