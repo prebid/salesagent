@@ -189,7 +189,8 @@ def test_pricing_service_receives_format_id_objects():
     """
     from src.services.dynamic_pricing_service import DynamicPricingService
 
-    service = DynamicPricingService()
+    pricing_dependency = MagicMock()
+    service = DynamicPricingService(pricing_dependency)
 
     mock_product = MagicMock()
     mock_product.format_ids = [
