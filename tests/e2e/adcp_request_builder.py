@@ -113,6 +113,9 @@ def build_adcp_media_buy_request(
         ],
         "start_time": start_time,
         "end_time": end_time,
+        # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
+        # original response instead of creating a new buy).
+        "idempotency_key": f"e2e-key-{uuid.uuid4().hex}",
     }
 
     # Add optional fields

@@ -11,6 +11,8 @@ beads: salesagent-9vgz.92
 
 from __future__ import annotations
 
+import uuid
+
 from pytest_bdd import given, then
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -197,9 +199,12 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a successful response from the original request"
 
-    # Make a rapid follow-up call to trigger rate limiting.
+    # Make a rapid follow-up call to trigger rate limiting. The follow-up needs a
+    # FRESH idempotency_key — reusing the original's would replay the cached
+    # success instead of exercising a second real request.
     rate_limit_hit = False
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
+    request_kwargs["idempotency_key"] = f"bdd-key-{uuid.uuid4().hex}"
     req = CreateMediaBuyRequest(**request_kwargs)
     try:
         env.call_impl(req=req)

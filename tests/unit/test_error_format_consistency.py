@@ -47,6 +47,7 @@ class TestMCPErrorShapes:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-001",
         )
 
         with pytest.raises(AdCPAuthRequiredError) as exc_info:
@@ -94,6 +95,7 @@ class TestMCPErrorShapes:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-002",
         )
 
         # _create_media_buy_impl requires identity; passing None triggers AdCPAuthenticationError
@@ -116,6 +118,7 @@ class TestMCPErrorShapes:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-003",
         )
 
         identity = ResolvedIdentity(
@@ -359,6 +362,7 @@ class TestCrossTransportErrorConsistency:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-004",
         )
 
         # MCP path: missing identity — raises AdCPValidationError (transport-agnostic)
@@ -458,6 +462,7 @@ class TestCrossTransportErrorConsistency:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-005",
         )
 
         identity = ResolvedIdentity(

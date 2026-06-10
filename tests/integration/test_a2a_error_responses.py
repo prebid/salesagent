@@ -10,6 +10,7 @@ through the A2A wrapper layer, including:
 """
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -164,6 +165,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -220,6 +222,7 @@ class TestA2AErrorPropagation:
         end = start - timedelta(days=1)  # end before start
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -266,6 +269,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -314,6 +318,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -417,6 +422,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",

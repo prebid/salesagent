@@ -19,6 +19,25 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyError, CreateMediaBuyResult, CreateMediaBuySuccess
 from tests.harness._base import IntegrationEnv
 
+# Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
+# request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
+OMIT_IDEMPOTENCY_KEY: Any = object()
+
+
+def _ensure_idempotency_key(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Default a per-call-unique idempotency_key unless the test controls it.
+
+    ``idempotency_key`` is REQUIRED on ``CreateMediaBuyRequest``; most tests don't
+    care, so the harness supplies a fresh spec-shaped key per call — unique because
+    a reused key would replay the original response (or raise IDEMPOTENCY_CONFLICT)
+    instead of creating a new buy. Pass ``OMIT_IDEMPOTENCY_KEY`` to send no key.
+    """
+    if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
+        kwargs.pop("idempotency_key")
+    else:
+        kwargs.setdefault("idempotency_key", f"test-key-{uuid.uuid4().hex}")
+    return kwargs
+
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
     """Re-inject creative_ids stripped by model_dump(exclude=True).
@@ -279,7 +298,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         # Build request from kwargs if not provided directly
         req = kwargs.pop("req", None)
         if req is None:
-            req = CreateMediaBuyRequest(**kwargs)
+            req = CreateMediaBuyRequest(**_ensure_idempotency_key(kwargs))
 
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
 
@@ -292,7 +311,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """
         req = kwargs.pop("req", None)
         if req is None:
-            return kwargs
+            return _ensure_idempotency_key(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
         for key in ("account", "proposal_id", "total_budget"):
             flat.pop(key, None)
@@ -336,7 +355,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
             # Preserve creative_ids — exclude=True strips them from model_dump
             _restore_creative_ids(req, body)
             return body
-        return kwargs
+        return _ensure_idempotency_key(kwargs)
 
     def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
         """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.

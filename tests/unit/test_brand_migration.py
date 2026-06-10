@@ -30,6 +30,7 @@ class TestCreateMediaBuyRequestBrandMigration:
                 packages=[],
                 start_time="asap",
                 end_time="2026-12-31T23:59:59Z",
+                idempotency_key="unit-test-key-brand-manifest-rej",
             )
 
         errors = exc_info.value.errors()
@@ -59,6 +60,7 @@ class TestCreateMediaBuyRequestBrandMigration:
             packages=[],
             start_time="asap",
             end_time="2026-12-31T23:59:59Z",
+            idempotency_key="unit-test-key-brand-ref-accepted",
         )
         assert request.brand is not None
         assert request.brand.domain == "testbrand.com"
@@ -72,6 +74,7 @@ class TestCreateMediaBuyRequestBrandMigration:
                 packages=[],
                 start_time="asap",
                 end_time="2026-12-31T23:59:59Z",
+                idempotency_key="unit-test-key-brand-required",
             )
 
         errors = exc_info.value.errors()

@@ -56,6 +56,14 @@ def make_mock_uow(
         mock_repo.get_packages.return_value = []
         mock_uow.media_buys = mock_repo
 
+    # Idempotency cache defaults to a MISS — idempotency_key is required on
+    # create requests, so the probe runs on every create; a bare MagicMock would
+    # read as a cache hit (truthy) with a mismatching hash → spurious conflict.
+    if repos is None or "idempotency_attempts" not in repos:
+        attempts_repo = MagicMock()
+        attempts_repo.find_by_key.return_value = None
+        mock_uow.idempotency_attempts = attempts_repo
+
     mock_uow_cls = MagicMock(return_value=mock_uow)
 
     return mock_uow_cls, mock_uow

@@ -1449,10 +1449,10 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     # adcp 4.3 makes account and idempotency_key required.  Our impl resolves
     # identity at the transport layer (ResolvedIdentity), not from the request
-    # payload, so account is optional here.  idempotency_key is generated at
-    # the transport boundary when not supplied by the caller.
+    # payload, so account stays optional here.  idempotency_key inherits the
+    # library's REQUIRED field (MinLen 16 + pattern) — a missing key rejects as
+    # VALIDATION_ERROR at the boundary per AdCP 3.0.1 idempotency.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
@@ -1636,9 +1636,10 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes account and idempotency_key required.  Override as optional
-    # — identity is resolved at the transport boundary, and idempotency_key is
-    # generated at the boundary when not supplied by the caller.
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional:
+    # identity is resolved at the transport boundary, and update_media_buy's
+    # required-key enforcement is a deliberate fast-follow — create_media_buy
+    # enforces it today; the update BDD contract still encodes optional keys.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
     idempotency_key: str | None = None  # type: ignore[assignment]
 

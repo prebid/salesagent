@@ -16,6 +16,7 @@ NOTE: These tests require a database connection. Run with:
 or with Docker Compose running for PostgreSQL.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -248,6 +249,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-001",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -311,6 +313,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-002",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -386,6 +389,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-003",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -429,6 +433,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-A2A-001",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -473,6 +478,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-STANDARD-001",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 

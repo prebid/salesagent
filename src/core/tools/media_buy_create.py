@@ -665,6 +665,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     for pkg in raw_request_data["packages"]:
                         pkg.pop("package_id", None)
 
+                # Buys stored before idempotency_key became required carry none in
+                # raw_request. This is an internal replay of an already-validated
+                # request (the approval path never consults the idempotency cache),
+                # so a synthetic spec-shaped key keeps reconstruction valid.
+                raw_request_data.setdefault("idempotency_key", f"legacy-approval-{media_buy_id}")
+
                 request = CreateMediaBuyRequest(**raw_request_data)
                 # Mark this request as already approved to skip adapter's approval workflow
                 setattr(request, "_already_approved", True)  # noqa: B010
@@ -4069,7 +4075,9 @@ async def create_media_buy(
             context=context,
             ext=ext,
             account=account,
-            idempotency_key=idempotency_key,
+            # Omit-when-absent so a missing key rejects as "Field required" (the
+            # spec's missing-key VALIDATION_ERROR), not as a None type error.
+            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
@@ -4149,7 +4157,9 @@ async def create_media_buy_raw(
             context=to_context_object(context),
             ext=ext,
             account=account,
-            idempotency_key=idempotency_key,
+            # Omit-when-absent so a missing key rejects as "Field required" (the
+            # spec's missing-key VALIDATION_ERROR), not as a None type error.
+            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e

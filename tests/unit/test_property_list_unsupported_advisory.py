@@ -224,6 +224,7 @@ class TestCreateRequestPackagesFlow:
             ],
             start_time="2030-01-01T00:00:00Z",
             end_time="2030-01-31T23:59:59Z",
+            idempotency_key="unit-test-key-proplist-001",
         )
 
     def test_advisory_fires_through_real_request_model(self):
@@ -267,21 +268,21 @@ class TestUpdateRequestPackagesFlow:
 
 
 # ---------------------------------------------------------------------------
-# Idempotency replay: advisory must be rebuilt live, not read from cache
+# Advisory is computed at FRESH create time; replays never recompute it
 # ---------------------------------------------------------------------------
 
 
-class TestIdempotencyReplayRebuildsAdvisory:
-    """The cached idempotency response is reconstructed from DB columns and
-    doesn't persist the ``errors`` advisory list. Each replay rebuilds the
-    advisory live using the CURRENT adapter capability — so the advisory
-    disappears automatically when the capability flips True between Day-1
-    and the replay, rather than locking in stale Day-1 state.
+class TestAdvisoryComputedOnFreshCreate:
+    """The advisory is computed live at FRESH create time from the current
+    adapter capability. Replays never recompute it: a verbatim replay returns
+    the STORED envelope (the advisory frozen exactly as cached — AdCP 3.0.1
+    byte-for-byte), and the degraded re-derivation fallback omits the advisory
+    entirely (the original is unrecoverable there; a live rebuild would leak
+    current capability state into a replayed response).
     """
 
-    def test_replay_rebuild_helper_returns_advisory_when_capability_off(self):
-        """The helper used by _build_idempotency_hit_result returns the same
-        advisory it would have returned on the original request."""
+    def test_fresh_create_advisory_present_when_capability_off(self):
+        """A fresh create against a non-compiling adapter carries the advisory."""
         from tests.helpers.adcp_factories import create_test_package_request
 
         req = CreateMediaBuyRequest(
@@ -301,10 +302,8 @@ class TestIdempotencyReplayRebuildsAdvisory:
             ],
             start_time="2030-01-01T00:00:00Z",
             end_time="2030-01-31T23:59:59Z",
+            idempotency_key="advisory-test-key-001",
         )
-        # adapter=None mirrors the "no compiling adapter" state of today's
-        # _build_idempotency_hit_result early-path call site
-        # (FIXME(idempotency-adapter) in media_buy_create.py).
         advisories = build_property_list_unsupported_advisories(
             req.packages,
             supports_property_list_filtering(None),
@@ -312,11 +311,12 @@ class TestIdempotencyReplayRebuildsAdvisory:
         assert len(advisories) == 1
         assert advisories[0].code == "UNSUPPORTED_FEATURE"
 
-    def test_replay_rebuild_disappears_when_capability_flips_true(self):
-        """The point of rebuild-live: when an adapter flips
-        ``supports_property_list_filtering=True`` between Day-1 and the
-        replay, the advisory naturally disappears. This is what makes
-        rebuild correct vs persisting the Day-1 errors list verbatim."""
+    def test_fresh_create_advisory_absent_when_capability_on(self):
+        """A fresh create against a compiling adapter carries no advisory.
+
+        Capability flips affect FRESH creates only — a replay of an older buy
+        still returns its original cached advisory verbatim.
+        """
         from tests.helpers.adcp_factories import create_test_package_request
 
         class _CompilingAdapter:
@@ -339,6 +339,7 @@ class TestIdempotencyReplayRebuildsAdvisory:
             ],
             start_time="2030-01-01T00:00:00Z",
             end_time="2030-01-31T23:59:59Z",
+            idempotency_key="advisory-test-key-002",
         )
         advisories = build_property_list_unsupported_advisories(
             req.packages,

@@ -49,7 +49,7 @@ class TestIdempotencyRaceDbLevel:
         from src.core.database.repositories import MediaBuyUoW
         from tests.factories import PrincipalFactory, TenantFactory
 
-        idem_key = f"race-{uuid.uuid4().hex[:8]}"
+        idem_key = f"race-{uuid.uuid4().hex}"
         tenant_id = f"race_t_{uuid.uuid4().hex[:6]}"
 
         with _RepoEnv() as env:
@@ -100,7 +100,7 @@ class TestBuildIdempotencyHitResult:
         from src.core.tools.media_buy_create import _build_idempotency_hit_result
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
-        idem_key = f"hit-{uuid.uuid4().hex[:8]}"
+        idem_key = f"hit-{uuid.uuid4().hex}"
         tenant_id = f"hit_t_{uuid.uuid4().hex[:6]}"
 
         with _RepoEnv() as env:
@@ -151,7 +151,7 @@ class TestIdempotencyRaceRecovery:
         from src.core.tools.media_buy_create import _build_idempotency_hit_result
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
-        idem_key = f"recovery-{uuid.uuid4().hex[:8]}"
+        idem_key = f"recovery-{uuid.uuid4().hex}"
         tenant_id = f"recov_t_{uuid.uuid4().hex[:6]}"
 
         with _RepoEnv() as env:
@@ -227,7 +227,7 @@ class TestDegradedFallbackStatus:
         from src.core.tools.media_buy_create import _build_idempotency_hit_result
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
 
-        idem_key = f"pend-{uuid.uuid4().hex[:8]}"
+        idem_key = f"pend-{uuid.uuid4().hex}"
         tenant_id = f"pend_t_{uuid.uuid4().hex[:6]}"
 
         with _RepoEnv() as env:
@@ -271,7 +271,7 @@ class TestRaceLoserPayloadRules:
         from tests.factories import PrincipalFactory, TenantFactory
         from tests.helpers import seed_cached_success
 
-        idem_key = f"rconf-{uuid.uuid4().hex[:8]}"
+        idem_key = f"rconf-{uuid.uuid4().hex}"
         tenant_id = f"rconf_t_{uuid.uuid4().hex[:6]}"
 
         with _RepoEnv() as env:
@@ -313,7 +313,7 @@ class TestRaceLoserPayloadRules:
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
         from tests.helpers import seed_cached_success
 
-        idem_key = f"rinv-{uuid.uuid4().hex[:8]}"
+        idem_key = f"rinv-{uuid.uuid4().hex}"
         tenant_id = f"rinv_t_{uuid.uuid4().hex[:6]}"
 
         with _RepoEnv() as env:
@@ -350,3 +350,6 @@ class TestRaceLoserPayloadRules:
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.media_buy_id == winner_id
         assert result.replayed is False, "A re-derived fallback is not a verbatim replay"
+        # Frozen advisory: the degraded path must not rebuild the property_list
+        # advisory from current capability state — it omits it.
+        assert result.response.errors is None

@@ -88,7 +88,7 @@ class TestImplReplaysCachedSuccess:
         from src.core.schemas._base import CreateMediaBuyResult, CreateMediaBuySuccess
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        idem_key = f"replay-{uuid.uuid4().hex[:8]}"
+        idem_key = f"replay-{uuid.uuid4().hex}"
         tenant_id = f"replay_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
@@ -114,7 +114,7 @@ class TestImplReplaysCachedSuccess:
         from src.core.exceptions import AdCPError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        idem_key = f"conflict-{uuid.uuid4().hex[:8]}"
+        idem_key = f"conflict-{uuid.uuid4().hex}"
         tenant_id = f"conflict_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
@@ -147,7 +147,7 @@ class TestImplReplaysCachedSuccess:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from tests.helpers import seed_cached_success
 
-        idem_key = f"drift-{uuid.uuid4().hex[:8]}"
+        idem_key = f"drift-{uuid.uuid4().hex}"
         tenant_id = f"drift_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
@@ -179,8 +179,8 @@ class TestImplReplaysCachedSuccess:
         from src.core.database.repositories import MediaBuyUoW
         from src.core.schemas._base import CreateMediaBuySuccess
 
-        seeded_key = f"seeded-{uuid.uuid4().hex[:8]}"
-        other_key = f"other-{uuid.uuid4().hex[:8]}"
+        seeded_key = f"seeded-{uuid.uuid4().hex}"
+        other_key = f"other-{uuid.uuid4().hex}"
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
@@ -213,6 +213,43 @@ class TestImplReplaysCachedSuccess:
             assert cached.payload_hash is not None
 
 
+class TestMissingKeyRejectedAtWire:
+    """Storyboard ``missing_key``: a create without idempotency_key rejects as VALIDATION_ERROR.
+
+    The key is required at the schema boundary (AdCP 3.0.1) — the request never
+    reaches ``_impl``, no buy is created, and the buyer sees the two-layer
+    VALIDATION_ERROR envelope on the real wire.
+    """
+
+    def test_rest_missing_key_rejects_validation_error(self, integration_db):
+        from datetime import timedelta
+
+        from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            now = datetime.now(UTC)
+            result = env.call_via(
+                Transport.REST,
+                brand={"domain": "missing-key.example.com"},
+                packages=[{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+                start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                po_number="MISSING-KEY-1",
+                idempotency_key=OMIT_IDEMPOTENCY_KEY,
+            )
+
+        assert result.is_error, f"Missing idempotency_key must reject, got success: {result.payload}"
+        assert_envelope_shape(
+            result.wire_error_envelope,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="idempotency_key",
+        )
+
+
 class TestErrorsAreNeverCached:
     """An error path writes no IdempotencyAttempt row — a retry re-executes (spec)."""
 
@@ -223,7 +260,7 @@ class TestErrorsAreNeverCached:
         from src.core.exceptions import AdCPError
         from src.core.schemas import CreateMediaBuyError, Error
 
-        idem_key = f"err-{uuid.uuid4().hex[:8]}"
+        idem_key = f"err-{uuid.uuid4().hex}"
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
