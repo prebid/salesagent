@@ -2315,7 +2315,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AUTH_REQUIRED on rest/e2e_rest, matching the corrected Gherkin.
         # Graduated: expired-token also passes — AUTH_TOKEN_INVALID matches.
 
-        # Graduated: T-UC-011-ext-g-echo-error (all 4 transports pass — context echo now works in error response)
+        # T-UC-011-ext-g-echo-error: impl passes (AdCPError carries context=req.context);
+        # a2a/mcp/rest xfail+note via the context-echo Then step (pytest.xfail) because the
+        # wire error envelope does not echo context — salesagent-egnl / D2. No marker here.
         # Graduated: T-UC-011-sync-missing-brand (all 4 transports pass — ValidationError now structured)
         # Graduated: T-UC-011-sync-missing-operator (all 4 transports pass — ValidationError now structured)
         # Graduated: T-UC-011-ext-f-scoped (all 4 transports now pass — deactivation scoping works on a2a)
