@@ -186,7 +186,7 @@ required (or stay blocked on stale `Test Suite / …` names).
 | Commit (~12 hooks) | `git commit` | ruff, hygiene, gitleaks, repo-invariants — warm target <2s |
 | Pre-push (~11 hooks) | `git push` | docs, routes, contracts, mypy — installed via `default_install_hook_types` |
 | pytest `arch_guard` | `make quality` | AST guards in `tests/unit/test_architecture_*.py` |
-| CI | PR to main | `make quality-ci` in Quality Gate + dedicated jobs (21 frozen checks) |
+| CI | PR to main | `make quality-ci` in Quality Gate + dedicated jobs (**20** frozen checks after PR #1379) |
 
 Requires pre-commit ≥3.2.0. Run `pre-commit install` once per clone (installs both commit and pre-push hooks).
 
