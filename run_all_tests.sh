@@ -21,6 +21,8 @@ PYTEST_TARGET="${2:-}"
 PYTEST_ARGS="${@:3}"
 RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
+# Record the tree this run verified — the pre-push gate compares it to HEAD.
+git rev-parse HEAD > "$RESULTS_DIR/HEAD" 2>/dev/null || true
 
 # Keep only the last 10 result directories
 ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf

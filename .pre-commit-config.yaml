@@ -257,6 +257,13 @@ repos:
         files: '^(src|tests)/.*\.py$'
         pass_filenames: false
         always_run: true
+      - id: check-full-suite-before-push
+        name: Full suite verified this HEAD (pre-push)
+        entry: uv run python .pre-commit-hooks/check_full_suite_before_push.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
 
       # Suggest factory usage in test files (non-blocking)
       - id: suggest-test-factories

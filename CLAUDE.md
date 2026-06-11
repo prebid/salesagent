@@ -527,6 +527,17 @@ def test_something():
 
 **When in doubt, use `./run_all_tests.sh`.** It handles everything: Docker up, all suites, Docker down, JSON reports saved.
 
+### Push Gate (MANDATORY)
+
+**The full suite must verify the exact tree being pushed.** `./run_all_tests.sh`
+records the verified HEAD into `test-results/<ts>/HEAD`; the pre-push hook
+(`check_full_suite_before_push.py`, install with `pre-commit install --hook-type pre-push`)
+fails any push whose HEAD no test run has verified. Hand-picked "affected test"
+subsets are how blast radius escapes — a wire/contract change has consumers in
+suites you are not running (e2e, BDD, admin). Deliberate bypass for doc-only or
+emergency pushes: `ALLOW_PUSH_WITHOUT_SUITE=1 git push` — the bypass is visible
+in your terminal history; own it.
+
 ### Testing Workflow (Before Commit)
 ```bash
 # ALL changes
