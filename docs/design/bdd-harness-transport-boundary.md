@@ -227,6 +227,121 @@ not business logic — consistent with the transport-boundary architecture in
 the create envs gain per-transport account enrichment rather than pushing
 resolution into `_create_media_buy_impl`.
 
+### D5 — `egnl` collision: local override via an `UpdateMediaBuyResult` task-status wrapper (DECIDED — no derivation bump)
+
+Owner decision: do **not** bump the pinned derivation; resolve the
+envelope-vs-body `status` collision with a **surgical local override in prod
+source**. The precedent already exists for create and is the template:
+
+`CreateMediaBuyResult` (`src/core/schemas/_base.py:296`) wraps
+`{status: <TaskStatus str>, response: CreateMediaBuySuccess|CreateMediaBuyError}`
+and defines `@model_serializer(mode="wrap")` that dumps the response, then
+**overwrites** the root `status` with the TaskStatus:
+
+```python
+@model_serializer(mode="wrap")
+def _serialize(self, serializer, info):
+    result = self.response.model_dump(mode=info.mode, context=info.context)
+    result["status"] = self.status      # envelope TaskStatus wins the root key
+    return result
+```
+
+So on the wire (flat MCP / REST / A2A DataPart) the root `status` is the
+TaskStatus (`completed`), and the body `MediaBuyStatus` is overwritten — exactly
+the conformant behavior, done locally, today. `_create_media_buy_impl` already
+returns a `CreateMediaBuyResult` (e.g. `media_buy_create.py:1521` with
+`status=AdcpTaskStatus.completed.value`).
+
+**Update has no equivalent.** `_update_media_buy_impl` returns
+`UpdateMediaBuySuccess | UpdateMediaBuyError` directly (`media_buy_update.py:167`),
+so no TaskStatus reaches the wire root and the success scenarios see the body
+`MediaBuyStatus` (or `None`).
+
+**Decision — mirror the create pattern for update:**
+1. Add `UpdateMediaBuyResult` wrapping
+   `{status: <TaskStatus>, response: UpdateMediaBuySuccess|UpdateMediaBuyError}`
+   with the same `model_serializer` that overwrites root `status` with the
+   TaskStatus. **DRY:** extract the shared wrap-serializer/`__iter__`/`__str__`
+   behavior into a small shared base (e.g. `TaskResultEnvelope`) and have both
+   `CreateMediaBuyResult` and `UpdateMediaBuyResult` extend it — per the DRY
+   invariant, do not copy-paste the serializer.
+2. `_update_media_buy_impl` returns `UpdateMediaBuyResult` with the correct
+   TaskStatus per path: `completed` (sync success), `submitted` (async/queued),
+   `input-required` (manual approval) — matching create's `AdcpTaskStatus` usage.
+3. Update the update transport wrappers (`update_media_buy_raw`, MCP, REST) and
+   the harness `MediaBuyDualEnv` update methods to pass through / read the
+   wrapper, and `then_response_status` to assert the wire root `status`.
+
+**Why this is the right "local override":** it is surgical (one wrapper +
+return-site change, mirroring an existing, reviewed pattern), functional (emits
+the spec-required envelope `TaskStatus` at the wire root across all transports),
+documented (this decision + the `CreateMediaBuyResult` precedent), and it does
+**not** adopt the post-pin `media_buy_status` field — the body `MediaBuyStatus`
+is overwritten on the wire exactly as create already does. Consequence: like
+create today, update will not expose `MediaBuyStatus` separately on the wire
+until the upstream `media_buy_status` split is pulled at a future derivation bump
+(tracked in `8cni`). That parity is acceptable and explicitly chosen over a bump.
+
+## Test execution topology and the two-DB question
+
+**Question:** why do integration and e2e use separate Postgres databases; what
+prevents one shared DB?
+
+**Finding — it is not a Postgres limitation; it is two execution topologies:**
+
+- **Integration / BDD(`impl`)** run *on the host*: test code in-process, or the
+  server as a **host subprocess** (`tests/integration/conftest.py:530` —
+  `subprocess.Popen([... "mcp.run(transport='http' ...)"])` with
+  `env["DATABASE_URL"]` pointing at a **host-reachable** Postgres,
+  `localhost:<port>`). DB connection originates on the host.
+- **E2E** runs the *full containerized stack* (`docker-compose.e2e.yml`): the app
+  container connects to Postgres via the **docker network service name**
+  (`DATABASE_URL=…@postgres:5432/adcp`). Tests reach the app via a host-published
+  HTTP port; the stack is torn down with `down -v` (fresh volume) per run.
+
+The app container resolves `postgres` on the compose network and cannot reach a
+host-only `agent-db` (`localhost:5XXXX`, separate network namespace). The e2e
+Postgres *is* host-published (`127.0.0.1:5435`), so a host process could connect
+— but the e2e stack owns that DB's lifecycle (volume wipe per run) and its
+migrations run from the app container. So each suite provisions the Postgres
+reachable from, and lifecycle-owned by, its own topology. Integration
+deliberately uses a lightweight host Postgres so it needs **no** app/nginx
+containers (faster, isolated).
+
+**This is the same root as D4.** "Two DBs" is a symptom of "two execution
+models": in-process/host (integration + BDD-`impl`) vs containerized-wire (e2e).
+
+**Unification direction (not a task yet — recorded for the true-E2E arc):**
+converge on one topology. The integration `mcp_server` fixture already proves the
+*host-subprocess-over-HTTP against a shared host Postgres* model. Extending that
+to BDD (true E2E over the wire) and folding e2e onto the same host server + host
+Postgres yields a **single DB** for integration + BDD + e2e; the
+compose-network DB then only matters for container/deployment smoke tests.
+Alternatively run integration inside the container network (heavier). Either way,
+unifying the transport model (D4) and the execution topology (this section) are
+the same move.
+
+## D4 audit — scenarios/fixtures that depend on `impl` (gating "drop impl")
+
+Before removing `impl` from the default BDD parametrization (D4), preserve any
+coverage that exists *only* on `impl`.
+
+**Impl-only fixtures/envs (static analysis):**
+- `MediaBuyAccountEnv` (`tests/harness/media_buy_account.py`) — defines **only**
+  `call_impl` (calls `resolve_account` directly; `EXTERNAL_PATCHES={}`). Used by
+  the UC-002 `account`-marker and UC-006 account scenarios. Account resolution on
+  the wire transports requires the wrapper plumbing in `l9wn`, so dropping
+  `impl` here is gated on `l9wn`.
+- Unit envs (`*_unit.py`: `delivery_poll_unit`, `product_unit`,
+  `delivery_webhook_unit`, `delivery_circuit_breaker_unit`) run mocked-DB and are
+  used by webhook / circuit-breaker scenarios; verify their wire coverage or
+  re-home to unit tests.
+- All other domain envs inherit the four transports from `BaseTestEnv`.
+
+**Impl-only passing scenarios (empirical):** _pending the full serial BDD run
+(`/tmp/bdd_full.json`); to be filled in `xqx7` with the exact node list (scenarios
+where `[impl]` passes and `[a2a]`/`[mcp]`/`[rest]` do not)._
+
 ## References
 
 - Architecture pattern: `CLAUDE.md` §"Transport Boundary: Layer Separation" (Pattern #5)
