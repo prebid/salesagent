@@ -3,9 +3,17 @@
 Recurring patterns extracted from code review history. Follow these when
 writing or modifying code.
 
-## Hoisting — No Inline Imports Without Circular-Dep Justification
+## Hoisting — No Inline Imports Without Justification
 
-Move imports to module level unless a circular dependency requires deferral.
+Move imports to module level unless a sanctioned exception applies:
+
+1. A circular dependency requires deferral
+2. `TYPE_CHECKING` guards
+3. Test files — fixture/function-scoped imports are repo convention
+4. A documented lazy import (e.g. an explicit comment explaining
+   test-patching or startup-cost rationale)
+
+Production code with an inline import and none of the above — flag it.
 
 ```python
 # WRONG — inline import without circular dep
