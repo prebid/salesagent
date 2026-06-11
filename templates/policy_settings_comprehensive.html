@@ -129,7 +129,7 @@
                             </div>
                             {% if pending_reviews|length > 5 %}
                                 <div class="mt-2 text-center">
-                                    <small class="text-muted">and {{ pending_reviews|length - 5 }} more...</small>
+                                    <small class="text-muted">and {{ (pending_reviews|length) - 5 }} more...</small>
                                 </div>
                             {% endif %}
                         {% else %}
