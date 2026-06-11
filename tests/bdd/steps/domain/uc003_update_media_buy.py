@@ -406,12 +406,6 @@ def given_daily_spend_ok(ctx: dict) -> None:
     ctx.setdefault("daily_spend_validated", True)
 
 
-@given(parsers.parse('the buyer_ref "{buyer_ref}" resolves to the existing media buy'))
-def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
-    """buyer_ref removed in adcp 3.12. Verify media buy exists."""
-    assert ctx.get("existing_media_buy") is not None, "No existing_media_buy in ctx"
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — creative_assignments / inline creatives on package updates
 # ═══════════════════════════════════════════════════════════════════════
@@ -1296,8 +1290,6 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
 
     id_config formats:
     - 'media_buy_id=<existing>' — use the existing media buy's ID
-    - 'buyer_ref=my_ref_01' — set buyer_ref only (ensure mb has this ref)
-    - 'media_buy_id=<existing>,buyer_ref=Y' — set both (ambiguous — expect error)
     - '<none>' — set neither (expect error)
     """
     kwargs: dict[str, Any] = {}

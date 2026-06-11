@@ -621,7 +621,7 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    And the request includes 1 package update without package_id or buyer_ref
+    And the request includes 1 package update without package_id
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
@@ -1116,11 +1116,9 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Valid partitions
       | partition          | id_config                        | outcome |
       | media_buy_id_only  | media_buy_id=mb_existing         | success |
-      | buyer_ref_only     | buyer_ref=my_ref_01              | success |
 
     Examples: Invalid partitions
       | partition       | id_config                                   | outcome                                      |
-      | both_provided   | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion       |
       | neither_provided | <none>                                      | error "INVALID_REQUEST" with suggestion       |
 
   @T-UC-003-boundary-media-buy-identification @boundary @media_buy_identification
@@ -1138,8 +1136,6 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                       | id_config                                   | outcome                                  |
       | media_buy_id only (primary path)     | media_buy_id=mb_existing                    | success                                  |
-      | buyer_ref only (fallback path)       | buyer_ref=my_ref_01                         | success                                  |
-      | both identifiers (ambiguous)         | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion  |
       | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" with suggestion  |
 
   @T-UC-003-partition-frequency-cap-suppress @partition @frequency_cap_suppress

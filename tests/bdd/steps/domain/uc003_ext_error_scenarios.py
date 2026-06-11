@@ -226,9 +226,9 @@ def given_media_buy_flight_days(ctx: dict, days: int) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the request includes 1 package update without package_id or buyer_ref")
+@given("the request includes 1 package update without package_id")
 def given_package_update_no_id(ctx: dict) -> None:
-    """Add a package update with no package_id and no buyer_ref to trigger ext-h."""
+    """Add a package update with no package_id to trigger ext-h (missing identifier)."""
     kwargs = _ensure_update_defaults(ctx)
     kwargs["packages"] = [{"budget": 5000.0}]
 
