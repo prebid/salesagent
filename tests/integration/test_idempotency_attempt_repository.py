@@ -194,7 +194,6 @@ class TestFindByKey:
 
             found = repo.find_by_key(
                 principal_id="idem_p1",
-                tool_name="create_media_buy",
                 idempotency_key="key-c",
             )
 
@@ -210,7 +209,6 @@ class TestFindByKey:
 
             found = repo.find_by_key(
                 principal_id="idem_p1",
-                tool_name="create_media_buy",
                 idempotency_key="never-cached",
             )
 
@@ -237,7 +235,6 @@ class TestFindByKey:
             # Querying with a "now" far past the expiry should return None
             found = repo.find_by_key(
                 principal_id="idem_p1",
-                tool_name="create_media_buy",
                 idempotency_key="key-expired",
                 now=datetime(2026, 1, 1, tzinfo=UTC),
             )
@@ -265,7 +262,6 @@ class TestFindByKey:
             repo_t2 = IdempotencyAttemptRepository(session, "idem_iso_t2")
             found = repo_t2.find_by_key(
                 principal_id="idem_iso_p",
-                tool_name="create_media_buy",
                 idempotency_key="shared-key",
             )
 
@@ -293,7 +289,6 @@ class TestFindByKey:
 
             found = repo.find_by_key(
                 principal_id="idem_pi_b",
-                tool_name="create_media_buy",
                 idempotency_key="shared-key",
             )
 
@@ -319,13 +314,11 @@ class TestFindByKey:
             # Same (tenant, principal, tool, key) but a different account → independent.
             other = repo.find_by_key(
                 principal_id="idem_p1",
-                tool_name="create_media_buy",
                 idempotency_key="shared-key",
                 account_id="acct_b",
             )
             same = repo.find_by_key(
                 principal_id="idem_p1",
-                tool_name="create_media_buy",
                 idempotency_key="shared-key",
                 account_id="acct_a",
             )
@@ -333,8 +326,14 @@ class TestFindByKey:
         assert other is None, "account acct_b must not see acct_a's cached success"
         assert same is not None, "account acct_a must replay its own cached success"
 
-    def test_tool_name_isolation(self, integration_db):
-        """Different tools using the same idempotency_key are independent."""
+    def test_key_scope_has_no_tool_dimension(self, integration_db):
+        """The spec scope is (agent, account, key) — a key is ONE row across tools.
+
+        A different tool probing the same key MUST hit the row the first tool
+        wrote (so its differing payload hash conflicts at the caller layer)
+        rather than getting an independent per-tool cache. ``tool_name`` is
+        recorded for observability only.
+        """
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
         with BareIntegrationEnv() as env:
@@ -351,11 +350,12 @@ class TestFindByKey:
 
             found = repo.find_by_key(
                 principal_id="idem_p1",
-                tool_name="update_media_buy",
                 idempotency_key="shared-key",
             )
 
-        assert found is None, "update_media_buy must not see create_media_buy's cached success"
+            assert found is not None, "a key probe must see the row regardless of which tool wrote it"
+            assert found.tool_name == "create_media_buy", "the writing tool stays recorded for observability"
+            assert found.payload_hash == "hash-fixed"
 
 
 class TestExpireOld:

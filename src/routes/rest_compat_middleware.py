@@ -52,6 +52,12 @@ class RestCompatMiddleware(BaseHTTPMiddleware):
             if not raw_body:
                 return await call_next(request)
 
+            # The wire bytes AS SENT — the idempotency payload-hash input.
+            # Stashed before any rewrite (bytes are immutable, so downstream
+            # mutation cannot corrupt the capture); read by api_v1's
+            # _raw_json_body dependency.
+            request.state.raw_wire_body = raw_body
+
             body_dict: dict[str, Any] = json.loads(raw_body)
             result = normalize_request_params(tool_name, body_dict)
 

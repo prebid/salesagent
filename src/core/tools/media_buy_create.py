@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn, TypedDict, cast
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -50,6 +50,7 @@ from src.core.exceptions import (
     AdCPIdempotencyExpiredError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
+    AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
@@ -1486,36 +1487,33 @@ from src.services.slack_notifier import get_slack_notifier
 _IDEMPOTENCY_TOOL_NAME = "create_media_buy"
 
 
-def _build_idempotency_hit_result(
+def _raise_degraded_replay_outcome(
     tenant_id: str,
     idempotency_key: str,
     principal_id: str,
-    context: ContextObject | None,
     *,
     account_id: str | None = None,
     request_hash: str | None = None,
-) -> CreateMediaBuyResult:
-    """Degraded idempotency fallback: re-derive a response from the committed MediaBuy row.
+) -> NoReturn:
+    """Fail closed when the backstop fired but no verbatim cache row is usable.
 
-    Reached only when a same-key buy exists (the ``MediaBuy.idempotency_key`` backstop
-    fired) but the verbatim success cache has no usable row — the race winner has not
-    committed its cache write yet, the row expired past the replay TTL, or the stored
-    envelope no longer validates. The lookup is account-scoped (the AdCP idempotency
-    scope is agent + account + key), a buy that outlived the advertised replay TTL
-    rejects as ``IDEMPOTENCY_EXPIRED`` instead of re-deriving, and a same-key request
-    whose canonical payload differs from the stored ``payload_hash`` rejects as
-    ``IDEMPOTENCY_CONFLICT`` — exactly as at the probe.
+    Reached only when a same-key buy exists (the ``MediaBuy.idempotency_key``
+    backstop fired) but the verbatim success cache has no usable row — the race
+    winner has not committed its cache write yet, the row expired past the
+    replay TTL, or the stored envelope no longer validates. The lookup is
+    account-scoped (the spec idempotency scope is agent + account + key).
 
-    The verbatim cache (``_replay_cached_success``) is the authoritative replay path;
-    this fallback trades byte-for-byte fidelity for availability and therefore
-    deliberately:
+    Per the spec, verbatim replay is byte-for-byte or nothing: a reconstructed
+    body the buyer cannot distinguish from a faithful replay is the named
+    failure mode, so this path never fabricates a response. Outcomes, in order:
 
-    - re-derives packages in the spec-minimal shape (``package_id`` only),
-    - omits the property_list advisory (the original is unrecoverable here, and a
-      live rebuild would reflect *current* capability state — a byte-for-byte
-      violation),
-    - carries no ``replayed`` marker (the body is reconstructed, not the cached
-      original).
+    - no same-key buy: terminal validation error (impossible-state guard),
+    - buy outlived the replay TTL: ``IDEMPOTENCY_EXPIRED`` (rule 6 fail-closed),
+    - canonical payload differs from the stored hash: ``IDEMPOTENCY_CONFLICT``
+      (rule 5 — exactly as at the probe),
+    - otherwise: transient ``SERVICE_UNAVAILABLE`` with a short ``retry_after``
+      — the winner's cache write is in flight; the buyer's retry replays the
+      verbatim envelope once it lands.
     """
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
     from src.core.database.repositories import MediaBuyUoW
@@ -1543,30 +1541,11 @@ def _build_idempotency_hit_result(
         # Legacy rows without a stored hash carry no conflict signal.
         _raise_on_payload_conflict(existing.payload_hash, request_hash)
 
-        db_packages = uow.media_buys.get_packages(existing.media_buy_id)
-        response_packages = [Package(package_id=pkg.package_id) for pkg in db_packages]
-
-        # "pending_approval" is the internal awaiting-approval state (not a spec
-        # MediaBuyStatus value); the original response for such a buy reported the
-        # protocol task as still in flight. Everything else originally completed.
-        protocol_status = (
-            AdcpTaskStatus.submitted.value if existing.status == "pending_approval" else AdcpTaskStatus.completed.value
-        )
-        try:
-            adcp_status = MediaBuyStatus(existing.status)
-        except ValueError:
-            adcp_status = MediaBuyStatus.pending_start
-
-        return CreateMediaBuyResult(
-            response=CreateMediaBuySuccess(
-                media_buy_id=existing.media_buy_id,
-                packages=response_packages,
-                status=adcp_status,
-                valid_actions=valid_actions_for_status(adcp_status.value),
-                context=context,
-            ),
-            status=protocol_status,
-        )
+    raise AdCPServiceUnavailableError(
+        "the verbatim replay for this idempotency_key is not yet available — "
+        "the original response is still being committed; retry shortly",
+        retry_after=1,
+    )
 
 
 def _raise_on_payload_conflict(stored_hash: str | None, request_hash: str | None) -> None:
@@ -1632,7 +1611,6 @@ def _lookup_cached_replay(
         cached = uow.idempotency_attempts.find_by_key(
             principal_id=principal_id,
             account_id=account_id,
-            tool_name=_IDEMPOTENCY_TOOL_NAME,
             idempotency_key=idempotency_key,
         )
         if cached is None:
@@ -1640,7 +1618,6 @@ def _lookup_cached_replay(
                 uow.idempotency_attempts.enforce_insert_ceiling(
                     principal_id=principal_id,
                     account_id=account_id,
-                    tool_name=_IDEMPOTENCY_TOOL_NAME,
                 )
             return None
         _raise_on_payload_conflict(cached.payload_hash, request_hash)
@@ -1714,7 +1691,6 @@ def _replay_after_race(
     idempotency_key: str,
     principal_id: str,
     account_id: str | None,
-    context: ContextObject | None,
     request_hash: str | None,
 ) -> CreateMediaBuyResult:
     """Resolve an idempotency-race loser to the winner's verbatim cached success.
@@ -1723,9 +1699,8 @@ def _replay_after_race(
     then best-effort cached its response. The loser's payload must still match — the
     same key with a different canonical payload is an ``IDEMPOTENCY_CONFLICT`` here
     exactly as at the probe, never a replay of someone else's response. If the cache
-    row is visible (and validates), replay it verbatim; otherwise fall back to
-    re-deriving from the committed row — the degraded path
-    (see ``_build_idempotency_hit_result``).
+    row is visible (and validates), replay it verbatim; otherwise fail closed
+    (see ``_raise_degraded_replay_outcome``) — never a fabricated body.
     """
     replay = _lookup_cached_replay(
         tenant_id,
@@ -1736,11 +1711,10 @@ def _replay_after_race(
     )
     if replay is not None:
         return replay
-    return _build_idempotency_hit_result(
-        tenant_id=tenant_id,
-        idempotency_key=idempotency_key,
-        principal_id=principal_id,
-        context=context,
+    _raise_degraded_replay_outcome(
+        tenant_id,
+        idempotency_key,
+        principal_id,
         account_id=account_id,
         request_hash=request_hash,
     )
@@ -2604,7 +2578,8 @@ async def _create_media_buy_impl(
                     raise
                 logger.warning(
                     "Idempotency race (pending_approval): another request won the commit for key %s. "
-                    "Returning the winner. An orphan adapter-side order may exist.",
+                    "Resolving via the winner's cached response (fail-closed transient if not yet "
+                    "visible). An orphan adapter-side order may exist.",
                     req.idempotency_key,
                 )
                 return _replay_after_race(
@@ -2613,7 +2588,6 @@ async def _create_media_buy_impl(
                     idempotency_key=req.idempotency_key or "",
                     principal_id=principal.principal_id,
                     account_id=identity.account_id,
-                    context=req.context,
                     request_hash=request_hash,
                 )
 
@@ -3462,7 +3436,8 @@ async def _create_media_buy_impl(
                 raise
             logger.warning(
                 "Idempotency race (auto-approved): another request won the commit for key %s. "
-                "Returning the winner. An orphan adapter-side order may exist for %s.",
+                "Resolving via the winner's cached response (fail-closed transient if not yet "
+                "visible). An orphan adapter-side order may exist for %s.",
                 req.idempotency_key,
                 response.media_buy_id,
             )
@@ -3472,7 +3447,6 @@ async def _create_media_buy_impl(
                 idempotency_key=req.idempotency_key or "",
                 principal_id=principal_id,
                 account_id=identity.account_id,
-                context=req.context,
                 request_hash=request_hash,
             )
 

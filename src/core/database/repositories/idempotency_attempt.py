@@ -4,8 +4,10 @@ AdCP 3.0.1 idempotency contract: retrying a mutating tool call with the same
 idempotency_key must return the ORIGINAL success response byte-for-byte (marked
 ``replayed: true``), and errors are NEVER cached — a retry after an error
 re-executes. This repository stores and replays those cached successes, keyed by
-``(tenant_id, principal_id, account_id, tool_name, idempotency_key)`` (the AdCP
-scope is agent + account + key). ``MediaBuy.idempotency_key`` remains the
+``(tenant_id, principal_id, account_id, idempotency_key)`` — the spec's
+idempotency tuple exactly. ``tool_name`` is recorded for observability only,
+never as a scope dimension: a key reused by a different tool hits the same row
+and conflicts on its differing payload hash. ``MediaBuy.idempotency_key`` remains the
 dup-booking backstop; this table holds the verbatim response to replay.
 
 The default TTL is 24h (matches the value announced via
@@ -33,15 +35,26 @@ DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
 # when the oldest row expires. Looked up at call time so tests can patch it.
 MAX_ACTIVE_ATTEMPTS_PER_SCOPE = 1000
 
+# Insert-RATE limit per (tenant, principal, account) scope — the spec's MUST is
+# a rate limit on cache inserts (the row count above is the derived storage
+# bound). The window/ceiling follow the spec's SHOULD-level burst numbers
+# (300 inserts per 10s). Looked up at call time so tests can patch them.
+INSERT_RATE_WINDOW = timedelta(seconds=10)
+MAX_INSERTS_PER_WINDOW = 300
+
+# The spec Error model bounds retry_after to [1, 3600] seconds (clients clamp
+# anyway); never emit more even when the oldest row expires further out.
+_RETRY_AFTER_MAX = 3600
+
 
 class IdempotencyAttemptRepository:
     """Tenant-scoped CRUD for the verbatim success cache.
 
-    Queries are scoped by ``(tenant_id, principal_id, account_id, tool_name,
+    Queries are scoped by ``(tenant_id, principal_id, account_id,
     idempotency_key)`` — the same composite key the unique index enforces (with
     NULLS NOT DISTINCT, so a NULL account still enforces uniqueness) — so two
     principals, or two accounts under one principal, can use the same
-    idempotency_key without collision.
+    idempotency_key without collision, while two TOOLS under one scope cannot.
 
     Args:
         session: SQLAlchemy session (caller manages lifecycle).
@@ -60,18 +73,20 @@ class IdempotencyAttemptRepository:
         self,
         *,
         principal_id: str,
-        tool_name: str,
         idempotency_key: str,
         account_id: str | None = None,
         now: datetime | None = None,
     ) -> IdempotencyAttempt | None:
         """Return the cached success for this key, or None if absent or expired.
 
-        Expired entries are treated as absent — callers should fall through to
-        re-execution rather than returning a stale answer. Cleanup of expired
-        rows is the responsibility of ``expire_old``. ``account_id is None``
-        matches rows stored with no account (``IS NULL``), mirroring the
-        NULLS NOT DISTINCT unique index.
+        The lookup scope is the spec's idempotency tuple — (agent, account,
+        key) — with NO tool dimension: a key reused by a different tool must
+        hit this same row (and conflict on its differing payload hash), never
+        a separate per-tool cache. Expired entries are treated as absent —
+        callers should fall through to re-execution rather than returning a
+        stale answer. Cleanup of expired rows is the responsibility of
+        ``expire_old``. ``account_id is None`` matches rows stored with no
+        account (``IS NULL``), mirroring the NULLS NOT DISTINCT unique index.
         """
         current = now or datetime.now(UTC)
         stmt = (
@@ -81,7 +96,6 @@ class IdempotencyAttemptRepository:
                 IdempotencyAttempt.principal_id == principal_id,
                 # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
                 IdempotencyAttempt.account_id == account_id,
-                IdempotencyAttempt.tool_name == tool_name,
                 IdempotencyAttempt.idempotency_key == idempotency_key,
                 IdempotencyAttempt.expires_at > current,
             )
@@ -113,7 +127,7 @@ class IdempotencyAttemptRepository:
         by the caller, so ``_impl`` functions never call ``.model_dump()``
         (enforced by the no-model-dump-in-impl structural guard).
 
-        The ``(tenant, principal, account, tool, key)`` tuple has a UNIQUE index
+        The ``(tenant, principal, account, key)`` tuple has a UNIQUE index
         — callers guarantee they haven't already cached for this key (the
         ``find_by_key`` lookup is the natural gate). Catching the
         ``IntegrityError`` on a concurrent same-key race is the caller's
@@ -144,44 +158,71 @@ class IdempotencyAttemptRepository:
         self,
         *,
         principal_id: str,
-        tool_name: str,
         account_id: str | None = None,
         ceiling: int | None = None,
+        rate_ceiling: int | None = None,
         now: datetime | None = None,
     ) -> None:
         """Raise ``RATE_LIMITED`` when the scope has no room for another cached success.
 
-        Called by the idempotency probe on a cache MISS, before any execution:
-        a fresh key would insert a new row, and the per-(tenant, principal,
-        account) scope is bounded to :data:`MAX_ACTIVE_ATTEMPTS_PER_SCOPE`
-        active rows so key-minting cannot grow storage unboundedly. Replays
-        and conflicts are not rate-limited — they insert nothing.
+        Called by the idempotency probe on a cache MISS, before any execution
+        — a fresh key would insert a new row. Two bounds, both on the spec's
+        (tenant, principal, account) scope (no tool dimension):
 
-        ``retry_after`` is the number of seconds until the OLDEST active row in
-        the scope expires, i.e. when capacity is next guaranteed to free up.
+        - **insert rate** (the spec's MUST): at most
+          :data:`MAX_INSERTS_PER_WINDOW` rows created within the trailing
+          :data:`INSERT_RATE_WINDOW`; ``retry_after`` is when the oldest
+          in-window insert leaves the window.
+        - **active row count** (the derived storage bound): at most
+          :data:`MAX_ACTIVE_ATTEMPTS_PER_SCOPE` non-expired rows;
+          ``retry_after`` is when the oldest active row expires.
+
+        Replays and conflicts are not rate-limited — they insert nothing.
+        ``retry_after`` is clamped to the spec Error model's [1, 3600] bound.
         """
         current = now or datetime.now(UTC)
-        limit = ceiling if ceiling is not None else MAX_ACTIVE_ATTEMPTS_PER_SCOPE
         scope = (
             IdempotencyAttempt.tenant_id == self._tenant_id,
             IdempotencyAttempt.principal_id == principal_id,
             # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
             IdempotencyAttempt.account_id == account_id,
-            IdempotencyAttempt.tool_name == tool_name,
-            IdempotencyAttempt.expires_at > current,
         )
-        active = self._session.scalar(select(func.count()).select_from(IdempotencyAttempt).where(*scope)) or 0
-        if active < limit:
-            return
-
-        oldest_expiry = self._session.scalar(select(func.min(IdempotencyAttempt.expires_at)).where(*scope))
-        retry_after = max(1, math.ceil((oldest_expiry - current).total_seconds())) if oldest_expiry else 1
 
         from src.core.exceptions import AdCPRateLimitError
 
+        # Insert-rate bound: rows CREATED inside the trailing window, expired or not.
+        rate_limit = rate_ceiling if rate_ceiling is not None else MAX_INSERTS_PER_WINDOW
+        window_start = current - INSERT_RATE_WINDOW
+        in_window = (*scope, IdempotencyAttempt.created_at > window_start)
+        recent = self._session.scalar(select(func.count()).select_from(IdempotencyAttempt).where(*in_window)) or 0
+        if recent >= rate_limit:
+            oldest_in_window = self._session.scalar(select(func.min(IdempotencyAttempt.created_at)).where(*in_window))
+            window_seconds = math.ceil(INSERT_RATE_WINDOW.total_seconds())
+            retry_after = (
+                max(1, math.ceil(window_seconds - (current - oldest_in_window).total_seconds()))
+                if oldest_in_window
+                else 1
+            )
+            # The wait can never logically exceed the window itself; the bound
+            # also absorbs DB-vs-app clock skew on created_at (server_default).
+            raise AdCPRateLimitError(
+                "idempotency cache insert rate exceeded for this account — retry shortly",
+                retry_after=min(retry_after, window_seconds, _RETRY_AFTER_MAX),
+            )
+
+        # Storage bound: ACTIVE (non-expired) rows.
+        limit = ceiling if ceiling is not None else MAX_ACTIVE_ATTEMPTS_PER_SCOPE
+        active_scope = (*scope, IdempotencyAttempt.expires_at > current)
+        active = self._session.scalar(select(func.count()).select_from(IdempotencyAttempt).where(*active_scope)) or 0
+        if active < limit:
+            return
+
+        oldest_expiry = self._session.scalar(select(func.min(IdempotencyAttempt.expires_at)).where(*active_scope))
+        retry_after = max(1, math.ceil((oldest_expiry - current).total_seconds())) if oldest_expiry else 1
+
         raise AdCPRateLimitError(
             "too many active idempotency keys for this account — retry after the oldest replay window expires",
-            retry_after=retry_after,
+            retry_after=min(retry_after, _RETRY_AFTER_MAX),
         )
 
     def expire_old(self, *, now: datetime | None = None) -> int:

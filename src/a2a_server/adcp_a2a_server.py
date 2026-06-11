@@ -4,6 +4,7 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import copy
 import json
 import logging
 import uuid
@@ -1378,6 +1379,12 @@ class AdCPRequestHandler(RequestHandler):
         Raises:
             ValueError: For unknown skills or invalid parameters
         """
+        # The buyer's wire payload, captured BEFORE the pnc protocol-layer
+        # injection, deprecated-field normalization, and any handler mutations —
+        # the idempotency payload-hash input (AdCP defines equivalence over the
+        # request as sent). Deep copy: downstream steps mutate nested dicts.
+        raw_wire_parameters = copy.deepcopy(parameters)
+
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
         if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
@@ -1442,7 +1449,10 @@ class AdCPRequestHandler(RequestHandler):
         try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            result = await handler(parameters, identity)
+            if skill_name == "create_media_buy":
+                result = await handler(parameters, identity, raw_wire_parameters=raw_wire_parameters)
+            else:
+                result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except A2AError:
@@ -1512,7 +1522,12 @@ class AdCPRequestHandler(RequestHandler):
             response_data.setdefault("success", True)
         return apply_version_compat("get_products", response_data, adcp_version)
 
-    async def _handle_create_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+    async def _handle_create_media_buy_skill(
+        self,
+        parameters: dict,
+        identity: ResolvedIdentity,
+        raw_wire_parameters: dict | None = None,
+    ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
         IMPORTANT: This handler ONLY accepts AdCP spec-compliant format:
@@ -1591,9 +1606,10 @@ class AdCPRequestHandler(RequestHandler):
             account=params.get("account"),
             idempotency_key=params.get("idempotency_key"),
             identity=identity,
-            # The DataPart params ARE the wire payload — the idempotency
-            # payload-hash input.
-            raw_request_payload=params,
+            # The DataPart params AS SENT (pre-normalization, pre-mutation) are
+            # the idempotency payload-hash input; the post-processed dict is the
+            # fallback only for direct handler callers.
+            raw_request_payload=raw_wire_parameters if raw_wire_parameters is not None else params,
         )
 
         return response

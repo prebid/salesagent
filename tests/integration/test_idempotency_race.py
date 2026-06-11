@@ -4,8 +4,9 @@ Verifies that when two concurrent requests with the same idempotency_key
 both pass the initial lookup and attempt to commit, the loser catches
 IntegrityError and resolves to the winner — replaying the winner's verbatim
 cached success when visible, enforcing the payload-hash conflict rule even
-after the race, and degrading to MediaBuy re-derivation only when the cache
-row is missing or unusable.
+after the race, and FAILING CLOSED (transient SERVICE_UNAVAILABLE) when the
+cache row is missing or unusable: verbatim replay is byte-for-byte or
+nothing, never a fabricated body.
 """
 
 import uuid
@@ -80,13 +81,19 @@ class TestIdempotencyRaceDbLevel:
                 )
 
 
-class TestBuildIdempotencyHitResult:
-    """_build_idempotency_hit_result re-queries the winner and returns correct result."""
+class TestDegradedReplayFailsClosed:
+    """No usable cache row ⇒ transient rejection, never a fabricated body.
 
-    def test_returns_winner_after_race(self, integration_db):
-        """After IntegrityError, the helper finds the winner and builds a response."""
-        from src.core.schemas import CreateMediaBuyResult, CreateMediaBuySuccess
-        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+    Verbatim replay is byte-for-byte or nothing (the spec's fail-closed rule):
+    a reconstruction the buyer cannot distinguish from a faithful replay is the
+    named failure mode. The buyer's retry replays verbatim once the winner's
+    cache write lands.
+    """
+
+    def test_missing_cache_row_rejects_transient(self, integration_db):
+        """A same-key buy with no cache row rejects SERVICE_UNAVAILABLE + retry_after."""
+        from src.core.exceptions import AdCPError
+        from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
         idem_key = f"hit-{uuid.uuid4().hex}"
@@ -97,47 +104,44 @@ class TestBuildIdempotencyHitResult:
             principal = PrincipalFactory(tenant=tenant)
             principal_id = principal.principal_id
 
-            # Create a media buy with the idempotency_key (simulates the winner)
+            # The committed winner whose cache write has not landed.
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 idempotency_key=idem_key,
                 status="active",
             )
-            buy_id = buy.media_buy_id
             MediaPackageFactory(media_buy=buy, package_id="pkg_winner_1")
             env.get_session()  # commit factory data
 
-        # Now call the helper — it opens its own UoW
-        result = _build_idempotency_hit_result(
-            tenant_id=tenant_id,
-            idempotency_key=idem_key,
-            principal_id=principal_id,
-            context=None,
-        )
+        with pytest.raises(AdCPError) as exc_info:
+            _raise_degraded_replay_outcome(
+                tenant_id,
+                idem_key,
+                principal_id,
+            )
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id == buy_id
-        assert len(result.response.packages) == 1
-        assert result.response.packages[0].package_id == "pkg_winner_1"
-        assert result.status == "completed"
+        exc = exc_info.value
+        assert exc.error_code == "SERVICE_UNAVAILABLE"
+        assert exc.recovery == "transient"
+        assert exc.retry_after >= 1
 
 
 class TestIdempotencyRaceRecovery:
-    """Integration test: IntegrityError catch + _build_idempotency_hit_result recovery.
+    """Integration test: IntegrityError catch + fail-closed degraded outcome.
 
     Simulates the race condition by:
     1. Creating a media buy with idempotency_key (the winner)
     2. Attempting to create a second with the same key via UoW (triggers IntegrityError)
-    3. Catching the error and verifying _build_idempotency_hit_result recovers correctly
+    3. Catching the error and verifying the loser fails closed (no cache row yet)
+       while exactly one booking survives
     """
 
-    def test_integrity_error_recovery_returns_winner(self, integration_db):
-        """IntegrityError on duplicate idempotency_key is caught and returns the winner."""
+    def test_integrity_error_loser_fails_closed_single_booking(self, integration_db):
+        """The loser gets a transient rejection; the winner's booking is untouched."""
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.schemas import CreateMediaBuyResult, CreateMediaBuySuccess
-        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+        from src.core.exceptions import AdCPError
+        from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
         idem_key = f"recovery-{uuid.uuid4().hex}"
@@ -180,21 +184,16 @@ class TestIdempotencyRaceRecovery:
             assert "idempotency_key" in str(exc.orig)
             caught = True
 
-            # This is the degraded fallback `_replay_after_race` lands on when
-            # no cache row is usable:
-            result = _build_idempotency_hit_result(
-                tenant_id=tenant_id,
-                idempotency_key=idem_key,
-                principal_id=principal_id,
-                context=None,
-            )
-
-            assert isinstance(result, CreateMediaBuyResult)
-            assert isinstance(result.response, CreateMediaBuySuccess)
-            assert result.response.media_buy_id == winner_id
-            assert len(result.response.packages) == 1
-            assert result.response.packages[0].package_id == "pkg_race_1"
-            assert result.status == "completed"
+            # This is the degraded outcome `_replay_after_race` lands on when
+            # no cache row is usable — fail closed, never a fabricated body:
+            with pytest.raises(AdCPError) as exc_info:
+                _raise_degraded_replay_outcome(
+                    tenant_id,
+                    idem_key,
+                    principal_id,
+                )
+            assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+            assert exc_info.value.recovery == "transient"
 
         assert caught, "IntegrityError should have been raised by the duplicate idempotency_key"
 
@@ -207,14 +206,13 @@ class TestIdempotencyRaceRecovery:
 
 
 class TestDegradedFallbackStatus:
-    """The degraded re-derivation reports an awaiting-approval buy as still in flight."""
+    """An awaiting-approval buy also fails closed — no fabricated submitted body."""
 
-    def test_pending_approval_buy_reports_submitted(self, integration_db):
-        """A degraded re-derivation of an awaiting-approval buy must not claim completed."""
-        from adcp.types import MediaBuyStatus
-
-        from src.core.schemas import CreateMediaBuyResult, CreateMediaBuySuccess
-        from src.core.tools.media_buy_create import _build_idempotency_hit_result
+    def test_pending_approval_buy_fails_closed_too(self, integration_db):
+        """The original submitted response (task_id and all) is unrecoverable here —
+        fabricating one would hand the buyer an envelope that never existed."""
+        from src.core.exceptions import AdCPError
+        from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
 
         idem_key = f"pend-{uuid.uuid4().hex}"
@@ -232,19 +230,15 @@ class TestDegradedFallbackStatus:
             )
             env.get_session()
 
-        result = _build_idempotency_hit_result(
-            tenant_id=tenant_id,
-            idempotency_key=idem_key,
-            principal_id=principal_id,
-            context=None,
-        )
+        with pytest.raises(AdCPError) as exc_info:
+            _raise_degraded_replay_outcome(
+                tenant_id,
+                idem_key,
+                principal_id,
+            )
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        # The protocol task is still in flight — the original response said "submitted".
-        assert result.status == "submitted"
-        # The internal awaiting-approval state maps to the nearest spec status.
-        assert result.response.status == MediaBuyStatus.pending_start
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.recovery == "transient"
 
 
 class TestRaceLoserPayloadRules:
@@ -280,7 +274,6 @@ class TestRaceLoserPayloadRules:
                 idempotency_key=idem_key,
                 principal_id=principal_id,
                 account_id=None,
-                context=None,
                 request_hash="loser-different-hash",
             )
 
@@ -288,11 +281,17 @@ class TestRaceLoserPayloadRules:
         # Read-oracle defense: the conflict must not leak the winner's response.
         assert "mb_race_winner" not in exc_info.value.message
 
-    def test_invalid_cached_envelope_falls_back_to_rederivation(self, integration_db):
-        """An unusable cache row degrades to MediaBuy re-derivation — never an internal error."""
+    def test_invalid_cached_envelope_fails_closed(self, integration_db):
+        """An unusable cache row fails closed (transient) — never a fabricated body,
+        never an internal error.
+
+        Schema drift between the writing and replaying deploy means the verbatim
+        envelope is unrecoverable on this deploy; per the spec, that is a
+        rejection, not a reconstruction.
+        """
         from pydantic import BaseModel
 
-        from src.core.schemas import CreateMediaBuyResult, CreateMediaBuySuccess
+        from src.core.exceptions import AdCPError
         from src.core.tools.media_buy_create import _replay_after_race
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
         from tests.helpers import seed_cached_success
@@ -310,7 +309,6 @@ class TestRaceLoserPayloadRules:
                 idempotency_key=idem_key,
                 status="active",
             )
-            winner_id = winner.media_buy_id
             MediaPackageFactory(media_buy=winner, package_id="pkg_rinv_1")
             env.get_session()
 
@@ -321,22 +319,17 @@ class TestRaceLoserPayloadRules:
 
         seed_cached_success(tenant_id, principal_id, idem_key, response_model=_LegacyShape(), payload_hash="same-hash")
 
-        result = _replay_after_race(
-            tenant_id,
-            idempotency_key=idem_key,
-            principal_id=principal_id,
-            account_id=None,
-            context=None,
-            request_hash="same-hash",
-        )
+        with pytest.raises(AdCPError) as exc_info:
+            _replay_after_race(
+                tenant_id,
+                idempotency_key=idem_key,
+                principal_id=principal_id,
+                account_id=None,
+                request_hash="same-hash",
+            )
 
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id == winner_id
-        assert result.replayed is False, "A re-derived fallback is not a verbatim replay"
-        # Frozen advisory: the degraded path must not rebuild the property_list
-        # advisory from current capability state — it omits it.
-        assert result.response.errors is None
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.recovery == "transient"
 
 
 class TestRaceSeamThroughEntrypoint:
@@ -347,15 +340,16 @@ class TestRaceSeamThroughEntrypoint:
     cache row with a surviving MediaBuy is exactly the state a race loser
     observes before the winner's cache write commits: the probe misses, the
     buy re-executes, the ``MediaBuy.idempotency_key`` backstop fires, and the
-    impl's except-branch must recover the winner — a regression in that
+    impl's except-branch must fail closed (transient) — a regression in that
     wiring (constraint-string drift, argument mis-pass) surfaces here, not
     only in the direct ``_replay_after_race`` tests.
     """
 
-    def test_retry_after_lost_cache_row_recovers_winner_via_backstop(self, integration_db):
+    def test_retry_after_lost_cache_row_fails_closed_via_backstop(self, integration_db):
         from datetime import timedelta
 
         from src.core.database.repositories import MediaBuyUoW
+        from src.core.exceptions import AdCPError
         from src.core.schemas._base import CreateMediaBuySuccess
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -388,18 +382,17 @@ class TestRaceSeamThroughEntrypoint:
 
             adapter_mock = env.mock["adapter"].return_value.create_media_buy
             calls_before = adapter_mock.call_count
-            second = env.call_impl(**call_kwargs)
+            with pytest.raises(AdCPError) as exc_info:
+                env.call_impl(**call_kwargs)
             calls_after = adapter_mock.call_count
             tenant_id = env._tenant_id
             principal_id = env._principal_id
 
         # The probe missed (row gone) → full re-execution → backstop fired →
-        # the except-branch recovered the winner via the degraded fallback.
+        # the except-branch failed closed instead of fabricating a body.
         assert calls_after == calls_before + 1, "the retry must re-execute (probe miss), not replay"
-        assert isinstance(second.response, CreateMediaBuySuccess)
-        assert second.response.media_buy_id == winner_id
-        assert second.status == "completed"
-        assert second.replayed is False, "the degraded re-derivation is reconstructed, never a verbatim replay"
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.recovery == "transient"
 
         # Exactly one booking exists for the key — the backstop held.
         with MediaBuyUoW(tenant_id) as verify_uow:

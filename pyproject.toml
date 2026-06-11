@@ -8,7 +8,6 @@ requires-python = ">=3.12"
 dependencies = [
     "a2wsgi>=1.10.0",
     "adcp==4.3.0",  # exact pin — 4.3.0 targets AdCP spec 3.0.1; see docs/adcp-spec-version.md
-    "rfc8785>=0.1.4",  # RFC 8785 JCS canonical hashing for idempotency payload-equivalence
     "fastmcp>=3.2.0,<3.3.0", # 3.3.0 split fastmcp-slim[server] from the monolith (breaking Context/Middleware imports); stay on 3.2.x
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",

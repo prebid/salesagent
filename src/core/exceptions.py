@@ -723,21 +723,18 @@ class AdCPCapabilityNotSupportedError(AdCPError):
 class AdCPIdempotencyConflictError(AdCPConflictError):
     """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
 
-    Recovery=terminal: the buyer must mint a fresh idempotency_key (or reconcile
-    state) rather than retry — replaying the same key with a different canonical
-    payload keeps conflicting.
-
-    .. note::
-        **Documented spec divergence (recovery class).** AdCP 3.0.1 prose
-        classifies the conflict as ``correctable``; we emit ``terminal`` to match
-        the installed SDK's ``STANDARD_ERROR_CODES`` validator. The conformance
-        storyboard grades the conflict CODE only (no recovery check), so
-        ``terminal`` passes both. Mirrors ``AdCPAuthenticationError``'s
-        SDK-alignment note; revisit if the SDK validator accepts ``correctable``.
+    Recovery=correctable: the buyer can fix this and resend — either replay the
+    ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
+    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    conformance storyboard's stated expectation. The SDK's
+    ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
+    table is only a default applied when no recovery is supplied — an explicit
+    recovery always wins, and nothing in the SDK or the storyboard's machine
+    validations grades the value.
     """
 
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_CONFLICT"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPIdempotencyExpiredError(AdCPConflictError):
@@ -748,8 +745,12 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     security.mdx#idempotency rule 6, a request arriving after eviction with a
     key the seller has seen SHOULD be rejected with ``IDEMPOTENCY_EXPIRED``
     rather than silently treated as new or answered with another buy's data.
-    Recovery=terminal per the SDK's ``STANDARD_ERROR_CODES``: the buyer must
-    mint a fresh idempotency_key.
+
+    Recovery=terminal: no resend of THIS key can ever succeed — the buyer must
+    reconcile state via a read and mint a fresh key, which is a different
+    request, not a correction of this one. The 3.0.1 prose assigns no recovery
+    class to this code; ``terminal`` matches the SDK's default classification
+    and the blind-retry-never-succeeds semantics.
     """
 
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"

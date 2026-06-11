@@ -199,7 +199,6 @@ class TestImplReplaysCachedSuccess:
             assert uow.idempotency_attempts is not None
             cached = uow.idempotency_attempts.find_by_key(
                 principal_id=principal_id,
-                tool_name="create_media_buy",
                 idempotency_key=other_key,
             )
             assert cached is not None, "A fresh successful create must cache its response"
@@ -257,7 +256,6 @@ class TestOpportunisticEviction:
             # the row was DELETED (evicted), not merely filtered.
             evicted = uow.idempotency_attempts.find_by_key(
                 principal_id=principal_id,
-                tool_name="create_media_buy",
                 idempotency_key=expired_key,
                 now=seeded_at,
             )
@@ -265,7 +263,6 @@ class TestOpportunisticEviction:
             # The fresh success's own row was written and survives.
             fresh = uow.idempotency_attempts.find_by_key(
                 principal_id=principal_id,
-                tool_name="create_media_buy",
                 idempotency_key=fresh_key,
             )
             assert fresh is not None
@@ -355,7 +352,6 @@ class TestErrorsAreNeverCached:
             assert uow.idempotency_attempts is not None
             cached = uow.idempotency_attempts.find_by_key(
                 principal_id=principal_id,
-                tool_name="create_media_buy",
                 idempotency_key=idem_key,
             )
             assert cached is None, "Errors must never be cached — a retry must re-execute"

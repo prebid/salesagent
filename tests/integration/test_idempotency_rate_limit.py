@@ -62,7 +62,6 @@ class TestInsertCeilingRepository:
             with pytest.raises(AdCPError) as exc_info:
                 uow.idempotency_attempts.enforce_insert_ceiling(
                     principal_id=principal_id,
-                    tool_name="create_media_buy",
                     ceiling=2,
                     now=now,
                 )
@@ -88,7 +87,6 @@ class TestInsertCeilingRepository:
             assert uow.idempotency_attempts is not None
             uow.idempotency_attempts.enforce_insert_ceiling(
                 principal_id=principal_id,
-                tool_name="create_media_buy",
                 ceiling=3,
                 now=now,
             )
@@ -108,9 +106,92 @@ class TestInsertCeilingRepository:
             assert uow.idempotency_attempts is not None
             uow.idempotency_attempts.enforce_insert_ceiling(
                 principal_id=principal_id,
-                tool_name="create_media_buy",
                 ceiling=1,
             )
+
+
+class TestInsertRateWindow:
+    """The spec's MUST: bound the INSERT RATE per scope, not just stored rows."""
+
+    @staticmethod
+    def _seed_principal(tenant_id, principal_id):
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness._base import BareIntegrationEnv
+
+        with BareIntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            PrincipalFactory(tenant=tenant, principal_id=principal_id)
+            env._commit_factory_data()
+
+    def test_burst_over_rate_ceiling_rejects_with_short_retry_after(self, integration_db):
+        """Rows created inside the trailing window count against the rate ceiling.
+
+        retry_after points at when the oldest in-window insert leaves the
+        window — bounded by the window length, far shorter than any TTL.
+        """
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.exceptions import AdCPError
+
+        tenant_id = f"rlw_t_{uuid.uuid4().hex[:6]}"
+        principal_id = f"p_{uuid.uuid4().hex[:8]}"
+        self._seed_principal(tenant_id, principal_id)
+        # Seeded rows are created NOW — inside the trailing window by construction.
+        _seed_scope_rows(tenant_id, principal_id, 2, ttl=timedelta(hours=1), now=datetime.now(UTC))
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            with pytest.raises(AdCPError) as exc_info:
+                uow.idempotency_attempts.enforce_insert_ceiling(
+                    principal_id=principal_id,
+                    rate_ceiling=2,
+                )
+
+        exc = exc_info.value
+        assert exc.error_code == "RATE_LIMITED"
+        assert exc.recovery == "transient"
+        assert 1 <= exc.retry_after <= 10, "rate-window retry_after is bounded by the window length"
+
+    def test_rows_outside_window_do_not_count_toward_rate(self, integration_db):
+        """The rate bound is a trailing window, not a lifetime count."""
+        from datetime import timedelta as td
+
+        from src.core.database.repositories import MediaBuyUoW
+
+        tenant_id = f"rlw_t_{uuid.uuid4().hex[:6]}"
+        principal_id = f"p_{uuid.uuid4().hex[:8]}"
+        self._seed_principal(tenant_id, principal_id)
+        _seed_scope_rows(tenant_id, principal_id, 2, ttl=timedelta(hours=1), now=datetime.now(UTC))
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            # Probe from 11s in the future: both rows fall outside the 10s window.
+            uow.idempotency_attempts.enforce_insert_ceiling(
+                principal_id=principal_id,
+                rate_ceiling=2,
+                now=datetime.now(UTC) + td(seconds=11),
+            )
+
+    def test_storage_bound_retry_after_clamps_to_spec_maximum(self, integration_db):
+        """A 24h TTL would imply retry_after=86400; the spec Error model caps at 3600."""
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.exceptions import AdCPError
+
+        tenant_id = f"rlc_t_{uuid.uuid4().hex[:6]}"
+        principal_id = f"p_{uuid.uuid4().hex[:8]}"
+        self._seed_principal(tenant_id, principal_id)
+        now = datetime.now(UTC)
+        _seed_scope_rows(tenant_id, principal_id, 1, ttl=timedelta(hours=24), now=now)
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            with pytest.raises(AdCPError) as exc_info:
+                uow.idempotency_attempts.enforce_insert_ceiling(
+                    principal_id=principal_id,
+                    ceiling=1,
+                    now=now + timedelta(seconds=11),
+                )
+
+        assert exc_info.value.retry_after == 3600, "retry_after must clamp to the Error model's upper bound"
 
 
 class TestInsertCeilingThroughEntrypoint:

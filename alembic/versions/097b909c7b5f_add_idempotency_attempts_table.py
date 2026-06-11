@@ -62,7 +62,7 @@ def upgrade() -> None:
     op.create_index(
         "idx_idempotency_attempts_lookup",
         "idempotency_attempts",
-        ["tenant_id", "principal_id", "tool_name", "idempotency_key"],
+        ["tenant_id", "principal_id", "idempotency_key"],
         unique=True,
     )
     op.create_index(

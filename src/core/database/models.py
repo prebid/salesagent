@@ -974,10 +974,11 @@ class MediaBuy(Base):
         Index("idx_media_buys_status", "status"),
         Index("idx_media_buys_strategy", "strategy_id"),
         Index("idx_media_buys_account", "account_id"),
-        # Dup-booking backstop, scoped per AdCP idempotency (agent + account +
-        # key): NULLS NOT DISTINCT so a NULL account (no sub-account) still
-        # enforces uniqueness on the rest of the tuple; partial so keyless
-        # legacy rows stay out of the index.
+        # Dup-booking backstop, scoped per the spec's idempotency tuple
+        # (agent + account + key) EXACTLY — no extra dimensions in uniqueness.
+        # NULLS NOT DISTINCT so a NULL account (no sub-account) still enforces
+        # uniqueness on the rest of the tuple; partial so keyless legacy rows
+        # stay out of the index.
         Index(
             "idx_media_buys_idempotency_key",
             "tenant_id",
@@ -992,7 +993,15 @@ class MediaBuy(Base):
 
 
 class IdempotencyAttempt(Base):
-    """Cached verbatim SUCCESS response keyed by (tenant, principal, account, tool, idempotency_key).
+    """Cached verbatim SUCCESS response keyed by (tenant, principal, account, idempotency_key).
+
+    The unique scope is the spec's idempotency tuple — (authenticated agent,
+    account, key) — EXACTLY. ``tool_name`` is recorded for observability but
+    deliberately NOT part of uniqueness or lookups: per the spec, the same key
+    reused across two different mutating tools with different payloads is an
+    ``IDEMPOTENCY_CONFLICT``, never two independent caches. (General principle:
+    spec-defined scope tuples are implemented as written; extra dimensions may
+    exist as columns but never in uniqueness/lookup semantics.)
 
     AdCP 3.0.1 idempotency: retrying a mutating tool call with the same
     idempotency_key must return the ORIGINAL success response byte-for-byte
@@ -1008,10 +1017,11 @@ class IdempotencyAttempt(Base):
     replay once the winner has committed.
 
     `expires_at` enforces an explicit TTL — expired rows are treated as absent at
-    the read path, so a retry after expiry re-executes. When the original buy
-    still exists, that re-execution hits the `MediaBuy.idempotency_key` backstop
-    and resolves to a re-derived (non-verbatim, unmarked) response rather than a
-    duplicate booking. The default TTL is announced via
+    the read path. When the original buy still exists, a post-expiry retry hits
+    the `MediaBuy.idempotency_key` backstop and rejects fail-closed
+    (`IDEMPOTENCY_EXPIRED`); a within-TTL retry whose cache row is missing or
+    unusable rejects transient — verbatim replay is byte-for-byte or nothing,
+    never a fabricated body. The default TTL is announced via
     `get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds` (86400 = 24h).
     """
 
@@ -1030,7 +1040,7 @@ class IdempotencyAttempt(Base):
     tool_name: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        comment="Tool that produced the cached success, e.g. 'create_media_buy'",
+        comment="Tool that produced the cached success (observability only — NOT part of the unique scope)",
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     payload_hash: Mapped[str | None] = mapped_column(
@@ -1067,7 +1077,6 @@ class IdempotencyAttempt(Base):
             "tenant_id",
             "principal_id",
             "account_id",
-            "tool_name",
             "idempotency_key",
             unique=True,
             postgresql_nulls_not_distinct=True,

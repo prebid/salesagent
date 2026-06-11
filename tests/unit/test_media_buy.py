@@ -1319,7 +1319,6 @@ class TestCreateMediaBuyIdempotency:
         mock_attempts.find_by_key.assert_called_once_with(
             principal_id="test_principal",
             account_id=identity.account_id,
-            tool_name="create_media_buy",
             idempotency_key=idem_key,
         )
 
@@ -1392,7 +1391,6 @@ class TestCreateMediaBuyIdempotency:
         mock_idem_attempts_repo.find_by_key.assert_called_once_with(
             principal_id="test_principal",
             account_id=identity.account_id,
-            tool_name="create_media_buy",
             idempotency_key="new-key-never-seen",
         )
 

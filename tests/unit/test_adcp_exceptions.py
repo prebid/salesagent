@@ -111,12 +111,16 @@ class TestExceptionHierarchy:
         assert exc.error_code == "IDEMPOTENCY_CONFLICT"
 
     def test_idempotency_conflict_wire_envelope(self):
-        """The two-layer envelope carries IDEMPOTENCY_CONFLICT + terminal in both layers."""
+        """The two-layer envelope carries IDEMPOTENCY_CONFLICT + correctable in both layers.
+
+        Correctable per the AdCP 3.0.1 prose example and storyboard expectation:
+        the buyer can resend the original bytes or mint a fresh key.
+        """
         from src.core.exceptions import AdCPIdempotencyConflictError, build_two_layer_error_envelope
 
         env = build_two_layer_error_envelope(AdCPIdempotencyConflictError("dup key"))
         assert env["adcp_error"]["code"] == "IDEMPOTENCY_CONFLICT"
-        assert env["adcp_error"]["recovery"] == "terminal"
+        assert env["adcp_error"]["recovery"] == "correctable"
         assert env["errors"][0]["code"] == "IDEMPOTENCY_CONFLICT"
 
     def test_idempotency_expired_error(self):
@@ -281,12 +285,17 @@ class TestRecoveryClassification:
         exc = AdCPConflictError("duplicate idempotency key")
         assert exc.recovery == "correctable"
 
-    def test_idempotency_conflict_defaults_to_terminal(self):
-        """AdCPIdempotencyConflictError overrides AdCPConflictError to recovery='terminal'."""
+    def test_idempotency_conflict_defaults_to_correctable(self):
+        """AdCPIdempotencyConflictError is recovery='correctable'.
+
+        The buyer can fix the conflict — resend the original bytes under the
+        same key, or mint a fresh key for the new payload (AdCP 3.0.1 prose
+        example + storyboard expectation).
+        """
         from src.core.exceptions import AdCPIdempotencyConflictError
 
         exc = AdCPIdempotencyConflictError("dup key, different payload")
-        assert exc.recovery == "terminal"
+        assert exc.recovery == "correctable"
 
     def test_gone_error_defaults_to_correctable(self):
         """AdCPGoneError defaults to recovery='correctable'.

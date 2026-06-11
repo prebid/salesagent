@@ -7,6 +7,7 @@ and applies version compat at the boundary.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -221,9 +222,16 @@ async def _raw_json_body(request: Request) -> dict[str, Any]:
     """The HTTP body as sent on the wire — the idempotency payload-hash input.
 
     A dependency rather than a route ``request`` parameter, so route signatures
-    stay Depends-only (the rest-depends-auth guard). Starlette caches the body,
-    so reading it here does not consume it before model parsing.
+    stay Depends-only (the rest-depends-auth guard). Prefers the pre-rewrite
+    bytes stashed by ``RestCompatMiddleware`` — when a deprecated-field
+    translation fires, ``request.json()`` would observe the NORMALIZED body,
+    not the bytes the buyer sent, and seller-side compat-table changes would
+    flip honest retries into conflicts mid-TTL. Starlette caches the body, so
+    the fallback read does not consume it before model parsing.
     """
+    raw = getattr(request.state, "raw_wire_body", None)
+    if raw is not None:
+        return json.loads(raw)
     return await request.json()
 
 

@@ -276,7 +276,7 @@ class TestAdvisoryComputedOnFreshCreate:
     """The advisory is computed live at FRESH create time from the current
     adapter capability. Replays never recompute it: a verbatim replay returns
     the STORED envelope (the advisory frozen exactly as cached — AdCP 3.0.1
-    byte-for-byte), and the degraded re-derivation fallback omits the advisory
+    byte-for-byte), and the degraded path fails closed rather than rebuild it
     entirely (the original is unrecoverable there; a live rebuild would leak
     current capability state into a replayed response).
     """
