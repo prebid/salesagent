@@ -23,6 +23,7 @@ from tests.factories.core import (
 )
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
+from tests.factories.delivery_simulation import DeliverySimulationConfigFactory
 from tests.factories.format import FormatFactory, FormatIdFactory
 from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
@@ -53,6 +54,7 @@ ALL_FACTORIES = [
     MediaBuyFactory,
     MediaPackageFactory,
     PushNotificationConfigFactory,
+    DeliverySimulationConfigFactory,
     CreativeFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
@@ -69,6 +71,7 @@ __all__ = [
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
+    "DeliverySimulationConfigFactory",
     "FormatFactory",
     "FormatIdFactory",
     "InventoryProfileFactory",
