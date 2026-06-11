@@ -200,7 +200,13 @@ def test_pricing_service_receives_format_id_objects():
 
     # If format_ids are FormatId objects, the service should handle them
     # without needing isinstance checks for str or dict
-    result = service._calculate_product_pricing(mock_product)
+    result = service._calculate_product_pricing(
+        mock_product,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
     assert "base_rate" in result or result is not None
 
 
