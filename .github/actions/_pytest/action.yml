@@ -1,0 +1,47 @@
+name: Run pytest
+description: Run pytest via uv with shared CI defaults.
+inputs:
+  paths:
+    description: Space-separated pytest paths or files.
+    required: true
+  extra_args:
+    description: Additional pytest CLI arguments.
+    required: false
+    default: ""
+  disable_randomly:
+    description: When true, pass -p no:randomly.
+    required: false
+    default: "false"
+  with_coverage:
+    description: When true, pass --cov=src with xml/term reports.
+    required: false
+    default: "false"
+  coverage_xml:
+    description: Custom XML coverage report path; enables --cov=src with no terminal report (xdist-friendly).
+    required: false
+    default: ""
+  tb:
+    description: Traceback style passed to --tb.
+    required: false
+    default: line
+runs:
+  using: composite
+  steps:
+    - name: Run pytest
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(uv run pytest ${{ inputs.paths }})
+        if [ "${{ inputs.disable_randomly }}" = "true" ]; then
+          args+=(-p no:randomly)
+        fi
+        args+=(-q "--tb=${{ inputs.tb }}")
+        if [ "${{ inputs.with_coverage }}" = "true" ]; then
+          args+=(--cov=src --cov-report=xml --cov-report=term)
+        fi
+        if [ -n "${{ inputs.coverage_xml }}" ]; then
+          args+=(--cov=src "--cov-report=xml:${{ inputs.coverage_xml }}" --cov-report=)
+        fi
+        # Inject extra_args at compile time — do not bash-word-split (marker exprs contain parentheses).
+        # shellcheck disable=SC2086,SC2093
+        exec "${args[@]}" ${{ inputs.extra_args }}

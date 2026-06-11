@@ -107,7 +107,7 @@ cmd_up() {
             sleep 2; continue
         fi
         export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT
-        export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
+        export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@127.0.0.1:${POSTGRES_PORT}/adcp_test"
         dc down -v 2>/dev/null || true
         dc build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -10
         if dc up -d 2>&1 | tee /tmp/dc-up-$$.log; then
