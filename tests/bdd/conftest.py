@@ -2505,9 +2505,11 @@ def e2e_stack():
 
     Reads E2E_BASE_URL / E2E_POSTGRES_URL (set by the in-network runner /
     run_all_tests via tox pass_env). Health-checks base_url so non-e2e transports
-    still run when the stack is absent (returns None; the ctx fixture skips the
-    e2e_* transport explicitly). The RestE2EDispatcher reads config off the env,
-    never the environment.
+    still run when the stack is absent (returns None). For an e2e_* transport a
+    None here is a hard ERROR (the ctx fixture raises) — never a skip, because
+    e2e_* is only parametrized when BDD_E2E_ENABLED=true, so a missing stack means
+    an explicitly-requested transport could not run. The RestE2EDispatcher reads
+    config off the env, never the environment.
     """
     import httpx
 
@@ -2579,7 +2581,20 @@ def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
         t = request.param
         if hasattr(t, "value") and str(t.value).startswith("e2e_"):
             if e2e_stack is None:
-                pytest.skip("E2E stack not available — set E2E_BASE_URL or start the in-network stack")
+                # e2e_* transports are only parametrized when BDD_E2E_ENABLED=true
+                # (see pytest_generate_tests), so reaching here means e2e was
+                # EXPLICITLY requested but the live stack could not be reached. That
+                # is a hard ERROR, never a skip: a skipped e2e test masks the fact
+                # that the transport never ran, turning a non-executed test into a
+                # false green (No Quiet Failures / Test Integrity).
+                base_url = os.environ.get("E2E_BASE_URL")
+                cause = "E2E_BASE_URL is unset" if not base_url else f"{base_url}/health failed"
+                raise RuntimeError(
+                    f"BDD_E2E_ENABLED=true but the live E2E stack is unreachable ({cause}). "
+                    "The e2e_rest transport cannot run. Start the in-network stack "
+                    "(run_all_tests.sh) or unset BDD_E2E_ENABLED to run the in-process "
+                    "transports only. Refusing to skip — a skipped e2e test is a false green."
+                )
             d["e2e_config"] = e2e_stack
     return d
 
