@@ -30,6 +30,8 @@ from adcp.types import (
     WcagLevel,
 )
 from adcp.types import Format as AdcpFormat
+from adcp.types.generated_poc.enums.disclosure_persistence import DisclosurePersistence
+from adcp.types.generated_poc.enums.disclosure_position import DisclosurePosition
 from adcp.utils.format_assets import get_format_assets
 from pydantic import Field
 
@@ -130,6 +132,8 @@ def build_list_creative_formats_request(
     min_height: int | None = None,
     max_height: int | None = None,
     wcag_level: WcagLevel | str | None = None,
+    disclosure_positions: list[DisclosurePosition] | None = None,
+    disclosure_persistence: list[DisclosurePersistence] | None = None,
     context: ContextObject | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
@@ -148,6 +152,8 @@ def build_list_creative_formats_request(
         min_height=min_height,
         max_height=max_height,
         wcag_level=wcag_level,
+        disclosure_positions=disclosure_positions,
+        disclosure_persistence=disclosure_persistence,
         context=context,
     )
 
@@ -496,6 +502,12 @@ async def list_creative_formats(
     max_width: Annotated[int | None, Field(description="Maximum format width in pixels")] = None,
     min_height: Annotated[int | None, Field(description="Minimum format height in pixels")] = None,
     max_height: Annotated[int | None, Field(description="Maximum format height in pixels")] = None,
+    disclosure_positions: Annotated[
+        list[DisclosurePosition] | None, Field(description="Filter by supported disclosure positions")
+    ] = None,
+    disclosure_persistence: Annotated[
+        list[DisclosurePersistence] | None, Field(description="Filter by supported disclosure persistence modes")
+    ] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
@@ -516,6 +528,8 @@ async def list_creative_formats(
         max_width: Maximum format width in pixels
         min_height: Minimum format height in pixels
         max_height: Maximum format height in pixels
+        disclosure_positions: Filter by supported disclosure positions
+        disclosure_persistence: Filter by supported disclosure persistence modes
         context: Application-level context per AdCP spec
         ctx: FastMCP context (automatically provided)
 
@@ -535,6 +549,8 @@ async def list_creative_formats(
             max_width=max_width,
             min_height=min_height,
             max_height=max_height,
+            disclosure_positions=disclosure_positions,
+            disclosure_persistence=disclosure_persistence,
             context=context,
         )
     except ValidationError as e:

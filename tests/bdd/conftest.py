@@ -314,27 +314,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 ]
 
 
-# MCP selective xfails: the MCP wrapper doesn't accept disclosure_positions.
-# Only xfail examples that actually SEND the param — "omitted"/"not_provided"
-# variants send no param and pass fine.
+# MCP selective xfails: previously the MCP wrapper did not accept the
+# disclosure_positions keyword. salesagent-7bit added disclosure_positions +
+# disclosure_persistence to the MCP list_creative_formats wrapper, so the param
+# is now accepted on MCP exactly like A2A/REST. The disclosure *filter* gap
+# (_impl does not filter by disclosure) is all-transport and handled by
+# _UC005_PARTIAL_TAGS / _XFAIL_TAGS, so no MCP-specific entries remain.
 # (tag, example_substrings, reason, strict)
-# strict=True  → must fail (genuine xfail)
-# strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
-_MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
-    # MCP wrapper does not accept disclosure_positions keyword (strict=False: some variants xpass)
-    (
-        "T-UC-005-partition-disclosure",
-        {"single_position", "multiple_positions_all_match", "duplicate_positions"},
-        "MCP wrapper: disclosure_positions not accepted or not validated",
-        False,
-    ),
-    (
-        "T-UC-005-boundary-disclosure",
-        {"single position", "duplicate positions"},
-        "MCP wrapper: disclosure_positions not accepted or not validated",
-        False,
-    ),
-]
+_MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = []
 
 # REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).
 # Only xfail scenarios that genuinely fail — many invariant "holds" scenarios
@@ -590,36 +577,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Must run BEFORE selective xfails (which use strict=True) to avoid
         # XPASS failures on transport variants that now pass.
         _UC005_PARTIAL_TAGS = {
-            # Graduated (all 4 transports pass with strong assertions):
-            # T-UC-005-partition-disclosure, T-UC-005-boundary-disclosure,
-            # T-UC-005-boundary-asset-types
-            # Graduated MCP: inv-049-8-violated, inv-049-8-nofield
-            # (MCP now passes with strong assertions; impl/a2a/rest still xfail)
+            # disclosure_positions filter is not implemented in _impl (all transports).
+            # salesagent-7bit added the param to the MCP wrapper, so MCP now sends it
+            # and fails the exclusion assertion exactly like impl/a2a/rest — hence the
+            # former `not is_mcp` exclusion is removed (MCP no longer passes vacuously).
             "T-UC-005-inv-049-8-violated",
             "T-UC-005-inv-049-8-nofield",
         }
-        if marker_names & _UC005_PARTIAL_TAGS and not is_mcp and not is_e2e_rest:
+        if marker_names & _UC005_PARTIAL_TAGS and not is_e2e_rest:
             item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
             # Skip selective xfails for these — the strict=False above covers them
         else:
-            # Graduated disclosure examples on impl — still fail on a2a/mcp/rest
-            if not is_impl and not is_e2e_rest:
-                if "T-UC-005-partition-disclosure" in marker_names:
-                    if any(s in item.nodeid for s in ("all_positions", "no_matching_formats")):
-                        item.add_marker(
-                            pytest.mark.xfail(
-                                reason="disclosure_positions filter not implemented on non-impl transports",
-                                strict=True,
-                            )
-                        )
-                elif "T-UC-005-boundary-disclosure" in marker_names:
-                    if any(s in item.nodeid for s in ("all 8 positions", "format has no")):
-                        item.add_marker(
-                            pytest.mark.xfail(
-                                reason="disclosure_positions filter not implemented on non-impl transports",
-                                strict=True,
-                            )
-                        )
+            # Graduated (salesagent-7bit): the partition/boundary-disclosure "valid"
+            # examples (all_positions / no_matching_formats / all 8 positions /
+            # "format has no") return unfiltered results that satisfy the assertion,
+            # so they now PASS on every wire transport (a2a/mcp/rest) — no marker.
 
             # Selective xfail for parametrized scenarios
             for tag, substrings, reason in _SELECTIVE_XFAIL:
