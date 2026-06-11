@@ -148,7 +148,9 @@ with an inline code string. The structural guard tests cap these sites.
 
 ## Project Conventions
 
-- No issue/PR numbers in code comments — reference in commit messages only
+- FIXME comments must carry a GitHub issue reference — `FIXME(#1234)`, not
+  bare `FIXME` and not internal tool IDs (e.g. beads). Reviewers ask for the
+  issue-tagged form so the revisit condition is trackable.
 - No `# noqa: F401` on imports that are actually used
 - No `--link` in Docker commands — use named networks
 - Check `subprocess.run()` result `returncode` when the result drives a gate
