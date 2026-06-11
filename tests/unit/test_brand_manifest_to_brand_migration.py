@@ -16,24 +16,17 @@ from pydantic import ValidationError
 
 
 class TestGetProductsRawRejectsBrandManifest:
-    """get_products_raw no longer accepts brand_manifest keyword."""
+    """get_products_raw now uses the brand keyword."""
 
-    def test_brand_manifest_kwarg_raises_type_error(self):
-        """Calling get_products_raw with brand_manifest= raises TypeError.
-
-        This reproduces the failure in:
-        - tests/integration_v2/test_get_products_filters.py (8+ tests)
-        """
+    def test_brand_kwarg_is_supported(self):
+        """Calling get_products_raw with brand= should not raise TypeError."""
         from src.core.tools.products import get_products_raw
 
-        with pytest.raises(TypeError, match="brand_manifest"):
-            # brand_manifest is not a valid parameter — brand is the new name.
-            # TypeError is raised at call time (before coroutine creation)
-            # because the function signature has no **kwargs.
-            get_products_raw(
-                brand_manifest={"name": "Test Brand"},
-                brief="",
-            )
+        # brand is the supported parameter name after migration from brand_manifest.
+        get_products_raw(
+            brand={"name": "Test Brand"},
+            brief="",
+        )
 
 
 class TestGetProductsRequestRejectsBrandManifest:
