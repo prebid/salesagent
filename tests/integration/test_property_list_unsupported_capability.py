@@ -1,7 +1,7 @@
 """Integration tests: property_list capability enforcement at the ``_impl`` boundary.
 
 AdCP honest-declaration contract: a seller advertises property_list support
-via ``features.property_list_filtering`` in get_adcp_capabilities
+via ``ext.prebid.property_list_targeting`` in get_adcp_capabilities
 (get_products.mdx), and one that cannot compile
 ``targeting_overlay.property_list`` rejects with ``UNSUPPORTED_FEATURE``
 (error-code.json) rather than silently ignoring it — the spec's
@@ -175,8 +175,8 @@ async def test_create_rejects_property_list_when_adapter_unsupported(capability_
     assert exc.field == "packages[0].targeting_overlay.property_list", (
         f"field must identify the exact offending package; got {exc.field!r}"
     )
-    assert exc.suggestion is not None and "property_list_filtering" in exc.suggestion, (
-        "suggestion must reference the canonical capability flag so the "
+    assert exc.suggestion is not None and "property_list_targeting" in exc.suggestion, (
+        "suggestion must reference the create-targeting capability signal so the "
         "buyer agent can locate a capable seller via get_adcp_capabilities"
     )
 

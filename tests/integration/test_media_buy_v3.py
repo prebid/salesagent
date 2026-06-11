@@ -26,11 +26,12 @@ from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
+    UpdateMediaBuyError,
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
 from tests.integration.media_buy_helpers import _get_tenant_dict, _make_create_request
-from tests.utils.database_helpers import media_buy_id_for_task
+from tests.utils.database_helpers import media_buy_id_for_task, set_media_buy_status
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -910,6 +911,12 @@ class TestUpdateMediaBuyAdapterError:
         assert result.status == "completed"
         media_buy_id = result.response.media_buy_id
 
+        # pause is only actionable on a live buy — fresh creates sit in
+        # pending_creatives, where the status gate raises BEFORE the adapter
+        # (the old blanket except hid exactly that, so this test never
+        # exercised its named scenario).
+        set_media_buy_status(media_buy_id, "active")
+
         # Mock adapter to simulate network failure
         with patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter:
             mock_adapter = MagicMock()
@@ -922,15 +929,22 @@ class TestUpdateMediaBuyAdapterError:
                 media_buy_id=media_buy_id,
                 paused=True,
             )
-            # _update_media_buy_impl propagates adapter exceptions as-is or returns error
-            # depending on the code path. Test that it either raises or returns error.
+            # _update_media_buy_impl either propagates the adapter's
+            # ConnectionError as-is or returns a typed error response,
+            # depending on the code path. Catch ONLY the adapter exception —
+            # the old blanket `except Exception` swallowed this test's own
+            # AssertionError, making the returns-branch assert decorative.
             try:
                 update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
-                # If it returns, should be an error response
-                assert hasattr(update_result, "errors") and update_result.errors
-            except (ConnectionError, Exception):
-                # Adapter error propagated -- acceptable behavior
-                pass
+            except ConnectionError:
+                pass  # adapter exception propagated — acceptable behavior
+            else:
+                assert isinstance(update_result, UpdateMediaBuyError), (
+                    f"non-raising path must return the error variant, got {type(update_result).__name__}"
+                )
+                assert update_result.errors, "error variant must carry errors[]"
+            # Either way the scenario's premise must hold: the adapter was reached.
+            mock_adapter.update_media_buy.assert_called_once()
 
 
 class TestDeliveryIdentityValidation:

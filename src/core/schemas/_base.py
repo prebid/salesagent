@@ -259,7 +259,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
         The A2A serializer uses ``str(response)`` as the wire ``message`` (and
         MCP's content text is ``str(result)``), so the advisory context stored
-        under ``ext.property_list_advisories`` surfaces here — the payload
+        under ``ext.prebid.property_list_advisories`` surfaces here — the payload
         itself carries no protocol ``message`` field per AdCP PR #113.
         """
         base = f"Media buy {self.media_buy_id} created successfully."

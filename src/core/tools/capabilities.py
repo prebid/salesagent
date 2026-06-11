@@ -161,14 +161,16 @@ def _get_adcp_capabilities_impl(
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        # property_list_filtering: True iff the bound adapter actually
-        # compiles ``targeting_overlay.property_list`` into native ad-server
-        # targeting (Kevel resolves it to siteIds; see kevel_site_resolver).
-        # Adapters that cannot compile it reject ``property_list`` requests at
-        # the ``_impl`` boundary via ``raise_if_property_list_unsupported``
-        # with ``AdCPCapabilityNotSupportedError``. The wire flag name
-        # ``property_list_filtering`` is preserved for spec compatibility.
-        property_list_filtering=supports_property_list_targeting(adapter),
+        # property_list_filtering (spec: "Honors property_list parameter in
+        # get_products to filter results"): True unconditionally — the
+        # get_products PropertyIntersection runs for every tenant,
+        # adapter-independent, and emits property_list_applied=true. The
+        # CREATE-side capability (compiling targeting_overlay.property_list
+        # into native ad-server targeting) is a different feature with no
+        # standard flag at 3.0.1; it is signaled via
+        # ext.prebid.property_list_targeting on this response and enforced
+        # at the boundary by raise_if_property_list_unsupported.
+        property_list_filtering=True,
         # catalog_management: declared False until a sync_catalogs tool ships.
         # AdCP spec binds this flag to the buyer-driven sync_catalogs task
         # (SyncCatalogsRequest with account + catalogs[] + delete_missing) —
@@ -266,6 +268,12 @@ def _get_adcp_capabilities_impl(
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,
+        # Create-side property_list capability: whether the bound adapter
+        # compiles targeting_overlay.property_list into native targeting
+        # (Kevel → siteIds; mock → simulation). No standard flag exists at
+        # 3.0.1 for the targeting side, so it rides the response's ext,
+        # vendor-namespaced per the spec's ExtensionObject guidance.
+        ext={"prebid": {"property_list_targeting": supports_property_list_targeting(adapter)}},
         last_updated=datetime.now(UTC),
     )
 

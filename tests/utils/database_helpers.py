@@ -433,3 +433,16 @@ def media_buy_id_for_task(task_id: str) -> str:
         ).one_or_none()
         assert mapping is not None, "Workflow step should map to the persisted media buy"
         return mapping.object_id
+
+
+def set_media_buy_status(media_buy_id: str, status: str) -> None:
+    """Flip a persisted media buy's status (e.g. to 'active' so updates are actionable)."""
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
+
+    with get_db_session() as session:
+        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).one()
+        mb.status = status
+        session.commit()

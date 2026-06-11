@@ -38,18 +38,20 @@ class TestCreateGetProductsRequestWithPropertyList:
 
 
 class TestCapabilitiesPropertyListFiltering:
-    """capabilities reports property_list_filtering per-adapter (not hardcoded).
+    """capabilities splits the two property_list signals correctly.
 
-    ``_get_adcp_capabilities_impl`` derives the flag from
-    ``supports_property_list_targeting(adapter)`` (capabilities.py). This test
-    patches ``get_principal_object`` to None, so no adapter is resolved and the
-    flag is False — the honest answer when the caller has no bound adapter.
-    (Kevel, which compiles property_list to siteIds, reports True for
-    Kevel-bound tenants; that capability is pinned in
+    ``features.property_list_filtering`` (spec: the get_products filter) is
+    True unconditionally — the PropertyIntersection serves every tenant. The
+    CREATE-targeting capability rides ``ext.prebid.property_list_targeting``,
+    derived from ``supports_property_list_targeting(adapter)``: this test
+    patches ``get_principal_object`` to None, so no adapter is resolved and
+    the targeting signal is False — the honest answer when the caller has no
+    bound adapter. (Kevel, which compiles property_list to siteIds, reports
+    True for Kevel-bound tenants; pinned in
     test_kevel_property_list_compilation.py.)
     """
 
-    def test_capabilities_reports_property_list_filtering(self):
+    def test_capabilities_reports_property_list_signals(self):
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
         from tests.factories import PrincipalFactory
 
@@ -77,4 +79,5 @@ class TestCapabilitiesPropertyListFiltering:
             response = _get_adcp_capabilities_impl(None, identity)
 
         features = response.media_buy.features
-        assert features.property_list_filtering is False
+        assert features.property_list_filtering is True
+        assert response.ext.prebid["property_list_targeting"] is False

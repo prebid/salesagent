@@ -199,9 +199,11 @@ def supports_property_list_targeting(adapter: object | None) -> bool:
     """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
 
     The ``property_list_filtering`` wire flag in ``media-buy-features.json:12``
-    names the *get_products result-filter* capability, which is a different
-    feature that happens to share a word. The capability THIS helper gates is
-    ``targeting_overlay.property_list`` — i.e. *targeting*, not *filtering*.
+    names the *get_products result-filter* capability — served unconditionally
+    by the PropertyIntersection, so it is declared True for every tenant. The
+    capability THIS helper gates is ``targeting_overlay.property_list`` — i.e.
+    *targeting*, not *filtering* — and is advertised separately via
+    ``ext.prebid.property_list_targeting`` on get_adcp_capabilities.
 
     Adapter capability is read from the
     ``supports_property_list_targeting: ClassVar[bool] = False`` declared in
@@ -239,9 +241,10 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
     machine-actionable ``suggestion`` so the buyer agent can drop the field
     and retry, or pick a capable seller.
 
-    AdCP spec basis (3.0.1): a seller advertises property_list support via
-    ``features.property_list_filtering`` in get_adcp_capabilities
-    (get_products.mdx: "must declare ... to support this filter"); honest
+    AdCP spec basis (3.0.1): the spec's only property_list capability flag
+    (``features.property_list_filtering``) names the get_products filter; the
+    targeting side has no standard flag, so this seller advertises it via
+    ``ext.prebid.property_list_targeting`` in get_adcp_capabilities; honest
     declaration means a seller that cannot compile the field rejects it with
     UNSUPPORTED_FEATURE (error-code.json: "A requested feature or field is
     not supported by this seller") rather than silently ignoring it — the
@@ -279,13 +282,13 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
                 "This seller's adapter cannot compile targeting_overlay.property_list "
                 "into native ad-server targeting. The buyer can drop the field and "
                 "retry, or use a seller whose get_adcp_capabilities advertises "
-                "property_list_filtering=true."
+                "ext.prebid.property_list_targeting=true."
             ),
             field=f"packages[{index}].targeting_overlay.property_list",
             suggestion=(
                 "Remove targeting_overlay.property_list from this package and retry, "
                 "or choose a seller whose get_adcp_capabilities declares "
-                "property_list_filtering=true."
+                "ext.prebid.property_list_targeting=true."
             ),
         )
 

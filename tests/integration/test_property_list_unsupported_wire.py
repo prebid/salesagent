@@ -95,8 +95,8 @@ def _assert_unsupported_envelope(envelope: dict) -> None:
     )
     err = envelope["errors"][0]
     assert err.get("field") == _FIELD, f"field must identify the offending package; got {err.get('field')!r}"
-    assert err.get("suggestion") and "property_list_filtering" in err["suggestion"], (
-        f"suggestion must reference the property_list_filtering capability flag; got {err.get('suggestion')!r}"
+    assert err.get("suggestion") and "property_list_targeting" in err["suggestion"], (
+        f"suggestion must reference the create-targeting capability signal; got {err.get('suggestion')!r}"
     )
 
 

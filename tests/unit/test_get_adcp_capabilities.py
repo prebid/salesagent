@@ -256,13 +256,15 @@ class TestGetAdcpCapabilitiesWithTenant:
                 assert response.media_buy.features is not None
                 assert response.media_buy.features.inline_creative_management is True
 
-                # Honesty assertions: capabilities the seller can't actually fulfill
-                # MUST declare False so buyers see the gap at discovery time, not at
-                # task-dispatch time. property_list_filtering: no adapter compiles it
-                # here — no adapter is resolved for this principal-less call.
+                # property_list_filtering names the get_products filter, which the
+                # PropertyIntersection serves for every tenant — True regardless of
+                # adapter. The create-targeting capability is the separate
+                # ext.prebid.property_list_targeting signal: False here because no
+                # adapter is resolved for this principal-less call.
                 # catalog_management: no sync_catalogs tool ships in this codebase;
                 # admin product CRUD is NOT the spec's buyer-driven catalog sync.
-                assert response.media_buy.features.property_list_filtering is False
+                assert response.media_buy.features.property_list_filtering is True
+                assert response.ext.prebid["property_list_targeting"] is False
                 assert response.media_buy.features.catalog_management is False
 
                 # Should have execution with targeting
@@ -654,11 +656,12 @@ class TestResponseShapeCapabilities:
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
-        """Features defaults: inline_creative_management=True, property_list_filtering=False.
+        """Features defaults: inline_creative_management=True, property_list_filtering=True.
 
-        property_list_filtering is False here because this principal-less call
-        resolves no adapter; the flag is adapter-derived (Kevel and the mock
-        simulation declare True).
+        property_list_filtering names the get_products filter (unconditional);
+        the adapter-derived create-targeting signal is
+        ext.prebid.property_list_targeting — False here because this
+        principal-less call resolves no adapter.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -670,16 +673,18 @@ class TestResponseShapeCapabilities:
 
         features = response.media_buy.features
         assert features.inline_creative_management is True
-        assert features.property_list_filtering is False
+        assert features.property_list_filtering is True
+        assert response.ext.prebid["property_list_targeting"] is False
 
     def test_adapter_with_property_list_support_advertises_capability(self):
-        """Adapter that sets supports_property_list_targeting=True flips the
-        ``MediaBuyFeatures.property_list_filtering`` wire flag to True.
+        """Adapter with supports_property_list_targeting=True flips the
+        ``ext.prebid.property_list_targeting`` wire signal to True.
 
         This is the cross-boundary contract that lets Kevel (which declares
         supports_property_list_targeting=True) advertise
-        the capability to buyers. Without this test, the True path is silent —
-        only the False path (4 adapters in B4) is covered.
+        the create-targeting capability to buyers. Without this test, the True
+        path is silent — only the False path (the non-compiling adapters) is
+        covered.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -705,6 +710,7 @@ class TestResponseShapeCapabilities:
 
         assert response.media_buy is not None
         assert response.media_buy.features.property_list_filtering is True
+        assert response.ext.prebid["property_list_targeting"] is True
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""

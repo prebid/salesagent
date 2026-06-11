@@ -40,34 +40,24 @@ def resolve_media_buy_for_task_in_db(live_server: dict, task_id: str) -> str:
     The spec ``submitted`` create variant carries ``task_id`` only
     (``media_buy_id`` is forbidden on that oneOf branch and arrives on the
     completion artifact); e2e flows that need the persisted row follow the
-    workflow mapping the same way the approval machinery does. Executes
-    inside the container like ``force_approve_media_buy_in_db``.
+    workflow mapping the same way the approval machinery does. Connects
+    host-side via ``live_server["postgres"]`` — the same proven path the
+    webhook payload tests use (the docker-compose exec route silently
+    depends on compose project context and broke in the full-suite run).
     """
-    select_script = f"""
-import os
-import psycopg2
-
-conn = psycopg2.connect(os.environ['DATABASE_URL'])
-cursor = conn.cursor()
-cursor.execute(
-    \"\"\"
-    SELECT object_id FROM object_workflow_mappings
-    WHERE step_id = '{task_id}' AND object_type = 'media_buy'
-    \"\"\"
-)
-row = cursor.fetchone()
-cursor.close()
-conn.close()
-if row is None:
-    raise SystemExit(f'No media_buy mapping for step {task_id}')
-print(f'MEDIA_BUY_ID={{row[0]}}')
-"""
-    cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", select_script]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    for line in result.stdout.splitlines():
-        if line.startswith("MEDIA_BUY_ID="):
-            return line.split("=", 1)[1].strip()
-    raise AssertionError(f"Could not resolve media buy for task {task_id}: {result.stdout!r}")
+    conn = psycopg2.connect(live_server["postgres"])
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT object_id FROM object_workflow_mappings WHERE step_id = %s AND object_type = 'media_buy'",
+            (task_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+    finally:
+        conn.close()
+    assert row is not None, f"No media_buy workflow mapping found for step {task_id}"
+    return row[0]
 
 
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):
@@ -158,3 +148,33 @@ except Exception as e:
         except Exception as ex:
             print(f"Fallback failed: {ex}")
             raise e
+
+
+def build_jsonrpc_message_send(
+    parts: list[dict], *, context_id: str | None = None, configuration: dict | None = None
+) -> dict:
+    """Raw A2A ``message/send`` JSON-RPC envelope for direct-HTTP e2e tests.
+
+    The webhook and compliance e2e suites hand-rolled this envelope at seven
+    sites; the message/id fields are always fresh UUIDs, ``context_id``
+    defaults to a fresh UUID, and ``configuration`` (e.g.
+    ``pushNotificationConfig``) is attached only when given.
+    """
+    import uuid as _uuid
+
+    params: dict = {
+        "message": {
+            "messageId": str(_uuid.uuid4()),
+            "contextId": context_id or str(_uuid.uuid4()),
+            "role": "user",
+            "parts": parts,
+        }
+    }
+    if configuration is not None:
+        params["configuration"] = configuration
+    return {
+        "jsonrpc": "2.0",
+        "id": str(_uuid.uuid4()),
+        "method": "message/send",
+        "params": params,
+    }
