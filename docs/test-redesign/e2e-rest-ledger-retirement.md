@@ -49,7 +49,7 @@ The mock-setup methods simply never got the same dispatch-on-transport treatment
 
 | Concept | Real surface | e2e realization |
 |---------|-------------|-----------------|
-| creative formats | **the live creative agent** | capture the agent's real format set **once per session** (session fixture), expose to harness; scenarios select/reference from the captured set; formats the agent doesn't serve get registered in the agent's own registry. Never mint synthetic in-process formats. |
+| creative formats | **the live creative agent**, materialized into a persisted checked-in fixture | capture the agent's real format set into a persisted fixture, **refreshed only when formats change** (rare — they barely move between runs), not re-fetched per session; both the harness and the server's `ADCP_TESTING` path read formats from that one fixture, so in-process and e2e serve identical formats by construction. Formats the agent doesn't serve get registered in the agent's own registry. Never mint synthetic in-process formats. |
 | products / properties / principals / tenant billing config | **server DB** | seed rows into the server DB (env session already binds to it; `set_billing_policy` already writes the tenant row) |
 | adapter delivery numbers | **Mock adapter reading a `DeliverySimulationConfig` row from the server DB** | write the simulation-config row; the live server's Mock adapter reads it. Requires recovering the stranded `DeliverySimulationConfig` mechanism. |
 
@@ -59,6 +59,32 @@ server's real configuration surfaces. Any setup that genuinely can't be
 expressed that way is a true signal that the server lacks a configuration
 mechanism it should have (e.g. fault injection for `set_adapter_error`), not a
 "mock incompatibility" to be hidden in a nodeid list.
+
+## Formats: current implementation — keep what works, replace what drifts
+
+Two caches already exist. Keep both:
+
+- **Persisted, checked-in fixture** — `src/core/format_cache.py` →
+  `tests/fixtures/creative_formats/reference_formats.json`. Stated design
+  principles: "tests never depend on external infrastructure"; "cache is updated
+  periodically but not required for operation." Right idea, persisted and
+  offline. Caveat: today it is **shallow** — only `format_id_string -> agent_url`,
+  used to upgrade legacy string IDs. It does not hold full `Format` definitions.
+- **In-memory TTL cache** — `creative_agent_registry.CachedFormats`
+  (`creative_agent_registry.py:243`), 1-hour TTL of full `Format` objects keyed
+  by agent URL. Fine as a runtime cache.
+
+The piece that **does** drift: `_get_mock_formats()`
+(`creative_agent_registry.py:208`) — a hardcoded list of 11 `Format` objects
+returned whenever `ADCP_TESTING=true`. Its docstring claims it "match[es] what
+the real creative agent returns," but nothing enforces that. It is the synthetic
+in-process source that `e2e_rest` (hitting the real agent) diverges from.
+
+**Plan:** extend the persisted fixture to hold full `Format` definitions captured
+from the live creative agent; refresh it via an explicit script/`make` target run
+only when the agent's formats change (not per session). Point `_get_mock_formats()`
+(in-process) and the harness seed at that same fixture. The live server in e2e
+already calls the real agent, so all three see the same formats by construction.
 
 ## Ledger breakdown by required mechanism (293 total)
 
