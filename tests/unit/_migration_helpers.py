@@ -21,15 +21,28 @@ def get_migration_files() -> list[Path]:
     return sorted(f for f in MIGRATIONS_DIR.glob("*.py") if f.name != "__init__.py" and not f.name.startswith("__"))
 
 
-def parse_function(tree: ast.Module, name: str) -> ast.FunctionDef | None:
+def parse_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Find a top-level function by name in the AST."""
     for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
             return node
     return None
 
 
-def is_empty_body(node: ast.FunctionDef) -> bool:
+def iter_migration_trees() -> list[tuple[Path, ast.Module]]:
+    """Parse every migration file into (path, ast.Module) pairs."""
+    trees: list[tuple[Path, ast.Module]] = []
+    for path in get_migration_files():
+        source = path.read_text()
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        trees.append((path, tree))
+    return trees
+
+
+def is_empty_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if a function body contains only pass/docstring."""
     for stmt in node.body:
         if isinstance(stmt, ast.Pass):

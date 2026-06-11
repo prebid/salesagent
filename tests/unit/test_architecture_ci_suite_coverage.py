@@ -13,6 +13,8 @@ No allowlist — zero tolerance. Every locally-run suite must have a gating
 CI job, or a broken suite can silently land on main again.
 """
 
+import pytest
+
 from tests.unit.workflow_helpers import load_ci_workflow
 
 
@@ -123,6 +125,39 @@ class TestCISuiteCoverage:
         run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
         assert "pytest" not in run_steps, "coverage job must not re-run tests."
         assert "coverage combine" in run_steps, "coverage job must combine unit and BDD coverage data."
+
+    @pytest.mark.arch_guard
+    def test_coverage_gate_requires_all_bdd_shard_artifacts(self):
+        """Coverage must fail on partial BDD shard artifact sets, not combine survivors."""
+        coverage_job = load_ci_workflow()["jobs"]["coverage"]
+        run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
+
+        assert "SHARD_COUNTS" in run_steps, "coverage gate must read SHARD_COUNTS from shard_split."
+        assert "expected_bdd_shards" in run_steps, "coverage gate must bind BDD shard count to a variable."
+        assert "Missing BDD coverage artifact for shard" in run_steps, (
+            "coverage gate must fail when any shard's .coverage.bdd-N file is missing."
+        )
+        bdd_downloads = [
+            step.get("with", {})
+            for step in coverage_job.get("steps", [])
+            if step.get("with", {}).get("pattern") == "bdd-shard-*-coverage"
+        ]
+        assert bdd_downloads, "coverage job must download BDD shard artifacts via bdd-shard-*-coverage pattern."
+        assert bdd_downloads[0].get("path") == "bdd-coverage-shards", (
+            "BDD shard coverage artifacts must land under bdd-coverage-shards/."
+        )
+
+    @pytest.mark.arch_guard
+    def test_ci_jobs_declare_permissions_and_timeout(self):
+        """Every CI job must declare permissions and timeout (workflow hygiene)."""
+        jobs = load_ci_workflow()["jobs"]
+        missing: list[str] = []
+        for job_name, job in jobs.items():
+            if "permissions" not in job:
+                missing.append(f"{job_name}: permissions")
+            if "timeout-minutes" not in job:
+                missing.append(f"{job_name}: timeout-minutes")
+        assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
 
     def test_summary_gates_bdd_and_e2e(self):
         """summary must depend on AND fail for bdd + e2e.

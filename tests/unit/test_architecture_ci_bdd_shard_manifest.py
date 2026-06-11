@@ -20,7 +20,7 @@ from scripts.ci.shard_split import (
 from tests.unit.workflow_helpers import CI_WORKFLOW_PATH
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_BDD_MODULE_LINE = re.compile(r"^\s*<Module ([^>]+)>\s*$")
+_COLLECT_TAG = re.compile(r"^<(Dir|Package|Module) ([^>]+)>$")
 
 
 def _pytest_bdd_module_paths(repo_root: Path) -> set[str]:
@@ -45,13 +45,26 @@ def _pytest_bdd_module_paths(repo_root: Path) -> set[str]:
         msg = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
         pytest.fail(f"pytest --collect-only tests/bdd/ failed: {msg}")
 
+    stack: list[str] = []
     paths: set[str] = set()
     for line in result.stdout.splitlines():
-        match = _BDD_MODULE_LINE.match(line)
-        if match:
-            paths.add(f"tests/bdd/{match.group(1)}")
+        stripped = line.strip()
+        match = _COLLECT_TAG.match(stripped)
+        if match is None:
+            continue
+        kind, name = match.groups()
+        if kind == "Module":
+            if "bdd" not in stack:
+                continue
+            bdd_idx = stack.index("bdd")
+            if bdd_idx < 1:
+                continue
+            paths.add("/".join(stack[bdd_idx - 1 : bdd_idx + 1] + [name]))
+        elif kind in {"Dir", "Package"}:
+            stack.append(name)
+
     if not paths:
-        pytest.fail("pytest --collect-only tests/bdd/ returned no <Module …> entries")
+        pytest.fail("pytest --collect-only tests/bdd/ returned no BDD module paths")
     return paths
 
 
@@ -70,6 +83,16 @@ def test_ci_bdd_matrix_matches_shard_config() -> None:
     workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
     matrix = workflow["jobs"]["bdd-tests-shard"]["strategy"]["matrix"]["shard"]
     assert matrix == list(range(1, SHARD_COUNTS["bdd"] + 1))
+
+
+@pytest.mark.arch_guard
+def test_ci_bdd_shard_job_name_uses_matrix_total() -> None:
+    """Shard denominator must follow matrix size (not a hardcoded literal)."""
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    name = workflow["jobs"]["bdd-tests-shard"]["name"]
+    assert "strategy.job-total" in name, (
+        "bdd-tests-shard job name must use strategy.job-total for the shard denominator."
+    )
 
 
 @pytest.mark.arch_guard

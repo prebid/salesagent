@@ -317,7 +317,7 @@ jobs:
           extra_args: -m "not requires_server and not slow"
 
   bdd-tests-shard:
-    name: BDD Tests (Shard ${{ matrix.shard }}/2)
+    name: BDD Tests (Shard ${{ matrix.shard }}/${{ strategy.job-total }})
     strategy:
       fail-fast: false
       matrix:
@@ -398,6 +398,7 @@ jobs:
     if: always()
     permissions:
       contents: read
+    timeout-minutes: 5
     steps:
       - name: Aggregate BDD shards
         run: |
@@ -412,6 +413,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:15
@@ -467,10 +469,19 @@ jobs:
           path: bdd-coverage-shards
       - name: Coverage gate
         run: |
-          shopt -s nullglob
-          mapfile -t bdd_data_files < <(find bdd-coverage-shards -name '.coverage.bdd-*' -type f | sort)
-          if [ "${#bdd_data_files[@]}" -eq 0 ]; then
-            echo "No BDD coverage data files downloaded."
+          set -euo pipefail
+          expected_bdd_shards="$(uv run python -c "from scripts.ci.shard_split import SHARD_COUNTS; print(SHARD_COUNTS['bdd'])")"
+          bdd_data_files=()
+          for shard in $(seq 1 "${expected_bdd_shards}"); do
+            found="$(find bdd-coverage-shards -name ".coverage.bdd-${shard}" -type f | head -1)"
+            if [ -z "${found}" ]; then
+              echo "::error::Missing BDD coverage artifact for shard ${shard} (.coverage.bdd-${shard})"
+              exit 1
+            fi
+            bdd_data_files+=("${found}")
+          done
+          if [ "${#bdd_data_files[@]}" -ne "${expected_bdd_shards}" ]; then
+            echo "::error::Expected ${expected_bdd_shards} BDD coverage files, found ${#bdd_data_files[@]}"
             exit 1
           fi
           if [ ! -f .coverage ]; then
@@ -484,6 +495,8 @@ jobs:
     name: Summary
     runs-on: ubuntu-latest
     if: always()
+    permissions:
+      contents: read
     timeout-minutes: 5
     needs:
       [

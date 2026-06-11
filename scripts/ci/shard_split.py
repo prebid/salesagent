@@ -12,7 +12,8 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_SCENARIO_LINE = re.compile(r"^\s*Scenario", re.MULTILINE)
+_PLAIN_SCENARIO = re.compile(r"^\s*Scenario:\s", re.MULTILINE)
+_SCENARIO_OUTLINE = re.compile(r"^\s*Scenario Outline:", re.MULTILINE)
 _SCENARIOS_CALL = re.compile(r"""scenarios\s*\(\s*["'](features/[^"']+)["']""")
 
 # Keep in sync with strategy.matrix.shard in .github/workflows/ci.yml (bdd-tests-shard).
@@ -42,7 +43,8 @@ def bdd_scenario_count(test_path: str, repo_root: Path | None = None) -> int:
     feature_path = root / "tests/bdd" / match.group(1)
     if not feature_path.is_file():
         raise ValueError(f"Feature file not found for {test_path}: {feature_path}")
-    return len(_SCENARIO_LINE.findall(feature_path.read_text(encoding="utf-8")))
+    feature_text = feature_path.read_text(encoding="utf-8")
+    return len(_PLAIN_SCENARIO.findall(feature_text)) + len(_SCENARIO_OUTLINE.findall(feature_text))
 
 
 def _assign_greedy_by_scenario_count(
