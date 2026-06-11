@@ -21,6 +21,18 @@ from src.core.database.models import (
 )
 
 
+def tenant_subdomain(tenant_id: str) -> str:
+    """Derive a tenant's subdomain from its tenant_id.
+
+    Single source of truth for subdomain derivation (#1418). The underscore ->
+    hyphen normalization is required: subdomains feed publisher_domain
+    (``f"{subdomain}.example.com"``) and the AdCP domain regex rejects
+    underscores, and the live server's subdomain lookup (and the e2e_rest
+    dispatcher's ``x-adcp-tenant`` header) must agree on this exact value.
+    """
+    return f"pub-{tenant_id}".replace("_", "-")
+
+
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = Tenant
@@ -29,7 +41,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     tenant_id = Sequence(lambda n: f"tenant_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Publisher {o.tenant_id}")
-    subdomain = LazyAttribute(lambda o: f"pub-{o.tenant_id}")
+    subdomain = LazyAttribute(lambda o: tenant_subdomain(o.tenant_id))
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"
@@ -43,7 +55,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         Uses same defaults as TenantFactory fields.
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
-        subdomain = f"pub-{tenant_id}".replace("_", "-")
+        subdomain = tenant_subdomain(tenant_id)
         tenant: dict[str, Any] = {
             "tenant_id": tenant_id,
             "name": f"Test Publisher {tenant_id}",
