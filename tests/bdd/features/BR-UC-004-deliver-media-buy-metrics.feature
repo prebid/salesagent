@@ -61,7 +61,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-identify-mode @invariant @BR-RULE-030 @identification
   Scenario Outline: Identification mode resolution - <mode>
-    Given a media buy "mb-001" owned by "buyer-001" with buyer_ref "ref-001"
+    Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with <request_params>
     Then the response should include delivery data for "mb-001"
@@ -70,15 +70,13 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Examples: Identification priority
       | mode | request_params | invariant |
       | media_buy_ids only | media_buy_ids=["mb-001"] | INV-1: resolves by publisher IDs |
-      | buyer_refs only | buyer_refs=["ref-001"] | INV-2: resolves by buyer refs |
-      | both provided | media_buy_ids=["mb-001"] buyer_refs=["ref-001"] | INV-3: media_buy_ids wins, buyer_refs ignored |
 
   @T-UC-004-identify-fallback @invariant @BR-RULE-030 @identification
   Scenario: Neither identifiers provided - returns all principal's media buys
     Given a media buy "mb-001" owned by "buyer-001"
     And a media buy "mb-002" owned by "buyer-001"
     And the ad server adapter has delivery data for both media buys
-    When the Buyer Agent requests delivery metrics without media_buy_ids or buyer_refs
+    When the Buyer Agent requests delivery metrics without media_buy_ids
     Then the response should include delivery data for "mb-001" and "mb-002"
     # BR-RULE-030 INV-4: neither provided -> all principal's buys
 
@@ -104,7 +102,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   @T-UC-004-identify-fallback-empty @invariant @BR-RULE-030 @identification
   Scenario: Neither identifiers AND no media buys for principal - empty array
     Given the principal "buyer-001" has no media buys
-    When the Buyer Agent requests delivery metrics without media_buy_ids or buyer_refs
+    When the Buyer Agent requests delivery metrics without media_buy_ids
     Then the response should have an empty media_buy_deliveries array
     And the response status should be "completed"
     # BR-RULE-030 INV-4 counter-example: neither provided, no buys -> empty
