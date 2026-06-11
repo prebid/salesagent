@@ -14,6 +14,7 @@ No allowlist — zero tolerance. Multiple heads must be resolved before merge.
 import pytest
 
 from tests.unit._migration_helpers import (
+    expected_heads_after_roundtrip_downgrade,
     extract_revision_info,
     get_migration_files,
     get_migration_heads,
@@ -61,3 +62,12 @@ class TestRoundtripDowngradeTarget:
                 assert resolve_roundtrip_downgrade_target(revision) == downs[0]
                 return
         pytest.fail("No single-parent migration found in graph.")
+
+    def test_merge_head_downgrade_restores_all_branch_tips(self):
+        """After downgrading a merge head, alembic_version should list every parent."""
+        for path in get_migration_files():
+            revision, downs = extract_revision_info(path)
+            if revision and len(downs) > 1:
+                assert expected_heads_after_roundtrip_downgrade(revision) == set(downs)
+                return
+        pytest.skip("No merge migration in graph.")

@@ -154,6 +154,34 @@ def resolve_roundtrip_downgrade_target(head_revision: str | None = None) -> str:
     raise ValueError(msg)
 
 
+def expected_heads_after_roundtrip_downgrade(head_revision: str | None = None) -> set[str]:
+    """Return alembic_version heads expected after CI roundtrip downgrade from head.
+
+    Non-merge heads land on a single parent revision. Merge heads restore every
+    branch tip listed in ``down_revision`` (Alembic branches docs).
+    """
+    if head_revision is None:
+        heads = get_migration_heads()
+        if len(heads) != 1:
+            msg = f"Expected exactly 1 migration head, found {sorted(heads)}"
+            raise ValueError(msg)
+        head_revision = next(iter(heads))
+
+    for path in get_migration_files():
+        revision, down_revisions = extract_revision_info(path)
+        if revision != head_revision:
+            continue
+        if not down_revisions:
+            msg = f"Cannot downgrade from base revision {head_revision}"
+            raise ValueError(msg)
+        if len(down_revisions) == 1:
+            return {down_revisions[0]}
+        return set(down_revisions)
+
+    msg = f"Migration file not found for head revision {head_revision}"
+    raise ValueError(msg)
+
+
 def is_merge_migration(tree: ast.Module) -> bool:
     """Check if this is a merge migration (empty upgrade + downgrade is OK).
 
