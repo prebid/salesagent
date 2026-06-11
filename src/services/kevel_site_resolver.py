@@ -31,6 +31,7 @@ index.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import threading
@@ -94,7 +95,7 @@ class KevelSiteResolver:
     """
 
     # Module-level cache across resolver instances:
-    # (base_url, network_id, sha256(api_key)[:16]) -> ({host: site_id}, expires_at).
+    # (base_url, network_id, hmac(api_key, purpose)[:16]) -> ({host: site_id}, expires_at).
     _site_cache: ClassVar[dict[tuple[str, str, str], tuple[dict[str, int], datetime]]] = {}
 
     # Guards reads/writes on ``_site_cache`` so concurrent ``create_media_buy``
@@ -122,6 +123,15 @@ class KevelSiteResolver:
         self.base_url = base_url.rstrip("/")
         self.cache_ttl_seconds = cache_ttl_seconds
         self.timeout_seconds = timeout_seconds
+        # Cache-partition token derived from the credential as an HMAC KEY
+        # over a constant purpose label (HKDF-extract shape): a keyed PRF
+        # whose output reveals nothing about the key, unlike hashing the
+        # credential as data. The plaintext api_key thus never persists in
+        # the process-global cache, while two credentials on the same
+        # network id still partition into separate indexes.
+        self._cache_partition = hmac.new(
+            self.api_key.encode(), b"kevel-site-cache-partition", hashlib.sha256
+        ).hexdigest()[:16]
 
     @classmethod
     def classify_identifier_types(cls, identifiers: list[Identifier]) -> set[str]:
@@ -183,11 +193,7 @@ class KevelSiteResolver:
         produce the same lookup), but the cache write back into ``_site_cache``
         is atomic and last-write-wins.
         """
-        # Digest, not the raw credential: the key must isolate per-credential
-        # but the plaintext api_key has no business persisting in a process-
-        # global ClassVar beyond the instance that owns it.
-        api_key_digest = hashlib.sha256(self.api_key.encode()).hexdigest()[:16]
-        cache_key = (self.base_url, self.network_id, api_key_digest)
+        cache_key = (self.base_url, self.network_id, self._cache_partition)
 
         with self._cache_lock:
             cached = self._site_cache.get(cache_key)

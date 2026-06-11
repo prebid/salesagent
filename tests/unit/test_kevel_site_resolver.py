@@ -13,7 +13,6 @@ shape and Kevel's native ``Site.Id`` integers. These tests cover:
 
 from __future__ import annotations
 
-import hashlib
 import threading
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -45,8 +44,7 @@ def _resolver() -> KevelSiteResolver:
 
 
 def _site_cache_key(resolver: KevelSiteResolver) -> tuple[str, str, str]:
-    digest = hashlib.sha256(resolver.api_key.encode()).hexdigest()[:16]
-    return (resolver.base_url, resolver.network_id, digest)
+    return (resolver.base_url, resolver.network_id, resolver._cache_partition)
 
 
 def _kevel_site(site_id: int, url: str) -> dict:
