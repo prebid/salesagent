@@ -147,7 +147,6 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
     def _call_update_mcp(self, **kwargs: Any) -> Any:
         import asyncio
-        from unittest.mock import AsyncMock
         from unittest.mock import MagicMock as MM
 
         from fastmcp.server.context import Context
@@ -167,7 +166,16 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         identity = kwargs.pop("identity", self.identity_for(Transport.MCP))
         mock_ctx = MM(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=identity)
+
+        # The update MCP wrapper reads two distinct state keys:
+        # get_state("identity") and get_state("context_id"). A blanket
+        # return_value=identity would feed the ResolvedIdentity in as the
+        # context_id, which then hits a DB query and fails to adapt. Return the
+        # identity only for the "identity" key; no buyer-supplied context.
+        async def _get_state(key: str) -> Any:
+            return identity if key == "identity" else None
+
+        mock_ctx.get_state = _get_state
 
         tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
         data = dict(tool_result.structured_content)

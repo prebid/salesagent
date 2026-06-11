@@ -2638,70 +2638,30 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     elif uc == "UC-003":
         marker_names = {m.name for m in request.node.iter_markers()}
         if any(t.startswith("T-UC-003-ext-") for t in marker_names):
-            # Extension/error scenarios (ext-a through ext-r): budget, currency,
-            # auth, creative, placement validation on update path.
-            # Uses MediaBuyCreateEnv (integration DB) with additional patches for
-            # the update module so _update_media_buy_impl can run against real DB.
+            # Extension/error scenarios: budget, currency, auth, creative,
+            # placement, keyword, and immutable-field validation on the update
+            # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module
+            # patches and dispatches UpdateMediaBuyRequest through the update
+            # transport wrappers (_update_media_buy_impl / update_media_buy_raw /
+            # MCP / REST), so update scenarios actually exercise the update flow
+            # against the real DB instead of falling through to _create_media_buy_impl.
             request.getfixturevalue("integration_db")
-            from unittest.mock import MagicMock, patch
+            from tests.harness.media_buy_dual import MediaBuyDualEnv
 
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            _UPDATE_PATCHES = {
-                "src.core.tools.media_buy_update.get_adapter": "adapter",
-                "src.core.tools.media_buy_update.get_audit_logger": "audit",
-                "src.core.tools.media_buy_update.get_context_manager": "ctx_mgr",
-            }
-
-            with MediaBuyCreateEnv() as env:
+            with MediaBuyDualEnv() as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
                 ctx["principal"] = principal
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
-                # Create an existing media buy + package for update scenarios
+                # Seed an existing media buy + package for update scenarios and
+                # tell the env which media_buy_id the REST update endpoint targets.
                 _setup_existing_media_buy(ctx, env, tenant, principal, product)
-                # Patch update module externals so _update_media_buy_impl
-                # doesn't hit real adapter/audit/context manager
-                patchers = []
-                for target, name in _UPDATE_PATCHES.items():
-                    p = patch(target)
-                    mock_obj = p.start()
-                    patchers.append(p)
-                    env.mock[f"update_{name}"] = mock_obj
-                # Configure happy-path adapter mock for update
-                mock_adapter = MagicMock()
-                mock_adapter.update_media_buy.return_value = None
-                mock_adapter.validate_media_buy_request.return_value = None
-                mock_adapter.manual_approval_required = False
-                mock_adapter.manual_approval_operations = []
-                mock_adapter.add_creative_assets.return_value = None
-                mock_adapter.associate_creatives.return_value = None
-                env.mock["update_adapter"].return_value = mock_adapter
-                env.mock["update_audit"].return_value = MagicMock()
-                env.mock["update_ctx_mgr"].return_value = env._build_mock_context_manager(tool_name="update_media_buy")
-                try:
-                    yield
-                finally:
-                    for p in reversed(patchers):
-                        p.stop()
+                env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
+                yield
         else:
             pytest.xfail("UC-003 harness not yet wired for non-extension scenarios")
-
-    elif uc == "UC-003":
-        # Update media buy — needs existing media buy + update dispatch
-        request.getfixturevalue("integration_db")
-        from tests.harness.media_buy_dual import MediaBuyDualEnv
-
-        with MediaBuyDualEnv() as env:
-            tenant, principal, product, pricing_option = env.setup_media_buy_data()
-            ctx["env"] = env
-            ctx["tenant"] = tenant
-            ctx["principal"] = principal
-            ctx["default_product"] = product
-            ctx["default_pricing_option"] = pricing_option
-            yield
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
