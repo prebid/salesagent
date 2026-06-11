@@ -60,6 +60,7 @@ def _adcp_error_from_code(
         AdCPCapabilityNotSupportedError,
         AdCPConflictError,
         AdCPError,
+        AdCPIdempotencyConflictError,
         AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
         AdCPPackageNotFoundError,
@@ -98,6 +99,7 @@ def _adcp_error_from_code(
             AdCPPackageNotFoundError,
             AdCPBudgetTooLowError,
             AdCPCapabilityNotSupportedError,
+            AdCPIdempotencyConflictError,
         )
     }
     # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED

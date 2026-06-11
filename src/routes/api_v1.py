@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
@@ -223,8 +224,6 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    from adcp.types import AccountReference as LibraryAccountReference
-
     account_ref = LibraryAccountReference.model_validate(body.account) if body.account is not None else None
     response = await media_buy_create_module.create_media_buy_raw(
         brand=body.brand,
@@ -260,11 +259,9 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
     if body.account is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = LibraryAccountReference(**body.account)
+        account_ref = LibraryAccountReference.model_validate(body.account)
         enriched = enrich_identity_with_account(identity, account_ref)
         assert enriched is not None  # identity is non-None (from require_auth)
         identity = enriched

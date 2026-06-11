@@ -1480,6 +1480,9 @@ async def _validate_and_convert_format_ids(
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
 
+# Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name).
+_IDEMPOTENCY_TOOL_NAME = "create_media_buy"
+
 
 def _build_idempotency_hit_result(
     tenant_id: str,
@@ -1574,6 +1577,39 @@ def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | N
     return CreateMediaBuyResult(response=success, status=protocol_status, replayed=True)
 
 
+def _lookup_cached_replay(
+    tenant_id: str,
+    *,
+    principal_id: str,
+    account_id: str | None,
+    idempotency_key: str,
+    request_hash: str | None,
+) -> CreateMediaBuyResult | None:
+    """Probe the verbatim success cache: conflict-check the stored hash, then replay.
+
+    Shared read path for the front probe and the post-race recovery. The same
+    key carrying a different canonical payload raises ``IDEMPOTENCY_CONFLICT``
+    (checked BEFORE any replay); a hit whose stored envelope no longer validates
+    returns ``None`` exactly like a miss, so callers fall through to fresh
+    execution (probe) or the degraded fallback (post-race).
+    """
+    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.idempotency_attempts is not None
+        cached = uow.idempotency_attempts.find_by_key(
+            principal_id=principal_id,
+            account_id=account_id,
+            tool_name=_IDEMPOTENCY_TOOL_NAME,
+            idempotency_key=idempotency_key,
+        )
+        if cached is None:
+            return None
+        _raise_on_payload_conflict(cached.payload_hash, request_hash)
+        return _replay_cached_success(cached.response_envelope)
+
+
 def _cache_and_return(
     result: CreateMediaBuyResult,
     req: CreateMediaBuyRequest,
@@ -1606,7 +1642,7 @@ def _cache_and_return(
             uow.idempotency_attempts.record_success(
                 principal_id=identity.principal_id,
                 account_id=identity.account_id,
-                tool_name="create_media_buy",
+                tool_name=_IDEMPOTENCY_TOOL_NAME,
                 idempotency_key=req.idempotency_key,
                 response_model=result.response,
                 protocol_status=result.status,
@@ -1654,22 +1690,15 @@ def _replay_after_race(
     re-deriving from the committed row — the degraded path
     (see ``_build_idempotency_hit_result``).
     """
-    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
-    from src.core.database.repositories import MediaBuyUoW
-
-    with MediaBuyUoW(tenant_id) as uow:
-        assert uow.idempotency_attempts is not None
-        cached = uow.idempotency_attempts.find_by_key(
-            principal_id=principal_id,
-            account_id=account_id,
-            tool_name="create_media_buy",
-            idempotency_key=idempotency_key,
-        )
-        if cached is not None:
-            _raise_on_payload_conflict(cached.payload_hash, request_hash)
-            replay = _replay_cached_success(cached.response_envelope)
-            if replay is not None:
-                return replay
+    replay = _lookup_cached_replay(
+        tenant_id,
+        principal_id=principal_id,
+        account_id=account_id,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+    )
+    if replay is not None:
+        return replay
     return _build_idempotency_hit_result(
         tenant_id=tenant_id,
         idempotency_key=idempotency_key,
@@ -1742,25 +1771,18 @@ async def _create_media_buy_impl(
     # replay. request_hash is computed once here (in scope for the success-cache stores).
     request_hash = canonical_request_hash(req) if req.idempotency_key else None
     if req.idempotency_key:
-        # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
-        from src.core.database.repositories import MediaBuyUoW as _IdempotencyUoW
-
-        with _IdempotencyUoW(tenant["tenant_id"]) as idem_uow:
-            assert idem_uow.idempotency_attempts is not None
-            cached = idem_uow.idempotency_attempts.find_by_key(
-                principal_id=principal_id,
-                account_id=identity.account_id,
-                tool_name="create_media_buy",
-                idempotency_key=req.idempotency_key,
-            )
-            if cached is not None:
-                _raise_on_payload_conflict(cached.payload_hash, request_hash)
-                replay = _replay_cached_success(cached.response_envelope)
-                if replay is not None:
-                    logger.info("Idempotency replay: returning cached success for key %s", req.idempotency_key)
-                    return replay
-                # Unusable cached envelope — proceed as a miss; the MediaBuy
-                # backstop resolves the resulting duplicate to the degraded path.
+        replay = _lookup_cached_replay(
+            tenant["tenant_id"],
+            principal_id=principal_id,
+            account_id=identity.account_id,
+            idempotency_key=req.idempotency_key,
+            request_hash=request_hash,
+        )
+        if replay is not None:
+            logger.info("Idempotency replay: returning cached success for key %s", req.idempotency_key)
+            return replay
+        # Miss or unusable cached envelope — proceed as a fresh execution; the
+        # MediaBuy backstop resolves any resulting duplicate to the degraded path.
 
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
@@ -3309,6 +3331,9 @@ async def _create_media_buy_impl(
             error_msg = response.errors[0].message if response.errors else "Unknown error"
             error_code = response.errors[0].code if response.errors else "UNKNOWN"
             logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
+            # Returned UNCACHED on purpose: errors are never cached (AdCP 3.0.1
+            # idempotency), so a retry with the same key re-executes instead of
+            # replaying this failure. Pinned by TestErrorsAreNeverCached.
             return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.failed.value)
 
         # At this point, response is CreateMediaBuySuccess - safe to access success-specific fields
@@ -4029,8 +4054,9 @@ async def create_media_buy(
         str | None,
         Field(
             description=(
-                "Optional client-supplied key for idempotent retries. Replaying the same key returns "
-                "the original media buy without creating a duplicate booking."
+                "Client-supplied key for idempotent retries — REQUIRED per AdCP 3.0.1 "
+                "(16-255 chars). Retrying with the same key returns the original media buy "
+                "without creating a duplicate booking; omitting it rejects with VALIDATION_ERROR."
             ),
         ),
     ] = None,
@@ -4057,6 +4083,10 @@ async def create_media_buy(
         push_notification_config: Push notification config for async notifications (AdCP spec)
         context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
+        account: Account reference scoping the buy to a sub-account the agent manages (optional)
+        idempotency_key: Client-supplied idempotency key (REQUIRED per AdCP 3.0.1) —
+            the same key replays the original success; a missing key rejects as
+            VALIDATION_ERROR
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -4079,8 +4109,10 @@ async def create_media_buy(
             context=context,
             ext=ext,
             account=account,
-            # Omit-when-absent so a missing key rejects as "Field required" (the
-            # spec's missing-key VALIDATION_ERROR), not as a None type error.
+            # Omit-when-absent so a missing key rejects as "Field required",
+            # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
+            # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
+            # None type error.
             **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
     except ValidationError as e:
@@ -4161,8 +4193,10 @@ async def create_media_buy_raw(
             context=to_context_object(context),
             ext=ext,
             account=account,
-            # Omit-when-absent so a missing key rejects as "Field required" (the
-            # spec's missing-key VALIDATION_ERROR), not as a None type error.
+            # Omit-when-absent so a missing key rejects as "Field required",
+            # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
+            # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
+            # None type error.
             **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
     except ValidationError as e:

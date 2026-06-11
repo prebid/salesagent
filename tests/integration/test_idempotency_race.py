@@ -180,7 +180,8 @@ class TestIdempotencyRaceRecovery:
             assert "idempotency_key" in str(exc.orig)
             caught = True
 
-            # This is exactly what _create_media_buy_impl does after catching:
+            # This is the degraded fallback `_replay_after_race` lands on when
+            # no cache row is usable:
             result = _build_idempotency_hit_result(
                 tenant_id=tenant_id,
                 idempotency_key=idem_key,
@@ -336,3 +337,73 @@ class TestRaceLoserPayloadRules:
         # Frozen advisory: the degraded path must not rebuild the property_list
         # advisory from current capability state — it omits it.
         assert result.response.errors is None
+
+
+class TestRaceSeamThroughEntrypoint:
+    """The impl's except-IntegrityError → ``_replay_after_race`` seam, end-to-end.
+
+    The components on either side of the seam are pinned individually; this
+    drives the junction through the production entrypoint. A lost/expired
+    cache row with a surviving MediaBuy is exactly the state a race loser
+    observes before the winner's cache write commits: the probe misses, the
+    buy re-executes, the ``MediaBuy.idempotency_key`` backstop fires, and the
+    impl's except-branch must recover the winner — a regression in that
+    wiring (constraint-string drift, argument mis-pass) surfaces here, not
+    only in the direct ``_replay_after_race`` tests.
+    """
+
+    def test_retry_after_lost_cache_row_recovers_winner_via_backstop(self, integration_db):
+        from datetime import timedelta
+
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas._base import CreateMediaBuySuccess
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+        idem_key = f"seam-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            now = datetime.now(UTC)
+            call_kwargs = {
+                "brand": {"domain": "seam-test.example.com"},
+                "packages": [
+                    {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
+                ],
+                "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "po_number": "SEAM-1",
+                "idempotency_key": idem_key,
+            }
+            first = env.call_impl(**call_kwargs)
+            assert isinstance(first.response, CreateMediaBuySuccess)
+            winner_id = first.response.media_buy_id
+
+            # Lose the cache row (TTL expiry / lost write) while the MediaBuy
+            # survives — the race-loser state. expire_old with a far-future
+            # ``now`` deletes the row through the production repository.
+            with MediaBuyUoW(env._tenant_id) as uow:
+                assert uow.idempotency_attempts is not None
+                deleted = uow.idempotency_attempts.expire_old(now=datetime(2099, 1, 1, tzinfo=UTC))
+            assert deleted >= 1, "test setup: the first call must have cached a row to lose"
+
+            adapter_mock = env.mock["adapter"].return_value.create_media_buy
+            calls_before = adapter_mock.call_count
+            second = env.call_impl(**call_kwargs)
+            calls_after = adapter_mock.call_count
+            tenant_id = env._tenant_id
+            principal_id = env._principal_id
+
+        # The probe missed (row gone) → full re-execution → backstop fired →
+        # the except-branch recovered the winner via the degraded fallback.
+        assert calls_after == calls_before + 1, "the retry must re-execute (probe miss), not replay"
+        assert isinstance(second.response, CreateMediaBuySuccess)
+        assert second.response.media_buy_id == winner_id
+        assert second.status == "completed"
+        assert second.replayed is False, "the degraded re-derivation is reconstructed, never a verbatim replay"
+
+        # Exactly one booking exists for the key — the backstop held.
+        with MediaBuyUoW(tenant_id) as verify_uow:
+            assert verify_uow.media_buys is not None
+            existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id)
+            assert existing is not None
+            assert existing.media_buy_id == winner_id

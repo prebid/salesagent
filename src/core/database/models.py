@@ -1022,6 +1022,13 @@ class IdempotencyAttempt(Base):
         nullable=True,
         comment="RFC 8785 JCS SHA-256 of the request payload (excluded fields stripped); enables IDEMPOTENCY_CONFLICT detection",
     )
+    # Bare JSONType (no model=) is deliberate: the envelope must replay
+    # byte-for-byte, and typed coercion on read could rewrite it. The
+    # {"status", "response"} shape is written by
+    # IdempotencyAttemptRepository.record_success and read by
+    # _replay_cached_success — do not migrate to a typed model in a
+    # "legacy JSONType" sweep without confirming coercion preserves
+    # verbatim fidelity.
     response_envelope: Mapped[dict] = mapped_column(
         JSONType,
         nullable=False,

@@ -24,6 +24,7 @@ import hashlib
 from typing import Any
 
 import rfc8785
+from pydantic import BaseModel
 
 from src.core.exceptions import AdCPValidationError
 
@@ -80,7 +81,7 @@ def canonical_payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def canonical_request_hash(request: Any) -> str:
+def canonical_request_hash(request: BaseModel) -> str:
     """Canonical hash of a Pydantic request model.
 
     Thin wrapper over :func:`canonical_payload_hash` that performs the
