@@ -61,28 +61,38 @@ Delete the masking no-op / buyer_ref steps so regenerated (buyer_ref-free) scena
 Production suggestion text (`src/`): remove `buyer_ref` from the package-required
 and package-update-missing-identifier error suggestions.
 
-## How to apply (the lockfile-merge workflow — NOT a plain overwrite)
+## How to apply — REVERSED flow (salesagent-first, then copy up)
 
-The salesagent features are produced by a 2-layer, lockfile-cached merge
-(`adcp-req/scripts/run_phase5_merge.sh`, epic `rzgb4`):
-`compile_bdd.py --merge` (TARGET ⨝ LEGACY, hash-keyed) → lockfile hit =
-RESOLVED-FROM-LOCKFILE; miss + WIRED+bound = NEEDS-SEMANTIC-MERGE
-(`drive_merges.py`: LLM merge + verifier, **upserts** `phase5-lockfile/UC-*.yaml`);
-unwired/unbound = TARGET-WINS → `render_features.py` → no auto-commit.
+**Key fact:** the lockfile-cached merge (`adcp-req/scripts/run_phase5_merge.sh`)
+exists *only* to preserve salesagent's pre-existing step-def bindings while
+absorbing upstream changes. TARGET (adcp-req) and LEGACY (salesagent) are
+otherwise the **same scenarios**. So for a deliberate, mechanical change like this
+we do **not** edit upstream and re-run the LLM merge (that would cache-miss every
+bound `buyer_ref` scenario → a semantic-merge call each). Instead we **author the
+change on the salesagent side, verify bindings by running the tests, then copy the
+result up to adcp-req so TARGET == LEGACY** — the merge then becomes a no-op and
+the result is correct by construction.
 
-The cache key includes `target_sha256` **and** `binding_index_sha256`, so **both**
-editing a TARGET scenario **and** changing its step defs invalidate the lockfile
-entry → re-merge. Therefore per UC:
+Per UC:
 
-1. Edit the TARGET scenarios in `adcp-req/tests/features/BR-UC-*.feature` (per the table).
-2. Make the paired salesagent step-def / parser / production-suggestion edits.
-3. `bash ~/projects/adcp-req/scripts/run_phase5_merge.sh --uc UC-0XX` (ADCP_SPEC_PIN=04f59d2d5).
-4. Review the re-merged lockfile entries (`phase5-lockfile/UC-0XX.yaml`) — confirm
-   `merged_gherkin` is buyer_ref-free and verifier verdict CORRECT; review
-   `MERGE-UNRESOLVED-REPORT.md`. Dropped scenarios: confirm their lockfile +
-   traceability entries are pruned.
-5. Run the wire BDD for that UC; confirm no new failures.
-6. Commit **adcp-req** (TARGET edits + updated `phase5-lockfile/UC-0XX.yaml`) and
-   **salesagent** (regenerated features + step/production edits) separately.
+1. **Edit salesagent feature files** `tests/bdd/features/BR-UC-*.feature` directly —
+   remove top-level `buyer_ref` (migrate to `media_buy_id`/`package_id`/`product_id`
+   or drop), per the table above.
+2. **Paired salesagent edits**: delete the `buyer_ref`/no-op step defs (list below),
+   the package datatable parser entries, and the production error-suggestion text.
+3. **Run the wire BDD for that UC locally** — confirm edited scenarios bind and pass
+   (or honest xfail), no new failures. Fast, deterministic, **no LLM**. This is the
+   verification that the merge would otherwise have protected.
+4. **Copy the edited feature file(s) up** to `adcp-req/tests/features/BR-UC-*.feature`
+   so TARGET == the new salesagent LEGACY (semantically + byte identical).
+5. **Reconcile the lockfile** in `adcp-req/phase5-lockfile/UC-*.yaml`: `delete`
+   entries for dropped scenarios (+ prune traceability); then run
+   `run_phase5_merge.sh --uc UC-0XX` (or `compile_bdd.py --merge --verify`) and
+   confirm it reports **zero** new NEEDS-SEMANTIC-MERGE (TARGET≡LEGACY ⇒ trivial)
+   and a clean render. Refresh any stale lockfile entries to the identical decision.
+6. **Commit** salesagent (features + steps + suggestions) and adcp-req
+   (features + lockfile) separately.
 
-Pre-req: salesagent working tree clean before the merge (the orchestrator checks).
+Why this is safe: step 3 verifies bindings directly (the only thing the merge
+protects), and step 5's `--verify` proves TARGET≡LEGACY so no decision is being
+guessed by an LLM. Pre-req: salesagent tree clean before step 5's merge check.
