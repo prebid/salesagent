@@ -1080,13 +1080,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-004-boundary-reporting-dims",
                 {
-                    "a2a-geo without geo_level",
+                    # a2a now normalizes these to AdCPError(INVALID_REQUEST) (wire-drop
+                    # confirmed XPASS, salesagent-tddx) — removed. mcp/rest still gap.
                     "mcp-geo without geo_level",
                     "rest-geo without geo_level",
-                    "a2a-limit=0 (below minimum)",
                     "mcp-limit=0 (below minimum)",
                     "rest-limit=0 (below minimum)",
-                    "a2a-limit negative",
                     "mcp-limit negative",
                     "rest-limit negative",
                 },
@@ -1098,13 +1097,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-004-boundary-attribution",
                 {
-                    "a2a-interval=0 (below minimum)",
+                    # a2a now normalizes these to AdCPError(INVALID_REQUEST) (wire-drop
+                    # confirmed XPASS, salesagent-tddx) — removed. mcp/rest still gap.
                     "mcp-interval=0 (below minimum)",
                     "rest-interval=0 (below minimum)",
-                    "a2a-unit=weeks (not in enum)",
                     "mcp-unit=weeks (not in enum)",
                     "rest-unit=weeks (not in enum)",
-                    "a2a-model=last_click (not in enum)",
                     "mcp-model=last_click (not in enum)",
                     "rest-model=last_click (not in enum)",
                 },
@@ -1143,10 +1141,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-004-boundary-date-range",
                 {
-                    "a2a-start_date after end_date",
+                    # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
+                    # salesagent-tddx) — removed. mcp/rest still gap.
                     "mcp-start_date after end_date",
                     "rest-start_date after end_date",
-                    "a2a-start_date equals end_date",
                     "mcp-start_date equals end_date",
                     "rest-start_date equals end_date",
                 },
@@ -1206,17 +1204,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-invalid_oneOf_both",
                     "impl-account_not_found",
                     "impl-empty_object",
-                    "a2a-explicit_account_id",
-                    "a2a-natural_key",
+                    # valid rows (explicit_account_id / natural_key) now resolve the
+                    # account on a2a/mcp/rest (wire-drop confirmed XPASS, salesagent-tddx)
+                    # — removed. Invalid-account rows still raise ValidationError-not-
+                    # AdCPError on a2a/mcp/rest, kept.
                     "a2a-invalid_oneOf_both",
                     "a2a-account_not_found",
                     "a2a-empty_object",
-                    "mcp-explicit_account_id",
-                    "mcp-natural_key",
                     "mcp-invalid_oneOf_both",
                     "mcp-empty_object",
-                    "rest-explicit_account_id",
-                    "rest-natural_key",
                     "rest-invalid_oneOf_both",
                     "rest-empty_object",
                 },
@@ -1230,9 +1226,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-account_id present + not found",
                     "a2a-account_id present + account exists",
                     "a2a-brand + operator present",
-                    "a2a-both account_id and brand/operator",
-                    "a2a-account_id present + not found",
-                    "a2a-empty object {}",
+                    # a2a invalid-account rows (both / not found / empty) now raise
+                    # AdCPError (wire-drop confirmed XPASS, salesagent-tddx) — removed.
                     "mcp-account_id present + account exists",
                     "mcp-brand + operator present",
                     "mcp-both account_id and brand/operator",
@@ -1283,7 +1278,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-failures_only (last enum value)",
                     "a2a-random (first enum value)",
                     "a2a-failures_only (last enum value)",
-                    "a2a-Unknown string not in enum",
+                    # a2a now rejects the unknown sampling_method value via extra=forbid
+                    # -> AdCPError (wire-drop confirmed XPASS, salesagent-tddx) — removed.
                     "mcp-random (first enum value)",
                     "mcp-failures_only (last enum value)",
                     "mcp-Unknown string not in enum",
@@ -1304,12 +1300,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "A2A wraps the empty-array Pydantic ValidationError in a bare RuntimeError "
                 "(not AdCPError). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            (
-                "T-UC-004-boundary-resolution",
-                {"a2a-empty array (schema reject)"},
-                "A2A wraps the empty-array Pydantic ValidationError in a bare RuntimeError "
-                "(not AdCPError). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # T-UC-004-boundary-resolution: a2a now raises AdCPError on the empty-array
+            # reject (wire-drop confirmed XPASS, salesagent-tddx); the only remaining
+            # transport-aware failure (a2a empty array) is handled below — entry removed
+            # here so it does not blanket-xfail every boundary-resolution row.
             # ownership (salesagent-lzf3): owner-matches rows pass on all
             # transports. owner-mismatch is the C3 security gap — cross-
             # principal access returns 200+empty instead of MEDIA_BUY_NOT_FOUND.
@@ -1325,7 +1319,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-004-boundary-ownership",
                 {
-                    "a2a-principal differs from owner",
+                    # a2a now raises AdCPError(MEDIA_BUY_NOT_FOUND) on cross-principal
+                    # access (wire-drop confirmed XPASS, salesagent-tddx) — removed.
+                    # mcp/rest still return 200+empty (C3 gap remains).
                     "mcp-principal differs from owner",
                     "rest-principal differs from owner",
                 },
@@ -1344,9 +1340,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-004-partition-status-filter",
                 {
-                    "a2a-single_pending",
-                    "mcp-single_pending",
-                    "rest-single_pending",
+                    # single_pending now normalizes on all wire transports (wire-drop
+                    # confirmed XPASS, salesagent-tddx) — removed. empty_array/unknown_value
+                    # still raise ValidationError-not-AdCPError on a2a/mcp/rest, kept.
                     "a2a-empty_array",
                     "mcp-empty_array",
                     "rest-empty_array",
@@ -1369,8 +1365,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "impl-pending_activation (first enum value)",
                     "a2a-pending_activation (first enum value)",
-                    "a2a-failed (not in AdCP enum",
-                    "a2a-[] (empty array, violates minItems)",
+                    # a2a now raises AdCPError on failed/[] (wire-drop confirmed XPASS,
+                    # salesagent-tddx) — removed. mcp still fails (mcp-failed kept).
                     "mcp-pending_activation (first enum value)",
                     "mcp-failed (not in AdCP enum",
                     "rest-pending_activation (first enum value)",
@@ -1412,13 +1408,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
-        # Graduated: T-UC-004-boundary-ownership — impl-"differs" and rest-"matches" pass
-        # Remaining failures: impl-matches, a2a-both, mcp-both, rest-differs
+        # Graduated: T-UC-004-boundary-ownership — impl-"differs", a2a-"differs" and
+        # rest-"matches" pass. Remaining failures: impl-matches, mcp-differs, rest-differs.
         if "T-UC-004-boundary-ownership" in marker_names:
-            _ownership_passes = (not is_a2a and not is_mcp) and (
-                (not is_rest and not is_e2e_rest and "differs from owner" in nodeid)
-                or (is_rest and "matches owner" in nodeid)
-                or (is_e2e_rest and "matches owner" in nodeid)
+            _ownership_passes = (
+                (not is_a2a and not is_mcp)
+                and (
+                    (not is_rest and not is_e2e_rest and "differs from owner" in nodeid)
+                    or (is_rest and "matches owner" in nodeid)
+                    or (is_e2e_rest and "matches owner" in nodeid)
+                )
+            ) or (
+                # a2a now raises AdCPError(MEDIA_BUY_NOT_FOUND) on cross-principal access
+                # (wire-drop confirmed XPASS, salesagent-tddx).
+                is_a2a and "differs from owner" in nodeid
             )
             if not _ownership_passes:
                 item.add_marker(
@@ -1432,7 +1435,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             _rdim_all_transport_fail = "geo_level=metro but no system" in nodeid
             # Post-merge: MCP and REST also return ToolError instead of AdCPError
             # for invalid reporting_dimensions (transport wrapping changed in adcp 3.12)
-            _rdim_non_impl_fail = (is_a2a or is_mcp or is_rest) and any(
+            # a2a now normalizes these to AdCPError (wire-drop confirmed XPASS,
+            # salesagent-tddx); mcp/rest still return ToolError-not-AdCPError.
+            _rdim_non_impl_fail = (is_mcp or is_rest) and any(
                 s in nodeid for s in ("geo without geo_level", "limit=0 (below minimum)", "limit negative")
             )
             if _rdim_all_transport_fail or _rdim_non_impl_fail:
@@ -1452,7 +1457,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 and not is_e2e_rest
                 and any(s in nodeid for s in ("random (first enum", "failures_only (last enum"))
             )
-            _samp_not_impl_fail = not is_impl and not is_e2e_rest and "Unknown string not in enum" in nodeid
+            # a2a now rejects the unknown value via extra=forbid -> AdCPError (wire-drop
+            # confirmed XPASS, salesagent-tddx); mcp still fails the type check.
+            _samp_not_impl_fail = (
+                not is_impl and not is_a2a and not is_e2e_rest and "Unknown string not in enum" in nodeid
+            )
             if _samp_not_rest_fail or _samp_not_impl_fail:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -1477,8 +1486,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 and not is_e2e_rest
                 and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
             )
+            # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
+            # salesagent-tddx); mcp/rest still don't enforce the gap.
             _dr_invalid_fail = (
                 not is_impl
+                and not is_a2a
                 and not is_e2e_rest
                 and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date"))
             )
@@ -1506,7 +1518,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             _aw_is_invalid_all_transports = any(s in nodeid for s in _aw_invalid_all_transports)
             # Graduated: valid examples now pass on all transports (impl/a2a/mcp/rest).
             # Only invalid examples still need xfails.
-            if _aw_is_invalid_all and (is_a2a or is_mcp or is_rest):
+            # a2a now normalizes these to AdCPError (wire-drop confirmed XPASS,
+            # salesagent-tddx); mcp/rest still gap.
+            if _aw_is_invalid_all and (is_mcp or is_rest):
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="attribution_window boundary: production gaps on this transport", strict=False
@@ -1530,9 +1544,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # "account_id not found" (invalid): fail on impl/a2a only.
         # "omitted": already PASS everywhere.
         if "T-UC-004-boundary-account" in marker_names:
+            # a2a now raises AdCPError on invalid-account rows (both / empty / not found)
+            # (wire-drop confirmed XPASS, salesagent-tddx); mcp still gaps on both/empty,
+            # impl still gaps on not-found.
             _acc_valid_fail = (is_mcp or is_rest) and any(s in nodeid for s in ("account exists", "single match"))
-            _acc_invalid_fail = (is_a2a or is_mcp) and any(s in nodeid for s in ("both account_id", "empty object"))
-            _acc_notfound_fail = (is_impl or is_a2a) and "not found" in nodeid
+            _acc_invalid_fail = is_mcp and any(s in nodeid for s in ("both account_id", "empty object"))
+            _acc_notfound_fail = is_impl and "not found" in nodeid
             if _acc_valid_fail or _acc_invalid_fail or _acc_notfound_fail:
                 item.add_marker(
                     pytest.mark.xfail(
@@ -1576,30 +1593,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
-        # Graduated boundary entries with transport-specific failures:
-        # T-UC-004-boundary-resolution "empty array": only a2a still fails
-        if "T-UC-004-boundary-resolution" in marker_names and is_a2a and "empty array" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="media_buy_resolution boundary: empty array validation gap on a2a",
-                    strict=False,
-                )
-            )
+        # T-UC-004-boundary-resolution "empty array": a2a now raises AdCPError
+        # (wire-drop confirmed XPASS, salesagent-tddx) — no transport still fails here.
         # T-UC-004-boundary-status-filter: graduated per-transport
-        # "not in AdCP enum" (failed): only a2a + mcp still fail
-        # "empty array, violates" ([]): only a2a still fails
+        # "not in AdCP enum" (failed): a2a now passes, only mcp still fails
+        # "empty array, violates" ([]): a2a now passes — no transport still fails
         if "T-UC-004-boundary-status-filter" in marker_names:
-            if "not in AdCP enum" in nodeid and (is_a2a or is_mcp):
+            if "not in AdCP enum" in nodeid and is_mcp:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="status_filter boundary: invalid enum validation not implemented on a2a/mcp",
-                        strict=False,
-                    )
-                )
-            elif "empty array, violates" in nodeid and is_a2a:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="status_filter boundary: empty array validation not implemented on a2a",
+                        reason="status_filter boundary: invalid enum validation not implemented on mcp",
                         strict=False,
                     )
                 )
@@ -1617,7 +1620,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # adcp 3.12: buyer_refs removed — "both provided" resolution tests
         # send both media_buy_ids and buyer_refs, but buyer_refs no longer exists.
-        if "T-UC-004-boundary-resolution" in marker_names and "both provided" in nodeid:
+        # rest now ignores the obsolete buyer_refs and resolves via media_buy_ids
+        # (wire-drop confirmed XPASS, salesagent-tddx); impl/a2a/mcp still fail.
+        if "T-UC-004-boundary-resolution" in marker_names and "both provided" in nodeid and not is_rest:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="adcp 3.12: buyer_refs removed — 'both provided' resolution test is obsolete",
