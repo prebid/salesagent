@@ -43,7 +43,7 @@ from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
-from src.services.property_intersection import PropertyIntersection
+from src.services.property_intersection import PropertyIntersection, property_list_drop_advisory
 
 if TYPE_CHECKING:
     from src.services.property_intersection import DroppedProduct
@@ -88,20 +88,21 @@ def _dropped_product_advisories(dropped: "tuple[DroppedProduct, ...]") -> list[E
     side's UNSUPPORTED_FEATURE reject: the request succeeds, and the envelope
     says what the filter did instead of silently shrinking the list.
     """
+    # PRODUCT_UNAVAILABLE is the closest standard code at spec 3.0.1 (the
+    # storyboard's INSUFFICIENT_INVENTORY/INVALID_TARGETING aren't in the
+    # 3.0.1 enum); "unavailable under your filter" is a documented stretch
+    # of its sold-out wording, chosen over a non-standard code so buyers
+    # keep standard-table recovery resolution. The code and details
+    # vocabulary live in property_list_drop_advisory.
     advisories = [
-        # PRODUCT_UNAVAILABLE is the closest standard code at spec 3.0.1 (the
-        # storyboard's INSUFFICIENT_INVENTORY/INVALID_TARGETING aren't in the
-        # 3.0.1 enum); "unavailable under your filter" is a documented stretch
-        # of its sold-out wording, chosen over a non-standard code so buyers
-        # keep standard-table recovery resolution.
-        Error(  # structural-guard: advisory: per-product filtering results ride the success envelope, not a raise
-            code="PRODUCT_UNAVAILABLE",
+        property_list_drop_advisory(
             message=(
                 f"Product {getattr(item.product, 'product_id', '<unknown>')} was excluded by your "
                 f"property_list filter ({item.reason.value})"
             ),
             field="property_list",
-            details={"product_id": getattr(item.product, "product_id", None), "reason": item.reason.value},
+            product_id=getattr(item.product, "product_id", None),
+            reason=item.reason,
             suggestion="Broaden the property_list (or omit it) to see this seller's full catalog.",
         )
         for item in dropped[:_MAX_DROPPED_PRODUCT_ADVISORIES]
@@ -109,11 +110,10 @@ def _dropped_product_advisories(dropped: "tuple[DroppedProduct, ...]") -> list[E
     overflow = len(dropped) - _MAX_DROPPED_PRODUCT_ADVISORIES
     if overflow > 0:
         advisories.append(
-            Error(  # structural-guard: advisory: aggregate tail keeps the envelope bounded
-                code="PRODUCT_UNAVAILABLE",
+            property_list_drop_advisory(
                 message=f"{overflow} more products were excluded by your property_list filter",
                 field="property_list",
-                details={"additional_dropped": overflow},
+                additional_dropped=overflow,
             )
         )
     return advisories

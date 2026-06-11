@@ -207,3 +207,35 @@ class TestResolvePropertyListAllowedSets:
         assert list(resolved) == [_allowed_key(pkg_a)]
         assert [i.value for i in resolved[_allowed_key(pkg_a)]] == ["espn.com"]
         assert resolve.await_count == 1
+
+
+class TestSuccessMessageSurfacesAdvisories:
+    """``str(CreateMediaBuySuccess)`` carries the advisory text for BOTH ext shapes.
+
+    The protocol ``message`` on every transport derives from ``str(response)``;
+    the advisory silently vanishing is the storyboard's named not-acceptable
+    outcome. ``ext`` is an ExtensionObject model on the construction path but
+    can be a plain dict (e.g. ``model_construct`` / round-trip shapes) — both
+    must surface the text.
+    """
+
+    _EXT = {
+        "prebid": {
+            "property_list_advisories": [
+                {"code": "PRODUCT_UNAVAILABLE", "message": "list has zero overlap with product prod_1"}
+            ]
+        }
+    }
+
+    def test_model_ext_surfaces_in_message(self):
+        from src.core.schemas import CreateMediaBuySuccess
+
+        response = CreateMediaBuySuccess(media_buy_id="mb_adv_1", packages=[], ext=self._EXT)
+        assert "zero overlap" in str(response)
+
+    def test_plain_dict_ext_surfaces_in_message(self):
+        from src.core.schemas import CreateMediaBuySuccess
+
+        response = CreateMediaBuySuccess.model_construct(media_buy_id="mb_adv_2", packages=[], ext=self._EXT)
+        assert isinstance(response.ext, dict), "precondition: ext must be the uncoerced dict shape"
+        assert "zero overlap" in str(response)

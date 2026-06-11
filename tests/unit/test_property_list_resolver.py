@@ -606,7 +606,7 @@ class TestThreadSafety:
             client.get = MagicMock(return_value=resp)
             return client
 
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
         results: list[list] = []
         results_lock = threading.Lock()
 

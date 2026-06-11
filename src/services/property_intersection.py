@@ -45,6 +45,7 @@ from adcp.types import Identifier
 
 from src.core.database.models import AuthorizedProperty
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
+from src.core.schemas import Error
 from src.services.identifier_matching import identifier_dicts, property_matches_buyer_list
 
 
@@ -178,3 +179,47 @@ class PropertyIntersection:
             rows.extend(self._repo.list_by_ids(publisher_domain, sorted(by_id_groups[publisher_domain])))
 
         return rows
+
+
+# Sentinel: lets callers pass explicit ``None`` values (e.g. a package without
+# a package_id) and still have the key appear in ``details``, while omitted
+# kwargs leave the key out entirely.
+_UNSET: Any = object()
+
+
+def property_list_drop_advisory(
+    *,
+    message: str,
+    field: str,
+    reason: Any = _UNSET,
+    product_id: Any = _UNSET,
+    package_id: Any = _UNSET,
+    list_id: Any = _UNSET,
+    additional_dropped: Any = _UNSET,
+    suggestion: str | None = None,
+) -> Error:
+    """Single builder for buyer-facing property_list drop advisories.
+
+    Every advisory for "a product/package was excluded (or zero-matched) by the
+    buyer's property_list" is constructed here, so the error code and the
+    ``details`` key vocabulary are decided once — call sites supply only the
+    prose, the JSONPath-lite ``field``, and whichever detail keys legitimately
+    apply (``reason`` accepts a :class:`DropReason` or its string value).
+    """
+    details: dict[str, Any] = {}
+    for key, value in (
+        ("product_id", product_id),
+        ("package_id", package_id),
+        ("reason", reason),
+        ("list_id", list_id),
+        ("additional_dropped", additional_dropped),
+    ):
+        if value is not _UNSET:
+            details[key] = value.value if isinstance(value, DropReason) else value
+    return Error(  # structural-guard: advisory: property_list drops are accept-with-context — they ride the success envelope, never a raise
+        code="PRODUCT_UNAVAILABLE",
+        message=message,
+        field=field,
+        suggestion=suggestion,
+        details=details or None,
+    )

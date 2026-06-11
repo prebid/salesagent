@@ -18,6 +18,7 @@ import json
 import logging
 import threading
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 from adcp.types import GetPropertyListResponse, Identifier, PropertyListReference
@@ -54,6 +55,16 @@ def loggable_list_id(list_id: str) -> str:
     newlines would otherwise let a buyer forge operator log lines (CWE-117).
     """
     return "".join(ch for ch in list_id if ch.isprintable())[:128]
+
+
+def package_property_list_ref(package: Any) -> PropertyListReference | None:
+    """The package's ``targeting_overlay.property_list`` reference, or ``None`` at any missing link.
+
+    Single home for the selector traversal shared by the create-side resolver
+    walk, the advisory builder, and the Kevel compile gate.
+    """
+    overlay = getattr(package, "targeting_overlay", None)
+    return getattr(overlay, "property_list", None) if overlay else None
 
 
 def _validate_agent_url(agent_url: str) -> None:
@@ -94,7 +105,7 @@ def _check_cache(agent_url: str, list_id: str) -> list[Identifier] | None:
             # refreshed or removed this key cannot raise ``KeyError``.
             _cache.pop(cache_key, None)
             return None
-    logger.debug("Cache hit for property list %s/%s", agent_url, list_id)
+    logger.debug("Cache hit for property list %s/%s", agent_url, loggable_list_id(list_id))
     return identifiers
 
 
@@ -108,7 +119,7 @@ def _store_in_cache(agent_url: str, list_id: str, response_data: dict) -> list[I
     logger.debug(
         "Resolved property list %s/%s: %d identifiers (cached until %s)",
         agent_url,
-        list_id,
+        loggable_list_id(list_id),
         len(identifiers),
         expires_at.isoformat(),
     )

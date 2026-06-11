@@ -196,6 +196,23 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
+def _ext_property_list_advisories(ext: Any) -> list | None:
+    """Advisory entries from ``ext.prebid.property_list_advisories``, tolerating model or dict ``ext``.
+
+    ``ext`` is an ExtensionObject model on the construction path but a plain
+    dict after a JSON round-trip; ``getattr`` alone returns ``None`` for a dict
+    and would silently drop the advisory from the protocol ``message`` — the
+    storyboard's named not-acceptable outcome.
+    """
+    if ext is None:
+        return None
+    vendor = ext.get("prebid") if isinstance(ext, dict) else getattr(ext, "prebid", None)
+    if not isinstance(vendor, dict):
+        return None
+    entries = vendor.get("property_list_advisories")
+    return entries if isinstance(entries, list) else None
+
+
 class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     """Successful create_media_buy response extending the adcp library type.
 
@@ -263,8 +280,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         itself carries no protocol ``message`` field per AdCP PR #113.
         """
         base = f"Media buy {self.media_buy_id} created successfully."
-        vendor_ext = getattr(self.ext, "prebid", None) if self.ext else None
-        ext_advisories = vendor_ext.get("property_list_advisories") if isinstance(vendor_ext, dict) else None
+        ext_advisories = _ext_property_list_advisories(self.ext)
         if ext_advisories:
             joined = " ".join(
                 advisory.get("message", "") for advisory in ext_advisories if isinstance(advisory, dict)

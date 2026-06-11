@@ -15,6 +15,7 @@ for upstream inclusion in AdCP.
 from typing import TYPE_CHECKING, Any
 
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
+from src.core.property_list_resolver import package_property_list_ref
 from src.core.schemas import Targeting, TargetingCapability
 from src.core.validation_helpers import package_field_path
 
@@ -272,8 +273,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
     if supports_property_list_targeting(adapter) or not packages:
         return
     for index, package in enumerate(packages):
-        overlay = getattr(package, "targeting_overlay", None)
-        if overlay is None or getattr(overlay, "property_list", None) is None:
+        if package_property_list_ref(package) is None:
             continue
         adapter_label = getattr(adapter.__class__, "adapter_name", adapter.__class__.__name__) if adapter else "adapter"
         raise AdCPCapabilityNotSupportedError(

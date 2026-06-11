@@ -150,7 +150,7 @@ from src.core.tools.financial_validation import (
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
-from src.services.property_intersection import PropertyIntersection
+from src.services.property_intersection import PropertyIntersection, property_list_drop_advisory
 from src.services.targeting_capabilities import (
     collect_overlay_targeting_violations,
     raise_if_property_list_unsupported,
@@ -1489,12 +1489,15 @@ async def _resolve_property_list_identifiers(packages: list | None) -> dict[tupl
     # Lazy import: the prefetch unit tests patch ``resolve_property_list_typed``
     # at its source module, so it must resolve at call time (a module-top import
     # would bind a ref the patch can't reach).
-    from src.core.property_list_resolver import loggable_list_id, resolve_property_list_typed
+    from src.core.property_list_resolver import (
+        loggable_list_id,
+        package_property_list_ref,
+        resolve_property_list_typed,
+    )
 
     resolved: dict[tuple[str, str], list[Identifier]] = {}
     for package in packages or []:
-        overlay = getattr(package, "targeting_overlay", None)
-        ref = getattr(overlay, "property_list", None) if overlay else None
+        ref = package_property_list_ref(package)
         if ref is None:
             continue
         key = (str(ref.agent_url), ref.list_id)
@@ -1556,14 +1559,13 @@ def _build_property_list_advisories(
     # module by the advisory unit/integration tests, so it must resolve at call
     # time (a module-top import would bind a ref the patch can't reach).
     from src.core.product_conversion import convert_product_model_to_schema
-    from src.core.property_list_resolver import loggable_list_id
+    from src.core.property_list_resolver import loggable_list_id, package_property_list_ref
 
     intersection = PropertyIntersection(authorized_property_repo)
     advisories: list[Error] = []
 
     for index, package in enumerate(packages):
-        overlay = getattr(package, "targeting_overlay", None)
-        ref = getattr(overlay, "property_list", None) if overlay else None
+        ref = package_property_list_ref(package)
         if ref is None:
             continue
         product = product_map.get(package.product_id)
@@ -1599,8 +1601,7 @@ def _build_property_list_advisories(
                 loggable_list_id(ref.list_id),
             )
             advisories.append(
-                Error(  # structural-guard: advisory: zero-overlap is accept-with-context — the success envelope explains the mismatch
-                    code="PRODUCT_UNAVAILABLE",
+                property_list_drop_advisory(
                     message=(
                         f"Buyer property_list {ref.agent_url}/{ref.list_id} has zero overlap with "
                         f"product {product.product_id}'s properties ({reason}); the buy proceeds "
@@ -1611,12 +1612,10 @@ def _build_property_list_advisories(
                         "Verify the referenced list targets this seller's properties, or choose a "
                         "product whose publisher_properties overlap the list."
                     ),
-                    details={
-                        "product_id": product.product_id,
-                        "package_id": getattr(package, "package_id", None),
-                        "reason": reason,
-                        "list_id": ref.list_id,
-                    },
+                    product_id=product.product_id,
+                    package_id=getattr(package, "package_id", None),
+                    reason=reason,
+                    list_id=ref.list_id,
                 )
             )
     return advisories

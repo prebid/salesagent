@@ -12,7 +12,7 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
 )
-from src.core.property_list_resolver import resolve_property_list_typed_sync
+from src.core.property_list_resolver import package_property_list_ref, resolve_property_list_typed_sync
 from src.core.schemas import *
 from src.services.kevel_site_resolver import (
     KevelSiteResolver,
@@ -154,10 +154,7 @@ class Kevel(AdServerAdapter):
                 contains identifier types Kevel cannot translate.
         """
         for index, package in enumerate(packages):
-            targeting = getattr(package, "targeting_overlay", None)
-            if targeting is None:
-                continue
-            ref = getattr(targeting, "property_list", None)
+            ref = package_property_list_ref(package)
             if ref is None:
                 continue
             resolved = self._resolve_property_list(ref)

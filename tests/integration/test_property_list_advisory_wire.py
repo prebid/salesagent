@@ -35,7 +35,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant as TenantModel
 from src.core.schemas import CreateMediaBuyRequest, CreateMediaBuySubmitted, CreateMediaBuySuccess
-from tests.factories import AuthorizedPropertyFactory
+from tests.factories import AuthorizedPropertyFactory, TenantAuthConfigFactory
 from tests.harness._base import IntegrationEnv
 from tests.harness.product import ProductEnv
 from tests.harness.transport import Transport
@@ -284,6 +284,113 @@ class TestCreateAdvisoryAttachment:
         # serializer-synthesized tracking sentence.
         assert "zero overlap" in payload["message"]
         assert not payload["message"].startswith("Media buy submitted for approval")
+        assert "media_buy_id" not in payload and "packages" not in payload
+
+    def test_rest_submitted_create_wire_carries_advisory(self, advisory_tenant):
+        """The submitted variant WITH advisory crosses the real HTTP boundary intact.
+
+        Drives TestClient -> route -> raw wrapper -> _impl with the real
+        token->DB->identity chain; the manual-approval gate is the tenant's
+        ``human_review_required`` DB flag, exactly as the A2A wire test forces
+        it. Pins the spec shape at real HTTP bytes: ``status="submitted"``,
+        ``task_id`` present, ``media_buy_id``/``packages`` absent per the
+        variant's ``not`` constraint, advisory on ``errors[]``.
+        """
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        with get_db_session() as session:
+            tenant = session.get(TenantModel, TENANT_ID)
+            tenant.human_review_required = True
+            # REST has no x-test-session-id seam (the testing-context bypass the
+            # MCP/A2A wire tests use — flagged as a transport-parity follow-up),
+            # so the production setup-checklist gate runs for real here: satisfy
+            # its SSO item the production way.
+            tenant.auth_setup_mode = False
+            session.commit()
+        with IntegrationEnv() as _env:
+            tenant_row = _env._session.scalars(select(TenantModel).filter_by(tenant_id=TENANT_ID)).first()
+            TenantAuthConfigFactory(tenant=tenant_row, oidc_enabled=True)
+        try:
+            with _patched_resolver():
+                client = TestClient(app, raise_server_exceptions=False)
+                response = client.post(
+                    "/api/v1/media-buys",
+                    json=create_test_property_list_create_params(PRODUCT_ID),
+                    headers={
+                        "x-adcp-auth": ACCESS_TOKEN,
+                        "x-adcp-tenant": TENANT_ID,
+                        "x-test-session-id": "prop-list-advisory-rest-submitted",
+                    },
+                )
+        finally:
+            with get_db_session() as session:
+                tenant = session.get(TenantModel, TENANT_ID)
+                tenant.human_review_required = False
+                session.commit()
+
+        assert response.status_code == 200, (
+            f"submitted create must serialize, got {response.status_code}: {response.text}"
+        )
+        payload = response.json()
+        assert payload["status"] == "submitted"
+        assert payload["task_id"]
+        assert payload["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
+        assert "zero overlap" in payload["message"]
+        assert "media_buy_id" not in payload and "packages" not in payload
+
+    @pytest.mark.asyncio
+    async def test_mcp_submitted_create_wire_carries_advisory(self, advisory_tenant):
+        """The submitted variant WITH advisory crosses the real FastMCP Client boundary intact.
+
+        The harness ``call_impl`` observes no wire bytes; this drives the real
+        ``Client(mcp)`` pipeline (middleware -> TypeAdapter -> wrapper -> _impl
+        -> ToolResult framing) with the production-shaped auth and
+        setup-checklist bypass (``x-test-session-id``), and reads the
+        structured content the buyer would.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        headers = {
+            "x-adcp-auth": ACCESS_TOKEN,
+            "x-adcp-tenant": TENANT_ID,
+            "x-test-session-id": "prop-list-advisory-mcp-submitted",
+        }
+        arguments = create_test_property_list_create_params(PRODUCT_ID)
+
+        with get_db_session() as session:
+            tenant = session.get(TenantModel, TENANT_ID)
+            tenant.human_review_required = True
+            session.commit()
+        try:
+            # Each module binds get_http_headers via ``from ... import`` so each
+            # needs its own patch; testing_hooks turns x-test-session-id into the
+            # production-shaped setup-checklist bypass.
+            with (
+                patch("src.core.auth.get_http_headers", return_value=headers),
+                patch("src.core.transport_helpers.get_http_headers", return_value=headers),
+                patch("src.core.testing_hooks.get_http_headers", return_value=headers),
+                patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers),
+                _patched_resolver(),
+            ):
+                async with Client(mcp) as client:
+                    result = await client.call_tool("create_media_buy", arguments)
+        finally:
+            with get_db_session() as session:
+                tenant = session.get(TenantModel, TENANT_ID)
+                tenant.human_review_required = False
+                session.commit()
+
+        payload = result.structured_content
+        assert isinstance(payload, dict), f"expected structured content dict, got {type(payload)}"
+        payload = payload.get("result", payload)
+        assert payload["status"] == "submitted"
+        assert payload["task_id"]
+        assert payload["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
+        assert "zero overlap" in payload["message"]
         assert "media_buy_id" not in payload and "packages" not in payload
 
     @pytest.mark.asyncio
