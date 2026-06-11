@@ -157,6 +157,15 @@ def resolve_identity(
     # Import here to avoid circular dependency (auth_utils imports from database)
     from src.core.auth_utils import get_principal_from_token
 
+    # Step 0: Derive the testing context from headers when the transport did
+    # not pre-extract one. This is the transport-parity guarantee for the
+    # AdCP testing hooks (X-Dry-Run, X-Test-Session-Id, …): MCP and A2A
+    # extract at their boundaries and pass it in (kept as-is — explicit wins);
+    # REST and any future transport get the same semantics from this default
+    # instead of silently dropping the headers.
+    if testing_context is None:
+        testing_context = AdCPTestContext.from_headers(headers)
+
     # Step 1: Detect tenant from headers
     tenant_id, tenant_context = _detect_tenant(headers)
 

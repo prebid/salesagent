@@ -357,17 +357,21 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_http_error_raises_adcp_adapter_error(self):
-        """HTTP 4xx/5xx errors are wrapped in AdCPAdapterError."""
+        """HTTP 5xx errors are wrapped in AdCPAdapterError (transient).
+
+        4xx responses are the buyer's error and map to a correctable
+        VALIDATION_ERROR instead — pinned by ``TestFetchErrorTaxonomy``.
+        """
         from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref()
 
         mock_response = MagicMock()
-        mock_response.status_code = 404
+        mock_response.status_code = 503
         mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Not Found",
+            "Service Unavailable",
             request=httpx.Request("GET", "https://example.com/lists/list-1"),
-            response=httpx.Response(404),
+            response=httpx.Response(503),
         )
 
         with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
@@ -587,7 +591,7 @@ class TestThreadSafety:
         ref = _make_ref()
         agent_url = str(ref.agent_url)
         # Pre-populate an EXPIRED entry to force the expiry-pop branch on entry.
-        plr._cache[(agent_url, ref.list_id)] = ([], datetime.now(UTC) - timedelta(seconds=1))
+        plr._cache.store((agent_url, ref.list_id), [], datetime.now(UTC) - timedelta(seconds=1))
 
         future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
         response_json = _make_response_json(
@@ -634,3 +638,80 @@ class TestThreadSafety:
         assert all([ident.value for ident in r] == ["fresh.com"] for r in results), (
             "Concurrent resolvers returned inconsistent identifiers — cache write was not atomic"
         )
+
+
+class TestFetchErrorTaxonomy:
+    """E6: buyer-correctable 4xx splits from transient infrastructure failures.
+
+    A typo'd list_id answered 404 by the list service is the BUYER's error —
+    classifying it transient (retry-after-delay) sends buyers into indefinite
+    retry loops on input they must correct. 5xx/timeout/connect stay transient.
+    """
+
+    @staticmethod
+    def _sync_client_raising(status_code: int):
+        request = httpx.Request("GET", "https://gov.example/lists/x")
+        response = httpx.Response(status_code, request=request)
+        exc = httpx.HTTPStatusError("err", request=request, response=response)
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = exc
+        sync_client = MagicMock()
+        sync_client.__enter__ = MagicMock(return_value=sync_client)
+        sync_client.__exit__ = MagicMock(return_value=False)
+        sync_client.get.return_value = mock_response
+        return sync_client
+
+    def test_sync_404_is_correctable_validation_error(self):
+        from src.core.exceptions import AdCPValidationError
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed_sync
+
+        clear_cache()
+        ref = _make_ref()
+        with patch("src.core.property_list_resolver.httpx.Client", return_value=self._sync_client_raising(404)):
+            with pytest.raises(AdCPValidationError) as excinfo:
+                resolve_property_list_typed_sync(ref)
+        assert excinfo.value.error_code == "VALIDATION_ERROR"
+        assert excinfo.value.recovery == "correctable"
+        assert ref.list_id in str(excinfo.value)
+
+    def test_sync_500_stays_transient(self):
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed_sync
+
+        clear_cache()
+        ref = _make_ref()
+        with patch("src.core.property_list_resolver.httpx.Client", return_value=self._sync_client_raising(500)):
+            with pytest.raises(AdCPAdapterError) as excinfo:
+                resolve_property_list_typed_sync(ref)
+        assert excinfo.value.recovery == "transient"
+
+    @pytest.mark.asyncio
+    async def test_async_403_is_correctable_validation_error(self):
+        from src.core.exceptions import AdCPValidationError
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
+
+        clear_cache()
+        ref = _make_ref()
+        request = httpx.Request("GET", "https://gov.example/lists/x")
+        response = httpx.Response(403, request=request)
+        exc = httpx.HTTPStatusError("err", request=request, response=response)
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = exc
+
+        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
+            mock_client_cls.return_value = _make_mock_client(get_return_value=mock_response)
+            with pytest.raises(AdCPValidationError) as excinfo:
+                await resolve_property_list_typed(ref)
+        assert excinfo.value.recovery == "correctable"
+
+    @pytest.mark.asyncio
+    async def test_async_timeout_stays_transient(self):
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
+
+        clear_cache()
+        ref = _make_ref()
+        mock_client = _make_mock_client(get_return_value=None)
+        mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("slow"))
+        with patch("src.core.property_list_resolver.httpx.AsyncClient", return_value=mock_client):
+            with pytest.raises(AdCPAdapterError) as excinfo:
+                await resolve_property_list_typed(ref)
+        assert excinfo.value.recovery == "transient"

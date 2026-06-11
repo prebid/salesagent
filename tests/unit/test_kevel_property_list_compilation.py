@@ -402,3 +402,69 @@ class TestEndToEndWiringSiteIdsLandInFlightPayload:
             f"Expected success after wiring resolved siteIds; got error: "
             f"{[err.message for err in (response.errors if hasattr(response, 'errors') else [])]}"
         )
+
+
+class TestUpdateTargetingRecompile:
+    """E3 update parity: update-side recompile mirrors create's compile path.
+
+    Create runs type-gate → compile → write targeting into the flight payload.
+    Update must do the same: ``validate_targeting_update`` is the pre-write
+    type gate, ``update_package_targeting`` recompiles and pushes the flight.
+    Without this pair, an updated property_list persists in package_config
+    while the live flight keeps serving the old siteIds.
+    """
+
+    def test_validate_targeting_update_runs_type_gate(self):
+        adapter = _kevel()
+        with patch.object(adapter, "_site_resolver") as mock_resolver:
+            mock_resolver.resolve.return_value = ResolvedSiteIds(
+                site_ids=set(), unsupported_types={"ios_bundle"}, unresolvable_values=[]
+            )
+            with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
+                adapter.validate_targeting_update([_package_with_ref(_ref())])
+        assert excinfo.value.field == "packages[0].targeting_overlay.property_list"
+
+    def test_dry_run_logs_recompiled_site_ids(self):
+        adapter = _kevel(dry_run=True)
+        overlay = Targeting(property_list=_ref())
+        with patch.object(adapter, "_site_resolver") as mock_resolver:
+            mock_resolver.resolve.return_value = ResolvedSiteIds(
+                site_ids={42, 99}, unsupported_types=set(), unresolvable_values=[]
+            )
+            with patch.object(adapter, "log") as mock_log:
+                adapter.update_package_targeting("kevel_77", "flight_9", overlay, datetime.now(UTC))
+        logged = " ".join(str(c.args[0]) for c in mock_log.call_args_list)
+        assert "PUT" in logged and "flight_9" in logged
+        assert "42" in logged and "99" in logged
+
+    def test_real_mode_puts_recompiled_targeting(self):
+        adapter = _kevel()
+        overlay = Targeting(property_list=_ref())
+        with patch.object(adapter, "_site_resolver") as mock_resolver:
+            mock_resolver.resolve.return_value = ResolvedSiteIds(
+                site_ids={42, 99}, unsupported_types=set(), unresolvable_values=[]
+            )
+            with patch("src.adapters.kevel.requests.put") as mock_put:
+                mock_put.return_value.raise_for_status = MagicMock()
+                adapter.update_package_targeting("kevel_77", "flight_9", overlay, datetime.now(UTC))
+        mock_put.assert_called_once_with(
+            f"{adapter.base_url}/flight/flight_9",
+            headers=adapter.headers,
+            json={"siteIds": [42, 99]},
+        )
+
+
+class TestBaseAdapterUpdateTargetingContract:
+    """The base seam fails loud: a capable adapter that forgets to implement
+    ``update_package_targeting`` rejects instead of silently persisting."""
+
+    def test_base_update_package_targeting_raises(self):
+        from src.adapters.base import AdServerAdapter
+
+        with pytest.raises(AdCPCapabilityNotSupportedError):
+            AdServerAdapter.update_package_targeting(MagicMock(), "mb_1", "pkg_1", MagicMock(), datetime.now(UTC))
+
+    def test_base_validate_targeting_update_accepts(self):
+        from src.adapters.base import AdServerAdapter
+
+        assert AdServerAdapter.validate_targeting_update(MagicMock(), [MagicMock()]) is None

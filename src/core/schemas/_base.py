@@ -213,7 +213,28 @@ def _ext_property_list_advisories(ext: Any) -> list | None:
     return entries if isinstance(entries, list) else None
 
 
-class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
+class _ForbidsErrorsExtra:
+    """Wire-discriminator enforcement for success variants.
+
+    The success variants of the create/update response oneOf carry
+    ``not: {required: ["errors"]}`` — an errors key on a success response
+    matches NO spec variant. The classes inherit ``extra="allow"`` (needed:
+    the A2A reconstruction path round-trips protocol fields through extras),
+    so without this validator a future ``errors=`` kwarg at any construction
+    site would serialize silently and ship an unparseable response.
+    """
+
+    @model_validator(mode="after")
+    def _reject_errors_extra(self):
+        extra = getattr(self, "model_extra", None) or {}
+        if extra.get("errors") is not None:
+            raise ValueError(
+                "the success variant forbids 'errors' — advisories ride ext/message, failures use the error variant"
+            )
+        return self
+
+
+class CreateMediaBuySuccess(_ForbidsErrorsExtra, AdCPCreateMediaBuySuccess):
     """Successful create_media_buy response extending the adcp library type.
 
     Extends the official adcp CreateMediaBuySuccess type with internal workflow
@@ -380,7 +401,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
+class UpdateMediaBuySuccess(_ForbidsErrorsExtra, AdCPUpdateMediaBuySuccess):
     """Successful update_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking.
@@ -393,7 +414,8 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     success/error discriminator), so this class deliberately has no errors
     field; a populated one would match no oneOf variant on the wire. The
     update-side zero-overlap advisory (message-channel, since update has no
-    submitted variant) is a tracked follow-up.
+    submitted variant) arrives with the verbatim success-cache reconciliation
+    (see ``_build_idempotency_hit_result``).
     """
 
     # Override affected_packages to use our extended AffectedPackage type

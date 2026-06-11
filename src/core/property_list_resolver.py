@@ -16,15 +16,15 @@ for the other mode's subsequent lookups.
 
 import json
 import logging
-import threading
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 from adcp.types import GetPropertyListResponse, Identifier, PropertyListReference
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPValidationError
 from src.core.security.url_validator import check_url_ssrf
+from src.core.ttl_cache import ThreadSafeTTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +34,12 @@ _DEFAULT_TIMEOUT = 10.0
 # Default cache TTL when cache_valid_until is not provided (seconds)
 _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 
-# Cache: (agent_url, list_id) -> (identifiers, expires_at)
-# Stores typed Identifier objects so both .value (for products discovery) and
-# .type (for adapter compilation) are available without re-fetching.
-_cache: dict[tuple[str, str], tuple[list[Identifier], datetime]] = {}
-
-# Guards every read/write/clear of ``_cache``. The async and sync resolver
-# paths plus the create-media-buy advisory share this module-level cache from
-# different threads/event loops; without the lock the expiry-drop could ``del``
-# a key another caller already removed (``KeyError``) or read a torn entry. The
-# HTTP fetch stays OUTSIDE the lock — a concurrent cold-cache double-fetch is
-# acceptable (both produce the same identifiers), only the dict op is atomic.
-_cache_lock = threading.Lock()
+# Cache: (agent_url, list_id) -> typed Identifier objects, so both .value (for
+# products discovery) and .type (for adapter compilation) are available without
+# re-fetching. The async and sync resolver paths plus the create-media-buy
+# advisory share this module-level cache from different threads/event loops;
+# the locking/expiry contract lives in ThreadSafeTTLCache.
+_cache: ThreadSafeTTLCache[tuple[str, str], list[Identifier]] = ThreadSafeTTLCache()
 
 
 def loggable_list_id(list_id: str) -> str:
@@ -93,18 +87,10 @@ def _build_request(ref: PropertyListReference) -> tuple[str, str, dict[str, str]
 
 
 def _check_cache(agent_url: str, list_id: str) -> list[Identifier] | None:
-    """Return cached identifiers if present and not expired; drop the entry on expiry."""
-    cache_key = (agent_url, list_id)
-    with _cache_lock:
-        cached = _cache.get(cache_key)
-        if cached is None:
-            return None
-        identifiers, expires_at = cached
-        if datetime.now(UTC) >= expires_at:
-            # ``pop`` (not ``del``) so a concurrent caller that already
-            # refreshed or removed this key cannot raise ``KeyError``.
-            _cache.pop(cache_key, None)
-            return None
+    """Return cached identifiers if present and not expired."""
+    identifiers = _cache.get((agent_url, list_id))
+    if identifiers is None:
+        return None
     logger.debug("Cache hit for property list %s/%s", agent_url, loggable_list_id(list_id))
     return identifiers
 
@@ -114,8 +100,7 @@ def _store_in_cache(agent_url: str, list_id: str, response_data: dict) -> list[I
     parsed = GetPropertyListResponse.model_validate(response_data)
     identifiers = parsed.identifiers or []
     expires_at = parsed.cache_valid_until or (datetime.now(UTC) + timedelta(seconds=_DEFAULT_CACHE_TTL_SECONDS))
-    with _cache_lock:
-        _cache[(agent_url, list_id)] = (identifiers, expires_at)
+    _cache.store((agent_url, list_id), identifiers, expires_at)
     logger.debug(
         "Resolved property list %s/%s: %d identifiers (cached until %s)",
         agent_url,
@@ -139,13 +124,28 @@ def _payload_or_raise(response: httpx.Response, request_url: str) -> dict:
         raise AdCPAdapterError(f"Property list service returned a non-JSON response: {request_url}") from exc
 
 
-def _http_error_message(url: str, exc: Exception) -> str:
-    """Uniform error message for HTTP failures across sync and async paths."""
+def _raise_fetch_error(ref: PropertyListReference, url: str, exc: Exception) -> NoReturn:
+    """Map an HTTP fetch failure to the typed error class, shared by both paths.
+
+    The split is the recovery taxonomy: a 4xx is the list service rejecting
+    the BUYER's reference (unknown/forbidden/expired list_id) — correctable,
+    so the buyer fixes the reference instead of retrying forever. 5xx,
+    timeouts, and connection failures are the service misbehaving — transient.
+    """
     if isinstance(exc, httpx.HTTPStatusError):
-        return f"Failed to fetch property list from {url}: HTTP {exc.response.status_code}"
+        status = exc.response.status_code
+        if 400 <= status < 500:
+            raise AdCPValidationError(
+                f"The property list service rejected list_id '{ref.list_id}' "
+                f"(HTTP {status} from {ref.agent_url}). The list may not exist or "
+                "may not be accessible to this agent.",
+                field="property_list",
+                suggestion="Check the property list reference (agent_url and list_id), or pick a different list.",
+            ) from exc
+        raise AdCPAdapterError(f"Failed to fetch property list from {url}: HTTP {status}") from exc
     if isinstance(exc, httpx.TimeoutException):
-        return f"Request to property list service timed out: {url}"
-    return f"Failed to connect to property list service: {url} — {exc}"
+        raise AdCPAdapterError(f"Request to property list service timed out: {url}") from exc
+    raise AdCPAdapterError(f"Failed to connect to property list service: {url} — {exc}") from exc
 
 
 async def resolve_property_list_typed(ref: PropertyListReference) -> list[Identifier]:
@@ -164,7 +164,7 @@ async def resolve_property_list_typed(ref: PropertyListReference) -> list[Identi
             response = await client.get(request_url, headers=headers)
             response.raise_for_status()
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
-        raise AdCPAdapterError(_http_error_message(request_url, exc)) from exc
+        _raise_fetch_error(ref, request_url, exc)
 
     return _store_in_cache(agent_url, ref.list_id, _payload_or_raise(response, request_url))
 
@@ -187,12 +187,11 @@ def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identif
             response = client.get(request_url, headers=headers)
             response.raise_for_status()
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
-        raise AdCPAdapterError(_http_error_message(request_url, exc)) from exc
+        _raise_fetch_error(ref, request_url, exc)
 
     return _store_in_cache(agent_url, ref.list_id, _payload_or_raise(response, request_url))
 
 
 def clear_cache() -> None:
     """Clear the property list cache."""
-    with _cache_lock:
-        _cache.clear()
+    _cache.clear()

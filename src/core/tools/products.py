@@ -301,7 +301,9 @@ async def _get_products_impl(
         ad_server_config.get("adapter", "mock") if isinstance(ad_server_config, dict) else ad_server_config
     )
 
-    # Query products via repository (tenant-scoped)
+    # Query products via repository (tenant-scoped).
+    # Lazy: tests patch ProductUoW at its source module; the name must
+    # resolve at call time (one import serves every use in this function).
     from src.core.database.repositories.uow import ProductUoW
 
     with ProductUoW(tenant["tenant_id"]) as uow:
@@ -373,13 +375,12 @@ async def _get_products_impl(
     _property_list_ref = getattr(req, "property_list", None)
     if isinstance(_property_list_ref, PropertyListReference):
         try:
-            # Lazy: tests patch ProductUoW and the resolver at their source
-            # modules; both must resolve at call time.
-            from src.core.database.repositories.uow import ProductUoW as _IntersectionUoW
+            # Lazy: tests patch the resolver at its source module; it must
+            # resolve at call time.
             from src.core.property_list_resolver import resolve_property_list_typed
 
             buyer_identifiers = await resolve_property_list_typed(_property_list_ref)
-            with _IntersectionUoW(tenant["tenant_id"]) as intersection_uow:
+            with ProductUoW(tenant["tenant_id"]) as intersection_uow:
                 assert intersection_uow.authorized_properties is not None
                 intersection = PropertyIntersection(intersection_uow.authorized_properties)
                 result = intersection.filter_products(products, buyer_identifiers)
@@ -404,7 +405,7 @@ async def _get_products_impl(
             # (ProgrammingError/IntegrityError/DataError) and everything else
             # PROPAGATE to the boundary, which normalizes unexpected exceptions
             # to the internal-error envelope — bugs are not retryable.
-            logger.error(f"Property list intersection infrastructure failure: {e}")
+            logger.error("Property list intersection infrastructure failure: %s", e)
             raise AdCPServiceUnavailableError(
                 "Could not evaluate property_list filtering against the property catalog"
             ) from e
@@ -436,7 +437,6 @@ async def _get_products_impl(
     # Enrich products with dynamic pricing from cached performance metrics
     # Updates pricing_options with price_guidance (floor, recommended) and estimated_exposures
     try:
-        from src.core.database.repositories.uow import ProductUoW
         from src.services.dynamic_pricing_service import DynamicPricingService
 
         # Extract country from request if available (future enhancement: parse from targeting)

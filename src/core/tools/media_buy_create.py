@@ -153,6 +153,7 @@ from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.property_intersection import PropertyIntersection, property_list_drop_advisory
 from src.services.targeting_capabilities import (
     collect_overlay_targeting_violations,
+    raise_if_overlay_targeting_violations,
     raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
@@ -1583,8 +1584,8 @@ def _build_property_list_advisories(
             result = intersection.filter_products([schema_product], buyer_identifiers)
         except Exception as exc:
             logger.warning(
-                "[INTERSECTION-ADVISORY] Intersection failed for package %s: %s",
-                getattr(package, "package_id", None),
+                "[INTERSECTION-ADVISORY] Intersection failed for packages[%d]: %s",
+                index,
                 exc,
                 exc_info=True,
             )
@@ -1593,9 +1594,9 @@ def _build_property_list_advisories(
             reason = result.dropped_products[0].reason.value if result.dropped_products else "zero_match"
             logger.warning(
                 "[INTERSECTION-ADVISORY] Buyer's property_list has zero overlap with product %s "
-                "for package %s (reason=%s, list=%s/%s). Buy proceeds per accept-with-context.",
+                "for packages[%d] (reason=%s, list=%s/%s). Buy proceeds per accept-with-context.",
                 product.product_id,
-                getattr(package, "package_id", None),
+                index,
                 reason,
                 ref.agent_url,
                 loggable_list_id(ref.list_id),
@@ -1607,13 +1608,12 @@ def _build_property_list_advisories(
                         f"product {product.product_id}'s properties ({reason}); the buy proceeds "
                         "but this package may deliver no matching inventory"
                     ),
-                    field=f"packages[{index}].targeting_overlay.property_list",
+                    field=package_field_path("targeting_overlay.property_list", index),
                     suggestion=(
                         "Verify the referenced list targets this seller's properties, or choose a "
                         "product whose publisher_properties overlap the list."
                     ),
                     product_id=product.product_id,
-                    package_id=getattr(package, "package_id", None),
                     reason=reason,
                     list_id=ref.list_id,
                 )
@@ -1621,9 +1621,22 @@ def _build_property_list_advisories(
     return advisories
 
 
-# The submitted variant's spec ``message`` field enforces maxLength 2000; an
-# over-long join would raise at response construction AFTER the buy persisted.
-_ADVISORY_MESSAGE_MAX = 2000
+def _submitted_message_max() -> int:
+    """The submitted variant's spec ``message`` maxLength, read from the model.
+
+    Derived (not hand-copied) so a spec bump that changes the cap cannot
+    drift: an over-long join would raise at response construction AFTER the
+    buy persisted.
+    """
+    from annotated_types import MaxLen
+
+    for meta in CreateMediaBuySubmitted.model_fields["message"].metadata:
+        if isinstance(meta, MaxLen):
+            return int(meta.max_length)
+    raise AssertionError("CreateMediaBuySubmitted.message lost its MaxLen constraint")
+
+
+_ADVISORY_MESSAGE_MAX = _submitted_message_max()
 
 
 def _advisory_message(advisories: list[Error]) -> str | None:
@@ -1674,8 +1687,11 @@ def _build_idempotency_hit_result(
     response carried — the zero-overlap property_list advisory message/ext,
     and the submitted-variant shape for approval-pending creates — is not
     reproduced. Buyers who missed the first response still get the ids they
-    need to proceed; full replay fidelity (persisting or recomputing the
-    original envelope) is a tracked follow-up.
+    need to proceed. Full replay fidelity is the verbatim success-cache that
+    replaces this reconstruction (in flight on the idempotency-replay branch);
+    once it merges, this branch's reconciliation makes the submitted variant
+    cacheable and replayable byte-for-byte, per the wire contract's
+    same-response/same-task_id replay rule.
     """
     from src.core.database.repositories import MediaBuyUoW
 
@@ -2336,14 +2352,7 @@ async def _create_media_buy_impl(
         if req.packages:
             for pkg in req.packages:
                 if pkg.targeting_overlay is not None:
-                    violations = collect_overlay_targeting_violations(pkg.targeting_overlay)
-                    if violations:
-                        error_msg = f"Targeting validation failed: {'; '.join(violations)}"
-                        raise AdCPInvalidRequestError(
-                            error_msg,
-                            suggestion="Check targeting constraints.",
-                            field="targeting_overlay",
-                        )
+                    raise_if_overlay_targeting_violations(collect_overlay_targeting_violations(pkg.targeting_overlay))
 
     except (AdCPError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 if TYPE_CHECKING:
@@ -503,6 +503,45 @@ class AdServerAdapter(ABC):
     ) -> UpdateMediaBuyResponse:
         """Updates a media buy with a specific action."""
         pass
+
+    def validate_targeting_update(self, packages: list[Any]) -> None:
+        """Adapter-specific pre-write validation of targeting_overlay updates.
+
+        Runs before the dry_run early-return and before any persistence, so
+        dry-run requests are validated identically to live ones (parity with
+        the create path's pre-booking gate). The default accepts everything;
+        adapters with compile-time constraints (e.g. Kevel's identifier-type
+        gate) override and raise a typed AdCPError.
+
+        ``packages`` carries the request's package-update objects; each
+        exposes ``targeting_overlay`` (possibly None).
+        """
+        return None
+
+    def update_package_targeting(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        targeting_overlay: Any,
+        today: date,
+    ) -> None:
+        """Recompile and push an updated targeting_overlay to the ad server.
+
+        Called by the update path only for overlays carrying ``property_list``
+        on adapters that declare ``supports_property_list_targeting=True`` (the
+        boundary gate rejects everyone else first). The default raises so a
+        future adapter that declares support but forgets this override fails
+        loud instead of silently persisting an overlay the live flight never
+        receives. Adapters whose persistence layer IS the compile path (Mock)
+        override with a documented no-op.
+        """
+        from src.core.exceptions import AdCPCapabilityNotSupportedError
+
+        raise AdCPCapabilityNotSupportedError(
+            f"{type(self).__name__} declares property_list support but cannot recompile targeting on update_media_buy.",
+            field="targeting_overlay.property_list",
+            suggestion="Remove targeting_overlay changes from the update, or contact the seller.",
+        )
 
     def get_config_ui_endpoint(self) -> str | None:
         """

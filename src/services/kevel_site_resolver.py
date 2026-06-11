@@ -34,7 +34,6 @@ import hashlib
 import hmac
 import json
 import logging
-import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -44,6 +43,7 @@ from adcp.types import Identifier, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.property_list_resolver import loggable_list_id, resolve_property_list_typed_sync
+from src.core.ttl_cache import ThreadSafeTTLCache
 from src.services.identifier_matching import (
     buyer_identifier_matches_host,
     host_from_url_or_host,
@@ -96,18 +96,10 @@ class KevelSiteResolver:
 
     # Module-level cache across resolver instances:
     # (base_url, network_id, hmac(api_key, purpose)[:16]) -> ({host: site_id}, expires_at).
-    _site_cache: ClassVar[dict[tuple[str, str, str], tuple[dict[str, int], datetime]]] = {}
-
-    # Guards reads/writes on ``_site_cache`` so concurrent ``create_media_buy``
-    # calls on the same network can't race. Without the lock, two threads
-    # could observe ``cached is None`` simultaneously, both call
-    # ``_fetch_all_sites()`` (double HTTP), and both write to the cache
-    # (last-write-wins clobber). The expiry-drop branch could also ``del``
-    # a key another thread had already refreshed, raising ``KeyError``. The
-    # HTTP fetch stays OUTSIDE the lock (slow) — two concurrent fetches on
-    # a cold cache are still possible and acceptable (both produce the same
-    # data), but the cache pop/write is atomic.
-    _cache_lock: ClassVar[threading.Lock] = threading.Lock()
+    # Concurrent ``create_media_buy`` calls on the same network share this
+    # index; the locking/expiry/last-write-wins contract lives in
+    # ThreadSafeTTLCache.
+    _site_cache: ClassVar[ThreadSafeTTLCache[tuple[str, str, str], dict[str, int]]] = ThreadSafeTTLCache()
 
     def __init__(
         self,
@@ -195,19 +187,12 @@ class KevelSiteResolver:
         """
         cache_key = (self.base_url, self.network_id, self._cache_partition)
 
-        with self._cache_lock:
-            cached = self._site_cache.get(cache_key)
-            if cached is not None:
-                cached_lookup, cached_expires_at = cached
-                if datetime.now(UTC) < cached_expires_at:
-                    return cached_lookup
-                # Expired — drop and re-fetch below. ``pop`` (not ``del``) so
-                # we don't raise ``KeyError`` if another thread already
-                # repopulated the entry between the read above and now.
-                self._site_cache.pop(cache_key, None)
+        cached_lookup = self._site_cache.get(cache_key)
+        if cached_lookup is not None:
+            return cached_lookup
 
-        # HTTP fetch outside the lock — Kevel pagination can take seconds and
-        # holding the lock that long would serialize unrelated networks too.
+        # HTTP fetch outside the cache lock — Kevel pagination can take
+        # seconds and holding it that long would serialize unrelated networks.
         sites = self._fetch_all_sites()
         lookup: dict[str, int] = {}
         for site in sites:
@@ -223,13 +208,7 @@ class KevelSiteResolver:
                 lookup[host] = int(site_id)
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self.cache_ttl_seconds)
-        with self._cache_lock:
-            # Last-write-wins: a concurrent fetch may have populated this key
-            # in the brief window we were doing HTTP. Both fetches produce
-            # the same data (within Kevel's API consistency), so overwriting
-            # is safe and avoids the complexity of a fetch-in-progress
-            # sentinel.
-            self._site_cache[cache_key] = (lookup, expires_at)
+        self._site_cache.store(cache_key, lookup, expires_at)
         logger.debug(
             "Cached Kevel site index for network %s: %d sites (expires %s)",
             self.network_id,
@@ -293,5 +272,4 @@ class KevelSiteResolver:
     @classmethod
     def clear_cache(cls) -> None:
         """Reset the module-level site index cache. Test-only utility."""
-        with cls._cache_lock:
-            cls._site_cache.clear()
+        cls._site_cache.clear()

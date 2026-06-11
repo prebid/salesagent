@@ -286,8 +286,9 @@ class TestSiteIndexCache:
             resolver.resolve(_ref())
             # Manually expire the cache entry
             cache_key = _site_cache_key(resolver)
-            lookup, _expires = KevelSiteResolver._site_cache[cache_key]
-            KevelSiteResolver._site_cache[cache_key] = (lookup, datetime.now(UTC) - timedelta(seconds=1))
+            lookup = KevelSiteResolver._site_cache.get(cache_key)
+            assert lookup is not None
+            KevelSiteResolver._site_cache.store(cache_key, lookup, datetime.now(UTC) - timedelta(seconds=1))
             resolver.resolve(_ref())
 
         assert fetch_mock.call_count == 2
@@ -344,7 +345,8 @@ class TestSiteIndexCache:
         assert 1 <= fetch_mock.call_count <= 8, f"fetch count {fetch_mock.call_count} outside the stampede bound"
         # Final cache state holds the lookup once with no torn entries.
         cache_key = _site_cache_key(resolver)
-        cached_lookup, _expires_at = KevelSiteResolver._site_cache[cache_key]
+        cached_lookup = KevelSiteResolver._site_cache.get(cache_key)
+        assert cached_lookup is not None
         assert cached_lookup == {"www.espn.com": 42}, f"Cache state torn after concurrent writes: {cached_lookup!r}"
 
     def test_sequential_expired_cache_redrop_does_not_raise(self):
@@ -361,7 +363,7 @@ class TestSiteIndexCache:
         cache_key = _site_cache_key(resolver)
 
         # Pre-populate cache with an expired entry to force the pop branch.
-        KevelSiteResolver._site_cache[cache_key] = ({"old.com": 1}, datetime.now(UTC) - timedelta(seconds=1))
+        KevelSiteResolver._site_cache.store(cache_key, {"old.com": 1}, datetime.now(UTC) - timedelta(seconds=1))
 
         fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
         with (

@@ -443,13 +443,20 @@ class TestA2ASkillInvocation:
             # Process the message
             result = await handler.on_message_send(params, context=ctx)
 
-            # Verify the result has status=submitted (manual approval required)
+            # The A2A Task COMPLETES even though the AdCP response is the
+            # ``submitted`` variant: the spec's extraction algorithm reads
+            # artifacts only on final A2A states (interim states read
+            # status.message, which carries no DataPart here), and
+            # calling-an-agent prose explicitly sanctions "a completed A2A
+            # task carrying a submitted AdCP response". The AdCP-level
+            # ``status: submitted`` field is the discriminator; the A2A
+            # task_id rides artifact.metadata.adcp_task_id for routers.
             assert isinstance(result, Task)
-            assert result.status.state == TaskState.TASK_STATE_SUBMITTED
-            # The submitted Task CARRIES its artifact: the spec's submitted
-            # variant is the buyer's tracking handle (task_id + message +
-            # advisory errors slot). media_buy_id/packages are FORBIDDEN on
-            # this variant — they arrive on the completion artifact after
+            assert result.status.state == TaskState.TASK_STATE_COMPLETED
+            # The Task CARRIES its artifact: the spec's submitted variant is
+            # the buyer's tracking handle (task_id + message + advisory
+            # errors slot). media_buy_id/packages are FORBIDDEN on this
+            # variant — they arrive on the completion artifact after
             # approval — and the type-derived success flag stays True (the
             # task was accepted, not failed).
             from tests.utils.a2a_helpers import extract_data_from_artifact
@@ -458,6 +465,7 @@ class TestA2ASkillInvocation:
             payload = extract_data_from_artifact(result.artifacts[0])
             assert payload["status"] == "submitted"
             assert payload["task_id"], "submitted variant must carry the tracking task_id"
+            assert dict(result.artifacts[0].metadata)["adcp_task_id"] == payload["task_id"]
             assert payload["success"] is True
             assert "media_buy_id" not in payload
             assert "packages" not in payload

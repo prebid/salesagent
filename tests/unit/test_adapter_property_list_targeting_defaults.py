@@ -32,9 +32,27 @@ from src.services.targeting_capabilities import raise_if_property_list_unsupport
 _DECLARED_CAPABLE = {Kevel, MockAdServer}
 
 
+def _import_all_adapter_modules() -> None:
+    """Import every module under ``src/adapters`` so ``__subclasses__`` is complete.
+
+    ``__subclasses__()`` only sees classes whose modules have been imported;
+    factory-disabled adapters (e.g. Xandr, commented out of the package
+    ``__init__``) would otherwise silently escape the False pin, making the
+    enumeration import-order-dependent instead of derived.
+    """
+    import importlib
+    import pkgutil
+
+    import src.adapters as _adapters_pkg
+
+    for module_info in pkgutil.iter_modules(_adapters_pkg.__path__):
+        importlib.import_module(f"src.adapters.{module_info.name}")
+
+
 def _non_compiling_adapters() -> list[type[AdServerAdapter]]:
     """Every concrete adapter without a declared compile path — derived, not
     hand-enumerated, so adapter #7 joins the False pin automatically."""
+    _import_all_adapter_modules()
     return sorted(
         (cls for cls in AdServerAdapter.__subclasses__() if cls not in _DECLARED_CAPABLE),
         key=lambda cls: cls.__name__,

@@ -340,3 +340,51 @@ def test_update_rejects_property_list_when_adapter_unsupported(capability_media_
     assert exc.recovery == "correctable"
     assert exc.field == "packages[0].targeting_overlay.property_list"
     assert exc.suggestion is not None
+
+
+@pytest.mark.requires_db
+def test_update_accepts_and_recompiles_property_list_on_capable_adapter(capability_media_buy):
+    """E3 update parity: a capable adapter receives the recompile call.
+
+    The update-side sibling of ``test_create_accepts_property_list_when_adapter_supports``:
+    MockAdServer declares support, so the boundary gate passes, the overlay
+    persists, and the impl pushes the recompile through the adapter seam
+    (``update_package_targeting``) — pinned here via a spy on the real
+    MockAdServer method so the impl→adapter wiring is the thing proven.
+    """
+    from unittest.mock import patch as mock_patch
+
+    media_buy_id = capability_media_buy
+    request = UpdateMediaBuyRequest(
+        media_buy_id=media_buy_id,
+        packages=[
+            {
+                "package_id": "pkg_test_plcap",
+                "targeting_overlay": TEST_PROPERTY_LIST_TARGETING_OVERLAY,
+            }
+        ],
+    )
+
+    from datetime import date
+    from unittest.mock import ANY
+
+    with (
+        mock_patch.object(MockAdServer, "validate_targeting_update", autospec=True) as spy_validate,
+        mock_patch.object(MockAdServer, "update_package_targeting", autospec=True) as spy_apply,
+    ):
+        # dry_run=False: the recompile push lives in the write phase, which
+        # the dry_run early-return never reaches (the type gate, by contrast,
+        # runs before it — pinned by the reject sibling above).
+        result = _update_media_buy_impl(req=request, identity=_make_identity(dry_run=False))
+
+    assert result is not None
+    # autospec passes the adapter instance first (ANY); the rest are the
+    # impl's exact positional arguments.
+    spy_validate.assert_called_once_with(ANY, request.packages)
+    spy_apply.assert_called_once_with(
+        ANY,
+        media_buy_id,
+        "pkg_test_plcap",
+        request.packages[0].targeting_overlay,
+        date.today(),
+    )

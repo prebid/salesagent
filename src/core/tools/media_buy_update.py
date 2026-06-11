@@ -90,6 +90,7 @@ from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.targeting_capabilities import (
     collect_overlay_targeting_violations,
+    raise_if_overlay_targeting_violations,
     raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
@@ -306,8 +307,7 @@ def _update_media_buy_impl(
                     if pkg_update.targeting_overlay is None:
                         continue
                     overlay_violations.extend(collect_overlay_targeting_violations(pkg_update.targeting_overlay))
-                if overlay_violations:
-                    raise AdCPValidationError(f"Targeting validation failed: {'; '.join(overlay_violations)}")
+                raise_if_overlay_targeting_violations(overlay_violations)
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:
@@ -341,14 +341,22 @@ def _update_media_buy_impl(
             # all transports + dry_run honor the contract uniformly.
             raise_if_property_list_unsupported(req.packages, adapter)
 
+            # Adapter-specific compile gate (e.g. Kevel's identifier-type
+            # check) — runs before the dry_run early-return so dry-run updates
+            # validate identically to live ones, mirroring create's
+            # pre-booking gate.
+            if req.packages:
+                adapter.validate_targeting_update(req.packages)
+
             # The zero-overlap advisory (``_build_property_list_advisories``)
             # is create-only today: create returns BUYER-VISIBLE advisories
             # (message/ext on success, the submitted variant's errors slot),
-            # while update enforces only the hard gates above — a zero-overlap
-            # property_list update succeeds with no buyer context. The spec's
-            # update-success variant forbids ``errors`` and has no submitted
-            # variant, so update parity means a message-channel advisory; that
-            # is a tracked follow-up, not an oversight.
+            # while update enforces the hard gates above plus the adapter
+            # recompile seam — a zero-overlap property_list update succeeds
+            # with no buyer context. The spec's update-success variant forbids
+            # ``errors`` and has no submitted variant, so update parity means
+            # a message-channel advisory; deliberately deferred (it needs its
+            # own message-composition design), not an oversight.
 
             # Dry-run mode: Return simulated response without any database writes
             # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
@@ -1077,6 +1085,19 @@ def _update_media_buy_impl(
                         # Flag the JSON field as modified so SQLAlchemy persists it
                         attributes.flag_modified(media_package, "package_config")
                         session.flush()
+
+                        # property_list overlays must reach the live flight,
+                        # not just package_config: recompile via the adapter
+                        # (capable adapters only — the boundary gate rejected
+                        # everyone else). Raising here rolls back the persist
+                        # above, so config and flight never diverge.
+                        if pkg_update.targeting_overlay.property_list is not None:
+                            adapter.update_package_targeting(
+                                req.media_buy_id,
+                                pkg_update.package_id,
+                                pkg_update.targeting_overlay,
+                                today,
+                            )
                         logger.info(
                             f"[update_media_buy] Updated package {pkg_update.package_id} targeting: {pkg_update.targeting_overlay}"
                         )

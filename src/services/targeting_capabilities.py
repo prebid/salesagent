@@ -14,7 +14,7 @@ for upstream inclusion in AdCP.
 
 from typing import TYPE_CHECKING, Any
 
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
 from src.core.property_list_resolver import package_property_list_ref
 from src.core.schemas import Targeting, TargetingCapability
 from src.core.validation_helpers import package_field_path
@@ -284,7 +284,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
                 "retry, or use a seller whose get_adcp_capabilities advertises "
                 "ext.prebid.property_list_targeting=true."
             ),
-            field=f"packages[{index}].targeting_overlay.property_list",
+            field=package_field_path("targeting_overlay.property_list", index),
             suggestion=(
                 "Remove targeting_overlay.property_list from this package and retry, "
                 "or choose a seller whose get_adcp_capabilities declares "
@@ -452,11 +452,24 @@ def collect_overlay_targeting_violations(targeting_overlay: Targeting) -> list[s
     Shared by ``_create_media_buy_impl`` and ``_update_media_buy_impl`` so a
     buyer cannot bypass unknown-field rejection, managed-only dimension checks,
     or geo inclusion/exclusion overlap by routing the same change through a
-    different path. The raise shape differs between create and update, so the
-    callers raise; only the collection is shared here.
+    different path.
     """
     return (
         validate_unknown_targeting_fields(targeting_overlay)
         + validate_overlay_targeting(targeting_overlay)
         + validate_geo_overlap(targeting_overlay)
     )
+
+
+def raise_if_overlay_targeting_violations(violations: list[str]) -> None:
+    """Single raise shape for overlay-targeting violations on create AND update.
+
+    Both paths emit byte-identical envelopes (INVALID_REQUEST, same field,
+    same suggestion) for identical violations from the shared collector.
+    """
+    if violations:
+        raise AdCPInvalidRequestError(
+            f"Targeting validation failed: {'; '.join(violations)}",
+            suggestion="Check targeting constraints.",
+            field="targeting_overlay",
+        )

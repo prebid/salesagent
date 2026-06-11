@@ -181,9 +181,8 @@ class PropertyIntersection:
         return rows
 
 
-# Sentinel: lets callers pass explicit ``None`` values (e.g. a package without
-# a package_id) and still have the key appear in ``details``, while omitted
-# kwargs leave the key out entirely.
+# Sentinel: omitted kwargs leave their key out of ``details`` entirely, while
+# explicitly-passed values (including None) appear.
 _UNSET: Any = object()
 
 
@@ -193,7 +192,6 @@ def property_list_drop_advisory(
     field: str,
     reason: Any = _UNSET,
     product_id: Any = _UNSET,
-    package_id: Any = _UNSET,
     list_id: Any = _UNSET,
     additional_dropped: Any = _UNSET,
     suggestion: str | None = None,
@@ -209,7 +207,6 @@ def property_list_drop_advisory(
     details: dict[str, Any] = {}
     for key, value in (
         ("product_id", product_id),
-        ("package_id", package_id),
         ("reason", reason),
         ("list_id", list_id),
         ("additional_dropped", additional_dropped),
@@ -222,4 +219,13 @@ def property_list_drop_advisory(
         field=field,
         suggestion=suggestion,
         details=details or None,
+        # Explicit recovery: a zero-overlap/dropped-product advisory is
+        # buyer-correctable (fix the list or pick another product) — without
+        # it, the spec's forward-compat rule tells receivers to assume
+        # transient (retry), the wrong instruction for this condition.
+        recovery="correctable",
+        # severity is prose-defined for warnings-in-errors[] but absent from
+        # the Error schema at 3.0.1 — legal via additionalProperties, and it
+        # lets schema-aware buyers separate advisories from failures.
+        severity="warning",
     )

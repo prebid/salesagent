@@ -1,9 +1,10 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, ClassVar
 
 import requests
+from adcp.types import PropertyListReference
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
@@ -14,6 +15,7 @@ from src.core.exceptions import (
 )
 from src.core.property_list_resolver import package_property_list_ref, resolve_property_list_typed_sync
 from src.core.schemas import *
+from src.core.validation_helpers import package_field_path
 from src.services.kevel_site_resolver import (
     KevelSiteResolver,
     ResolvedSiteIds,
@@ -93,7 +95,7 @@ class Kevel(AdServerAdapter):
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"display", "native"}
 
-    def _resolve_property_list(self, ref: Any) -> ResolvedSiteIds:
+    def _resolve_property_list(self, ref: PropertyListReference) -> ResolvedSiteIds:
         """Resolve a ``PropertyListReference`` once per request, with dry-run support.
 
         Memoizes by ``(agent_url, list_id)`` so ``_raise_if_property_list_uncompilable``
@@ -166,12 +168,49 @@ class Kevel(AdServerAdapter):
                         f"{sorted(resolved.unsupported_types)}. Remove these identifier types "
                         "from the list, or use a different property list scoped to domain/subdomain."
                     ),
-                    field=f"packages[{index}].targeting_overlay.property_list",
+                    field=package_field_path("targeting_overlay.property_list", index),
                     suggestion=(
                         "Remove the unsupported identifier types from the property list, or "
                         "scope the list to domain/subdomain identifiers."
                     ),
                 )
+
+    def validate_targeting_update(self, packages: list[Any]) -> None:
+        """Update-side identifier-type gate — same check create runs pre-booking.
+
+        Delegates to ``_raise_if_property_list_uncompilable`` (the package
+        objects expose ``targeting_overlay`` the same way create's
+        MediaPackages do), so create and update reject the same lists with
+        byte-identical envelopes.
+        """
+        self._raise_if_property_list_uncompilable(packages)
+
+    def update_package_targeting(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        targeting_overlay: Any,
+        today: date,
+    ) -> None:
+        """Recompile the overlay and push it to the live flight.
+
+        Mirrors create's compile step: ``_build_targeting`` resolves
+        property_list to siteIds (memoized resolver, types already gated by
+        ``validate_targeting_update``) and the result lands on the flight via
+        PUT — the same endpoint shape the action-based updates use. Without
+        this push the recompiled list would exist only in package_config while
+        the flight kept serving the old siteIds.
+        """
+        self.log(f"Kevel.update_package_targeting for flight '{package_id}'", dry_run_prefix=False)
+        targeting = self._build_targeting(targeting_overlay)
+        if self.dry_run:
+            self.log(f"Would call: PUT {self.base_url}/flight/{package_id}")
+            if targeting:
+                self.log(f"  Payload: {json.dumps(targeting, default=list)}")
+            return
+        response = requests.put(f"{self.base_url}/flight/{package_id}", headers=self.headers, json=targeting)
+        response.raise_for_status()
+        self.audit_logger.log_success(f"Updated Kevel flight {package_id} targeting for {media_buy_id}")
 
     def _validate_targeting(self, targeting_overlay):
         """Validate targeting and return unsupported features."""

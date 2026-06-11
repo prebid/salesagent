@@ -89,9 +89,11 @@ class TestEmitPropertyListAdvisories:
         assert "zero overlap" in advisory.message and "p1" in advisory.message
         assert advisory.field == "packages[0].targeting_overlay.property_list"
         assert advisory.suggestion is not None
+        # package identity rides the JSONPath-lite ``field`` (packages[i]);
+        # PackageRequest carries no package_id at create time, so details
+        # holds only keys with real values.
         assert advisory.details == {
             "product_id": "p1",
-            "package_id": "pkg_p1",
             "reason": "no_property_overlap",
             "list_id": "L1",
         }
@@ -239,3 +241,53 @@ class TestSuccessMessageSurfacesAdvisories:
         response = CreateMediaBuySuccess.model_construct(media_buy_id="mb_adv_2", packages=[], ext=self._EXT)
         assert isinstance(response.ext, dict), "precondition: ext must be the uncoerced dict shape"
         assert "zero overlap" in str(response)
+
+
+class TestAdvisoryRecoverySemantics:
+    """The single builder stamps the advisory's recovery + severity explicitly."""
+
+    def test_drop_advisory_is_correctable_warning(self):
+        from src.services.property_intersection import property_list_drop_advisory
+
+        advisory = property_list_drop_advisory(
+            message="zero overlap",
+            field="packages[0].targeting_overlay.property_list",
+        )
+        assert advisory.recovery is not None and advisory.recovery.value == "correctable"
+        dumped = advisory.model_dump()
+        assert dumped["severity"] == "warning"
+
+
+class TestSuccessVariantForbidsErrors:
+    """Construction-time enforcement of the spec's success/error discriminator."""
+
+    def test_create_success_rejects_errors_kwarg(self):
+        import pydantic
+
+        from src.core.schemas._base import CreateMediaBuySuccess
+
+        with pytest.raises(pydantic.ValidationError, match="forbids 'errors'"):
+            CreateMediaBuySuccess(
+                media_buy_id="mb_1",
+                status="active",
+                packages=[],
+                errors=[{"code": "X", "message": "y"}],
+            )
+
+    def test_update_success_rejects_errors_kwarg(self):
+        import pydantic
+
+        from src.core.schemas._base import UpdateMediaBuySuccess
+
+        with pytest.raises(pydantic.ValidationError, match="forbids 'errors'"):
+            UpdateMediaBuySuccess(
+                media_buy_id="mb_1",
+                affected_packages=[],
+                errors=[{"code": "X", "message": "y"}],
+            )
+
+    def test_reconstruction_tolerates_none_errors(self):
+        from src.core.schemas._base import CreateMediaBuySuccess
+
+        obj = CreateMediaBuySuccess(media_buy_id="mb_1", status="active", packages=[], errors=None)
+        assert "errors" not in obj.model_dump(exclude_none=True)

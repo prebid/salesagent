@@ -44,7 +44,7 @@ from tests.helpers.adcp_factories import (
     create_test_property_list_create_params,
 )
 from tests.utils.a2a_helpers import drive_a2a_skill, extract_data_from_artifact
-from tests.utils.database_helpers import seed_property_list_capability_tenant
+from tests.utils.database_helpers import manual_approval, seed_property_list_capability_tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -251,32 +251,29 @@ class TestCreateAdvisoryAttachment:
         clobber the payload's own message (REST/MCP and A2A carry the same
         advisory text), and the artifact's errors[] slot survives framing.
         """
-        with get_db_session() as session:
-            tenant = session.get(TenantModel, TENANT_ID)
-            tenant.human_review_required = True
-            session.commit()
-        try:
-            headers = {
-                "x-adcp-auth": ACCESS_TOKEN,
-                "x-adcp-tenant": TENANT_ID,
-                "x-test-session-id": "prop-list-advisory-a2a-submitted",
-            }
-            with _patched_resolver():
-                result = await drive_a2a_skill(
-                    "create_media_buy",
-                    create_test_property_list_create_params(PRODUCT_ID),
-                    headers,
-                    auth_token=ACCESS_TOKEN,
-                )
-        finally:
-            with get_db_session() as session:
-                tenant = session.get(TenantModel, TENANT_ID)
-                tenant.human_review_required = False
-                session.commit()
+        headers = {
+            "x-adcp-auth": ACCESS_TOKEN,
+            "x-adcp-tenant": TENANT_ID,
+            "x-test-session-id": "prop-list-advisory-a2a-submitted",
+        }
+        with manual_approval(TENANT_ID), _patched_resolver():
+            result = await drive_a2a_skill(
+                "create_media_buy",
+                create_test_property_list_create_params(PRODUCT_ID),
+                headers,
+                auth_token=ACCESS_TOKEN,
+            )
 
+        # Final A2A state + artifact: the extraction algorithm only reads
+        # artifacts on final states, so the submitted AdCP payload rides a
+        # COMPLETED task (the payload's status field is the discriminator).
+        from a2a.types import TaskState
+
+        assert result.status.state == TaskState.TASK_STATE_COMPLETED
         assert result.artifacts, "submitted Task must carry its tracking artifact"
         payload = extract_data_from_artifact(result.artifacts[0])
         assert payload["status"] == "submitted"
+        assert dict(result.artifacts[0].metadata)["adcp_task_id"] == payload["task_id"]
         assert payload["task_id"]
         assert payload["success"] is True
         assert payload["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
@@ -302,33 +299,25 @@ class TestCreateAdvisoryAttachment:
 
         with get_db_session() as session:
             tenant = session.get(TenantModel, TENANT_ID)
-            tenant.human_review_required = True
-            # REST has no x-test-session-id seam (the testing-context bypass the
-            # MCP/A2A wire tests use — flagged as a transport-parity follow-up),
-            # so the production setup-checklist gate runs for real here: satisfy
-            # its SSO item the production way.
+            # This REST leg deliberately runs WITHOUT the x-test-session-id
+            # bypass (REST honors testing hooks since the resolve_identity
+            # parity default): the production setup-checklist gate runs for
+            # real here, so its SSO item is satisfied the production way.
             tenant.auth_setup_mode = False
             session.commit()
         with IntegrationEnv() as _env:
             tenant_row = _env._session.scalars(select(TenantModel).filter_by(tenant_id=TENANT_ID)).first()
             TenantAuthConfigFactory(tenant=tenant_row, oidc_enabled=True)
-        try:
-            with _patched_resolver():
-                client = TestClient(app, raise_server_exceptions=False)
-                response = client.post(
-                    "/api/v1/media-buys",
-                    json=create_test_property_list_create_params(PRODUCT_ID),
-                    headers={
-                        "x-adcp-auth": ACCESS_TOKEN,
-                        "x-adcp-tenant": TENANT_ID,
-                        "x-test-session-id": "prop-list-advisory-rest-submitted",
-                    },
-                )
-        finally:
-            with get_db_session() as session:
-                tenant = session.get(TenantModel, TENANT_ID)
-                tenant.human_review_required = False
-                session.commit()
+        with manual_approval(TENANT_ID), _patched_resolver():
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.post(
+                "/api/v1/media-buys",
+                json=create_test_property_list_create_params(PRODUCT_ID),
+                headers={
+                    "x-adcp-auth": ACCESS_TOKEN,
+                    "x-adcp-tenant": TENANT_ID,
+                },
+            )
 
         assert response.status_code == 200, (
             f"submitted create must serialize, got {response.status_code}: {response.text}"
@@ -339,6 +328,42 @@ class TestCreateAdvisoryAttachment:
         assert payload["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
         assert "zero overlap" in payload["message"]
         assert "media_buy_id" not in payload and "packages" not in payload
+
+    def test_rest_dry_run_header_is_honored(self, advisory_tenant):
+        """X-Dry-Run on REST simulates instead of booking (transport parity).
+
+        Before the resolve_identity testing-context default, REST dropped the
+        AdCP testing hooks entirely — a buyer's X-Dry-Run create booked for
+        real. Pins the parity contract at real HTTP bytes: the response is the
+        dry-run simulation and no MediaBuy row is persisted.
+        """
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.database.models import MediaBuy as MediaBuyModel
+
+        with _patched_resolver():
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.post(
+                "/api/v1/media-buys",
+                json=create_test_property_list_create_params(PRODUCT_ID),
+                headers={
+                    "x-adcp-auth": ACCESS_TOKEN,
+                    "x-adcp-tenant": TENANT_ID,
+                    "X-Dry-Run": "true",
+                },
+            )
+
+        assert response.status_code == 200, (
+            f"dry-run create must serialize, got {response.status_code}: {response.text}"
+        )
+        payload = response.json()
+        assert payload.get("media_buy_id"), "dry-run returns a simulated buy id"
+        with get_db_session() as session:
+            persisted = session.scalars(
+                select(MediaBuyModel).filter_by(tenant_id=TENANT_ID, media_buy_id=payload["media_buy_id"])
+            ).first()
+        assert persisted is None, "X-Dry-Run on REST must not persist a booking"
 
     @pytest.mark.asyncio
     async def test_mcp_submitted_create_wire_carries_advisory(self, advisory_tenant):
@@ -361,28 +386,19 @@ class TestCreateAdvisoryAttachment:
         }
         arguments = create_test_property_list_create_params(PRODUCT_ID)
 
-        with get_db_session() as session:
-            tenant = session.get(TenantModel, TENANT_ID)
-            tenant.human_review_required = True
-            session.commit()
-        try:
-            # Each module binds get_http_headers via ``from ... import`` so each
-            # needs its own patch; testing_hooks turns x-test-session-id into the
-            # production-shaped setup-checklist bypass.
-            with (
-                patch("src.core.auth.get_http_headers", return_value=headers),
-                patch("src.core.transport_helpers.get_http_headers", return_value=headers),
-                patch("src.core.testing_hooks.get_http_headers", return_value=headers),
-                patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers),
-                _patched_resolver(),
-            ):
-                async with Client(mcp) as client:
-                    result = await client.call_tool("create_media_buy", arguments)
-        finally:
-            with get_db_session() as session:
-                tenant = session.get(TenantModel, TENANT_ID)
-                tenant.human_review_required = False
-                session.commit()
+        # Each module binds get_http_headers via ``from ... import`` so each
+        # needs its own patch; testing_hooks turns x-test-session-id into the
+        # production-shaped setup-checklist bypass.
+        with (
+            manual_approval(TENANT_ID),
+            patch("src.core.auth.get_http_headers", return_value=headers),
+            patch("src.core.transport_helpers.get_http_headers", return_value=headers),
+            patch("src.core.testing_hooks.get_http_headers", return_value=headers),
+            patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers),
+            _patched_resolver(),
+        ):
+            async with Client(mcp) as client:
+                result = await client.call_tool("create_media_buy", arguments)
 
         payload = result.structured_content
         assert isinstance(payload, dict), f"expected structured content dict, got {type(payload)}"
@@ -392,6 +408,47 @@ class TestCreateAdvisoryAttachment:
         assert payload["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
         assert "zero overlap" in payload["message"]
         assert "media_buy_id" not in payload and "packages" not in payload
+
+    @pytest.mark.asyncio
+    async def test_mcp_completed_create_wire_carries_ext_advisory(self, advisory_tenant):
+        """The completed variant's ext advisory crosses the real MCP boundary intact.
+
+        MCP is the one transport whose structured content bypasses
+        ``model_dump()`` overrides — exactly where a transport-specific drop of
+        ``ext.prebid.property_list_advisories`` would hide. Same rig as the
+        submitted sibling, without the manual-approval flip.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        headers = {
+            "x-adcp-auth": ACCESS_TOKEN,
+            "x-adcp-tenant": TENANT_ID,
+            "x-test-session-id": "prop-list-advisory-mcp-completed",
+        }
+        arguments = create_test_property_list_create_params(PRODUCT_ID)
+
+        with (
+            patch("src.core.auth.get_http_headers", return_value=headers),
+            patch("src.core.transport_helpers.get_http_headers", return_value=headers),
+            patch("src.core.testing_hooks.get_http_headers", return_value=headers),
+            patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers),
+            _patched_resolver(),
+        ):
+            async with Client(mcp) as client:
+                result = await client.call_tool("create_media_buy", arguments)
+
+        payload = result.structured_content
+        assert isinstance(payload, dict), f"expected structured content dict, got {type(payload)}"
+        payload = payload.get("result", payload)
+        assert payload["media_buy_id"], "auto-approve path must complete the buy"
+        assert "errors" not in payload or payload["errors"] is None
+        advisory = payload["ext"]["prebid"]["property_list_advisories"][0]
+        assert advisory["code"] == "PRODUCT_UNAVAILABLE"
+        assert advisory["severity"] == "warning"
+        content_text = " ".join(getattr(block, "text", "") for block in result.content)
+        assert "zero overlap" in content_text
 
     @pytest.mark.asyncio
     async def test_a2a_completed_create_wire_success_true_with_advisory(self, advisory_tenant):

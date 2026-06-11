@@ -446,3 +446,27 @@ def set_media_buy_status(media_buy_id: str, status: str) -> None:
         mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).one()
         mb.status = status
         session.commit()
+
+
+@contextmanager
+def manual_approval(tenant_id: str):
+    """Force a tenant onto the manual-approval path for the duration of a test.
+
+    Flips ``human_review_required`` and restores it on exit (including on
+    failure), so wire tests that need the submitted variant don't each carry
+    the same try/finally flip block.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Tenant as _Tenant
+
+    with get_db_session() as session:
+        tenant = session.get(_Tenant, tenant_id)
+        tenant.human_review_required = True
+        session.commit()
+    try:
+        yield
+    finally:
+        with get_db_session() as session:
+            tenant = session.get(_Tenant, tenant_id)
+            tenant.human_review_required = False
+            session.commit()
