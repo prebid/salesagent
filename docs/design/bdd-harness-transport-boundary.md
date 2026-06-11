@@ -329,39 +329,37 @@ coverage that exists *only* on `impl`.
 **Impl-only fixtures/envs (static analysis):**
 - `MediaBuyAccountEnv` (`tests/harness/media_buy_account.py`) — defines **only**
   `call_impl` (calls `resolve_account` directly; `EXTERNAL_PATCHES={}`). Used by
-  the UC-002 `account`-marker and UC-006 account scenarios. Account resolution on
-  the wire transports requires the wrapper plumbing in `l9wn`, so dropping
-  `impl` here is gated on `l9wn`.
-- Unit envs (`*_unit.py`: `delivery_poll_unit`, `product_unit`,
-  `delivery_webhook_unit`, `delivery_circuit_breaker_unit`) run mocked-DB and are
-  used by webhook / circuit-breaker scenarios; verify their wire coverage or
-  re-home to unit tests.
+  the UC-002 `account`-marker and UC-006 account scenarios. Wire account
+  resolution is `l9wn` — but it is **orthogonal** to the drop (on drop these rows
+  become wire `xfail`+note; `l9wn` graduates them later).
+- Unit envs (`*_unit.py`) run mocked-DB; verify their wire coverage.
 - All other domain envs inherit the four transports from `BaseTestEnv`.
 
-**Impl-only passing scenarios (empirical).** Full serial BDD run, 8905 nodes
-(1540 passed / 42 failed / 7319 xfailed / 4 skipped):
+**Impl-only passing scenarios (empirical — RE-VERIFIED, outline-aware parser).**
+The first pass under-counted (its regex matched only bare `[impl]`, skipping
+scenario-outline rows like `[impl-random-random]`). Re-run over the same
+`/tmp/bdd_full.json`, keying by `(scenario, example)`:
 
-- **Scenarios that pass *only* on `impl`: exactly 1** —
-  `test_context_echoed_in_sync_error_response` (UC-011). Its `a2a`/`mcp`/`rest`
-  variants are **xfailed** (not wired), not failing. Context-echo-in-error is a
-  wire/envelope behavior, so the right move is to **graduate its wire variants**,
-  not preserve the `impl` one.
-- **Scenarios parametrized on `impl` exclusively (no wire variant at all): 99** —
-  **all xfailed** (37 uc002, 21 uc004, 20 uc005, 15 uc006, 6 uc003). Zero passing
-  coverage; when wired they should be wired on the wire transports.
-- **Passing per transport: impl 118 / a2a 117 / mcp 119 / rest 97.** The wire
-  transports already carry essentially the same passing set as `impl` (`mcp`
-  even exceeds it). `impl` provides **no unique passing coverage** beyond the
-  wire transports.
+- distinct (scenario, example) rows: **3079**.
+- **passing per transport: impl 402 / a2a 375 / mcp 377 / rest 358** (the wire
+  transports closely match `impl`).
+- **impl-only-passing (wire variant present but not passing): 2** — UC-011
+  context-echo, UC-004 delivery-account sandbox natural-key.
+- **impl-EXCLUSIVE passing (no wire variant at all): 32** — almost all UC-004 /
+  UC-005 / UC-019 **request-validation** boundary/partition rows.
+- impl-EXCLUSIVE xfailed: **375** (no coverage; lose the impl variant).
 
-**Conclusion: dropping `impl` from the default parametrization loses ~zero
-unique passing coverage** — 1 scenario (whose wire variants only need
-graduating) and 99 all-xfailed impl-exclusive scenarios. Gating actions before
-removal: (a) graduate `test_context_echoed_in_sync_error_response` onto the wire
-transports; (b) re-home/parametrize the 99 impl-exclusive scenarios onto wire
-transports as they get wired; (c) land `l9wn` so `MediaBuyAccountEnv`'s account
-resolution is covered on the wire. `rest` (97) trails `a2a`/`mcp` (~117) — a
-separate wiring gap, independent of dropping `impl`.
+**So `impl` uniquely contributes a PASS in ~34 rows (32 + 2), not 1.** Root
+cause: they pass on `impl` because `_impl` gets the full typed request; the wire
+harness paths drop/transform the param before validation (same class as the REST
+body bug), so the wire variant was deselected/xfailed.
+
+**Conclusion: dropping `impl` is safe but requires per-row disposition of the 34.**
+Each becomes a passing full BDD-wire scenario (fix the wire path so it carries the
+request) or an honest `xfail`+note ("not wired / unreachable on wire"). **No unit
+tests** — coverage stays in BDD. The 375 impl-exclusive-xfailed rows just lose the
+impl variant. `rest` (358) trails `a2a`/`mcp` (~375) — a separate wiring gap. Full
+design + per-row plan: [bdd-drop-impl.md](bdd-drop-impl.md).
 
 ## References
 

@@ -20,7 +20,10 @@ impl-only coverage.
 
 **Goals**
 - BDD default parametrization = `[a2a, mcp, rest]` (E2E_REST conditional unchanged).
-- No loss of real (passing) coverage: graduate / re-home what only `impl` covered.
+- No loss of real (passing) coverage: every scenario `impl` uniquely passes today
+  becomes EITHER a passing full BDD-wire scenario (fix the wire path so it carries
+  the request faithfully) OR an honest `xfail` with a note ("not wired / not
+  implemented in prod on wire — <reason>").
 - Clean up transport-keyed xfail ledgers that assume `impl` is present.
 - Keep the suite green (no new unexplained failures; xfails honest).
 
@@ -29,9 +32,26 @@ impl-only coverage.
   `ImplDispatcher`, `synthesized_error_envelope` STAY — unit/integration tests
   call `call_impl` directly, and `call_via(IMPL)` remains a valid non-BDD path.
   Removing them is a separate later cleanup, not this ticket.
-- Not fixing production gaps that the wire transports newly expose (those become
-  honest xfails here; real fixes are their own tickets, e.g. `l9wn`, `egnl`).
+- **Do NOT create unit tests to "re-home" impl coverage.** Coverage lives in BDD,
+  executed end-to-end on the wire. If a behavior can't be expressed as a full
+  wire BDD scenario, it is either a prod gap (`xfail` with note) or genuinely
+  unreachable on the wire (`xfail` with note, or removed if not a real wire
+  behavior). No new unit/integration shims are written for the dropped `impl`
+  cases. (BDD-wire *is* the integration coverage — see "Coverage philosophy".)
+- Not fixing the underlying prod/wire-path gaps that newly surface (those become
+  honest xfails here; the real fixes are independent tickets, e.g. `l9wn`,
+  `egnl`, `j2qj`, `ihwl`).
 - Not the test-DB/topology unification (`pwqw`).
+
+## Coverage philosophy (owner-directed)
+
+BDD scenarios execute the whole system over the wire — that is the integration
+coverage. We do **not** add unit/integration tests to compensate for dropping
+`impl`. Anything `impl` covered is re-expressed as a full BDD-wire scenario, or
+marked `xfail` with a note stating exactly what is not wired/implemented in prod.
+A green `impl` result that has no passing wire equivalent is, by definition, a
+wire gap being masked — surface it (xfail+note) or fix the wire path; never hide
+it in a unit test.
 
 ## Current machinery (verified)
 
@@ -58,79 +78,97 @@ impl-only coverage.
 
 (Phase 2 re-pins exact line numbers; conftest shifts.)
 
+## Verified audit (re-run, outline-aware parser)
+
+The first audit under-counted: its regex matched only bare `[impl]` ids and
+skipped scenario-outline rows like `[impl-random-random]`. Re-run over
+`/tmp/bdd_full.json` keying by `(scenario, example)`, transport = first token of
+the trailing bracket:
+
+- distinct (scenario, example) rows: **3079**
+- **passing per transport: impl 402 / a2a 375 / mcp 377 / rest 358**
+- **impl-only-passing (wire variant present but not passing): 2** —
+  `test_context_echoed_in_sync_error_response` (UC-011) and a
+  `test_delivery_account_boundary` sandbox natural-key row (UC-004).
+- **impl-EXCLUSIVE passing (no wire variant at all): 32** — almost all UC-004 /
+  UC-005 / UC-019 **request-validation** boundary/partition rows (attribution
+  window, delivery account, date range, disclosure positions, identification mode,
+  input/output format_ids, principal ownership, reporting dimensions, sampling
+  method, status filter).
+- impl-EXCLUSIVE xfailed: **375** (no coverage; just lose the impl variant).
+
+**So `impl` uniquely contributes a PASS in ~34 rows** (32 + 2), not 1. Phase 2
+enumerates all 34 individually.
+
+**Root characterization:** they pass on `impl` because `impl` hands `_impl` the
+full typed request, so request-level validation runs. On the wire the harness
+paths **drop or transform the param** before validation (same class as the REST
+update-body bug, `j2qj`), so the wire variant can't exercise it and was
+deselected/xfailed. Fix = make the wire path carry the request faithfully (then it
+passes as full BDD-wire) or `xfail`+note. Never a unit test.
+
 ## Design — categories of change
 
 **A. Parametrization core.** Drop `Transport.IMPL`/`"impl"` from the default list
-(~2456). Remove `_IMPL_ONLY` + its check (~2414-2419, ~2450-2454) — its only member
-(UC-002 `@account`) is handled by category D.
+(~2456). Remove `_IMPL_ONLY` + its check (~2414-2419, ~2450-2454).
 
-**B. Dispatch fallbacks.** `dispatch_request` / `when_request` currently fall back
-to `call_impl` when no transport is set. After the change every BDD scenario is
-wire-parametrized, so the fallback should become an explicit error ("BDD dispatch
-requires a wire transport") rather than silently calling `_impl`. (Keeps tests
-honest; surfaces any scenario that lost its parametrization.)
+**B. Remove dispatch fallbacks (no fallback).** Every scenario is parametrized
+across all wire transports, so `ctx["transport"]` is ALWAYS set — there is no
+"unset" case. Delete the `call_impl` fallbacks outright (`_dispatch.py:~57-61`,
+`when_request.py:~27-36, ~45`). BDD never calls `_impl`.
 
-**C. xfail-ledger cleanup.** For each `is_impl` branch and `impl-…` substring:
-- If it xfailed wire transports *because impl was the pass baseline* (e.g. UC-005
-  disclosure ~606, UC-004 sampling ~1455, date-range ~1481): the scenario now runs
-  only on wire → keep/adjust the wire xfail (these are real production gaps); drop
-  the `not is_impl` guard. Make `strict` correct (the case truly fails on wire).
-- If `impl-…` substrings only selected the impl variant for xfail: remove them
-  (no impl variant exists anymore).
-- `is_impl`-containing OR conditions (e.g. ~1535 `(is_impl or is_a2a)`): simplify
-  (impl branch is dead).
+**C. xfail-ledger cleanup (verify each row before acting).** ~6 `is_impl` branches
++ ~12 `impl-…` substrings; cross-check each against the 34-row list so no real
+pass is silently lost:
+- `impl-…` substrings (UC-004 selective sets ~1206-1208/1230/1258-1262/1282-1283/1370):
+  remove — no impl variant exists post-drop.
+- `is_impl` branches that xfailed wire because impl was the pass baseline (UC-005
+  disclosure ~606, UC-004 sampling ~1455, date-range ~1481): scenario now runs only
+  on wire; keep the wire `xfail` (real wire gap) with correct `strict` + a note;
+  drop the `not is_impl` guard.
+- `is_impl` OR-conditions (~1535): simplify (impl branch dead).
 
-**D. Re-home impl-only coverage.** (The gating work — preserve coverage.)
-- **UC-002 `@account` (~23 rows, impl-only via `MediaBuyAccountEnv`)**: account
-  resolution must run on the wire. Gated on **`l9wn`** (wire account resolution:
-  wrappers accept `account`, harness un-strips + enriches). Until `l9wn`, either
-  keep these on `impl` via an explicit `@impl-only`-style carve-out OR xfail their
-  wire variants — pick one in Phase 2 (prefer: land `l9wn` first).
-- **UC-019 boundary-principal (null/empty/ghost principal_id, ~1810-1827)**:
-  unreachable via HTTP (auth middleware resolves a real principal before `_impl`).
-  These are genuine `_impl`-level defensive tests → **re-home to unit/integration
-  tests** that call `_impl`/`_update_impl` directly; remove from BDD.
-- **`uc002_nfr.py` steps reading `result.status` / `result.response` internals
-  (~339-349, ~430-451)**: assert on the wire envelope/payload instead, or move the
-  internal-state assertions to unit tests.
-- **`given_*_not_found` preconditions calling `env.call_impl(account_ref=…)`
-  (`uc002_create_media_buy.py:79-98`, `_account_resolution.py:75-81`)**: replace
-  with a transport-independent precondition (canonical `resolve_account` via UoW,
-  or factory/DB assertion) so they don't depend on an impl dispatch. (Overlaps
-  `rkb9`/`l9wn`.)
-- **The 1 impl-only-*passing* scenario** `test_context_echoed_in_sync_error_response`
-  (UC-011): graduate its `a2a/mcp/rest` variants (currently xfailed).
-- **99 impl-exclusive scenarios (all xfailed)**: give them wire variants as their
-  UC harness gets wired; no passing coverage to preserve.
+**D. Handle the 34 impl-unique-passing rows — wire-or-xfail, NEVER unit tests.**
+Per row:
+1. **Prod implements it on the wire, the test wire-path just drops the param** →
+   fix the wire request-building so the param survives → it becomes a passing full
+   BDD-wire scenario. (Most of the 32 validation rows; overlaps `j2qj`.)
+2. **Prod does not implement it on the wire** → `xfail` the wire variant with note
+   "not wired/not implemented in prod on wire — <param/behavior>".
+3. **Genuinely unreachable on the wire** (e.g. `test_principal_ownership_boundary`
+   null/empty principal — auth resolves a real principal before any handler) →
+   `xfail` with note "unreachable via wire — auth resolves a real principal before
+   dispatch"; or remove if it asserts no real wire behavior. Phase 2 decides
+   xfail-note vs removal per row. **No conversion to unit tests.**
+- The 2 impl-only-passing: UC-011 context-echo and UC-004 sandbox natural-key →
+  fix on wire, or `xfail`+note (the latter is account-resolution, `l9wn`).
+- The 375 impl-exclusive-xfailed: lose the impl variant; already no coverage.
 
 **E. Harness (KEEP, do not delete).** `Transport.IMPL`, `ImplDispatcher`,
 `call_impl`, `synthesized_error_envelope` remain for unit/integration use. Only
 their use *in the BDD default path* goes away.
 
-## Why proceed despite the "keep impl" argument
+## Why proceed (and why `l9wn` is orthogonal)
 
-One investigation recommended keeping `impl` (account scenarios lack wire
-wrappers; transport-asymmetric xfails use impl as the pass baseline). Rebuttal,
-grounded in the audit: those are **test-infrastructure artifacts, not coverage**.
-`impl` passing count (118) is matched by the wire transports (a2a 117 / mcp 119),
-and only **1** scenario passes impl-only. The "impl baseline for xfail detection"
-is exactly the by-construction confusion D4 removes: a scenario that "passes only
-on impl" is asserting boundary behavior the wire doesn't yet implement — that
-should be an honest wire xfail or a real fix (`l9wn`/`egnl`), not a green impl
-result masking a wire gap. The account-wrapper gap is real and is `l9wn`, which is
-sequenced first.
+`impl` passing (402) is essentially matched by each wire transport
+(a2a 375 / mcp 377 / rest 358); the unique-pass set is ~34, each of which is
+either a fixable wire-path param-drop or a wire gap that *should* be a visible
+`xfail`. A green `impl` with no passing wire equivalent is a masked wire gap.
+
+The drop is **self-contained** — it does NOT require `l9wn`/`egnl`/`j2qj`/`ihwl`
+first. Those are independent greening tasks that later turn specific xfail-notes
+into passes. **`l9wn` is orthogonal**: the `@account` rows simply become wire
+`xfail`+note on drop; `l9wn` graduates them whenever it lands.
 
 ## Sequencing
 
-1. **`l9wn`** (wire account resolution) lands first — unblocks UC-002 `@account`
-   re-homing (D) and removes the biggest impl-exclusive cluster.
-2. Re-home UC-019 defensive + `uc002_nfr` internal-state steps to unit tests (D).
-3. Parametrization core (A) + dispatch fallback (B).
-4. xfail-ledger cleanup (C) + graduate the UC-011 scenario.
-5. Full wire-suite verification.
+1. Parametrization core (A) + remove fallbacks (B).
+2. xfail-ledger cleanup (C), cross-checked against the 34-row list.
+3. Per-row disposition of the 34 (D): fix wire path → pass, else `xfail`+note.
+4. Full wire-suite verification.
 
-(`egnl`/`ihwl`/`j2qj` greening can proceed in parallel; they make more wire
-scenarios pass but are not blockers for the drop.)
+(`l9wn`/`egnl`/`ihwl`/`j2qj` run independently and convert specific xfail-notes
+into passes; none gate the drop.)
 
 ## Verification
 
@@ -138,26 +176,35 @@ scenarios pass but are not blockers for the drop.)
   failed / 7319 xfailed across impl+a2a+mcp+rest). Re-baseline as a stored
   artifact in Phase 2.
 - **Gate:** after the drop, wire-only run must show **passing(a2a∪mcp∪rest) ≥
-  pre-drop wire passing**, **0 new failures** (only honest xfails), and the
-  re-homed unit tests cover what `impl` uniquely asserted.
+  pre-drop wire passing (≈ a2a 375 / mcp 377 / rest 358 union)**, **0 new
+  failures** (only honest xfails), and every one of the 34 impl-unique-passing
+  rows is accounted for (now passing on wire, or `xfail`+note).
 - Run serial (`-n0`) on the agent-db (xdist deadlocks on a single DB).
 
 ## Risks
 
-- **UC-019 defensive tests** lose their only execution path if re-homing is
-  skipped — must land the unit tests in the same change.
+- **The 34 impl-unique-passing rows** must each be dispositioned (wire-pass or
+  `xfail`+note) — a row silently dropped is lost coverage. Phase 2 lists all 34.
+- **UC-019 / `principal_ownership` defensive rows** are unreachable on the wire;
+  honest treatment is `xfail`+note (or removal), not a unit test.
 - **Transport-asymmetric xfails** (UC-004/UC-005) flip from "impl passes" to
   "wire xfails": ensure `strict` is correct so they don't become silent xpasses.
-- **`rest` lags `a2a`/`mcp`** (97 vs ~117): dropping impl doesn't cause this, but
+- **`rest` lags `a2a`/`mcp`** (358 vs ~375): dropping impl doesn't cause this, but
   the wire-only gate will surface it — track separately, don't block the drop.
 - conftest is large and churny — Phase 2 must re-pin line numbers at execution
   time, and Phase 3 agents should anchor on symbols/markers, not line numbers.
 
 ## Manifest scope (what Phase 2 enumerates)
 
-One row per change site with `file:symbol/marker`, category (A–E), action, the
-slice/agent it belongs to, and its dependency (e.g. "after `l9wn`"). Dimensions:
-parametrization core; `_IMPL_ONLY`; dispatch fallbacks; each `is_impl` branch;
-each `impl-…` substring set; each impl-only env + its scenarios; each re-home
-target (UC-002 account, UC-019 defensive, `uc002_nfr` internals, `given_*_not_found`);
-the UC-011 graduation; the 99 impl-exclusive scenarios (per-UC).
+One row per change site with `file:symbol/marker`, category (A–E), action, and the
+slice/agent it belongs to. Dimensions:
+- parametrization core; `_IMPL_ONLY`; dispatch fallbacks;
+- each `is_impl` branch + each `impl-…` substring set;
+- **the 34 impl-unique-passing rows, one row each**, with per-row disposition
+  (fix-wire-path / `xfail`+note / remove) — the coverage-preservation core;
+- the 375 impl-exclusive-xfailed rows (bulk: lose impl variant, no coverage);
+- impl-only env (`MediaBuyAccountEnv`) usage sites.
+
+No row prescribes a unit test. Independent greening tickets
+(`l9wn`/`egnl`/`j2qj`/`ihwl`) are referenced where they would later convert an
+`xfail`+note into a wire pass, but none gate the drop.
