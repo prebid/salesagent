@@ -57,7 +57,7 @@
         </div>
         {% if incomplete_critical | length > 3 %}
         <div style="margin-top: 0.75rem; font-size: 0.75rem; opacity: 0.9;">
-            + {{ incomplete_critical | length - 3 }} more critical tasks
+            + {{ (incomplete_critical | length) - 3 }} more critical tasks
         </div>
         {% endif %}
     </div>
