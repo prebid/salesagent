@@ -931,30 +931,36 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004: additional xfails for features needing production enhancements
         # FIXME(salesagent-a0o): These require production changes, not BDD wiring.
         _UC004_XFAIL_ADDITIONAL: dict[str, tuple[str, bool]] = {
-            # FIXME(salesagent-afq): _impl doesn't echo attribution_window in response
-            "T-UC-004-attr-supported": ("attribution_window echo not implemented in _impl", True),
-            "T-UC-004-attr-unsupported": ("attribution_window platform default not implemented in _impl", True),
+            # Delivery response reports a date-derived status (media_buy_delivery.py
+            # status computation casts to a Literal that excludes the pending_* states),
+            # so a pending_start buy reports "active". The adcp MediaBuyDelivery.status
+            # enum includes pending_start/pending_creatives/pending — surfacing the
+            # persisted pre-serving status is an unimplemented production change.
+            "T-UC-004-status-pending-legacy-alias": (
+                "delivery response does not surface persisted pending_start status, though "
+                "the adcp MediaBuyDelivery.status enum includes it (production gap)",
+                True,
+            ),
+            # T-UC-004-attr-supported: resolved — steps now assert attribution_window model and echo
+            # T-UC-004-attr-unsupported: resolved — xfail now in step function for specific production gap
             # T-UC-004-attr-echo: resolved — vvx9 + ral2 fixed enum→str handling
             # T-UC-004-attr-omitted: resolved — vvx9 + ral2 fixed enum→str handling
-            "T-UC-004-attr-campaign-valid": ("attribution_window campaign window not implemented in _impl", True),
+            # T-UC-004-attr-campaign-valid: resolved — _impl now resolves campaign unit to days
             # campaign unit interval validation: _impl doesn't validate attribution_window
             "T-UC-004-attr-campaign-invalid": (
                 "attribution_window campaign unit validation not implemented in _impl",
                 True,
             ),
             # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
-            "T-UC-004-dim-sortby-valid": (
-                "sort_by metric: str(SortMetric.clicks) != 'clicks' — needs .value in _impl",
-                True,
-            ),
+            # T-UC-004-dim-sortby-valid: resolved — sort_by now works in _impl
             # Graduated: T-UC-004-dim-sortby-fallback (impl, mcp, rest pass — only a2a still fails)
-            # FIXME(salesagent-b2v): _impl only supports by_placement, not by_device_type/by_geo/truncation
+            # FIXME(#1376): _impl only supports by_placement, not by_device_type/by_geo/truncation
             "T-UC-004-dim-supported": ("by_device_type breakdown not implemented in _impl (only by_placement)", True),
             "T-UC-004-dim-truncated": ("truncation flags (by_*_truncated) not implemented in _impl", True),
             "T-UC-004-dim-complete": ("by_device_type_truncated flag not implemented in _impl", True),
-            "T-UC-004-dim-geo-system": ("by_geo breakdown not implemented in _impl", True),
-            "T-UC-004-dim-geo-postal": ("by_geo breakdown not implemented in _impl", True),
-            "T-UC-004-dim-multi": ("by_geo/by_device_type breakdowns not implemented in _impl", True),
+            # T-UC-004-dim-geo-system: resolved — by_geo now populated by _impl
+            # T-UC-004-dim-geo-postal: resolved — by_geo now populated by _impl
+            "T-UC-004-dim-multi": ("by_device_type breakdown not implemented on PackageDelivery (by_geo works)", True),
             # Partial-success Error model lacks suggestion field and rich messages
             "T-UC-004-ext-a": ("partial-success Error needs suggestion field + authentication in message", True),
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
@@ -980,21 +986,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                 break
 
-        # Graduated: T-UC-004-dim-sortby-fallback — impl, mcp, rest pass; only a2a fails
-        if "T-UC-004-dim-sortby-fallback" in marker_names and is_a2a:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="sort_by fallback: A2A transport drops by_placement from response — serialization gap",
-                    strict=False,
-                )
-            )
+        # Graduated: T-UC-004-dim-sortby-fallback — all transports pass.
+        # A2A previously dropped by_placement; that serialization gap is fixed.
+        # Verified: the scenario passes with by_placement present and sorted by
+        # spend (then_placement_sorted_fallback asserts values == sorted(values,
+        # reverse=True); inline pytest.xfail guards the vacuous case), so the
+        # pass is real, not a weakened assertion.
 
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
             (
+                # The generic `requests delivery metrics with {request_params}` step
+                # shadows the specific `with status_filter "X"` step and parses only
+                # the key=value form, so the `status_filter "X"` value is dropped and
+                # the filter defaults to "active". Every non-active value therefore
+                # returns the active buy and fails the "only buys with status X" check.
+                # pending_creatives/pending_start are the v3.1 additions of this same
+                # known step-shadowing gap (pending_activation was stale — not a real
+                # MediaBuyStatus value). Fixing the generic step is tracked separately
+                # and would graduate this whole family.
                 "T-UC-004-filter",
-                {"pending_activation", "rejected", "canceled", "paused", "completed"},
-                "status_filter for non-active statuses not mapped in _impl",
+                {"rejected", "canceled", "paused", "completed", "pending_creatives", "pending_start"},
+                "status_filter for non-active values is dropped by the generic request_params step "
+                "(shadows the specific status_filter step), so the filter defaults to active",
             ),
             (
                 "T-UC-004-filter-default",
@@ -1405,18 +1419,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
 
-        # Graduated: T-UC-004-boundary-credentials — impl passes invalid examples,
-        # rest passes valid examples. A2A and MCP still fail on all examples.
-        if "T-UC-004-boundary-credentials" in marker_names:
-            _cred_invalid = any(s in nodeid for s in ("31 chars (rejected)", "Unknown auth scheme"))
-            _cred_valid = any(s in nodeid for s in ("Bearer scheme", "HMAC-SHA256 scheme", "credentials = 32 chars"))
-            _cred_passes = (is_impl and _cred_invalid) or (is_rest and _cred_valid)
-            if not _cred_passes:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="webhook credentials boundary: validation gaps on this transport", strict=False
-                    )
-                )
+        # Graduated: T-UC-004-boundary-credentials — the When now validates the real
+        # AdCP reporting_webhook Authentication at the create_media_buy boundary
+        # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
         # Graduated: T-UC-004-boundary-ownership — impl-"differs" and rest-"matches" pass
         # Remaining failures: impl-matches, a2a-both, mcp-both, rest-differs
@@ -1731,18 +1736,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
-        # Graduated: T-UC-004-partition-credentials — impl passes invalid examples,
-        # rest passes valid examples. A2A and MCP still fail on all examples.
-        if "T-UC-004-partition-credentials" in marker_names:
-            _pcred_invalid = any(s in nodeid for s in ("credentials_too_short", "unknown_scheme"))
-            _pcred_valid = any(s in nodeid for s in ("hmac_sha256", "bearer_auth", "credentials_at_minimum"))
-            _pcred_passes = (is_impl and _pcred_invalid) or (is_rest and _pcred_valid)
-            if not _pcred_passes:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="webhook credentials partition: validation gaps on this transport", strict=False
-                    )
-                )
+        # Graduated: T-UC-004-partition-credentials — the When now validates the real
+        # AdCP reporting_webhook Authentication at the create_media_buy boundary
+        # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
         # Graduated: T-UC-004-partition-sampling — "not_provided" passes all transports;
         # valid named methods (random, stratified, recent, failures_only) pass on REST only.

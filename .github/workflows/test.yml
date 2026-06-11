@@ -62,7 +62,7 @@ jobs:
         key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
-      run: uv sync --extra dev
+      run: uv sync --group dev
 
     - name: Run smoke tests
       env:
@@ -107,7 +107,7 @@ jobs:
         key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
-      run: uv sync --extra dev
+      run: uv sync --group dev
 
     - name: Run unit tests
       env:
@@ -177,7 +177,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync --extra dev
+        uv sync --group dev
         find . -type d -name __pycache__ -exec rm -rf {} + || true
         find . -type f -name '*.pyc' -delete || true
 
@@ -206,6 +206,7 @@ jobs:
         CREATIVE_AGENT_URL: ${{ matrix.group == 'creative' && 'http://localhost:9999/api/creative-agent' || '' }}
       run: |
         uv run pytest tests/integration/ -v --tb=short --timeout=60 \
+          -p no:randomly \
           -m "(${{ matrix.marker }}) and not requires_server and not skip_ci"
 
   bdd-tests:
@@ -260,7 +261,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync --extra dev
+        uv sync --group dev
         find . -type d -name __pycache__ -exec rm -rf {} + || true
         find . -type f -name '*.pyc' -delete || true
 
@@ -367,7 +368,7 @@ jobs:
         key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
 
     - name: Install dependencies
-      run: uv sync --extra dev
+      run: uv sync --group dev
 
     - name: Verify Docker Compose v2
       run: |
@@ -432,15 +433,13 @@ jobs:
         version: ${{ env.UV_VERSION }}
 
     - name: Install dependencies
-      run: uv sync --extra dev
+      run: uv sync --group dev
 
     - name: Run Ruff linter
-      run: uv run ruff check . --config pyproject.toml || true
-      continue-on-error: true
+      run: uv run ruff check . --config pyproject.toml
 
     - name: Run Ruff formatter
-      run: uv run ruff format . --check --config pyproject.toml || true
-      continue-on-error: true
+      run: uv run ruff format . --check --config pyproject.toml
 
     - name: Run mypy type checking (ENFORCED - must pass)
       run: |

@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-016 Sync Audiences
   As a Buyer
@@ -15,17 +15,21 @@ Feature: BR-UC-016 Sync Audiences
   #   POST-S6: Buyer has purged buyer-managed audiences not in the request
   #   POST-S7: Application context from the request is echoed unchanged
   #   POST-S8: When remove and add contain the same identifier, remove takes precedence
+  #   POST-S9: Async/governance-gated uploads surface a SyncAudiencesSubmitted envelope (status=submitted + task_id)
+  #   POST-S10: Buyer can read a per-identifier-type match_breakdown for each audience whose seller reports per-type matching
+  #   POST-S11: Replaying a sync with a previously-seen idempotency_key returns the original result (at-most-once)
   #   POST-F1: System state is unchanged on complete operation failure
   #   POST-F2: Buyer knows what failed and the specific error code with recovery
   #   POST-F3: Application context is still echoed when possible
   #   POST-F4: Individual audience failures do not prevent other audiences from being processed
   #
-  # Rules: BR-RULE-113..132 (20 rules, ~80 invariants)
+  # Rules: BR-RULE-113..132, 209, 211 (idempotency), 230 (match_breakdown/effective_match_rate), 231 (CONFLICT)
   # Extensions: A (sync/upsert), B (delete specific), C (bulk delete missing),
   #   D (ACCOUNT_NOT_FOUND), E (INVALID_REQUEST), F (AUDIENCE_TOO_SMALL),
-  #   G (UNSUPPORTED_FEATURE), H (AUTH_REQUIRED), I (RATE_LIMITED), J (SERVICE_UNAVAILABLE)
+  #   G (UNSUPPORTED_FEATURE), H (AUTH_REQUIRED), I (RATE_LIMITED), J (SERVICE_UNAVAILABLE),
+  #   K (Idempotent Replay, v3.1), L (CONFLICT, v3.1)
   # Error codes: AUTH_REQUIRED, ACCOUNT_NOT_FOUND, INVALID_REQUEST, AUDIENCE_TOO_SMALL,
-  #   UNSUPPORTED_FEATURE, RATE_LIMITED, SERVICE_UNAVAILABLE
+  #   UNSUPPORTED_FEATURE, RATE_LIMITED, SERVICE_UNAVAILABLE, CONFLICT
 
   Background:
     Given a Seller Agent is operational and accepting requests
@@ -210,19 +214,6 @@ Feature: BR-UC-016 Sync Audiences
     # BR-RULE-118: 65 characters boundary
     # --- Audience Type Classification (BR-RULE-119) ---
 
-  @partition @boundary @audience-type
-  Scenario Outline: Audience type valid -- <partition>
-    When the Buyer Agent syncs an audience with audience_type <type_value>
-    Then <outcome>
-    # BR-RULE-119 INV-1..4
-
-    Examples:
-      | partition        | boundary_point   | type_value       | outcome                                              |
-      | crm              | crm              | "crm"            | audience used for positive targeting                 |
-      | suppression      | suppression      | "suppression"    | audience used for negative targeting (exclusion)     |
-      | lookalike_seed   | lookalike_seed   | "lookalike_seed" | audience used as seed for lookalike modeling          |
-      | omitted          | field omitted    | (absent)         | seller applies default handling                      |
-
   @T-UC-016-audience-type-invalid @ext-a @error @partition @boundary @audience-type @post-f2
   Scenario Outline: Audience type invalid -- <partition>
     When the Buyer Agent syncs an audience with audience_type <type_value>
@@ -284,7 +275,7 @@ Feature: BR-UC-016 Sync Audiences
 
     Examples:
       | partition              | boundary_point       | consent_value   |
-      | invalid_enum           | unknown enum value   | "performance"   |
+      | invalid_enum           | unknown enum value   | "marketing"     |
 
   @T-UC-016-status-presence @post-s3 @post-s4 @partition @boundary @status-presence
   Scenario Outline: Status presence and conditional fields -- <partition>
@@ -341,6 +332,74 @@ Feature: BR-UC-016 Sync Audiences
       | partition               | status     | outcome                                                          |
       | too_small_with_minimum  | too_small  | minimum_size is populated (integer >= 1)                         |
       | ready_no_minimum        | ready      | minimum_size not expected (audience meets threshold)             |
+
+  @T-UC-016-effective-match-rate @v31 @effective-match-rate @partition @boundary @post-s4
+  Scenario Outline: Deduplicated effective_match_rate population -- <partition>
+    Given an audience sync result with status "<status>"
+    Then <outcome>
+    # BR-RULE-230 INV-1 (ready -> populated [0,1]), INV-2 (processing/too_small -> not expected)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | partition         | status     | outcome                                                                       |
+      | ready_rate        | ready      | effective_match_rate is populated, a number in [0,1], deduplicated across id types |
+      | ready_zero        | ready      | effective_match_rate is 0 (no members matched)                                |
+      | processing_absent | processing | effective_match_rate is not expected (reach not yet determined)               |
+      | too_small_absent  | too_small  | effective_match_rate is not expected (reach not yet determined)               |
+
+  @T-UC-016-effective-match-rate-boundary @v31 @effective-match-rate @boundary
+  Scenario Outline: effective_match_rate range boundaries -- <boundary_point>
+    Given an audience sync result with status "ready" and effective_match_rate <value>
+    Then the result is <expected>
+    # range [0,1] inclusive
+    # --- Match Breakdown (BR-RULE-230, v3.1, per-identifier-type) ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | boundary_point                          | value   | expected |
+      | effective_match_rate=0 (status=ready)   | 0       | valid    |
+      | effective_match_rate=1 (status=ready, full match) | 1       | valid    |
+      | effective_match_rate=1.0001             | 1.0001  | invalid  |
+      | effective_match_rate=-0.0001            | -0.0001 | invalid  |
+
+  @T-UC-016-match-breakdown @v31 @match-breakdown @partition @post-s10
+  Scenario Outline: Per-identifier-type match_breakdown reporting -- <partition>
+    Given an audience sync result with status "ready" whose match_breakdown is "<partition>"
+    Then <outcome>
+    # BR-RULE-230 INV-3 (array minItems1, item shape), INV-4 (omitted is valid)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | partition   | outcome                                                                                              |
+      | single_type | match_breakdown is an array of length 1; the item carries id_type, submitted>=0, matched>=0, match_rate in [0,1] |
+      | multi_type  | match_breakdown lists one item per identifier type, each with id_type, submitted, matched, match_rate |
+      | omitted     | match_breakdown is absent; its absence is valid and is not an error (aggregate-only seller)           |
+
+  @T-UC-016-match-breakdown-item-validity @v31 @match-breakdown @partition @boundary
+  Scenario Outline: match_breakdown item validity -- <partition>
+    Given an audience sync result whose match_breakdown is <example>
+    Then the breakdown is <expected>
+    # BR-RULE-230 INV-3 minItems1 + required item fields + id_type enum
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | partition                   | example                                                                  | expected |
+      | single_type                 | one item with id_type "hashed_email", submitted 1000, matched 620, match_rate 0.62 | valid    |
+      | empty_array                 | an empty array                                                           | invalid  |
+      | missing_required_item_field | an item missing the submitted field                                      | invalid  |
+      | bad_id_type                 | an item whose id_type is "ssn" (not a match-id-type enum member)         | invalid  |
+
+  @T-UC-016-match-breakdown-authoritative @v31 @match-breakdown @semantics @post-s10
+  Scenario: match_breakdown match_rate is server-authoritative and must not be conflated with effective_match_rate
+    Given an audience sync result with status "ready"
+    And effective_match_rate of 0.62
+    And a match_breakdown listing id_type "hashed_email" with matched 620 and id_type "maid" with matched 300
+    Then each match_breakdown item match_rate is server-authoritative and the consumer prefers it over a self-computed matched/submitted
+    And the sum of matched across breakdown items double-counts multi-identifier members
+    And that sum does not reconstruct effective_match_rate or matched_count
+    # BR-RULE-230 INV-5 (server-authoritative), INV-6 (dedup vs sum MUST NOT conflate)
+    # --- Member Count Recommendation (BR-RULE-126) ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
 
   @T-UC-016-member-count @partition @boundary @member-count
   Scenario Outline: Member count recommendation -- <partition>
@@ -516,6 +575,7 @@ Feature: BR-UC-016 Sync Audiences
     # POST-F2: Error code with terminal recovery
     # POST-F3: Context echoed
     # --- Extension E: INVALID_REQUEST ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
 
     Examples:
       | transport |
@@ -536,6 +596,7 @@ Feature: BR-UC-016 Sync Audiences
     # POST-F2: Error with correctable recovery
     # POST-F3: Context echoed
     # --- Extension F: AUDIENCE_TOO_SMALL ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
 
     Examples:
       | transport | trigger                         | invalid_input                                    |
@@ -619,6 +680,7 @@ Feature: BR-UC-016 Sync Audiences
     # POST-F2: Error with transient recovery and retry_after
     # POST-F3: Context echoed
     # --- Extension J: SERVICE_UNAVAILABLE ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
 
     Examples:
       | transport |
@@ -695,3 +757,232 @@ Feature: BR-UC-016 Sync Audiences
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
 
+  @T-UC-016-submitted-envelope @v31 @submitted-envelope @post-s9 @async
+  Scenario: Submitted envelope -- seller queues batch ingestion and returns task_id
+    Given the seller pipeline batches audience ingestion and cannot return per-audience results synchronously
+    When the Buyer Agent sends a sync_audiences request with audiences
+    Then the response is a SyncAudiencesSubmitted envelope
+    And the response has status "submitted"
+    And the response has a task_id
+    And the response does not have an audiences array
+    And the response may include an optional message field
+    # POST-S9: buyer polls tasks/get or awaits webhook for completion artifact
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-submitted-governance-gated @v31 @submitted-envelope @post-s9 @async @governance
+  Scenario: Submitted envelope -- governance review gates the upload before matching starts
+    Given the seller routes audience uploads through governance review before matching can start
+    When the Buyer Agent sends a sync_audiences request with audiences
+    Then the response is a SyncAudiencesSubmitted envelope
+    And the response has status "submitted"
+    And the response has a task_id
+    And the final per-audience results land on the task completion artifact
+    # POST-S9: governance-gated ingestion uses task envelope, not synchronous success
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-submitted-advisory-errors @v31 @submitted-envelope @post-s9 @async @advisory-errors
+  Scenario: Submitted envelope -- advisory errors permitted for non-blocking warnings
+    Given the seller queues the sync operation with non-blocking warnings
+    When the Buyer Agent sends a sync_audiences request with audiences
+    Then the response is a SyncAudiencesSubmitted envelope
+    And the response has status "submitted"
+    And the response has a task_id
+    And the response may include an advisory errors array with non-blocking warnings
+    And terminal failures are not present in the submitted envelope (those use SyncAudiencesError instead)
+    # BR-23: advisory errors allowed; terminal failures excluded
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-submitted-mutual-exclusion @v31 @submitted-envelope @boundary @response-exclusivity
+  Scenario Outline: Submitted envelope mutual exclusion -- <partition>
+    When a sync_audiences response is shaped as <response_shape>
+    Then the response <response_check>
+    # BR-15: three-shape oneOf; triple-not guard ensures shapes are unambiguous
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | partition               | response_shape                                      | response_check                                                          |
+      | submitted_no_audiences  | SyncAudiencesSubmitted with task_id only            | is a valid submitted envelope without audiences array                   |
+      | submitted_plus_audiences | submitted with status="submitted" AND audiences    | should be invalid (submitted envelope must not carry audiences)         |
+      | success_plus_task_id    | success audiences array AND a top-level task_id    | should be invalid (synchronous success must not carry task_id)          |
+      | error_plus_status_submitted | errors array AND status="submitted"            | should be invalid (error branch must not carry submitted status)        |
+
+  @T-UC-016-submitted-vs-per-item-processing @v31 @submitted-envelope @per-audience-async
+  Scenario: Per-audience status=processing belongs on synchronous success, not submitted envelope
+    Given the seller resolves the sync synchronously but one audience is still matching
+    When the Buyer Agent sends a sync_audiences request with audiences
+    Then the response is a SyncAudiencesSuccess with an audiences array
+    And the audience still matching has audience-status "processing"
+    And the response does not use the SyncAudiencesSubmitted envelope
+    # POST-S9 boundary: operation-level async vs per-audience async are distinct
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-submitted-message-injection-guard @v31 @submitted-envelope @security @prompt-injection
+  Scenario: Submitted envelope message field is untrusted seller input -- buyer must sanitize
+    Given the seller returns a SyncAudiencesSubmitted envelope with a hostile message field
+    When the Buyer Agent renders or forwards the response
+    Then the message field is treated as untrusted seller input
+    And the buyer escapes the message before rendering to any HTML UI
+    And the buyer sanitizes or isolates the message before passing to an LLM prompt context
+    And the message length does not exceed 2000 characters
+    # BR-24: prompt-injection guard on message field
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-too-small-details-shape @v31 @audience-too-small @error-details @schema @br-25
+  Scenario: too_small per-audience result carries audience-too-small details (minimum_size, current_size)
+    Given the Buyer Agent submits a sync_audiences request with a CRM list whose matched count falls below the seller's minimum
+    When the Seller Agent returns a SyncAudiencesSuccess with that audience's status set to "too_small"
+    Then the per-audience error.details object conforms to /schemas/error-details/audience-too-small.json
+    And error.details.minimum_size is a number greater than 0
+    And error.details.current_size is a number less than error.details.minimum_size
+    # Buyer broadens targeting using the threshold gap; BR-RULE-131 INV-4 details shape
+    # --- CONFLICT (BR-UC-016-ext-l, BR-RULE-231) ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-conflict-details-on-concurrent-sync @v31 @conflict @error-details @schema @ext-l @post-f2
+  Scenario: Concurrent sync on the same audience_id marks that audience CONFLICT with conflict details
+    Given a sync_audiences request whose audiences array includes audience_id "aud_loyalty_2026"
+    And a concurrent in-flight sync is already mutating audience_id "aud_loyalty_2026"
+    When the Seller Agent returns a SyncAudiencesSuccess response
+    Then that audience result has action "failed" with an errors entry whose code is "CONFLICT"
+    And that errors entry's error.details object conforms to /schemas/error-details/conflict.json
+    And error.details.resource_id equals "aud_loyalty_2026"
+    And error.details.expected_version is present
+    And error.details.current_version reflects the version applied by the winning sync
+    And the errors entry should include a "suggestion" field for reconciliation
+    # BR-RULE-231 INV-1 (concurrent same audience_id), INV-3 (conflict.json details)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-conflict-partial-success @v31 @conflict @ext-l @partial-success @post-f4
+  Scenario: A per-audience CONFLICT does not abort the request -- other audiences process normally
+    Given a sync_audiences request whose audiences array contains one audience that collides with a concurrent sync and two valid audiences
+    When the Seller Agent processes the request
+    Then the response is a SyncAudiencesSuccess
+    And the conflicted audience result has action "failed" with an errors entry whose code is "CONFLICT"
+    And the two valid audiences are processed normally
+    And the errors entry should include a "suggestion" field for reconciliation
+    # BR-RULE-231 INV-4 (partial success; one CONFLICT MUST NOT abort the whole request)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-conflict-seller-managed-collision @v31 @conflict @ext-l @post-f2
+  Scenario: Buyer audience_id colliding with a seller-managed segment fails CONFLICT without overwrite
+    Given a sync_audiences request whose audience_id collides with an existing seller-managed segment the buyer may not overwrite
+    When the Seller Agent processes that audience
+    Then that audience result has action "failed" with an errors entry whose code is "CONFLICT"
+    And the seller-managed segment is not overwritten
+    And the errors entry should include a "suggestion" field for reconciliation
+    # BR-RULE-231 INV-2 (seller-managed segment collision)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-conflict-not-cleared-by-replay @v31 @conflict @ext-l @idempotency-key @semantics
+  Scenario: A resource-collision CONFLICT is not resolved by replaying under the same idempotency_key
+    Given an audience previously failed with CONFLICT due to a resource collision
+    When the Buyer Agent replays the sync_audiences request under the same idempotency_key
+    Then the audience still fails with CONFLICT
+    And recovery requires reconciling the resource by re-reading it or choosing a different audience_id
+    And the errors entry should include a "suggestion" field for reconciliation
+    # BR-RULE-231 INV-5 (distinct from BR-RULE-211 idempotency replay and BR-RULE-215 revision token)
+    # --- Idempotent Replay (BR-UC-016-ext-k, BR-RULE-211) ---
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-idempotent-replay @v31 @idempotency-key @ext-k @post-s11 @happy-path
+  Scenario: Replaying sync_audiences with a previously-seen idempotency_key returns the original result
+    Given a sync_audiences request with idempotency_key "aud-sync-2026-q1-replay-001"
+    And a prior sync_audiences request for the same (seller, account, idempotency_key) completed with byte-identical payload
+    When the Buyer Agent resends the sync_audiences request
+    Then the Seller Agent returns the original response unchanged
+    And no new audience side effects are produced
+    And no audit events or downstream refreshes are re-fired
+    And the request context is echoed unchanged
+    # BR-RULE-211 INV-2 (identical replay -> cached response, no new state); POST-S11 at-most-once; POST-S7 context echo (ext-k step 3)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-idempotent-new-key @v31 @idempotency-key @ext-k @post-s11 @happy-path
+  Scenario: First sync_audiences request with a new idempotency_key executes normally
+    Given a sync_audiences request with idempotency_key "aud-sync-2026-q1-new-key-001"
+    And no prior record exists for the same (seller, account, idempotency_key)
+    When the Buyer Agent sends the sync_audiences request
+    Then the request is processed as a new execution
+    And the idempotency_key is stored with the canonical payload and response
+    # BR-RULE-211 INV-1 (new key -> processed normally)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+  @T-UC-016-idempotency-key-required @v31 @idempotency-key @validation @partition @boundary @post-f2
+  Scenario Outline: idempotency_key presence and format on sync_audiences -- <partition>
+    Given a sync_audiences request with idempotency_key "<value>"
+    When the Buyer Agent sends the sync_audiences request
+    Then the request is <expected>
+    # idempotency_key.yaml: v3.1 REQUIRED, 16-255, pattern ^[A-Za-z0-9_.:-]{16,255}$
+
+    Examples:
+      | partition       | value                                  | expected                                |
+      | absent_required | (field omitted)                        | rejected with error code "INVALID_REQUEST" |
+      | empty_string    | (empty string)                         | rejected with error code "INVALID_REQUEST" |
+      | too_short       | abc1234                                | rejected with error code "INVALID_REQUEST" |
+      | boundary_min    | abcd0123_efgh.456                      | accepted (exactly 16 characters)        |
+      | typical_valid   | aud-sync-2026-q1-0001                   | accepted                                |
+      | boundary_max    | a 255-character key                    | accepted (exactly 255 characters)       |
+      | too_long        | a 256-character key                    | rejected with error code "INVALID_REQUEST" |
+      | bad_pattern     | abcd 0123 efgh 4567                    | rejected with error code "INVALID_REQUEST" |
+
+  @T-UC-016-sandbox-response-bva @invariant @br-rule-209 @sandbox @boundary @partition
+  Scenario Outline: sync_audiences sandbox response boundary -- <boundary>
+    Given the Buyer is authenticated with a valid principal_id
+    And the request targets a <account_kind> account
+    When the Buyer Agent sends a sync_audiences request with audiences
+    Then the response is a success variant with audiences array
+    And the sandbox field is <sandbox_field_state>
+    And the returned audience data is <data_kind>
+    # BR-RULE-209 INV-4 (sandbox account -> sandbox: true, simulated), INV-5 (production -> sandbox absent, real)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | boundary                                          | account_kind | sandbox_field_state         | data_kind |
+      | sandbox: true in response (sandbox account)       | sandbox      | present and equal to true   | simulated |
+      | sandbox absent in response (production account)   | production   | absent                      | real      |
+      | sandbox: false in response (explicit production)  | production   | present and equal to false  | real      |
+
+  @T-UC-016-idempotency-key-format-bva @v31 @idempotency-key @validation @boundary @partition @post-f2
+  Scenario Outline: idempotency_key format rejection boundary -- <boundary>
+    Given a sync_audiences request whose idempotency_key is "<key_condition>"
+    When the Buyer Agent sends the sync_audiences request
+    Then the request is rejected with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
+    And the error should include a "suggestion" field for how to fix the idempotency_key
+    # idempotency_key.yaml BR-RULE-081: v3.1 REQUIRED, 16-255, pattern ^[A-Za-z0-9_.:-]{16,255}$
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | boundary                                         | key_condition               |
+      | absent (field not provided)                      | absent (field not provided) |
+      | valid length, disallowed character (e.g. space)  | abcd 0123 efgh 4567         |
+
+  @T-UC-016-replay-policy-valid-bva @v31 @idempotency-key @ext-k @boundary @partition @post-s11
+  Scenario Outline: sync_audiences idempotency replay accept boundary -- <boundary>
+    Given the replay condition is <boundary>
+    When the Buyer Agent sends a sync_audiences request under idempotency_key "aud-sync-2026-q1-replay-200"
+    Then the request outcome is <outcome>
+    # BR-RULE-211 INV-1 (new key -> processed normally), INV-2 (identical replay -> cached response, no new state)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-audiences-request.json
+
+    Examples:
+      | boundary                                                  | outcome                                         |
+      | key present, no prior record for (seller, account, key)   | processed as a new execution                    |
+      | key present, prior record exists, payload byte-identical  | the original cached response returned unchanged |
+
+  @T-UC-016-replay-policy-invalid-bva @v31 @idempotency-key @ext-k @boundary @partition @post-f2
+  Scenario Outline: sync_audiences idempotency replay rejection boundary -- <boundary>
+    Given a prior sync_audiences request under idempotency_key "aud-sync-2026-q1-replay-100" for this (seller, account)
+    And the replay condition is <boundary>
+    When the Buyer Agent resends a sync_audiences request under the same idempotency_key
+    Then the request is rejected with error code "<error_code>"
+    And the error code should be "<error_code>"
+    And the error should include a "suggestion" field for recovery
+    # BR-RULE-211: divergent payload -> IDEMPOTENCY_CONFLICT; in-flight -> IDEMPOTENCY_IN_FLIGHT; TTL expiry -> IDEMPOTENCY_EXPIRED; key absent -> schema INVALID_REQUEST
+
+    Examples:
+      | boundary                                                                                 | error_code            |
+      | key absent (field omitted)                                                               | INVALID_REQUEST       |
+      | key present, prior record exists, payload has one field changed                          | IDEMPOTENCY_CONFLICT  |
+      | key present, prior record exists, payload has all fields changed                         | IDEMPOTENCY_CONFLICT  |
+      | key present, prior request still in flight (not yet committed)                           | IDEMPOTENCY_IN_FLIGHT |
+      | key present, prior record exists, replay arrives exactly at replay_ttl_seconds boundary  | IDEMPOTENCY_EXPIRED   |

@@ -268,11 +268,12 @@ repos:
         always_run: false  # Only run when test files change
 
 
-      # ast-grep BDD guards (structural AST pattern detection)
+      # ast-grep BDD guards — scaffold only, no rules enforced yet.
+      # Real BDD structural patterns will be added in a follow-up PR.
       # Uses sgconfig.yml at repo root to discover all rules under .ast-grep/rules/
       # (--rule takes a single file, not a directory).
       - id: ast-grep-bdd-guards
-        name: ast-grep BDD step guards
+        name: ast-grep BDD step guards (scaffold — no rules yet)
         entry: ast-grep scan
         language: system
         files: '^tests/bdd/steps/.*\.py$'
@@ -291,43 +292,43 @@ repos:
       - id: check-ast
       - id: debug-statements
 
-  - repo: https://github.com/psf/black
-    rev: 87928e6d6761a4a6d22250e1fee5601b3998086e  # frozen: 26.5.1
+  # Per ADR-001: formatter runs via `uv run ruff format` from uv.lock — same
+  # command as `make quality`. Replaces psf/black pre-commit repo (PR 2 #1234).
+  # black remains in dev deps for GHSA-3936-cmfr-pm3m pin only; the repo
+  # canonical style is ruff format (upstream/Makefile/CI).
+  - repo: local
     hooks:
-      - id: black
-        language_version: python3
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 0c7b6c989466a93942def1f84baf36ddfcd60c83  # frozen: v0.15.14
-    hooks:
-      - id: ruff
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+        require_serial: true
+      # Per ADR-001: lint runs via `uv run ruff check` from uv.lock — same
+      # command as `make quality`. Replaces astral-sh/ruff-pre-commit (PR 2 #1234).
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types: [python]
         args: [--fix, --exit-non-zero-on-fix]
 
-  # Type checking with mypy - ENFORCED (0 errors in src/)
-  # After achieving 100% compliance, mypy is now mandatory for all commits
-  #
-  # FIXME(#1234-pr2): This hook still uses mirrors-mypy + additional_dependencies,
-  # which violates ADR-001 (uv.lock as single source of truth). Migration to
-  # language: system / entry: uv run mypy is PR 2 scope — it requires deleting
-  # [project.optional-dependencies].dev and wiring the pydantic.mypy plugin.
-  # Until then, adcp pin here must be kept in sync with uv.lock manually.
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: d2823d321df3af8f878f7ee3414dc94d037145b9  # frozen: v2.1.0
+  # Per ADR-001: mypy runs via `uv run` so it resolves from uv.lock.
+  # This replaced mirrors-mypy + additional_dependencies in PR 2 of issue #1234,
+  # eliminating the adcp/sqlalchemy/fastmcp version drift that was the root cause
+  # of the original bug (adcp 3.2→3.10 drift in mypy's isolated venv).
+  # pydantic.mypy plugin is active because pydantic is in [dependency-groups].dev.
+  - repo: local
     hooks:
       - id: mypy
-        args: [--config-file=mypy.ini]
-        additional_dependencies:
-          - sqlalchemy[mypy]==2.0.36
-          - types-requests
-          - types-python-dateutil
-          - types-pytz
-          - types-Markdown
-          - types-waitress
-          - adcp==4.3.0
-          - fastmcp
-          - alembic
+        name: mypy
+        entry: uv run mypy
+        language: system
+        args: [--config-file=mypy.ini, src/]
         files: '^src/'
         exclude: '^src/adapters/google_ad_manager_original\.py$'
+        pass_filenames: false
+        require_serial: true
 
   # Per D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
   - repo: https://github.com/gitleaks/gitleaks

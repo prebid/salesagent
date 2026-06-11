@@ -66,3 +66,4 @@ Feature: Product discovery with inventory profile publisher_properties
     Then the response contains at least one product
     And the first product publisher_properties selection_type is "by_id"
     And the first product publisher_properties property_ids contains "homepage"
+    And the first product publisher_properties preserves all legacy fields

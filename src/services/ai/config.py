@@ -13,6 +13,22 @@ class ModelSettings(BaseModel):
     timeout: int = Field(default=30, gt=0)
 
 
+GOOGLE_PROVIDER_ALIASES: frozenset[str] = frozenset({"gemini", "google", "google-gla"})
+CANONICAL_GOOGLE_PROVIDER = "google"
+
+
+def canonicalize_google_provider(provider: str) -> str:
+    """Map legacy Google provider names to pydantic-ai 1.99 canonical form."""
+    if provider in GOOGLE_PROVIDER_ALIASES:
+        return CANONICAL_GOOGLE_PROVIDER
+    return provider
+
+
+def uses_legacy_gemini_api_key(provider: str) -> bool:
+    """True when admin AI settings should read tenant.gemini_api_key for this provider."""
+    return canonicalize_google_provider(provider) == CANONICAL_GOOGLE_PROVIDER
+
+
 class TenantAIConfig(BaseModel):
     """Per-tenant AI configuration stored in database.
 
@@ -60,8 +76,9 @@ def _get_provider_api_key(provider: str) -> str | None:
     Returns:
         API key if found, None otherwise
     """
+    provider = canonicalize_google_provider(provider)
     provider_env_vars = {
-        "gemini": "GEMINI_API_KEY",
+        "google": "GEMINI_API_KEY",
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "groq": "GROQ_API_KEY",
@@ -76,7 +93,7 @@ def _get_provider_api_key(provider: str) -> str | None:
 def build_model_string(provider: str, model: str) -> str:
     """Build the Pydantic AI model string.
 
-    Pydantic AI uses format: "provider:model" (e.g., "google-gla:gemini-2.0-flash")
+    Pydantic AI uses format: "provider:model" (e.g., "google:gemini-2.0-flash")
 
     Args:
         provider: Provider name (e.g., "google-gla", "anthropic", "gateway/openai")
@@ -85,9 +102,5 @@ def build_model_string(provider: str, model: str) -> str:
     Returns:
         Pydantic AI model string
     """
-    # Handle legacy "gemini" provider name
-    if provider == "gemini":
-        provider = "google-gla"
-
-    # Provider string is already in Pydantic AI format (e.g., "google-gla", "gateway/anthropic")
+    provider = canonicalize_google_provider(provider)
     return f"{provider}:{model}"

@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-021 Preview Creative
   As a Buyer (or Buyer Agent)
@@ -21,12 +21,13 @@ Feature: BR-UC-021 Preview Creative
   #   POST-F3: In batch mode, individual item failures do not prevent other items from succeeding
   #   POST-F4: Application context is still echoed when possible
   #
-  # Rules: BR-RULE-043, BR-RULE-160..168 (10 rules, 44 invariants)
+  # Rules: BR-RULE-043, BR-RULE-160..168 (10 rules, 44 invariants),
+  #   BR-RULE-227 (quality), BR-RULE-228 (item_limit)
   # Extensions: A (batch), B (variant), C (input variants), D (CREATIVE_MANIFEST_REQUIRED),
   #   E (FORMAT_NOT_FOUND), F (MANIFEST_VALIDATION_ERROR), G (BATCH_LIMIT_EXCEEDED),
-  #   H (VARIANT_NOT_FOUND), I (OUTPUT_FORMAT_INVALID), J (CREATIVE_AGENT_UNAVAILABLE)
+  #   H (REFERENCE_NOT_FOUND), I (OUTPUT_FORMAT_INVALID), J (SERVICE_UNAVAILABLE)
   # Error codes: CREATIVE_MANIFEST_REQUIRED, FORMAT_NOT_FOUND, MANIFEST_VALIDATION_ERROR,
-  #   BATCH_LIMIT_EXCEEDED, VARIANT_NOT_FOUND, OUTPUT_FORMAT_INVALID, CREATIVE_AGENT_UNAVAILABLE,
+  #   BATCH_LIMIT_EXCEEDED, REFERENCE_NOT_FOUND, OUTPUT_FORMAT_INVALID, SERVICE_UNAVAILABLE,
   #   BATCH_EMPTY, BATCH_REQUESTS_REQUIRED, MANIFEST_FORMAT_ID_REQUIRED, MANIFEST_ASSETS_REQUIRED,
   #   MANIFEST_ASSET_KEY_INVALID, MANIFEST_AGENT_URL_REQUIRED, MANIFEST_DIMENSIONS_INCOMPLETE,
   #   INPUTS_EMPTY, INPUT_NAME_REQUIRED, VARIANT_ID_REQUIRED, REQUEST_TYPE_REQUIRED,
@@ -184,6 +185,7 @@ Feature: BR-UC-021 Preview Creative
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows creative_manifest is required
     # POST-F3: Suggestion for recovery
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-d-batch @extension @ext-d @error @batch @post-f3
   Scenario: Batch mode with missing creative_manifest in one item -- per-item error
@@ -297,32 +299,33 @@ Feature: BR-UC-021 Preview Creative
     # POST-F3: Suggestion for recovery
 
   @T-UC-021-ext-h @extension @ext-h @error @variant @post-f1 @post-f2
-  Scenario: Variant not found -- VARIANT_NOT_FOUND
+  Scenario: Variant not found -- REFERENCE_NOT_FOUND
     Given a variant_id "v-nonexistent" that does not exist in the system
     When the Buyer Agent invokes preview_creative with request_type "variant" and variant_id "v-nonexistent"
     Then the operation should fail
-    And the error code should be "VARIANT_NOT_FOUND"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error message should contain "v-nonexistent"
     And the error field should be "variant_id"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "get_creative_delivery"
-    # BR-RULE-163 INV-3: variant does not exist -> VARIANT_NOT_FOUND
+    # BR-RULE-163 INV-3: variant does not exist -> REFERENCE_NOT_FOUND
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows the variant was not found
     # POST-F3: Suggestion for recovery
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-h-expired @extension @ext-h @error @variant @br-rule-163
-  Scenario: Variant expired -- VARIANT_NOT_FOUND
+  Scenario: Variant expired -- REFERENCE_NOT_FOUND
     Given a variant_id "v-expired" that references a variant whose data has expired
     When the Buyer Agent invokes preview_creative with request_type "variant" and variant_id "v-expired"
     Then the operation should fail
-    And the error code should be "VARIANT_NOT_FOUND"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error message should contain "expired"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "variant"
-    # BR-RULE-163 INV-3: variant expired -> VARIANT_NOT_FOUND
+    # BR-RULE-163 INV-3: variant expired -> REFERENCE_NOT_FOUND
     # POST-F3: Suggestion for recovery
 
   @T-UC-021-ext-i @extension @ext-i @error @post-f1 @post-f2
@@ -342,19 +345,20 @@ Feature: BR-UC-021 Preview Creative
     # POST-F3: Suggestion for recovery
 
   @T-UC-021-ext-j @extension @ext-j @error @post-f1 @post-f2
-  Scenario: Creative agent unreachable -- CREATIVE_AGENT_UNAVAILABLE
+  Scenario: Creative agent unreachable -- SERVICE_UNAVAILABLE
     Given a creative manifest with format_id pointing to an unreachable creative agent
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "CREATIVE_AGENT_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error message should contain the agent URL
     And the error recovery should be "transient"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
-    # BR-RULE-168 INV-3: agent unreachable/timeout/error -> CREATIVE_AGENT_UNAVAILABLE
+    # BR-RULE-168 INV-3: agent unreachable/timeout/error -> SERVICE_UNAVAILABLE
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows the agent is unavailable and receives retry guidance
     # POST-F3: Suggestion for recovery
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-j-batch @extension @ext-j @error @batch @br-rule-168
   Scenario: Creative agent unavailable in batch -- per-item error with other items succeeding
@@ -362,23 +366,24 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "batch"
     Then results[0] has success true with a response
     And results[1] has success false
-    And results[1] errors include code "CREATIVE_AGENT_UNAVAILABLE"
+    And results[1] errors include code "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     # BR-RULE-168 INV-3 in batch context
     # POST-F3: Item 1 succeeds despite item 2 agent failure
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-ext-j-timeout @extension @ext-j @error @timeout @br-rule-168
-  Scenario: Creative agent timeout -- CREATIVE_AGENT_UNAVAILABLE after 30s
+  Scenario: Creative agent timeout -- SERVICE_UNAVAILABLE after 30s
     Given a creative manifest with format_id pointing to a creative agent that responds slowly
     And the creative agent does not respond within 30 seconds
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "CREATIVE_AGENT_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error recovery should be "transient"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
-    # BR-RULE-168 INV-3: timeout -> CREATIVE_AGENT_UNAVAILABLE with retry
+    # BR-RULE-168 INV-3: timeout -> SERVICE_UNAVAILABLE with retry
     # POST-F3: Suggestion for recovery
 
   @T-UC-021-discriminator @invariant @BR-RULE-160 @discriminator
@@ -402,16 +407,19 @@ Feature: BR-UC-021 Preview Creative
     Given a preview_creative request with request_type "unknown_type"
     When the Buyer Agent invokes preview_creative
     Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "single" or "batch" or "variant"
     # BR-RULE-160 INV-5: request_type unknown -> rejected
     # POST-F3: Suggestion for recovery
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
 
   @T-UC-021-discriminator-missing @invariant @BR-RULE-160 @error @discriminator
   Scenario: Missing request type -- rejected before processing
     Given a preview_creative request without request_type field
     When the Buyer Agent invokes preview_creative
     Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "request_type"
     # BR-RULE-160 INV-5: request_type missing -> rejected
@@ -449,6 +457,74 @@ Feature: BR-UC-021 Preview Creative
     Then the render has output_format "both"
     And the render includes both preview_url and preview_html
     # BR-RULE-167 INV-5: render output_format = both -> both preview_url and preview_html
+
+  @T-UC-021-quality-draft @invariant @BR-RULE-227 @quality
+  Scenario: Quality draft -- accepted and rendered at lower fidelity
+    Given a valid single preview request with quality "draft"
+    When the Buyer Agent invokes preview_creative
+    Then the response should succeed
+    And the response has response_type "single"
+    And the response contains a previews array with at least 1 preview
+    # BR-RULE-227 INV-1: quality = draft -> fast, lower-fidelity render
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
+
+  @T-UC-021-quality-production @invariant @BR-RULE-227 @quality
+  Scenario: Quality production -- accepted and rendered at full fidelity
+    Given a valid single preview request with quality "production"
+    When the Buyer Agent invokes preview_creative
+    Then the response should succeed
+    And the response has response_type "single"
+    And the response contains a previews array with at least 1 preview
+    # BR-RULE-227 INV-2: quality = production -> full-quality render
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
+
+  @T-UC-021-quality-invalid @invariant @BR-RULE-227 @quality @error
+  Scenario: Quality not in enum -- rejected before processing
+    Given a single preview request with quality "ultra"
+    When the Buyer Agent invokes preview_creative
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    And the error should include "suggestion" field
+    # BR-RULE-227 INV-3: quality not in [draft, production] -> rejected
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
+
+  @T-UC-021-quality-batch-override @invariant @BR-RULE-227 @quality @batch @ext-a
+  Scenario: Batch quality default with per-item override -- per-item wins
+    Given a batch of 2 creative manifests
+    And the batch-level quality is "draft"
+    And the first item specifies quality "production"
+    When the Buyer Agent invokes preview_creative with request_type "batch"
+    Then results[0] is rendered at quality "production" (overriding the batch default)
+    And results[1] is rendered at quality "draft" (batch default)
+    # BR-RULE-227 INV-4: batch root quality is default; per-item overrides it
+
+  @T-UC-021-item-limit-accepted @invariant @BR-RULE-228 @item-limit
+  Scenario: Item limit accepted -- caps catalog items rendered per variant
+    Given a valid single preview request with item_limit 5
+    When the Buyer Agent invokes preview_creative
+    Then the response should succeed
+    And the response has response_type "single"
+    And the preview renders at most 5 catalog items
+    # BR-RULE-228 INV-1, INV-3: item_limit >= 1 caps catalog items per preview variant
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
+
+  @T-UC-021-item-limit-below-min @invariant @BR-RULE-228 @item-limit @error @boundary
+  Scenario: Item limit below minimum -- zero is rejected
+    Given a single preview request with item_limit 0
+    When the Buyer Agent invokes preview_creative
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    And the error should include "suggestion" field
+    # BR-RULE-228 INV-2: item_limit < 1 violates minimum: 1 -> rejected
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
+
+  @T-UC-021-item-limit-batch @invariant @BR-RULE-228 @item-limit @batch @ext-a
+  Scenario: Item limit per batch item -- applies to that item's catalog rendering
+    Given a batch of 2 creative manifests
+    And the first item specifies item_limit 3
+    When the Buyer Agent invokes preview_creative with request_type "batch"
+    Then results[0] renders at most 3 catalog items
+    # BR-RULE-228 INV-5: per-item item_limit applies to that batch item
 
   @T-UC-021-multi-render @invariant @BR-RULE-167 @multi-render
   Scenario: Multi-render format -- companion ad produces multiple renders with roles
@@ -521,15 +597,15 @@ Feature: BR-UC-021 Preview Creative
     # BR-RULE-168 INV-5: no custom agents -> default creative agent used
 
   @T-UC-021-delegation-error-response @invariant @BR-RULE-168 @error @delegation
-  Scenario: Agent returns error response -- CREATIVE_AGENT_UNAVAILABLE
+  Scenario: Agent returns error response -- SERVICE_UNAVAILABLE
     Given a creative agent that is reachable but returns an error status
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "CREATIVE_AGENT_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error recovery should be "transient"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
-    # BR-RULE-168 INV-3: agent returns error -> CREATIVE_AGENT_UNAVAILABLE
+    # BR-RULE-168 INV-3: agent returns error -> SERVICE_UNAVAILABLE
     # POST-F3: Suggestion for recovery
 
   @T-UC-021-context-echo @invariant @BR-RULE-043 @context-echo
@@ -717,7 +793,7 @@ Feature: BR-UC-021 Preview Creative
     Examples: Invalid partitions
       | partition          | outcome                                                                      |
       | missing_variant_id | error "VARIANT_ID_REQUIRED" with suggestion "variant_id"                     |
-      | variant_not_found  | error "VARIANT_NOT_FOUND" with suggestion "get_creative_delivery"            |
+      | variant_not_found  | error "REFERENCE_NOT_FOUND" with suggestion "get_creative_delivery"            |
 
   @T-UC-021-boundary-variant @boundary @variant_constraints
   Scenario Outline: Variant constraints boundary validation -- <boundary_point>
@@ -730,8 +806,8 @@ Feature: BR-UC-021 Preview Creative
       | variant_id present and valid                | response includes variant_id, previews, and manifest                     |
       | variant_id present, creative_id omitted     | response includes variant_id and manifest without creative_id            |
       | variant_id missing in variant mode          | error "VARIANT_ID_REQUIRED" with suggestion "variant_id"                 |
-      | variant_id references non-existent variant  | error "VARIANT_NOT_FOUND" with suggestion "get_creative_delivery"        |
-      | variant_id references expired variant       | error "VARIANT_NOT_FOUND" with suggestion "get_creative_delivery"        |
+      | variant_id references non-existent variant  | error "REFERENCE_NOT_FOUND" with suggestion "get_creative_delivery"        |
+      | variant_id references expired variant       | error "REFERENCE_NOT_FOUND" with suggestion "get_creative_delivery"        |
 
   @T-UC-021-partition-discriminator @partition @type_discriminator
   Scenario Outline: Type discriminator partition validation -- <partition>
@@ -849,9 +925,9 @@ Feature: BR-UC-021 Preview Creative
 
     Examples: Invalid partitions
       | partition          | outcome                                                                      |
-      | agent_unreachable  | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"                   |
-      | agent_timeout      | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"                   |
-      | agent_error        | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"                   |
+      | agent_unreachable  | error "SERVICE_UNAVAILABLE" with suggestion "Retry"                   |
+      | agent_timeout      | error "SERVICE_UNAVAILABLE" with suggestion "Retry"                   |
+      | agent_error        | error "SERVICE_UNAVAILABLE" with suggestion "Retry"                   |
 
   @T-UC-021-boundary-delegation @boundary @agent_delegation
   Scenario Outline: Agent delegation boundary validation -- <boundary_point>
@@ -863,8 +939,22 @@ Feature: BR-UC-021 Preview Creative
       | boundary_point                                       | outcome                                                              |
       | agent_url = default creative agent (always reachable) | renders returned from default agent                                 |
       | agent_url = tenant-specific agent (reachable)        | renders returned from tenant agent                                   |
-      | agent_url = unreachable endpoint                     | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"           |
-      | agent responds but exceeds 30-second timeout         | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"           |
-      | agent returns error response                         | error "CREATIVE_AGENT_UNAVAILABLE" with suggestion "Retry"           |
+      | agent_url = unreachable endpoint                     | error "SERVICE_UNAVAILABLE" with suggestion "Retry"           |
+      | agent responds but exceeds 30-second timeout         | error "SERVICE_UNAVAILABLE" with suggestion "Retry"           |
+      | agent returns error response                         | error "SERVICE_UNAVAILABLE" with suggestion "Retry"           |
       | agent returns empty previews (no renders)            | server-side error: renders must have at least 1 item                 |
 
+  @T-UC-021-storyboard-preview-display-from-synced-manifest @storyboard-v3.1 @v3-1 @preview-from-library
+  Scenario: Preview a synced display creative -- returns preview_url and render_dimensions matching the format
+    Given a display creative has been synced to the library with creative_id "display_trail_pro_300x250" and format_id {agent_url, "display_300x250"}
+    When the Buyer Agent sends preview_creative with request_type "single" and the synced creative_manifest
+    Then the response should be schema-valid against preview-creative-response.json
+    And the response should carry a preview_url the buyer can inspect
+    And the render_dimensions on the preview should match the format_id "display_300x250"
+    # creative_lifecycle preview_display: the buyer requests a preview of a
+    # display creative that was previously synced (creative_id present). The
+    # platform returns a preview_url the buyer can inspect along with
+    # render_dimensions matching the format (300x250 in the storyboard's
+    # canonical example). This anchors the post-sync preview flow as distinct
+    # from the existing single/batch/variant inline scenarios.
+    # preview_display: post-sync preview returns a render in the format's native dimensions

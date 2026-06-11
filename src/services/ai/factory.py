@@ -4,9 +4,12 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from src.core.exceptions import AdCPConfigurationError
 from src.services.ai.config import (
+    CANONICAL_GOOGLE_PROVIDER,
     TenantAIConfig,
     build_model_string,
+    canonicalize_google_provider,
     get_platform_defaults,
 )
 
@@ -99,7 +102,7 @@ class AIServiceFactory:
             This can be passed directly to Agent(model=...).
 
         Raises:
-            ValueError: If no API key is available for the configured provider
+            AdCPConfigurationError: If no API key is available for the configured provider
         """
         # Parse tenant config if provided as dict
         if isinstance(tenant_ai_config, dict):
@@ -118,9 +121,7 @@ class AIServiceFactory:
         if config.logfire_token:
             configure_logfire(config.logfire_token)
 
-        # Normalize provider name
-        if provider == "gemini":
-            provider = "google-gla"
+        provider = canonicalize_google_provider(provider)
 
         logger.debug(f"Creating Pydantic AI model: {provider}:{model_name}")
 
@@ -135,7 +136,7 @@ class AIServiceFactory:
         avoiding global environment variable mutation.
 
         Args:
-            provider: Normalized provider name (e.g., "google-gla", "anthropic")
+            provider: Normalized provider name (e.g., "google", "anthropic")
             model_name: Model name (e.g., "gemini-2.0-flash")
             api_key: API key for the provider
 
@@ -143,13 +144,17 @@ class AIServiceFactory:
             Configured Model instance
         """
         # Import providers lazily to avoid import errors if not installed
-        if provider == "google-gla":
+        if provider == CANONICAL_GOOGLE_PROVIDER:
             from pydantic_ai.models.google import GoogleModel
             from pydantic_ai.providers.google import GoogleProvider
 
-            if api_key:
-                return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-            return GoogleModel(model_name, provider="google-gla")
+            # Google requires explicit api_key via GoogleProvider; other providers may
+            # fall back to string-format and pydantic-ai env-var resolution.
+            if not api_key:
+                raise AdCPConfigurationError(
+                    f"No API key available for provider '{provider}'. Set a tenant api_key or platform GEMINI_API_KEY."
+                )
+            return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
 
         elif provider == "anthropic":
             from pydantic_ai.models.anthropic import AnthropicModel

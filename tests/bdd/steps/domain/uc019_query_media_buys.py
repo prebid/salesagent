@@ -1372,8 +1372,47 @@ def then_creative_approval_state(ctx: dict) -> None:
 
 @then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
 def then_buyer_refs_for_correlation(ctx: dict) -> None:
-    """No-op: buyer_ref removed in adcp 3.12. buyer_campaign_ref checked elsewhere."""
-    assert ctx.get("response") is not None or ctx.get("error") is not None
+    """Assert buyer_campaign_ref on each response media buy matches the seeded value.
+
+    buyer_ref was removed in adcp 3.12; buyer_campaign_ref is the surviving
+    correlation identifier.  The step text still mentions buyer_ref because the
+    feature file is auto-generated from the spec.  We explicitly assert buyer_ref
+    is absent to document the removal.
+    """
+    buys = _get_media_buys(ctx)
+    seeded = ctx.get("seeded_media_buys", {})
+    checked = 0
+    for buy in buys:
+        buy_id = buy.media_buy_id
+
+        # buyer_ref was removed in adcp 3.12 — assert it is absent on the
+        # response schema to document the removal.
+        assert not hasattr(buy, "buyer_ref") or getattr(buy, "buyer_ref", None) is None, (
+            f"Media buy '{buy_id}' unexpectedly has buyer_ref="
+            f"{getattr(buy, 'buyer_ref', None)!r}; buyer_ref was removed in adcp 3.12"
+        )
+
+        # buyer_campaign_ref is the surviving correlation identifier.
+        # Match it against the value seeded via factory raw_request.
+        seeded_mb = None
+        for mb in seeded.values():
+            if mb.media_buy_id == buy_id:
+                seeded_mb = mb
+                break
+        assert seeded_mb is not None, (
+            f"Response media buy '{buy_id}' not found in seeded_media_buys — "
+            f"known IDs: {[m.media_buy_id for m in seeded.values()]}"
+        )
+        expected_ref = (seeded_mb.raw_request or {}).get("buyer_campaign_ref")
+        actual_ref = buy.buyer_campaign_ref
+        assert actual_ref == expected_ref, (
+            f"Media buy '{buy_id}' buyer_campaign_ref mismatch: "
+            f"expected {expected_ref!r} (from factory raw_request), got {actual_ref!r}"
+        )
+        checked += 1
+    assert checked == len(seeded), (
+        f"Expected {len(seeded)} media buys with buyer_campaign_ref verified, but only checked {checked}"
+    )
 
 
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
@@ -1583,14 +1622,19 @@ def then_error_field_validation(ctx: dict) -> None:
 
 @then(parsers.parse('the error should include a "recovery" field indicating correctable failure'))
 def then_error_recovery_correctable(ctx: dict) -> None:
-    """Assert error has correctable recovery classification."""
+    """Assert error has recovery field set to 'correctable'.
+
+    The step text explicitly says "correctable failure" — the recovery field
+    must be exactly "correctable" (not "retryable" or other values).
+    """
     error = ctx.get("error")
-    assert error is not None, "Expected an error"
+    assert error is not None, "Expected an error but got none"
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery in ("correctable", "retryable"), (
-        f"Expected correctable/retryable recovery, got '{error.recovery}'"
+    assert error.recovery == "correctable", (
+        f"Expected recovery='correctable' (step says 'correctable failure'), "
+        f"got recovery='{error.recovery!r}' on error code '{error.error_code}'"
     )
 
 
@@ -1936,23 +1980,36 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the snapshot should include "{field}" amount'))
 def then_snapshot_field_amount(ctx: dict, field: str) -> None:
-    """Assert snapshot has an amount field."""
+    """Assert snapshot field matches the exact value from the seeded expected_snapshots.
 
+    The Given step stores expected Snapshot objects in ctx["expected_snapshots"][pkg_id].
+    We verify the response snapshot field equals that exact seeded value.
+    """
+    expected_snapshots = ctx.get("expected_snapshots", {})
+    assert expected_snapshots, (
+        f"No expected_snapshots in ctx — the Given step must seed snapshot data "
+        f"via _make_test_snapshot() before asserting '{field}' amount"
+    )
     buys = _get_media_buys(ctx)
+    snapshots_checked = 0
     for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            snapshot = getattr(pkg, "snapshot", None)
-            if snapshot is not None:
-                val = getattr(snapshot, field, None)
-                if val is None and isinstance(snapshot, dict):
-                    val = snapshot.get(field)
-                assert val is not None, f"Snapshot field '{field}' amount not present on package"
-                assert isinstance(val, int | float), (
-                    f"Expected '{field}' to be a numeric amount, got {type(val).__name__}: {val!r}"
-                )
-                assert val >= 0, f"Expected '{field}' amount to be non-negative, got {val}"
-                return
-    raise AssertionError(f"No snapshots found — cannot verify '{field}' amount")
+        for pkg in buy.packages or []:
+            if pkg.snapshot is None:
+                continue
+            snapshots_checked += 1
+            actual_val = getattr(pkg.snapshot, field, None)
+            assert actual_val is not None, f"Snapshot field '{field}' not present on package '{pkg.package_id}'"
+            expected_snapshot = expected_snapshots.get(pkg.package_id)
+            assert expected_snapshot is not None, (
+                f"Package '{pkg.package_id}' has a snapshot but no expected_snapshot was seeded. "
+                f"Known seeded packages: {list(expected_snapshots)}"
+            )
+            expected_val = getattr(expected_snapshot, field)
+            assert actual_val == expected_val, (
+                f"Snapshot '{field}' on package '{pkg.package_id}': "
+                f"expected {expected_val!r} (from seeded snapshot), got {actual_val!r}"
+            )
+    assert snapshots_checked > 0, f"No packages with snapshots found — cannot verify '{field}' amount"
 
 
 @then(parsers.parse("the response should include {count:d} media buys"))
@@ -2034,45 +2091,6 @@ def then_no_sandbox_field(ctx: dict) -> None:
     assert sandbox is None, (
         f"Production response includes sandbox={sandbox!r} for production account — should be absent"
     )
-
-
-@then("no real ad platform API calls should have been made")
-def then_no_real_api_calls(ctx: dict) -> None:
-    """Assert no real adapter API calls (sandbox mode).
-
-    Two verification paths:
-    1. If the env has adapter mocks (e.g. create/update envs), verify no methods were called.
-    2. If the env has NO adapter patches (e.g. MediaBuyListEnv — pure DB read),
-       this proves no adapter calls are possible by design. Verify EXTERNAL_PATCHES
-       is empty to confirm the operation is adapter-free.
-    """
-    env = ctx["env"]
-    if "adapter" in env.mock:
-        # Path 1: adapter mock exists — verify no methods were called
-        adapter_mock = env.mock["adapter"].return_value
-        methods_checked = 0
-        for method_name in ("create_line_item", "get_report", "sync_creative"):
-            method = getattr(adapter_mock, method_name, None)
-            if method is not None and hasattr(method, "called"):
-                methods_checked += 1
-                assert not method.called, f"Real adapter method '{method_name}' was called in sandbox mode"
-        assert methods_checked > 0, (
-            "Adapter mock exists but no callable methods found to verify — "
-            f"adapter mock type: {type(adapter_mock).__name__}"
-        )
-    else:
-        # Path 2: no adapter mock — operation is adapter-free by design.
-        # Some envs patch non-adapter services (registry, audit_logger) that
-        # are not ad platform API calls.  Only flag truly unknown patches.
-        non_adapter_patches = {"registry", "audit_logger"}
-        unexpected = set(env.EXTERNAL_PATCHES) - non_adapter_patches
-        assert not unexpected, (
-            f"No adapter mock but EXTERNAL_PATCHES contains unexpected entries: {unexpected}. "
-            f"If the env patches ad platform services, it should include an adapter mock "
-            f"to verify no real calls were made in sandbox mode."
-        )
-        # Confirm response was successful (operation completed without adapter)
-        assert ctx.get("response") is not None, "No adapter mock and no response — operation may have failed silently"
 
 
 @then("the response should indicate a validation error")
