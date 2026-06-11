@@ -250,9 +250,14 @@ _APPROVAL_MUTATING_CLASSES = ("TestA2AWebhookPayloadTypes", "TestWebhookPayloadS
 
 @pytest.fixture(autouse=True)
 def _restore_auto_approval(request):
+    # Resolve live_server during SETUP — fixture values are unavailable in
+    # teardown (and only for the mutating classes, so the serialization-only
+    # tests don't acquire the stack dependency).
+    needs_restore = request.cls is not None and request.cls.__name__ in _APPROVAL_MUTATING_CLASSES
+    live_server = request.getfixturevalue("live_server") if needs_restore else None
     yield
-    if request.cls is not None and request.cls.__name__ in _APPROVAL_MUTATING_CLASSES:
-        set_mock_manual_approval(request.getfixturevalue("live_server"), required=False)
+    if needs_restore:
+        set_mock_manual_approval(live_server, required=False)
 
 
 class TestA2AWebhookPayloadTypes:

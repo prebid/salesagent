@@ -46,6 +46,9 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 collect_reports() {
     # Copy JSON reports from .tox/ to results dir
     mkdir -p "$RESULTS_DIR"
+    # (Re-)record the verified HEAD here: the results dir can be recreated
+    # mid-run, which drops the early write the pre-push gate reads.
+    git rev-parse HEAD > "$RESULTS_DIR/HEAD" 2>/dev/null || true
     for name in unit integration e2e admin bdd ui; do
         [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
     done

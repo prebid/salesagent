@@ -943,8 +943,10 @@ class TestUpdateMediaBuyAdapterError:
                     f"non-raising path must return the error variant, got {type(update_result).__name__}"
                 )
                 assert update_result.errors, "error variant must carry errors[]"
-            # Either way the scenario's premise must hold: the adapter was reached.
-            mock_adapter.update_media_buy.assert_called_once()
+            # Either way the scenario's premise must hold: the adapter was
+            # reached (count-only on purpose — the raising mock never produces
+            # a return value worth pinning, and the impl owns its call shape).
+            assert mock_adapter.update_media_buy.call_count == 1
 
 
 class TestDeliveryIdentityValidation:
