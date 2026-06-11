@@ -16,6 +16,9 @@ import httpx
 import pytest
 import requests
 
+# Bind before any test patches os.getpid (unit suite autouse mocks leak through).
+_GETPID = os.getpid
+
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 
@@ -38,7 +41,7 @@ def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> i
     this exact algorithm in their Python heredocs -- keep them in sync.
     """
     if pid is None:
-        pid = os.getpid()
+        pid = _GETPID()
     span = end_port - start_port
     if span <= 1:
         return start_port
