@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,17 +20,49 @@ from scripts.ci.shard_split import (
 from tests.unit.workflow_helpers import CI_WORKFLOW_PATH
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_BDD_MODULE_LINE = re.compile(r"^\s*<Module ([^>]+)>\s*$")
+
+
+def _pytest_bdd_module_paths(repo_root: Path) -> set[str]:
+    """Collect BDD test module paths via pytest (independent of shard_split glob)."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/bdd/",
+            "--collect-only",
+            "-q",
+            "--no-header",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+        timeout=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        pytest.fail(f"pytest --collect-only tests/bdd/ failed: {msg}")
+
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        match = _BDD_MODULE_LINE.match(line)
+        if match:
+            paths.add(f"tests/bdd/{match.group(1)}")
+    if not paths:
+        pytest.fail("pytest --collect-only tests/bdd/ returned no <Module …> entries")
+    return paths
 
 
 @pytest.mark.arch_guard
 def test_bdd_shards_partition_suite() -> None:
-    expected = list_suite_files("bdd", repo_root=_REPO_ROOT)
+    expected = _pytest_bdd_module_paths(_REPO_ROOT)
     buckets = assign_files_to_shards("bdd", repo_root=_REPO_ROOT)
-    assigned = [path for paths in buckets.values() for path in paths]
+    assigned = {path for paths in buckets.values() for path in paths}
 
     assert len(buckets) == SHARD_COUNTS["bdd"]
-    assert set(assigned) == set(expected)
-    assert len(assigned) == len(expected)
+    assert assigned == expected
 
 
 @pytest.mark.arch_guard
