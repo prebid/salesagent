@@ -366,25 +366,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
         # When steps dispatch through harness (blanket xfail removed).
 
-        # UC-002 @account error paths: after dropping IMPL (salesagent-5yst) these
-        # impl-exclusive scenarios re-parametrize onto a2a/mcp/rest. Account
-        # resolution is not wired through the create_media_buy wire path, so the
-        # error scenarios raise a generic CreateMediaBuyRequest ValidationError on
-        # the wire instead of the spec ACCOUNT_NOT_FOUND / ACCOUNT_SETUP_REQUIRED /
-        # ACCOUNT_AMBIGUOUS error. Real wire wiring is salesagent-l9wn.
-        _UC002_ACCOUNT_WIRE_GAP = {
-            "T-UC-002-ext-r",  # account not found — explicit account_id
-            "T-UC-002-ext-r-nk",  # account not found — natural key
-            "T-UC-002-ext-s",  # account requires setup before use
-            "T-UC-002-ext-t",  # account ambiguous — natural key matches multiple
-        }
-        if marker_names & _UC002_ACCOUNT_WIRE_GAP:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="account resolution not wired on the create_media_buy wire path (salesagent-l9wn)",
-                    strict=True,
-                )
-            )
+        # NOTE (salesagent-5yst/S5 reconciliation): the UC-002 @account error
+        # scenarios (ext-r / ext-r-nk / ext-s / ext-t) are NOT impl-exclusive and
+        # are NOT a wire-only gap — they failed on ALL four transports (impl + wire)
+        # in the pre-drop baseline. They are the pre-existing budget-branch When-step
+        # routing bug (create_media_buy account-resolution scenarios build a request
+        # with `account_ref`, which CreateMediaBuyRequest rejects). That is a step
+        # bug fixable in the When step, not a production wire gap, so it is left as a
+        # genuine (pre-existing) failure rather than masked with an xfail. The
+        # drop-impl change introduces 0 new failures; this debt is out of scope.
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
