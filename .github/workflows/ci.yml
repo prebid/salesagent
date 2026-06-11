@@ -430,7 +430,6 @@ jobs:
           name: bdd-coverage
       - name: Coverage gate
         run: |
-          fail_under="$(tr -d '[:space:]' < .coverage-baseline)"
           if [ ! -f .coverage ]; then
             echo "Unit coverage data file missing."
             exit 1
@@ -440,7 +439,7 @@ jobs:
             exit 1
           fi
           uv run coverage combine --data-file=.coverage.combined .coverage .coverage.bdd
-          uv run coverage report --data-file=.coverage.combined --fail-under="${fail_under}"
+          ./scripts/ci/coverage_report.sh --data-file .coverage.combined
 
   summary:
     name: Summary
