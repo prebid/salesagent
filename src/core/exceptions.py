@@ -339,6 +339,8 @@ class AdCPError(Exception):
             result["field"] = self.field
         if self.suggestion is not None:
             result["suggestion"] = self.suggestion
+        if self.retry_after is not None:
+            result["retry_after"] = self.retry_after
         serialized_context = _serialize_context(self.context)
         if serialized_context is not None:
             result["context"] = serialized_context
@@ -374,6 +376,7 @@ class AdCPError(Exception):
             recovery=self.recovery,
             field=self.field,
             suggestion=self.suggestion,
+            retry_after=self.retry_after,
             details=merged_details or None,
         )
 

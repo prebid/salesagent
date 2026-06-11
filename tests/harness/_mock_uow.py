@@ -62,6 +62,10 @@ def make_mock_uow(
     if repos is None or "idempotency_attempts" not in repos:
         attempts_repo = MagicMock()
         attempts_repo.find_by_key.return_value = None
+        # The admission policy unpacks (count, oldest) from the two scope
+        # queries — empty scope by default so the ceiling never trips in units.
+        attempts_repo.count_inserts_since.return_value = (0, None)
+        attempts_repo.count_active.return_value = (0, None)
         mock_uow.idempotency_attempts = attempts_repo
 
     mock_uow_cls = MagicMock(return_value=mock_uow)

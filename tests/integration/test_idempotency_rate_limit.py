@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from src.services.idempotency_policy import enforce_insert_ceiling
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -60,7 +61,8 @@ class TestInsertCeilingRepository:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
             with pytest.raises(AdCPError) as exc_info:
-                uow.idempotency_attempts.enforce_insert_ceiling(
+                enforce_insert_ceiling(
+                    uow.idempotency_attempts,
                     principal_id=principal_id,
                     ceiling=2,
                     now=now,
@@ -85,7 +87,8 @@ class TestInsertCeilingRepository:
 
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.enforce_insert_ceiling(
+            enforce_insert_ceiling(
+                uow.idempotency_attempts,
                 principal_id=principal_id,
                 ceiling=3,
                 now=now,
@@ -104,7 +107,8 @@ class TestInsertCeilingRepository:
 
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.enforce_insert_ceiling(
+            enforce_insert_ceiling(
+                uow.idempotency_attempts,
                 principal_id=principal_id,
                 ceiling=1,
             )
@@ -141,7 +145,8 @@ class TestInsertRateWindow:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
             with pytest.raises(AdCPError) as exc_info:
-                uow.idempotency_attempts.enforce_insert_ceiling(
+                enforce_insert_ceiling(
+                    uow.idempotency_attempts,
                     principal_id=principal_id,
                     rate_ceiling=2,
                 )
@@ -165,7 +170,8 @@ class TestInsertRateWindow:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
             # Probe from 11s in the future: both rows fall outside the 10s window.
-            uow.idempotency_attempts.enforce_insert_ceiling(
+            enforce_insert_ceiling(
+                uow.idempotency_attempts,
                 principal_id=principal_id,
                 rate_ceiling=2,
                 now=datetime.now(UTC) + td(seconds=11),
@@ -185,7 +191,8 @@ class TestInsertRateWindow:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
             with pytest.raises(AdCPError) as exc_info:
-                uow.idempotency_attempts.enforce_insert_ceiling(
+                enforce_insert_ceiling(
+                    uow.idempotency_attempts,
                     principal_id=principal_id,
                     ceiling=1,
                     now=now + timedelta(seconds=11),
@@ -214,7 +221,7 @@ class TestInsertCeilingThroughEntrypoint:
         from tests.harness.transport import Transport
         from tests.helpers import assert_envelope_shape
 
-        monkeypatch.setattr("src.core.database.repositories.idempotency_attempt.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 1)
+        monkeypatch.setattr("src.services.idempotency_policy.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 1)
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
@@ -236,7 +243,7 @@ class TestInsertCeilingThroughEntrypoint:
         """Retrying a cached key replays verbatim even when the scope is at the ceiling."""
         from src.core.schemas._base import CreateMediaBuySuccess
 
-        monkeypatch.setattr("src.core.database.repositories.idempotency_attempt.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 1)
+        monkeypatch.setattr("src.services.idempotency_policy.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 1)
 
         idem_key = f"rlreplay-{uuid.uuid4().hex}"
         with MediaBuyCreateEnv() as env:

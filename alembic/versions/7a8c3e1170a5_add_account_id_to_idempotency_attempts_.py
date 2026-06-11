@@ -32,7 +32,8 @@ def upgrade() -> None:
         "idempotency_attempts",
         sa.Column(
             "account_id",
-            sa.String(length=255),
+            # Width matches accounts.account_id (String(100)) — same logical value.
+            sa.String(length=100),
             nullable=True,
             comment=(
                 "Resolved account scope (AdCP idempotency scope is agent+account+key); "

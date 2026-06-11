@@ -1033,7 +1033,9 @@ class IdempotencyAttempt(Base):
     )
     principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
     account_id: Mapped[str | None] = mapped_column(
-        String(255),
+        # String(100) matches accounts.account_id (and every other account_id
+        # column) — the same logical value joins on the degraded-path lookup.
+        String(100),
         nullable=True,
         comment="Resolved account scope (AdCP idempotency scope is agent+account+key); NULL when the buy targets no sub-account",
     )

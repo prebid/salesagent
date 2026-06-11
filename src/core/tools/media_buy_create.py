@@ -9,6 +9,7 @@ Handles media buy creation including:
 """
 
 import logging
+import random
 import secrets
 import time
 import uuid
@@ -1599,8 +1600,8 @@ def _lookup_cached_replay(
     execution (probe) or the degraded fallback (post-race).
 
     ``enforce_ceiling=True`` (the front probe) additionally rate-limits a MISS:
-    a fresh key would insert a new cache row, and the per-scope row count is
-    bounded — see ``IdempotencyAttemptRepository.enforce_insert_ceiling``. The
+    a fresh key would insert a new cache row, and the per-scope insert rate and
+    row count are bounded — see :mod:`src.services.idempotency_policy`. The
     post-race path never enforces it (the loser inserts nothing).
     """
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
@@ -1615,13 +1616,44 @@ def _lookup_cached_replay(
         )
         if cached is None:
             if enforce_ceiling:
-                uow.idempotency_attempts.enforce_insert_ceiling(
+                from src.services.idempotency_policy import enforce_insert_ceiling
+
+                enforce_insert_ceiling(
+                    uow.idempotency_attempts,
                     principal_id=principal_id,
                     account_id=account_id,
                 )
             return None
         _raise_on_payload_conflict(cached.payload_hash, request_hash)
         return _replay_cached_success(cached.response_envelope)
+
+
+# Fraction of successful keyed creates that run storage reclamation. Eviction
+# is pure housekeeping (read-path TTL filtering guarantees replay correctness),
+# so the hot path almost never carries the DELETE; patchable in tests.
+_EVICTION_PROBABILITY = 0.01
+
+
+def _maybe_evict_expired(tenant_id: str) -> None:
+    """Probabilistically reclaim expired cache rows in a separate short transaction.
+
+    Runs OUTSIDE the cache-write transaction so a tenant-wide DELETE deadlock
+    can never roll back a just-cached success, and only on
+    ``_EVICTION_PROBABILITY`` of keyed successes so creates almost never pay
+    for housekeeping. Best-effort by design — a failure here affects nothing
+    the buyer sees.
+    """
+    if random.random() >= _EVICTION_PROBABILITY:
+        return
+    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
+    from src.core.database.repositories import MediaBuyUoW
+
+    try:
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            uow.idempotency_attempts.expire_old()
+    except Exception:
+        logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
 
 
 def _cache_and_return(
@@ -1662,11 +1694,6 @@ def _cache_and_return(
                 protocol_status=result.status,
                 payload_hash=request_hash,
             )
-            # Opportunistic eviction: one indexed, tenant-scoped DELETE per
-            # successful keyed create keeps the cache bounded without a
-            # scheduler. Read-path TTL filtering already guarantees replay
-            # correctness; this only reclaims storage.
-            uow.idempotency_attempts.expire_old()
     except IntegrityError:
         logger.info(
             "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",
@@ -1682,6 +1709,9 @@ def _cache_and_return(
             identity.principal_id,
             exc_info=True,
         )
+    # Eviction runs AFTER the cache write commits, in its own transaction —
+    # a DELETE deadlock can never roll back the just-cached success.
+    _maybe_evict_expired(identity.tenant_id)
     return result
 
 
@@ -4056,6 +4086,54 @@ async def _create_media_buy_impl(
         raise AdCPAdapterError(f"Failed to create media buy: {str(e)}")
 
 
+def _build_create_media_buy_request(
+    *,
+    brand: BrandReference | str | None,
+    # The MCP wrapper receives the internal PackageRequest subtype; the raw
+    # wrapper the library type — CreateMediaBuyRequest validates either.
+    packages: list[AdcpPackageRequest] | list[PackageRequest] | None,
+    start_time: str | None,
+    end_time: str | None,
+    po_number: str | None,
+    reporting_webhook: ReportingWebhook | None,
+    context: ContextObject | None,
+    ext: dict[str, Any] | None,
+    account: AccountReference | None,
+    idempotency_key: str | None,
+) -> CreateMediaBuyRequest:
+    """Shared boundary request construction for the MCP and A2A/REST wrappers.
+
+    One home for the field list, the brand string-shorthand coercion, the
+    idempotency omit-when-absent splat, and the ValidationError translation —
+    a future request field lands here once instead of in wrapper lockstep.
+    Transport-specific input coercions (A2A's ``to_reporting_webhook`` /
+    ``to_context_object``) happen at the call site; this builder receives
+    already-typed values.
+    """
+    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
+    if isinstance(brand, str):
+        brand = BrandReference(domain=brand)
+    try:
+        return CreateMediaBuyRequest(
+            brand=brand,
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            po_number=po_number,
+            reporting_webhook=reporting_webhook,
+            context=context,
+            ext=ext,
+            account=account,
+            # Omit-when-absent so a missing key rejects as "Field required",
+            # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
+            # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
+            # None type error.
+            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
+        )
+    except ValidationError as e:
+        raise AdCPValidationError(format_validation_error(e, context="request")) from e
+
+
 async def create_media_buy(
     brand: Annotated[
         BrandReference | str | None,
@@ -4122,31 +4200,19 @@ async def create_media_buy(
     Returns:
         ToolResult with CreateMediaBuyResponse data
     """
-    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
-    if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
-
-    # Construct spec-compliant request object at the boundary — validation happens here
     # FastMCP already coerced JSON inputs to typed Pydantic models
-    try:
-        req = CreateMediaBuyRequest(
-            brand=brand,
-            packages=packages,
-            start_time=start_time,
-            end_time=end_time,
-            po_number=po_number,
-            reporting_webhook=reporting_webhook,
-            context=context,
-            ext=ext,
-            account=account,
-            # Omit-when-absent so a missing key rejects as "Field required",
-            # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
-            # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
-            # None type error.
-            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
-        )
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="request")) from e
+    req = _build_create_media_buy_request(
+        brand=brand,
+        packages=packages,
+        start_time=start_time,
+        end_time=end_time,
+        po_number=po_number,
+        reporting_webhook=reporting_webhook,
+        context=context,
+        ext=ext,
+        account=account,
+        idempotency_key=idempotency_key,
+    )
 
     # Read identity, context_id, and the raw wire arguments pre-stashed by
     # MCPAuthMiddleware. The raw arguments (pre compat-normalization) are the
@@ -4213,31 +4279,20 @@ async def create_media_buy_raw(
     Returns:
         Dict with status and CreateMediaBuyResponse data
     """
-    # Coerce string brand shorthand to BrandReference (A2A may send raw "acme.com")
-    if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
-
-    # Construct spec-compliant request object at the boundary — validation happens here
-    # A2A server sends dict inputs which Pydantic coerces to typed models
-    try:
-        req = CreateMediaBuyRequest(
-            brand=brand,
-            packages=packages,
-            start_time=start_time,
-            end_time=end_time,
-            po_number=po_number,
-            reporting_webhook=to_reporting_webhook(reporting_webhook),
-            context=to_context_object(context),
-            ext=ext,
-            account=account,
-            # Omit-when-absent so a missing key rejects as "Field required",
-            # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
-            # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
-            # None type error.
-            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
-        )
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="request")) from e
+    # A2A/REST send dict inputs; the two coercions below are this transport's
+    # only divergence from the MCP wrapper — everything else is the shared builder.
+    req = _build_create_media_buy_request(
+        brand=brand,
+        packages=packages,
+        start_time=start_time,
+        end_time=end_time,
+        po_number=po_number,
+        reporting_webhook=to_reporting_webhook(reporting_webhook),
+        context=to_context_object(context),
+        ext=ext,
+        account=account,
+        idempotency_key=idempotency_key,
+    )
 
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context

@@ -424,6 +424,8 @@ class TestCreateMediaBuyValidation:
 
         mock_uow = MagicMock()
         mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
@@ -502,6 +504,8 @@ class TestCreateMediaBuyValidation:
 
         mock_uow = MagicMock()
         mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
@@ -1295,6 +1299,8 @@ class TestCreateMediaBuyIdempotency:
 
         mock_uow = MagicMock()
         mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.idempotency_attempts = mock_attempts
@@ -1340,6 +1346,8 @@ class TestCreateMediaBuyIdempotency:
         # β success cache returns None (no cached success) → probe misses, flow proceeds
         mock_idem_attempts_repo = MagicMock()
         mock_idem_attempts_repo.find_by_key.return_value = None
+        mock_idem_attempts_repo.count_inserts_since.return_value = (0, None)
+        mock_idem_attempts_repo.count_active.return_value = (0, None)
 
         mock_idem_uow = MagicMock()
         mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
@@ -1551,6 +1559,8 @@ class TestCreateMediaBuyAdapterInteraction:
 
         mock_uow = MagicMock()
         mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = mock_session
@@ -1765,6 +1775,8 @@ class TestUpdateMediaBuyMainFlow:
         # Build mock UoW
         mock_uow = MagicMock()
         mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_session = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
@@ -1892,6 +1904,8 @@ class TestUpdateMediaBuyPauseResume:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -1954,6 +1968,8 @@ class TestUpdateMediaBuyPauseResume:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition: 'resume' is only valid from 'paused'
@@ -2015,6 +2031,8 @@ class TestUpdateMediaBuyPauseResume:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -2105,6 +2123,8 @@ class TestUpdateMediaBuyTiming:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
@@ -2179,6 +2199,8 @@ class TestUpdateMediaBuyTiming:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
@@ -2336,6 +2358,8 @@ class TestUpdateMediaBuyCreativeIds:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2416,6 +2440,8 @@ class TestUpdateMediaBuyCreativeIds:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2503,6 +2529,8 @@ class TestUpdateMediaBuyCreativeIds:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2591,6 +2619,8 @@ class TestUpdateMediaBuyCreativeIds:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2695,6 +2725,8 @@ class TestUpdateMediaBuyCreativeIds:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2794,6 +2826,8 @@ class TestUpdateMediaBuyIdentification:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = None
@@ -2862,6 +2896,8 @@ class TestUpdateMediaBuyOwnership:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
@@ -2918,6 +2954,8 @@ class TestUpdateMediaBuyManualApproval:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -2980,6 +3018,8 @@ class TestUpdateMediaBuyManualApproval:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -3045,6 +3085,8 @@ class TestUpdateMediaBuyAdapterFailure:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -3120,6 +3162,8 @@ class TestUpdateMediaBuyAdapterFailure:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -3173,6 +3217,8 @@ class TestUpdateMediaBuyAdapterFailure:
 
             mock_uow = MagicMock()
             mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
+            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)

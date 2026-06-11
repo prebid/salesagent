@@ -808,3 +808,38 @@ class TestIterConcreteSubclasses:
 
         assert _Concrete in result  # concrete descendant of an abstract base is yielded
         assert _AbstractMid not in result  # the abstract base itself is skipped
+
+
+class TestRetryAfterSerializerParity:
+    """retry_after rides every serializer the docstring claims is in sync.
+
+    The two-layer envelope builder already emitted it; the flat ``to_dict``
+    and SDK ``to_adcp_error`` shapes dropped it — a future flat-serializer
+    caller would silently lose the client's backoff hint.
+    """
+
+    def test_to_dict_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        assert exc.to_dict()["retry_after"] == 7
+
+    def test_to_dict_omits_absent_retry_after(self):
+        from src.core.exceptions import AdCPValidationError
+
+        exc = AdCPValidationError("bad input")
+        assert "retry_after" not in exc.to_dict()
+
+    def test_to_adcp_error_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        payload = exc.to_adcp_error()
+        assert payload["errors"][0]["retry_after"] == 7
+
+    def test_envelope_builder_still_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError, build_two_layer_error_envelope
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["retry_after"] == 7

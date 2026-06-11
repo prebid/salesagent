@@ -206,18 +206,24 @@ class TestImplReplaysCachedSuccess:
 
 
 class TestOpportunisticEviction:
-    """A successful keyed create evicts the tenant's expired cache rows.
+    """A successful keyed create probabilistically evicts expired cache rows.
 
-    ``expire_old`` runs in the same UoW as the success-cache write — the
-    storage-growth bound for the cache without a scheduler (read-path TTL
-    filtering already keeps replay correctness independent of eviction).
+    Eviction runs in its OWN transaction after the cache write commits (a
+    DELETE deadlock can never roll back the just-cached success) and only on
+    ``_EVICTION_PROBABILITY`` of successes — the storage-growth bound for the
+    cache without a scheduler (read-path TTL filtering already keeps replay
+    correctness independent of eviction). The tests pin both sides: forced
+    eviction deletes the row; suppressed eviction leaves it and the create
+    is untouched.
     """
 
-    def test_fresh_success_evicts_expired_rows(self, integration_db):
+    def test_fresh_success_evicts_expired_rows(self, integration_db, monkeypatch):
         from datetime import timedelta
 
         from src.core.database.repositories import MediaBuyUoW
         from tests.helpers import make_active_cached_success, seed_cached_success
+
+        monkeypatch.setattr("src.core.tools.media_buy_create._EVICTION_PROBABILITY", 1.0)
 
         expired_key = f"evict-{uuid.uuid4().hex}"
         fresh_key = f"fresh-{uuid.uuid4().hex}"
@@ -355,3 +361,56 @@ class TestErrorsAreNeverCached:
                 idempotency_key=idem_key,
             )
             assert cached is None, "Errors must never be cached — a retry must re-execute"
+
+
+@pytest.mark.requires_db
+def test_suppressed_eviction_never_touches_the_create(integration_db, monkeypatch):
+    """With eviction suppressed, the expired row survives and the buy is unaffected.
+
+    Pins the decoupling: eviction is housekeeping OUTSIDE the cache-write
+    transaction, so the create's outcome and its cached row are identical
+    whether or not reclamation ran.
+    """
+    from datetime import timedelta
+
+    from src.core.database.repositories import MediaBuyUoW
+    from tests.harness.media_buy_create import MediaBuyCreateEnv
+    from tests.helpers import make_active_cached_success, seed_cached_success
+
+    monkeypatch.setattr("src.core.tools.media_buy_create._EVICTION_PROBABILITY", 0.0)
+    expired_key = f"keep-{uuid.uuid4().hex}"
+    fresh_key = f"fresh-{uuid.uuid4().hex}"
+    seeded_at = datetime(2020, 1, 1, tzinfo=UTC)
+
+    with MediaBuyCreateEnv() as env:
+        _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+        seed_cached_success(
+            env._tenant_id,
+            env._principal_id,
+            expired_key,
+            response_model=make_active_cached_success("mb_kept_row"),
+            payload_hash="kept-row-hash",
+            ttl=timedelta(minutes=1),
+            now=seeded_at,
+        )
+        now = datetime.now(UTC)
+        result = env.call_impl(
+            brand={"domain": "keep-test.example.com"},
+            packages=[{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            po_number="KEEP-1",
+            idempotency_key=fresh_key,
+        )
+        assert result.status in {"completed", "submitted"}
+        tenant_id = env._tenant_id
+        principal_id = env._principal_id
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.idempotency_attempts is not None
+        kept = uow.idempotency_attempts.find_by_key(
+            principal_id=principal_id, idempotency_key=expired_key, now=seeded_at
+        )
+        assert kept is not None, "suppressed eviction must leave the expired row in place"
+        fresh = uow.idempotency_attempts.find_by_key(principal_id=principal_id, idempotency_key=fresh_key)
+        assert fresh is not None, "the fresh success caches regardless of eviction"
