@@ -24,16 +24,18 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
 def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
-    """Dispatch through ctx['transport'] (defaults to IMPL for backward compat)."""
+    """Dispatch through ctx['transport'] (a wire transport: a2a/mcp/rest).
+
+    IMPL was dropped from the BDD default parametrization (salesagent-5yst), so a
+    missing transport is a wiring bug — fail loudly rather than bypassing the wire.
+    """
     transport = ctx.get("transport")
-    if transport is not None:
-        _call_via(ctx, transport, req=req)
-    else:
-        env = ctx["env"]
-        try:
-            ctx["response"] = env.call_impl(req=req)
-        except Exception as exc:
-            ctx["error"] = exc
+    if transport is None:
+        raise RuntimeError(
+            "when_request._call: ctx['transport'] is unset. BDD scenarios must dispatch "
+            "through a wire transport (a2a/mcp/rest); the IMPL call_impl fallback was removed."
+        )
+    _call_via(ctx, transport, req=req)
 
 
 def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsRequest | None = None) -> None:
@@ -42,7 +44,9 @@ def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsReq
         t = transport
     else:
         transport_map = {"a2a": Transport.A2A, "mcp": Transport.MCP, "rest": Transport.REST}
-        t = transport_map.get(transport, Transport.IMPL)
+        if transport not in transport_map:
+            raise RuntimeError(f"when_request._call_via: unrecognized wire transport {transport!r}")
+        t = transport_map[transport]
     env = ctx["env"]
 
     kwargs: dict[str, Any] = {}

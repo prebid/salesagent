@@ -366,6 +366,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
         # When steps dispatch through harness (blanket xfail removed).
 
+        # UC-002 @account error paths: after dropping IMPL (salesagent-5yst) these
+        # impl-exclusive scenarios re-parametrize onto a2a/mcp/rest. Account
+        # resolution is not wired through the create_media_buy wire path, so the
+        # error scenarios raise a generic CreateMediaBuyRequest ValidationError on
+        # the wire instead of the spec ACCOUNT_NOT_FOUND / ACCOUNT_SETUP_REQUIRED /
+        # ACCOUNT_AMBIGUOUS error. Real wire wiring is salesagent-l9wn.
+        _UC002_ACCOUNT_WIRE_GAP = {
+            "T-UC-002-ext-r",  # account not found — explicit account_id
+            "T-UC-002-ext-r-nk",  # account not found — natural key
+            "T-UC-002-ext-s",  # account requires setup before use
+            "T-UC-002-ext-t",  # account ambiguous — natural key matches multiple
+        }
+        if marker_names & _UC002_ACCOUNT_WIRE_GAP:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="account resolution not wired on the create_media_buy wire path (salesagent-l9wn)",
+                    strict=True,
+                )
+            )
+
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
             for tag, substrings, reason, strict in _MCP_SELECTIVE_XFAIL:
@@ -2339,13 +2359,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.admin)
 
     # ── Single-transport optimization for strict xfails ──────────────
-    # Scenarios that xfail(strict=True) on ALL transports waste 3/4 of
-    # their runtime running the same failure path on mcp/rest/a2a after
-    # impl already proved it xfails. Deselect redundant transports.
+    # Scenarios that xfail(strict=True) waste runtime running the same failure
+    # path on every transport. Keep one canonical transport running (so the
+    # xfail still proves out and an xpass is still caught when production catches
+    # up) and deselect the redundant ones.
     #
-    # How it works: after the loop above, every item has its xfail markers.
-    # We find items with strict xfail and deselect the non-impl variants.
-    # The impl variant still runs → catches when production catches up (xpass).
+    # IMPL was dropped from the BDD default parametrization (salesagent-5yst), so
+    # a2a is now the canonical transport that always runs; mcp/rest are the
+    # redundant transports deselected when the scenario carries a strict xfail.
+    # (Previously impl was canonical; keeping a2a preserves the "still xfail on
+    # wire, not deselected-to-nothing" guarantee for the impl-exclusive ledger.)
     #
     # Opt out: set BDD_ALL_TRANSPORTS=1 to run everything (for full runs).
     if not os.environ.get("BDD_ALL_TRANSPORTS"):
@@ -2353,14 +2376,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         remaining: list[pytest.Item] = []
         for item in items:
             nodeid = item.nodeid
-            is_redundant_transport = (
-                "[mcp]" in nodeid
-                or "[mcp-" in nodeid
-                or "[a2a]" in nodeid
-                or "[a2a-" in nodeid
-                or "[rest]" in nodeid
-                or "[rest-" in nodeid
-            )
+            is_redundant_transport = "[mcp]" in nodeid or "[mcp-" in nodeid or "[rest]" in nodeid or "[rest-" in nodeid
             if not is_redundant_transport:
                 remaining.append(item)
                 continue
@@ -2390,20 +2406,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # These scenarios must NOT be multiplied — they have explicit When steps.
 _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 
-# UC + tag combinations that should run IMPL-only (no 4-way parametrization).
-# UC-002 @account: MediaBuyAccountEnv tests resolve_account() directly — no
-# transport wrappers exist for the create_media_buy account resolution path.
-_IMPL_ONLY: set[tuple[str, str]] = {
-    ("UC-002", "account"),
-}
-
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    """Parametrize BDD scenarios across all 4 transports.
+    """Parametrize BDD scenarios across the wire transports (a2a/mcp/rest).
+
+    The IMPL transport was dropped from the BDD default parametrization
+    (salesagent-5yst): BDD asserts AdCP *wire* conformance only. IMPL/call_impl
+    remain available for unit/integration tests via the harness; they are simply
+    no longer auto-parametrized here.
 
     Scenarios tagged with @rest, @mcp, or @a2a are transport-specific
     and skip parametrization — they already dispatch through their
@@ -2426,14 +2440,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return
 
-    # IMPL-only scenarios: harness has no transport wrappers for this path
-    for uc_prefix, required_tag in _IMPL_ONLY:
-        tag_prefix = f"T-{uc_prefix}-"
-        if any(t.startswith(tag_prefix) for t in marker_names) and required_tag in marker_names:
-            return
-
-    transports = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
-    ids = ["impl", "a2a", "mcp", "rest"]
+    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["a2a", "mcp", "rest"]
 
     if os.environ.get("BDD_E2E_ENABLED") == "true":
         transports.append(Transport.E2E_REST)

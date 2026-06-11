@@ -29,33 +29,36 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
 
     transport = ctx.get("transport")
     env = ctx["env"]
-    if transport is not None:
-        from tests.harness.transport import Transport
+    # BDD dispatches on a wire transport only (IMPL was dropped from the default
+    # parametrization, salesagent-5yst). A missing transport is a wiring bug, not
+    # an IMPL fallback — fail loudly rather than silently bypassing the wire.
+    if transport is None:
+        raise RuntimeError(
+            "dispatch_request: ctx['transport'] is unset. BDD scenarios must dispatch "
+            "through a wire transport (a2a/mcp/rest); the IMPL call_impl fallback was removed."
+        )
 
-        if isinstance(transport, Transport):
-            pass  # Already a Transport enum — use as-is
-        elif isinstance(transport, str):
-            transport_map = {
-                "MCP": Transport.MCP,
-                "mcp": Transport.MCP,
-                "A2A": Transport.A2A,
-                "a2a": Transport.A2A,
-                "REST": Transport.REST,
-                "rest": Transport.REST,
-                "IMPL": Transport.IMPL,
-                "impl": Transport.IMPL,
-            }
-            transport = transport_map.get(transport, Transport.IMPL)
-        try:
-            result = env.call_via(transport, **kwargs)
-            if result.is_error:
-                ctx["error"] = result.error
-            else:
-                ctx["response"] = result.payload
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        try:
-            ctx["response"] = env.call_impl(**kwargs)
-        except Exception as exc:
-            ctx["error"] = exc
+    from tests.harness.transport import Transport
+
+    if isinstance(transport, Transport):
+        pass  # Already a Transport enum — use as-is
+    elif isinstance(transport, str):
+        transport_map = {
+            "MCP": Transport.MCP,
+            "mcp": Transport.MCP,
+            "A2A": Transport.A2A,
+            "a2a": Transport.A2A,
+            "REST": Transport.REST,
+            "rest": Transport.REST,
+        }
+        if transport not in transport_map:
+            raise RuntimeError(f"dispatch_request: unrecognized wire transport {transport!r}")
+        transport = transport_map[transport]
+    try:
+        result = env.call_via(transport, **kwargs)
+        if result.is_error:
+            ctx["error"] = result.error
+        else:
+            ctx["response"] = result.payload
+    except Exception as exc:
+        ctx["error"] = exc
