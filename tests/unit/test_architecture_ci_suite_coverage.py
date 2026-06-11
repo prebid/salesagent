@@ -20,53 +20,40 @@ class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
 
     def test_bdd_job_exists(self):
-        """A dedicated BDD job must exist in the CI workflow.
-
-        Before this guard, ``tests/bdd/`` was never executed in CI, so any
-        PR could break every BDD scenario and still show green.
-        """
+        """BDD aggregate + parallel shard jobs must exist in CI."""
         jobs = load_ci_workflow()["jobs"]
 
-        assert "bdd-tests" in jobs, (
-            "No 'bdd-tests' job in .github/workflows/ci.yml. The BDD suite "
-            "(tests/bdd/) is run by ./run_all_tests.sh but has zero CI "
-            "coverage — a broken BDD suite can silently land on main. Add a "
-            "'bdd-tests' job mirroring 'integration-tests' (Postgres service "
-            "+ migrations + pytest tests/bdd/)."
+        assert "bdd-tests" in jobs, "No 'bdd-tests' aggregate job in .github/workflows/ci.yml."
+        assert "bdd-tests-shard" in jobs, "No 'bdd-tests-shard' matrix job in .github/workflows/ci.yml."
+
+    def test_bdd_shards_run_the_bdd_suite(self):
+        """Each BDD shard must resolve paths via shard_paths and run pytest."""
+        shard_job = load_ci_workflow()["jobs"]["bdd-tests-shard"]
+        steps_text = " ".join(
+            str(step.get("run", "")) + " " + str(step.get("uses", "")) + " " + str(step.get("with", {}))
+            for step in shard_job.get("steps", [])
         )
 
-    def test_bdd_job_runs_the_bdd_suite(self):
-        """The BDD job must actually invoke ``pytest tests/bdd/``.
-
-        A job that exists but doesn't run the suite is worse than no job —
-        it gives false confidence.
-        """
-        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
-        run_steps = " ".join(str(step.get("run", "")) for step in bdd_job.get("steps", []))
-        pytest_inputs = " ".join(
-            str(step.get("with", {}).get("paths", ""))
-            for step in bdd_job.get("steps", [])
-            if str(step.get("uses", "")).endswith("/_pytest")
+        assert "shard_paths.py bdd" in steps_text, (
+            "bdd-tests-shard must resolve test files via scripts/ci/shard_paths.py bdd."
+        )
+        assert "./.github/actions/_pytest" in steps_text or "pytest" in steps_text, (
+            "bdd-tests-shard must invoke pytest (via _pytest composite or explicit run)."
         )
 
-        assert "tests/bdd/" in run_steps or "tests/bdd/" in pytest_inputs, (
-            "The 'bdd-tests' job does not run 'pytest tests/bdd/'. The job "
-            "must execute the BDD suite, not merely exist."
-        )
+    def test_bdd_shards_have_postgres_service(self):
+        """BDD harnesses use the integration_db fixture (real PostgreSQL)."""
+        services = load_ci_workflow()["jobs"]["bdd-tests-shard"].get("services", {})
 
-    def test_bdd_job_has_postgres_service(self):
-        """BDD harnesses use the integration_db fixture (real PostgreSQL).
+        assert "postgres" in services, "bdd-tests-shard has no postgres service."
 
-        Without a Postgres service the BDD job cannot run, so the gate would
-        be hollow.
-        """
-        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
-        services = bdd_job.get("services", {})
-
-        assert "postgres" in services, (
-            "The 'bdd-tests' job has no 'postgres' service. BDD scenarios use "
-            "the integration_db fixture and require a real PostgreSQL "
-            "instance (mirror the integration-tests job)."
+    def test_bdd_aggregate_is_status_proxy_only(self):
+        """Aggregate BDD job must gate shard status, not merge coverage."""
+        aggregate = load_ci_workflow()["jobs"]["bdd-tests"]
+        steps_text = " ".join(str(step.get("run", "")) for step in aggregate.get("steps", []))
+        assert "needs.bdd-tests-shard.result" in steps_text, "bdd-tests aggregate must fail when bdd-tests-shard fails."
+        assert "coverage combine" not in steps_text, (
+            "bdd-tests aggregate must not merge coverage; that belongs in the Coverage job."
         )
 
     def test_admin_job_has_postgres_service(self):
@@ -129,8 +116,10 @@ class TestCISuiteCoverage:
         )
 
         assert "unit-tests" in needs, "coverage job must depend on unit-tests."
-        assert "bdd-tests" in needs, "coverage job must depend on bdd-tests."
-        assert steps_text.count("download-artifact") >= 2, "coverage job must download unit and BDD coverage artifacts."
+        assert "bdd-tests-shard" in needs, "coverage job must depend on bdd-tests-shard."
+        assert steps_text.count("download-artifact") >= 2, (
+            "coverage job must download unit and BDD shard coverage artifacts."
+        )
         run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
         assert "pytest" not in run_steps, "coverage job must not re-run tests."
         assert "coverage combine" in run_steps, "coverage job must combine unit and BDD coverage data."
