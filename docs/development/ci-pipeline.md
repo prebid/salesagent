@@ -63,6 +63,16 @@ status-only. Shard jobs route pytest through the shared `_pytest` composite.
 | 1/2 | 5 | 479 |
 | 2/2 | 8 | 441 |
 
+Reproduce a CI shard locally:
+
+```bash
+uv run pytest $(uv run python scripts/ci/shard_paths.py bdd 1)
+```
+
+`make test-bdd` (full `tests/bdd/`) runs the same scenarios as both shards combined.
+
+**Load metric note:** greedy assignment balances Gherkin `Scenario` line counts (~920 total). Collected pytest items are much higher (~9×) because each scenario expands by `Examples:` rows and transport parametrization. Wall-clock is dominated by slow DB-heavy scenarios, not test volume — the reason 2 shards was chosen over 3–4.
+
 Structural guard: `tests/unit/test_architecture_ci_bdd_shard_manifest.py`.
 
 ## Integration Test Shards

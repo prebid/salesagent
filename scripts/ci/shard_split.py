@@ -45,18 +45,13 @@ def bdd_scenario_count(test_path: str, repo_root: Path | None = None) -> int:
     return len(_SCENARIO_LINE.findall(feature_path.read_text(encoding="utf-8")))
 
 
-def _assign_round_robin(files: list[str], shard_count: int) -> dict[int, list[str]]:
-    buckets: dict[int, list[str]] = {i: [] for i in range(1, shard_count + 1)}
-    for index, path in enumerate(files):
-        buckets[(index % shard_count) + 1].append(path)
-    return buckets
-
-
 def _assign_greedy_by_scenario_count(
     files: list[str],
     shard_count: int,
     repo_root: Path,
 ) -> dict[int, list[str]]:
+    if shard_count > len(files):
+        raise ValueError(f"shard_count={shard_count} exceeds {len(files)} bdd files; a shard would be empty")
     loads: dict[int, int] = dict.fromkeys(range(1, shard_count + 1), 0)
     buckets: dict[int, list[str]] = {i: [] for i in range(1, shard_count + 1)}
     for path in files:
@@ -67,12 +62,12 @@ def _assign_greedy_by_scenario_count(
 
 
 def assign_files_to_shards(suite: str, repo_root: Path | None = None) -> dict[int, list[str]]:
+    if suite != "bdd":
+        raise KeyError(f"Unknown suite {suite!r}")
     root = repo_root or _REPO_ROOT
     files = list_suite_files(suite, repo_root=root)
     shard_count = SHARD_COUNTS[suite]
-    if suite == "bdd":
-        return _assign_greedy_by_scenario_count(files, shard_count, root)
-    return _assign_round_robin(files, shard_count)
+    return _assign_greedy_by_scenario_count(files, shard_count, root)
 
 
 def paths_for_shard(suite: str, shard: int, repo_root: Path | None = None) -> list[str]:

@@ -9,6 +9,7 @@ import yaml
 
 from scripts.ci.shard_split import (
     SHARD_COUNTS,
+    _assign_greedy_by_scenario_count,
     assign_files_to_shards,
     bdd_scenario_count,
     list_suite_files,
@@ -39,7 +40,14 @@ def test_ci_bdd_matrix_matches_shard_config() -> None:
 @pytest.mark.arch_guard
 def test_bdd_shards_have_discoverable_scenario_counts() -> None:
     for path in list_suite_files("bdd", repo_root=_REPO_ROOT):
-        assert bdd_scenario_count(path, repo_root=_REPO_ROOT) >= 0
+        assert bdd_scenario_count(path, repo_root=_REPO_ROOT) >= 1
+
+
+@pytest.mark.arch_guard
+def test_bdd_greedy_split_rejects_shard_count_above_file_count() -> None:
+    files = list_suite_files("bdd", repo_root=_REPO_ROOT)
+    with pytest.raises(ValueError, match="shard would be empty"):
+        _assign_greedy_by_scenario_count(files, len(files) + 1, _REPO_ROOT)
 
 
 @pytest.mark.arch_guard

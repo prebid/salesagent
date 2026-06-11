@@ -354,7 +354,15 @@ jobs:
       - name: Resolve BDD shard paths
         id: bdd_shard
         run: |
-          mapfile -t TEST_FILES < <(uv run python scripts/ci/shard_paths.py bdd ${{ matrix.shard }})
+          set -euo pipefail
+          shard_list=$(mktemp)
+          trap 'rm -f "$shard_list"' EXIT
+          uv run python scripts/ci/shard_paths.py bdd ${{ matrix.shard }} > "$shard_list"
+          mapfile -t TEST_FILES < "$shard_list"
+          if [ "${#TEST_FILES[@]}" -eq 0 ]; then
+            echo "::error::shard_paths.py produced no files for bdd shard ${{ matrix.shard }}"
+            exit 1
+          fi
           joined="${TEST_FILES[*]}"
           echo "paths=${joined}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/_pytest
