@@ -9,8 +9,8 @@
 # in-process-only setup leak. Design + execution plan + per-mechanism breakdown:
 #   docs/test-redesign/e2e-rest-ledger-retirement.md
 # Each entry migrates off this file as the transport-aware harness surfaces land;
-# the file shrinks to ~0. By mechanism: formats 137 (uc005/uc006/get_products),
-# adapter-delivery 113 (uc004), account/billing 43 (uc011).
+# the file shrinks to ~0. By mechanism: formats 141 (uc005/uc006/get_products),
+# adapter-delivery 127 (uc004), account/billing 44 (uc011). [312 total after origin/main merge 2026-06-11]
 
 # --- get_products_inventory_profile (6) ---
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_preserves_them[e2e_rest]
@@ -314,3 +314,30 @@ tests/bdd/test_uc011_manage_accounts.py::test_sync_with_billing_model_billing__p
 tests/bdd/test_uc011_manage_accounts.py::test_sync_with_billing_model_billing__partition_name[e2e_rest-operator-operator_honored-billing = operator]
 tests/bdd/test_uc011_manage_accounts.py::test_sync_with_empty_accounts_array_rejected_0_accounts[e2e_rest]
 tests/bdd/test_uc011_manage_accounts.py::test_sync_with_shortest_valid_domain_eg_ab[e2e_rest]
+
+# --- Added from origin/main merge 2026-06-11 (#1370 feature-file updates added/renamed
+#     these e2e_rest scenarios). VERIFIED mock-incompatible: each PASSES on all 4
+#     in-process transports and fails only over real HTTP (adapter mock / captured-logs /
+#     seeded-tenant not visible to the separate live server). Same class as entries above. ---
+# +++ test_uc004_deliver_media_buy_metrics (14) +++
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_omits_attribution_window__seller_uses_and_echoes_default[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_custom_attribution__seller_applies_and_echoes[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_campaign_unit_with_interval_1__valid[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_geo_with_metro_level_includes_classification_system[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_geo_with_postal_area_level_includes_classification_system[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_boundary__boundary_point[e2e_rest-media_buy_ids provided-valid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_response_always_echoes_applied_attribution_window_with_model[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sort_by_metric_available__seller_uses_requested_metric[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-all 7 statuses in array-["pending_creatives", "pending_start", "active", "paused", "completed", "rejected", "canceled"]-valid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-pending_creatives (first enum value)-pending_creatives-valid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-all_statuses_array-["pending_creatives", "pending_start", "active", "paused", "completed", "rejected", "canceled"]-valid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_does_not_retry_on_4xx_response[e2e_rest]
+# +++ test_uc005_discover_creative_formats (4) +++
+tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-audio (valid enum)-valid]
+tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-dooh (valid enum)-valid]
+tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-audio-valid]
+tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-dooh-valid]
+# +++ test_uc011_manage_accounts (1) +++
+tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
