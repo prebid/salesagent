@@ -2546,8 +2546,7 @@ def _reset_e2e_db(e2e_config) -> None:
                 row[0]
                 for row in conn.execute(
                     text(
-                        "SELECT tablename FROM pg_tables "
-                        "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+                        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
                     )
                 )
             ]
