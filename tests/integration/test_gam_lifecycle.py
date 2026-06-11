@@ -13,7 +13,7 @@ import pytest
 from src.adapters.constants import UPDATE_ACTIONS
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.exceptions import AdCPAuthorizationError, AdCPCapabilityNotSupportedError
-from src.core.schemas import Principal
+from src.core.schemas import Principal, UpdateMediaBuySuccess
 
 
 def _assert_unsupported_feature_for_action(response, action: str) -> None:
@@ -248,10 +248,10 @@ class TestGAMOrderLifecycleIntegration:
                     # Guaranteed activation actually creates the workflow
                     # step (the patched ``create_activation_workflow_step``
                     # runs even though the adapter logs "Unsupported action"
-                    # for activate_order). The response is Success with
-                    # ``workflow_step_id`` populated and ``errors=None`` —
-                    # the workflow_step_id below is the semantic anchor.
-                    assert response.errors is None or response.errors == []
+                    # for activate_order). The response is Success — a class
+                    # with no errors field at all (the update-success schema
+                    # forbids one) — and ``workflow_step_id`` is the anchor.
+                    assert isinstance(response, UpdateMediaBuySuccess)
                     assert response.workflow_step_id == "test_step_id"
 
     # Helper method for line item classification (no external dependencies)

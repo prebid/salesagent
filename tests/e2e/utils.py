@@ -34,6 +34,42 @@ def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
     pytest.fail(f"Server at {mcp_url} did not become ready within {timeout} seconds")
 
 
+def resolve_media_buy_for_task_in_db(live_server: dict, task_id: str) -> str:
+    """Resolve the media_buy_id an approval-pending create's task_id names.
+
+    The spec ``submitted`` create variant carries ``task_id`` only
+    (``media_buy_id`` is forbidden on that oneOf branch and arrives on the
+    completion artifact); e2e flows that need the persisted row follow the
+    workflow mapping the same way the approval machinery does. Executes
+    inside the container like ``force_approve_media_buy_in_db``.
+    """
+    select_script = f"""
+import os
+import psycopg2
+
+conn = psycopg2.connect(os.environ['DATABASE_URL'])
+cursor = conn.cursor()
+cursor.execute(
+    \"\"\"
+    SELECT object_id FROM object_workflow_mappings
+    WHERE step_id = '{task_id}' AND object_type = 'media_buy'
+    \"\"\"
+)
+row = cursor.fetchone()
+cursor.close()
+conn.close()
+if row is None:
+    raise SystemExit(f'No media_buy mapping for step {task_id}')
+print(f'MEDIA_BUY_ID={{row[0]}}')
+"""
+    cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", select_script]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    for line in result.stdout.splitlines():
+        if line.startswith("MEDIA_BUY_ID="):
+            return line.split("=", 1)[1].strip()
+    raise AssertionError(f"Could not resolve media buy for task {task_id}: {result.stdout!r}")
+
+
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):
     """
     Force approve media buy in database to bypass approval workflow.

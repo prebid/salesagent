@@ -24,7 +24,7 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
-from tests.e2e.utils import force_approve_media_buy_in_db
+from tests.e2e.utils import force_approve_media_buy_in_db, resolve_media_buy_for_task_in_db
 
 
 class TestAdCPFullLifecycle:
@@ -93,7 +93,18 @@ class TestAdCPFullLifecycle:
             media_buy_data = parse_tool_result(media_buy_result)
 
             media_buy_id = media_buy_data.get("media_buy_id")
-            assert media_buy_id, f"create_media_buy must return media_buy_id, got: {list(media_buy_data.keys())}"
+            if not media_buy_id:
+                # Approval-pending tenants get the spec submitted variant:
+                # task_id only (media_buy_id is forbidden on that oneOf
+                # branch). Resolve the persisted buy through the workflow
+                # mapping so the lifecycle continues under either approval
+                # mode — pre-variant wires carried media_buy_id even when
+                # submitted, which silently masked the tenant's mode here.
+                task_id = media_buy_data.get("task_id")
+                assert task_id, (
+                    f"create_media_buy must return media_buy_id or task_id, got: {list(media_buy_data.keys())}"
+                )
+                media_buy_id = resolve_media_buy_for_task_in_db(live_server, task_id)
 
             # Force-approve the media buy so delivery works
             force_approve_media_buy_in_db(live_server, media_buy_id)
