@@ -3,7 +3,14 @@
 # (set_registry_formats / set_adapter_response / account billing-state fixtures) is
 # invisible to the separate server process -> the scenario cannot pass over e2e_rest.
 # Loaded by tests/bdd/conftest.py to xfail(strict=False) exactly these nodeids.
-# Regenerate: run bdd -k e2e_rest, collect failed [e2e_rest] nodeids. See beads ledger task.
+# Regenerate: run bdd -k e2e_rest, collect failed [e2e_rest] nodeids.
+#
+# THIS IS A TODO, NOT A PERMANENT FIXTURE. It is the work-list for retiring the
+# in-process-only setup leak. Design + execution plan + per-mechanism breakdown:
+#   docs/test-redesign/e2e-rest-ledger-retirement.md
+# Each entry migrates off this file as the transport-aware harness surfaces land;
+# the file shrinks to ~0. By mechanism: formats 137 (uc005/uc006/get_products),
+# adapter-delivery 113 (uc004), account/billing 43 (uc011).
 
 # --- get_products_inventory_profile (6) ---
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_preserves_them[e2e_rest]
