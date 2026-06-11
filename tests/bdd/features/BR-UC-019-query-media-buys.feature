@@ -32,11 +32,11 @@ Feature: BR-UC-019 Query Media Buys
     Then the response should include media buy "mb-001" with status "active"
     And each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state
     And each package should include creative approval state when creatives are assigned
-    And each media buy should include buyer_ref and buyer_campaign_ref for correlation
+    And each media buy should include buyer_campaign_ref for correlation
     # POST-S1: Status computed from flight dates
     # POST-S2: Package-level details present
     # POST-S3: Creative approval state present
-    # POST-S6: Buyer refs present for correlation
+    # POST-S6: buyer_campaign_ref present for correlation
 
   @T-UC-019-main-filter-ids @main-flow @filtering
   Scenario: Query media buys by specific media_buy_ids
