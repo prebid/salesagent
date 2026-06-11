@@ -114,40 +114,53 @@ the dead duplicate `elif uc == "UC-003"` branches were removed.
 
 ### D2 — Success status is the protocol-envelope `TaskStatus`, REQUIRED on every response (RESOLVED via spec)
 
-Resolved against the pinned AdCP spec (`~/projects/adcp`, tag `v3.1.0-beta.3`).
+**Authoritative ref:** the pinned 3.1 derivation commit `04f59d2d5`
+(tag `v3.1-04f59d2d5`, 2026-05-13) — the same commit the BR feature files stamp
+in their `@source` lines. **Not** `v3.1.0-beta.3`, which is 226 commits *ahead*
+and contains late-3.1 changes our derivation does not (see "Ref hazard" below).
 
-**Spec findings:**
+**Spec findings (verified at `04f59d2d5`):**
 - `core/protocol-envelope.json` declares `status` (`$ref enums/task-status.json`)
-  and lists it in `required`. The description: *"REQUIRED on every task response
-  envelope … Synchronous tasks … MUST emit `status: "completed"` … Agents
-  shipping responses without a top-level `status` are non-conformant regardless
-  of whether the task body schema would otherwise validate."* (changeset
-  `4832-envelope-status-required`, issue #4876.)
-- `task-status.json` enum: `submitted | working | input-required | completed |
+  and lists it in `required` (`["status", "payload"]`). Examples show
+  `status: "completed"` (sync) / `"submitted"` / `"input-required"`. So the
+  envelope `status` (TaskStatus) is REQUIRED on every response already at our pin.
+- `enums/task-status.json`: `submitted | working | input-required | completed |
   canceled | failed | rejected | auth-required | unknown`.
-- `media-buy/update-media-buy-response.json` and `create-media-buy-response.json`
-  `allOf`-include `protocol-envelope.json`. The `UpdateMediaBuySuccess` /
-  `CreateMediaBuySuccess` body adds **`media_buy_status`** (`$ref
-  media-buy-status.json`) as the canonical field; the legacy top-level body
-  `status: MediaBuyStatus` is `deprecated: true`, removed in 3.2 (#4906).
-  (changeset `4895-media-buy-status-additive-deprecate`.) Rationale: under MCP
-  flat-on-the-wire serialization, envelope `status` (TaskStatus) and body
-  `status` (MediaBuyStatus) collide on the root key; the MediaBuyStatus moves to
-  `media_buy_status`, and the root `status` is reserved for the envelope
-  TaskStatus.
+- `media-buy/{create,update}-media-buy-response.json` success branch (`*Success`)
+  carries `status: $ref media-buy-status.json` — i.e. a **MediaBuyStatus**
+  (`pending_creatives | pending_start | active | paused | completed | …`). There
+  is **no `media_buy_status` field** at this commit. The async/submitted branch's
+  `status` is the TaskStatus discriminator.
 
 **Decision:**
 1. `the response status should be "completed"` asserts the **envelope
-   `TaskStatus`** (a protocol-layer field, REQUIRED on every response), value
-   `completed` for a synchronous success. It is **not** a domain field.
+   `TaskStatus`** (REQUIRED protocol-layer field), value `completed` for a
+   synchronous success. `completed` is also a *MediaBuyStatus* value, but it
+   means "flight over" — impossible for a just-updated active buy — so the
+   scenario can only mean the TaskStatus.
 2. The harness must observe responses **with their envelope**. On the wire
    transports the envelope `status` is part of the response (MCP: sibling of
    payload at root; A2A: in the artifact DataPart; REST: JSON body root). The
    `then_response_status` step asserts the envelope `status`, not a probed
    domain `model_fields["status"]`.
-3. Production should carry `MediaBuyStatus` as **`media_buy_status`** on
-   create/update success (3.1 additive; deprecate top-level domain `status`) so
-   it does not collide with the envelope TaskStatus. Tracked separately.
+
+**Known collision at `04f59d2d5` (do NOT "fix" by adopting newer schema).** Because
+the success body still carries `status: MediaBuyStatus` while the envelope
+carries `status: TaskStatus`, the two collide on the root `status` key under MCP
+flat-on-the-wire serialization. Upstream resolves this *after* our pin
+(changeset `4895`, beta.2/.3: add `media_buy_status`, deprecate the body
+`status`, remove in 3.2). Per the source-of-truth hierarchy we reconcile this
+**upstream at the next derivation bump**, not by editing local generated
+features or unilaterally adding `media_buy_status` against a 04f59d2d5-derived
+suite. Tracked as a reconciliation note, not an immediate production change.
+
+**Ref hazard (learned here).** `04f59d2d5` is an *ancestor* of every `v3.1.0-beta.*`
+tag (226 commits behind beta.3). Reading a beta tag surfaces changes
+(`envelope-status-required` formalization, `media_buy_status`) and forward 3.2
+notes that are **not** in our derivation. Always `git show 04f59d2d5:<path>` for
+BR-feature semantics. Note the separate divergence: the Python SDK `adcp==5.7`
+targets `3.1.0-beta.3`, so runtime types may differ from the 04f59d2d5 features —
+this is the "SDK is not authoritative; scenario drives" case.
 
 **Consequence — this reframes the harness problem (see D4).** `_impl` returns
 only the payload; it has **no envelope**, so by the spec's own words it is a
