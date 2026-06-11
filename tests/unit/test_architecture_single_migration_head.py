@@ -13,7 +13,7 @@ No allowlist — zero tolerance. Multiple heads must be resolved before merge.
 
 import pytest
 
-from tests.unit._migration_helpers import (
+from scripts.ci.migration_helpers import (
     expected_heads_after_roundtrip_downgrade,
     extract_revision_info,
     get_migration_files,

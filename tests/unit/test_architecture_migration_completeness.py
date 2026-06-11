@@ -15,7 +15,7 @@ beads: salesagent-t735
 
 import ast
 
-from tests.unit._migration_helpers import (
+from scripts.ci.migration_helpers import (
     MIGRATIONS_DIR,
     is_empty_body,
     is_merge_migration,

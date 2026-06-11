@@ -9,10 +9,6 @@ inputs:
     description: uv version to install.
     required: false
     default: "0.11.15"
-  dependency-group:
-    description: Dependency group passed to uv sync.
-    required: false
-    default: "dev"
 runs:
   using: composite
   steps:
@@ -36,4 +32,4 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      run: uv sync --group "${{ inputs.dependency-group }}"
+      run: uv sync --group dev

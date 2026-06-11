@@ -17,7 +17,7 @@ from scripts.ci.shard_split import (
     bdd_scenario_count,
     list_suite_files,
 )
-from tests.unit.workflow_helpers import CI_WORKFLOW_PATH
+from scripts.ci.workflow_helpers import CI_WORKFLOW_PATH
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COLLECT_TAG = re.compile(r"^<(Dir|Package|Module) ([^>]+)>$")

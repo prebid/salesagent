@@ -15,7 +15,7 @@ CI job, or a broken suite can silently land on main again.
 
 import pytest
 
-from tests.unit.workflow_helpers import load_ci_workflow
+from scripts.ci.workflow_helpers import load_ci_workflow
 
 
 class TestCISuiteCoverage:
@@ -159,31 +159,40 @@ class TestCISuiteCoverage:
                 missing.append(f"{job_name}: timeout-minutes")
         assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
 
-    def test_summary_gates_bdd_and_e2e(self):
-        """summary must depend on AND fail for bdd + e2e.
-
-        A job that runs but isn't in ``needs`` (or whose failure isn't
-        checked in the aggregation step) leaves the gate soft — exactly the
-        leak that let PR #1299 land red.
-        """
+    @pytest.mark.arch_guard
+    def test_summary_gates_every_required_job(self):
+        """summary must depend on AND fail for every job in summary.needs."""
         workflow = load_ci_workflow()
         summary = workflow["jobs"]["summary"]
         needs = summary["needs"]
-
-        for required in ("bdd-tests", "e2e-tests"):
-            assert required in needs, (
-                f"summary.needs is missing '{required}'. CI will report green even when the {required} suite fails."
-            )
-
-        # The aggregation step must actually check the result of each suite.
         check_text = " ".join(str(step.get("run", "")) for step in summary.get("steps", []))
-        for required in ("bdd-tests", "e2e-tests"):
+
+        assert isinstance(needs, list) and needs, "summary.needs must list every upstream gate job."
+        for required in needs:
+            assert required in workflow["jobs"], (
+                f"summary.needs lists unknown job '{required}'. Update summary.needs or add the missing job definition."
+            )
             token = f"needs.{required}.result"
             assert token in check_text, (
-                f"summary's result-check step does not inspect "
-                f"'{token}'. A failing {required} suite would not fail CI "
-                f"even though it is listed in needs[]."
+                f"summary's result-check step does not inspect '{token}'. "
+                f"A failing {required} job would not fail CI even though it is listed in needs[]."
             )
+
+    @pytest.mark.arch_guard
+    def test_type_check_uses_make_target(self):
+        """Type Check job must invoke the same entrypoint as local make typecheck."""
+        type_check = load_ci_workflow()["jobs"]["type-check"]
+        run_steps = " ".join(str(step.get("run", "")) for step in type_check.get("steps", []))
+        assert "make typecheck" in run_steps, "type-check job must run make typecheck for CI/local parity."
+
+    @pytest.mark.arch_guard
+    def test_smoke_tests_do_not_duplicate_skip_guard(self):
+        """Skip-decorator enforcement belongs in the smoke suite, not a workflow grep step."""
+        smoke_job = load_ci_workflow()["jobs"]["smoke-tests"]
+        step_names = " ".join(str(step.get("name", "")) for step in smoke_job.get("steps", []))
+        assert "skipped tests" not in step_names.lower(), (
+            "smoke-tests must not grep for skip decorators; TestNoSkippedTests is the single source of truth."
+        )
 
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.

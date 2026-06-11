@@ -8,34 +8,14 @@ runs against a real PostgreSQL database.
 Only `./run_all_tests.sh ci` catches migration bugs.
 """
 
-import ast
 import sys
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-def _is_merge_migration(functions: dict[str, ast.FunctionDef]) -> bool:
-    """Check if this is a merge migration (both upgrade and downgrade are empty).
-
-    Merge migrations reconcile multiple alembic branch heads. They have no
-    schema changes — both upgrade() and downgrade() are intentionally empty.
-
-    NOTE: This duplicates logic in tests/unit/_migration_helpers.py:is_merge_migration().
-    Pre-commit hooks run via ``python script.py`` where sys.path[0] is the
-    script directory, not the project root — so ``from tests.unit...`` is not
-    importable.  Keep both implementations in sync when changing empty-body
-    detection logic.
-    """
-    if "upgrade" not in functions or "downgrade" not in functions:
-        return False
-
-    for name in ("upgrade", "downgrade"):
-        for stmt in functions[name].body:
-            if isinstance(stmt, ast.Pass):
-                continue
-            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
-                continue
-            return False
-    return True
+from scripts.ci.migration_helpers import is_empty_body, is_merge_migration, parse_function, parse_migration_tree
 
 
 def check_migration_file(path: Path) -> list[str]:
@@ -44,41 +24,28 @@ def check_migration_file(path: Path) -> list[str]:
     Returns list of error messages (empty = OK).
     """
     errors = []
-    source = path.read_text()
-
     try:
-        tree = ast.parse(source, filename=str(path))
-    except SyntaxError as e:
-        errors.append(f"{path}: SyntaxError: {e}")
+        tree = parse_migration_tree(path)
+    except Exception as exc:
+        errors.append(f"{path}: {exc}")
         return errors
 
-    # Find upgrade() and downgrade() functions
-    functions = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in ("upgrade", "downgrade"):
-            functions[node.name] = node
-
-    # Merge migrations have intentionally empty upgrade() + downgrade() — skip them
-    if _is_merge_migration(functions):
+    if is_merge_migration(tree):
         return errors
 
-    if "upgrade" not in functions:
+    upgrade = parse_function(tree, "upgrade")
+    downgrade = parse_function(tree, "downgrade")
+
+    if upgrade is None:
         errors.append(f"{path}: missing upgrade() function")
 
-    if "downgrade" not in functions:
+    if downgrade is None:
         errors.append(f"{path}: missing downgrade() function")
 
-    # Check for non-empty bodies (not just `pass` or docstring-only)
-    for name, node in functions.items():
-        body = node.body
-        # Filter out docstrings and pass statements
-        meaningful = [
-            stmt
-            for stmt in body
-            if not (isinstance(stmt, ast.Pass))
-            and not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant))
-        ]
-        if not meaningful:
+    for name, node in (("upgrade", upgrade), ("downgrade", downgrade)):
+        if node is None:
+            continue
+        if is_empty_body(node):
             errors.append(f"{path}: {name}() is empty (only pass/docstring) — must contain migration logic")
 
     return errors
@@ -102,7 +69,6 @@ def main() -> int:
             print(f"  {error}")
         return 1
 
-    # Always warn to run Docker validation
     print(
         "⚠️  Migration files staged. Validate with Docker before pushing:\n"
         "    ./run_all_tests.sh ci\n"

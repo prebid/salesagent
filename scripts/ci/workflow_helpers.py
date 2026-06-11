@@ -1,4 +1,4 @@
-"""Shared helpers for CI workflow guard tests."""
+"""Operational helpers for parsing the canonical CI workflow file."""
 
 from __future__ import annotations
 
@@ -11,7 +11,18 @@ CI_WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
 def load_ci_workflow() -> dict:
     """Load and parse the canonical CI workflow file."""
-    return yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    if not CI_WORKFLOW_PATH.is_file():
+        msg = f"CI workflow file not found: {CI_WORKFLOW_PATH}"
+        raise FileNotFoundError(msg)
+
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    if not isinstance(workflow, dict):
+        msg = f"CI workflow YAML must parse to a mapping, got {type(workflow).__name__}"
+        raise ValueError(msg)
+    if "jobs" not in workflow or not isinstance(workflow["jobs"], dict):
+        msg = "CI workflow is missing a top-level 'jobs' mapping."
+        raise ValueError(msg)
+    return workflow
 
 
 def _matrix_job_total(matrix: dict) -> int:
@@ -38,7 +49,8 @@ def _render_job_name(name: str, matrix: dict, substitutions: dict[str, str]) -> 
 
 def rendered_ci_check_names(workflow: dict | None = None) -> set[str]:
     """Return rendered ``CI / …`` check names, expanding strategy.matrix jobs."""
-    jobs = (workflow or load_ci_workflow())["jobs"]
+    parsed = workflow or load_ci_workflow()
+    jobs = parsed["jobs"]
     names: set[str] = set()
     for job in jobs.values():
         name = job.get("name", "")
