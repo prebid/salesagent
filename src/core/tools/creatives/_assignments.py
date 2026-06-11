@@ -56,6 +56,25 @@ def _process_assignments(
                 if creative_id not in assignment_errors_by_creative:
                     assignment_errors_by_creative[creative_id] = {}
 
+                # An assignment row carries a FK to creatives(creative_id, tenant_id,
+                # principal_id). A creative that failed validation this sync was never
+                # persisted, and a creative_id absent from the library never existed —
+                # inserting its assignment would raise a raw FK violation that escapes
+                # as a 500 (#1418). Skip such creatives and report the skipped packages
+                # via assignment_errors (same convention as package-not-found below).
+                creative_row = assignment_repo.get_creative_by_id(creative_id)
+                if creative_row is None:
+                    error_msg = (
+                        f"Creative not found: {creative_id} (was not persisted — "
+                        f"check the per-creative result for the failure reason)"
+                    )
+                    for package_id in package_ids:
+                        assignment_errors_by_creative[creative_id][package_id] = error_msg
+                    if validation_mode == "strict":
+                        raise AdCPValidationError(error_msg)
+                    logger.warning(f"Skipping assignments for non-persisted creative {creative_id}: {error_msg}")
+                    continue
+
                 for package_id in package_ids:
                     # Find which media buy this package belongs to
                     pkg_result = assignment_repo.find_package_with_media_buy(package_id)
@@ -82,8 +101,9 @@ def _process_assignments(
                             logger.warning(f"Package not found during assignment: {package_id}, skipping")
                             continue
 
-                    # Validate creative format against package product formats
-                    db_creative_result = assignment_repo.get_creative_by_id(creative_id)
+                    # Validate creative format against package product formats.
+                    # creative_row was fetched once above (guaranteed non-None here).
+                    db_creative_result = creative_row
 
                     # Get product_id from package_config
                     product_id = db_package.package_config.get("product_id") if db_package.package_config else None

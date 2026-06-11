@@ -3156,8 +3156,12 @@ class TestValidationModeSemantics:
                     return (mock_package, mock_media_buy)
                 return None
 
+            # Both creatives exist in the library (so assignments may be created);
+            # the error under test is package-not-found, not creative-not-found.
+            mock_creative_row = MagicMock()
+            mock_creative_row.agent_url = None
             mock_assignment_repo.find_package_with_media_buy.side_effect = find_pkg
-            mock_assignment_repo.get_creative_by_id.return_value = None
+            mock_assignment_repo.get_creative_by_id.return_value = mock_creative_row
             mock_assignment_repo.get_existing.return_value = None
 
             mock_new_assignment = MagicMock()
@@ -3251,8 +3255,12 @@ class TestAssignmentPackageValidationGaps:
             mock_media_buy.approved_at = None
             mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
 
-            # Creative lookup (for format validation) - no creative found, skip format check
-            mock_assignment_repo.get_creative_by_id.return_value = None
+            # Creative exists in the library; package_config has no product_id so the
+            # format check is skipped, but the creative must be present for the
+            # idempotent upsert path to run (see #1418).
+            mock_creative_row = MagicMock()
+            mock_creative_row.creative_id = "c1"
+            mock_assignment_repo.get_creative_by_id.return_value = mock_creative_row
 
             # Existing assignment found
             mock_assignment_repo.get_existing.return_value = mock_existing_assignment
@@ -3585,8 +3593,12 @@ class TestMediaBuyStatusTransition:
         mock_media_buy.status = media_buy_status
         mock_media_buy.approved_at = approved_at
 
+        # Creative must exist for an assignment to be created (a non-persisted
+        # creative is skipped to avoid an FK violation — see #1418).
+        mock_creative_row = MagicMock()
+        mock_creative_row.creative_id = "c1"
         mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
-        mock_assignment_repo.get_creative_by_id.return_value = None
+        mock_assignment_repo.get_creative_by_id.return_value = mock_creative_row
         mock_assignment_repo.get_existing.return_value = existing_assignment
 
         # Mock create for new assignments

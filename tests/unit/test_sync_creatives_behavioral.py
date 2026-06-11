@@ -94,8 +94,12 @@ class TestMediaBuyStatusTransitions:
         # Mock find_package_with_media_buy to return the package+media_buy pair
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
 
-        # Mock get_creative_by_id: return db_creative if provided, else None
-        mock_repo.get_creative_by_id.return_value = db_creative
+        # get_creative_by_id: an explicit creative, or the default truthy MagicMock
+        # (a present creative). A creative must exist in the library for its
+        # assignment to be created — a non-persisted creative is skipped to avoid
+        # an FK violation (#1418).
+        if db_creative is not None:
+            mock_repo.get_creative_by_id.return_value = db_creative
 
         # Mock get_existing: no existing assignment
         mock_repo.get_existing.return_value = None
@@ -189,7 +193,8 @@ class TestMediaBuyStatusTransitions:
 
         mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = None
+        # get_creative_by_id defaults to the truthy MagicMock (present creative)
+        # so the assignments are created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -229,7 +234,8 @@ class TestMediaBuyStatusTransitions:
 
         mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = None
+        # get_creative_by_id defaults to the truthy MagicMock (present creative)
+        # so the assignments are created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -375,7 +381,8 @@ class TestLenientAssignmentSkip:
             (db_package_valid, db_media_buy),
             None,
         ]
-        mock_repo.get_creative_by_id.return_value = None
+        # Creative exists (default truthy MagicMock) so the valid assignment can
+        # be created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -620,7 +627,7 @@ class TestAssignmentsListFormNormalization:
     def _run_list_assignments(self, assignments, results, tenant, db_package, db_media_buy):
         mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = None
+        # Creative exists (default truthy MagicMock) so its assignment is created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -671,7 +678,7 @@ class TestAssignmentsListFormNormalization:
             (db_package1, db_media_buy),
             (db_package2, db_media_buy),
         ]
-        mock_repo.get_creative_by_id.return_value = None
+        # Creative exists (default truthy MagicMock) so both assignments are created (#1418).
         mock_repo.get_existing.return_value = None
 
         call_count = 0
