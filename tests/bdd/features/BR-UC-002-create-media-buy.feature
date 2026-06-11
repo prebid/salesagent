@@ -36,7 +36,6 @@ Feature: BR-UC-002 Create Media Buy
     Given the tenant is configured for auto-approval
     And a valid create_media_buy request with:
     | field          | value                        |
-    | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
     | start_time     | 2026-04-01T00:00:00Z         |
@@ -51,11 +50,10 @@ Feature: BR-UC-002 Create Media Buy
     Then the response should succeed
     And the response status should be "completed"
     And the response should include a "media_buy_id"
-    And the response should include "buyer_ref" matching "campaign-2026-q1"
     And the response should include packages with allocations
     And each package should include product_id, budget, and pricing details
     # POST-S1: Buyer knows their media buy has been created and is activating
-    # POST-S2: Buyer can track the media buy via media_buy_id and buyer_ref
+    # POST-S2: Buyer can track the media buy via media_buy_id
     # POST-S3: Buyer knows each package's allocation, product, and pricing
     # POST-S4: Buyer's advertising campaign is live (or activating) on the ad server
     # POST-S5: Buyer receives an unambiguous success confirmation
@@ -120,7 +118,6 @@ Feature: BR-UC-002 Create Media Buy
     | field          | value                        |
     | proposal_id    | prop-2026-001                |
     | total_budget   | amount 5000, currency "USD"  |
-    | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
     | start_time     | 2026-04-01T00:00:00Z         |
@@ -133,7 +130,7 @@ Feature: BR-UC-002 Create Media Buy
     And the total_budget should be distributed per allocation percentages
     And the response should include the created media buy with derived packages
     # POST-S1: Buyer knows their media buy has been created and is activating
-    # POST-S2: Buyer can track the media buy via media_buy_id and buyer_ref
+    # POST-S2: Buyer can track the media buy via media_buy_id
     # POST-S3: Buyer knows each package's allocation, product, and pricing
     # POST-S11: Buyer knows the proposal was successfully executed with their total budget
 
