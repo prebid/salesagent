@@ -338,9 +338,30 @@ coverage that exists *only* on `impl`.
   re-home to unit tests.
 - All other domain envs inherit the four transports from `BaseTestEnv`.
 
-**Impl-only passing scenarios (empirical):** _pending the full serial BDD run
-(`/tmp/bdd_full.json`); to be filled in `xqx7` with the exact node list (scenarios
-where `[impl]` passes and `[a2a]`/`[mcp]`/`[rest]` do not)._
+**Impl-only passing scenarios (empirical).** Full serial BDD run, 8905 nodes
+(1540 passed / 42 failed / 7319 xfailed / 4 skipped):
+
+- **Scenarios that pass *only* on `impl`: exactly 1** —
+  `test_context_echoed_in_sync_error_response` (UC-011). Its `a2a`/`mcp`/`rest`
+  variants are **xfailed** (not wired), not failing. Context-echo-in-error is a
+  wire/envelope behavior, so the right move is to **graduate its wire variants**,
+  not preserve the `impl` one.
+- **Scenarios parametrized on `impl` exclusively (no wire variant at all): 99** —
+  **all xfailed** (37 uc002, 21 uc004, 20 uc005, 15 uc006, 6 uc003). Zero passing
+  coverage; when wired they should be wired on the wire transports.
+- **Passing per transport: impl 118 / a2a 117 / mcp 119 / rest 97.** The wire
+  transports already carry essentially the same passing set as `impl` (`mcp`
+  even exceeds it). `impl` provides **no unique passing coverage** beyond the
+  wire transports.
+
+**Conclusion: dropping `impl` from the default parametrization loses ~zero
+unique passing coverage** — 1 scenario (whose wire variants only need
+graduating) and 99 all-xfailed impl-exclusive scenarios. Gating actions before
+removal: (a) graduate `test_context_echoed_in_sync_error_response` onto the wire
+transports; (b) re-home/parametrize the 99 impl-exclusive scenarios onto wire
+transports as they get wired; (c) land `l9wn` so `MediaBuyAccountEnv`'s account
+resolution is covered on the wire. `rest` (97) trails `a2a`/`mcp` (~117) — a
+separate wiring gap, independent of dropping `impl`.
 
 ## References
 
