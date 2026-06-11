@@ -5773,18 +5773,6 @@ mappings:
       upstream_refs: ["BR-UC-009-main-mcp", "BR-RULE-021"]
       business_rules: ["BR-RULE-021"]
       status: new
-    - adcp_scenario_id: "T-UC-009-inv-021-1-buyerref"
-      adcp_feature: "BR-UC-009-update-performance-index.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-009-main-mcp", "BR-RULE-021"]
-      business_rules: ["BR-RULE-021"]
-      status: new
-    - adcp_scenario_id: "T-UC-009-inv-021-2"
-      adcp_feature: "BR-UC-009-update-performance-index.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-009-ext-b", "BR-RULE-021"]
-      business_rules: ["BR-RULE-021"]
-      status: new
     - adcp_scenario_id: "T-UC-009-inv-021-3"
       adcp_feature: "BR-UC-009-update-performance-index.feature"
       obligation_id: null
