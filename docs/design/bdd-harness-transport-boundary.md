@@ -112,23 +112,99 @@ keeps update routing in one place instead of duplicating dispatch logic in the
 When step. Consequence: all UC-003 ext scenarios now execute the update flow;
 the dead duplicate `elif uc == "UC-003"` branches were removed.
 
-### D2 — Success `TaskStatus` is a protocol-envelope concern (OPEN — needs spec check)
+### D2 — Success status is the protocol-envelope `TaskStatus`, REQUIRED on every response (RESOLVED via spec)
 
-`status="completed"` asserted by the success scenarios is the protocol
-`TaskStatus` from `ProtocolEnvelope`, **not** the domain response's `status`
-field (which is `MediaBuyStatus` for create and unset for update). Open
-question, to be resolved against the pinned AdCP spec
-(`~/projects/adcp`, tag `v3.1.0-beta.3`): does the update-media-buy response
-carry a status at the domain level, or only via the envelope? Candidate
-resolutions:
-- Harness-level: `a2a`/`mcp`/`rest` capture `ProtocolEnvelope.status`; `then_response_status`
-  becomes transport-aware (no status assertion on `impl`).
-- Domain-level: `_update_media_buy_impl` sets a status on success (only if the
-  spec puts it on the domain response — unlikely given the envelope design).
+Resolved against the pinned AdCP spec (`~/projects/adcp`, tag `v3.1.0-beta.3`).
+
+**Spec findings:**
+- `core/protocol-envelope.json` declares `status` (`$ref enums/task-status.json`)
+  and lists it in `required`. The description: *"REQUIRED on every task response
+  envelope … Synchronous tasks … MUST emit `status: "completed"` … Agents
+  shipping responses without a top-level `status` are non-conformant regardless
+  of whether the task body schema would otherwise validate."* (changeset
+  `4832-envelope-status-required`, issue #4876.)
+- `task-status.json` enum: `submitted | working | input-required | completed |
+  canceled | failed | rejected | auth-required | unknown`.
+- `media-buy/update-media-buy-response.json` and `create-media-buy-response.json`
+  `allOf`-include `protocol-envelope.json`. The `UpdateMediaBuySuccess` /
+  `CreateMediaBuySuccess` body adds **`media_buy_status`** (`$ref
+  media-buy-status.json`) as the canonical field; the legacy top-level body
+  `status: MediaBuyStatus` is `deprecated: true`, removed in 3.2 (#4906).
+  (changeset `4895-media-buy-status-additive-deprecate`.) Rationale: under MCP
+  flat-on-the-wire serialization, envelope `status` (TaskStatus) and body
+  `status` (MediaBuyStatus) collide on the root key; the MediaBuyStatus moves to
+  `media_buy_status`, and the root `status` is reserved for the envelope
+  TaskStatus.
+
+**Decision:**
+1. `the response status should be "completed"` asserts the **envelope
+   `TaskStatus`** (a protocol-layer field, REQUIRED on every response), value
+   `completed` for a synchronous success. It is **not** a domain field.
+2. The harness must observe responses **with their envelope**. On the wire
+   transports the envelope `status` is part of the response (MCP: sibling of
+   payload at root; A2A: in the artifact DataPart; REST: JSON body root). The
+   `then_response_status` step asserts the envelope `status`, not a probed
+   domain `model_fields["status"]`.
+3. Production should carry `MediaBuyStatus` as **`media_buy_status`** on
+   create/update success (3.1 additive; deprecate top-level domain `status`) so
+   it does not collide with the envelope TaskStatus. Tracked separately.
+
+**Consequence — this reframes the harness problem (see D4).** `_impl` returns
+only the payload; it has **no envelope**, so by the spec's own words it is a
+non-conformant response. A status assertion can never be satisfied on a raw
+`_impl` call — not because the harness is wrong, but because `_impl` is not an
+AdCP response surface.
+
+### D4 — `_impl` is not an AdCP response surface; BDD conformance runs on the wire transports (PROPOSED)
+
+**Problem (raised in review).** The BDD harness parametrizes every scenario over
+four transports including `impl`, which calls `_impl` directly. But `_impl`
+deliberately implements **only** transport-agnostic business logic. Everything
+the wire contract requires is added at the boundary, *above* `_impl`:
+
+| Boundary behavior | Lives in | `_impl` has it? |
+|-------------------|----------|------------------|
+| Envelope `status` (TaskStatus, REQUIRED — D2) | `ProtocolEnvelope` / transport wrappers | No |
+| Two-layer error envelope (`adcp_error`, error code, recovery) | wrappers (`_handle_tool_exception`, `build_two_layer_error_envelope`) | No (raises `AdCPError`) |
+| Account resolution → `ACCOUNT_NOT_FOUND` | `enrich_identity_with_account` in wrappers (`media_buy_create.py:3927/4004`) | No |
+| Identity/auth resolution, `context_id`, `replayed`/idempotency | wrappers / middleware | No |
+
+A large fraction of UC scenarios assert exactly these boundary behaviors. On
+`impl` they are **unsatisfiable by construction**, which is the real reason the
+UC-002 account-not-found and UC-003 success/status families could not go green
+on `impl`. `impl`'s only legitimate BDD value is the narrow set of purely
+transport-agnostic business-logic outcomes — which are better covered by unit /
+integration tests that call the harness or `_impl` directly.
+
+**Proposed decision.** Treat AdCP conformance as a **wire** property and run BDD
+scenarios on the wire transports (`mcp`, `a2a`, `rest`). Remove `impl` from the
+**default** BDD transport parametrization. Keep transport-agnostic business-logic
+coverage in unit/integration tests (harness `call_impl` is still available
+there). This (a) aligns the BDD suite with the spec's definition of conformance,
+(b) deletes an entire class of by-construction-impossible `impl` failures
+(unblocking the `l9wn`/`egnl`/parser families without per-`impl` workarounds),
+and (c) cuts ~25% of BDD test instances.
+
+**Alternatives considered:**
+- *Redefine `impl` as in-process-through-boundary* — run identity-resolve →
+  account-enrich → `_impl` → envelope-build in-process (no HTTP), so `impl`
+  becomes a fast, conformant transport. Preserves a fast path and matches the
+  "harness → true E2E" direction, but `impl` then largely duplicates `mcp`/`a2a`
+  minus serialization, for marginal extra value over running the three wire
+  transports.
+- *Scope `impl`* — keep `impl` only for scenarios explicitly tagged
+  transport-agnostic; exclude it from boundary/conformance scenarios. Lowest
+  blast radius but adds a per-scenario tagging burden and leaves the conceptual
+  confusion ("why does this scenario skip impl?") in place.
+
+**Open / gating before adopting:** audit which scenarios currently pass
+**only** on `impl` (e.g. `MediaBuyAccountEnv` is `impl`-only today) so their
+coverage is preserved on the wire transports or re-homed to unit tests before
+`impl` is dropped. Owner decision required — see report.
 
 Do **not** hack `then_response_status` to probe `model_fields` for branching
-(see memory `feedback_sdk_not_authoritative`: the SDK/model is not authoritative
-for shape decisions).
+(memory `feedback_sdk_not_authoritative`: the SDK/model is not authoritative for
+shape decisions).
 
 ### D3 — Account resolution belongs at the boundary, mirrored by the harness (DECIDED-direction)
 
