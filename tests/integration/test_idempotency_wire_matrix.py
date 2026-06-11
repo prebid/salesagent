@@ -190,3 +190,34 @@ class TestMissingKeyWireMatrix:
             recovery="correctable",
             message_substr="idempotency_key",
         )
+
+
+class TestWireLevelHashInput:
+    """The payload hash is computed over the WIRE payload, not the model dump.
+
+    AdCP defines payload equivalence as RFC 8785 over the request AS SENT.
+    Two encodings of the same instant ("...Z" vs "...+00:00") normalize to the
+    same value inside the request model — a model-level hash would replay — but
+    they are different wire payloads, so the retry must conflict. Pins that the
+    transport wrappers thread the raw wire dict into the hash (a wrapper that
+    silently dropped it would fall back to model hashing and replay here).
+    """
+
+    def test_equivalent_but_differently_encoded_retry_conflicts(self, integration_db):
+        key = f"wire-enc-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            kwargs = _create_kwargs(product, idempotency_key=key)
+
+            first = env.call_via(Transport.REST, **dict(kwargs))
+            assert first.is_success, f"fresh create failed: {first.error}"
+
+            # Same instant, different wire encoding: +00:00 instead of Z.
+            reencoded = dict(kwargs)
+            reencoded["start_time"] = reencoded["start_time"].replace("Z", "+00:00")
+
+            second = env.call_via(Transport.REST, **reencoded)
+
+        assert second.is_error, "a differently-encoded wire payload must not replay"
+        assert_envelope_shape(second.wire_error_envelope, "IDEMPOTENCY_CONFLICT", recovery="terminal")

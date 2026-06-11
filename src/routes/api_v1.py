@@ -19,7 +19,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
 )
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
@@ -217,8 +217,26 @@ async def list_authorized_properties(
 # ---------------------------------------------------------------------------
 
 
+async def _raw_json_body(request: Request) -> dict[str, Any]:
+    """The HTTP body as sent on the wire — the idempotency payload-hash input.
+
+    A dependency rather than a route ``request`` parameter, so route signatures
+    stay Depends-only (the rest-depends-auth guard). Starlette caches the body,
+    so reading it here does not consume it before model parsing.
+    """
+    return await request.json()
+
+
+# Module-level singleton, matching require_auth (ruff B008 forbids Depends() in defaults).
+raw_json_body = Depends(_raw_json_body)
+
+
 @router.post("/media-buys")
-async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def create_media_buy(
+    body: CreateMediaBuyBody,
+    identity: ResolvedIdentity = require_auth,
+    raw_request_payload: dict[str, Any] = raw_json_body,
+):
     """Create a new media buy (auth required).
 
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
@@ -234,6 +252,7 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
         account=account_ref,
         idempotency_key=body.idempotency_key,
         identity=identity,
+        raw_request_payload=raw_request_payload,
     )
     return response.model_dump(mode="json")
 

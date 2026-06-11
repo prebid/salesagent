@@ -924,6 +924,16 @@ class MediaBuy(Base):
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Canonical hash of the request as hashed by the idempotency probe (see
+    # src.core.idempotency_canonical). raw_request is NOT canonicalizable —
+    # it carries injected package_ids and alias-dependent field names — so the
+    # degraded idempotency fallback conflict-checks against this stored hash.
+    # NULL on rows that predate the column (legacy: no conflict signal).
+    payload_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="RFC 8785 JCS SHA-256 of the create request (excluded fields stripped); degraded-path IDEMPOTENCY_CONFLICT signal",
+    )
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -964,13 +974,19 @@ class MediaBuy(Base):
         Index("idx_media_buys_status", "status"),
         Index("idx_media_buys_strategy", "strategy_id"),
         Index("idx_media_buys_account", "account_id"),
+        # Dup-booking backstop, scoped per AdCP idempotency (agent + account +
+        # key): NULLS NOT DISTINCT so a NULL account (no sub-account) still
+        # enforces uniqueness on the rest of the tuple; partial so keyless
+        # legacy rows stay out of the index.
         Index(
             "idx_media_buys_idempotency_key",
             "tenant_id",
             "principal_id",
+            "account_id",
             "idempotency_key",
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

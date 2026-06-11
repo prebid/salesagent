@@ -224,6 +224,7 @@ class AdCPError(Exception):
         recovery: RecoveryHint | None = None,
         field: str | None = None,
         suggestion: str | None = None,
+        retry_after: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
     ) -> None:
         # ``error_code`` and ``status_code`` kwargs are only used by the
@@ -235,6 +236,7 @@ class AdCPError(Exception):
         self.details = details
         self.field = field
         self.suggestion = suggestion
+        self.retry_after = retry_after
         self.context = context
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
@@ -738,6 +740,22 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
+class AdCPIdempotencyExpiredError(AdCPConflictError):
+    """idempotency_key seen before, but its replay window has expired (409, IDEMPOTENCY_EXPIRED).
+
+    Raised when a same-key buy exists but outlived the advertised replay TTL
+    (``get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds``): per
+    security.mdx#idempotency rule 6, a request arriving after eviction with a
+    key the seller has seen SHOULD be rejected with ``IDEMPOTENCY_EXPIRED``
+    rather than silently treated as new or answered with another buy's data.
+    Recovery=terminal per the SDK's ``STANDARD_ERROR_CODES``: the buyer must
+    mint a fresh idempotency_key.
+    """
+
+    _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+
+
 class AdCPCreativeRejectedError(AdCPError):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
@@ -897,6 +915,7 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
         recovery=exc.recovery,
         field=exc.field,
         suggestion=exc.suggestion,
+        retry_after=exc.retry_after,
         details=exc.details,
     )
     # Copy errors[0] for the envelope-level mirror so callers that mutate one

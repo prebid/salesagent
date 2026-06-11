@@ -119,6 +119,34 @@ class TestExceptionHierarchy:
         assert env["adcp_error"]["recovery"] == "terminal"
         assert env["errors"][0]["code"] == "IDEMPOTENCY_CONFLICT"
 
+    def test_idempotency_expired_error(self):
+        """AdCPIdempotencyExpiredError must be a 409 conflict with code IDEMPOTENCY_EXPIRED."""
+        from src.core.exceptions import AdCPConflictError, AdCPError, AdCPIdempotencyExpiredError
+
+        exc = AdCPIdempotencyExpiredError("replay window has expired")
+        assert isinstance(exc, AdCPConflictError)
+        assert isinstance(exc, AdCPError)
+        assert exc.status_code == 409
+        assert exc.error_code == "IDEMPOTENCY_EXPIRED"
+
+    def test_idempotency_expired_wire_envelope(self):
+        """The two-layer envelope carries IDEMPOTENCY_EXPIRED + terminal in both layers."""
+        from src.core.exceptions import AdCPIdempotencyExpiredError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPIdempotencyExpiredError("stale key"))
+        assert env["adcp_error"]["code"] == "IDEMPOTENCY_EXPIRED"
+        assert env["adcp_error"]["recovery"] == "terminal"
+        assert env["errors"][0]["code"] == "IDEMPOTENCY_EXPIRED"
+
+    def test_rate_limit_retry_after_rides_both_envelope_layers(self):
+        """retry_after is a first-class Error field — both layers carry it."""
+        from src.core.exceptions import AdCPRateLimitError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPRateLimitError("slow down", retry_after=42))
+        assert env["adcp_error"]["code"] == "RATE_LIMITED"
+        assert env["adcp_error"]["retry_after"] == 42
+        assert env["errors"][0]["retry_after"] == 42
+
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
         from src.core.exceptions import AdCPBudgetExhaustedError, AdCPError

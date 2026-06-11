@@ -52,6 +52,14 @@ class MCPAuthMiddleware(Middleware):
         if context.fastmcp_context:
             await context.fastmcp_context.set_state("identity", identity, serializable=False)
 
+            # Raw wire arguments, captured BEFORE RequestCompatMiddleware
+            # normalizes them — the idempotency payload-hash input (AdCP defines
+            # payload equivalence over the request as the buyer sent it).
+            if context.message.arguments is not None:
+                await context.fastmcp_context.set_state(
+                    "raw_arguments", dict(context.message.arguments), serializable=False
+                )
+
             # Extract x-context-id from HTTP headers for tools that need it
             try:
                 headers = get_http_headers(include_all=True) or {}

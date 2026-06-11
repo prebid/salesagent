@@ -407,3 +407,118 @@ class TestRaceSeamThroughEntrypoint:
             existing = verify_uow.media_buys.find_by_idempotency_key(idem_key, principal_id)
             assert existing is not None
             assert existing.media_buy_id == winner_id
+
+
+class TestDegradedFallbackScopeRules:
+    """Account scoping, payload-conflict, and TTL-expiry rules on the degraded fallback.
+
+    The verbatim cache is the authoritative replay path; these pin what happens
+    when it has no usable row and the ``MediaBuy.idempotency_key`` backstop is
+    the only signal left. Deterministic recipes — no concurrency: a missing
+    cache row plus a surviving buy IS the race-loser state.
+    """
+
+    @staticmethod
+    def _create_kwargs(product, idem_key, *, po_number):
+        from datetime import timedelta
+
+        now = datetime.now(UTC)
+        return {
+            "brand": {"domain": "degraded-test.example.com"},
+            "packages": [{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "po_number": po_number,
+            "idempotency_key": idem_key,
+        }
+
+    def test_degraded_path_conflicts_on_mutated_payload(self, integration_db):
+        """Same key + different canonical payload conflicts even with the cache row gone.
+
+        The buy's stored ``payload_hash`` (written at create time) carries the
+        conflict signal the evicted cache row can no longer provide — the retry
+        must never be resolved to a buy describing a different request.
+        """
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.exceptions import AdCPError
+        from src.core.schemas._base import CreateMediaBuySuccess
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+        idem_key = f"degconf-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            first = env.call_impl(**self._create_kwargs(product, idem_key, po_number="DEG-1"))
+            assert isinstance(first.response, CreateMediaBuySuccess)
+            winner_id = first.response.media_buy_id
+
+            with MediaBuyUoW(env._tenant_id) as uow:
+                assert uow.idempotency_attempts is not None
+                assert uow.idempotency_attempts.expire_old(now=datetime(2099, 1, 1, tzinfo=UTC)) >= 1
+
+            with pytest.raises(AdCPError) as exc_info:
+                env.call_impl(**self._create_kwargs(product, idem_key, po_number="DEG-2-MUTATED"))
+
+        exc = exc_info.value
+        assert exc.error_code == "IDEMPOTENCY_CONFLICT"
+        # Read-oracle defense: the conflict must not leak the winner's id.
+        assert winner_id not in exc.message
+
+    def test_post_ttl_retry_rejects_idempotency_expired(self, integration_db):
+        """A key whose buy outlived the replay TTL rejects instead of re-deriving.
+
+        security.mdx#idempotency rule 6: a request arriving after eviction with
+        a key the seller has seen SHOULD reject with IDEMPOTENCY_EXPIRED rather
+        than be silently treated as new or answered with a reconstruction the
+        buyer cannot distinguish from a faithful replay.
+        """
+        from datetime import timedelta
+
+        from src.core.exceptions import AdCPError
+        from tests.factories import MediaBuyFactory
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+        idem_key = f"degexp-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            tenant, principal, product, _pricing = env.setup_media_buy_data()
+            # The buy that outlived the advertised TTL; its cache row is long evicted.
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                idempotency_key=idem_key,
+                status="active",
+                created_at=datetime.now(UTC) - timedelta(days=2),
+            )
+
+            with pytest.raises(AdCPError) as exc_info:
+                env.call_impl(**self._create_kwargs(product, idem_key, po_number="EXP-1"))
+
+        assert exc_info.value.error_code == "IDEMPOTENCY_EXPIRED"
+
+    def test_same_key_different_account_books_independently(self, integration_db):
+        """The idempotency scope is (agent, account, key): accounts never collide.
+
+        Pins the widened backstop index end-to-end — before account_id joined
+        the unique tuple, the second account's create raised IntegrityError and
+        could be resolved to the first account's buy.
+        """
+        from src.core.schemas._base import CreateMediaBuySuccess
+        from tests.factories import AccountFactory
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+        idem_key = f"degacct-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            AccountFactory(tenant=tenant, account_id="acct_a")
+            AccountFactory(tenant=tenant, account_id="acct_b")
+
+            kwargs = self._create_kwargs(product, idem_key, po_number="ACCT-1")
+            first = env.call_impl(identity=env.identity.model_copy(update={"account_id": "acct_a"}), **kwargs)
+            second = env.call_impl(identity=env.identity.model_copy(update={"account_id": "acct_b"}), **kwargs)
+
+        assert isinstance(first.response, CreateMediaBuySuccess)
+        assert isinstance(second.response, CreateMediaBuySuccess)
+        assert second.response.media_buy_id != first.response.media_buy_id
+        assert second.replayed is False, "a different account is an independent request, never a replay"

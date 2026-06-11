@@ -14,16 +14,24 @@ get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds = 86400).
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import IdempotencyAttempt
 
 # Matches GetAdcpCapabilitiesResponse.adcp.idempotency.replay_ttl_seconds (86400 = 24h).
 DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
+
+# Storage-abuse ceiling: active (non-expired) cached successes per
+# (tenant, principal, account) scope. Each keyed create stores one row for the
+# replay TTL, so a buyer minting fresh keys is bounded to this many creates per
+# window; the probe rejects the excess as RATE_LIMITED with retry_after set to
+# when the oldest row expires. Looked up at call time so tests can patch it.
+MAX_ACTIVE_ATTEMPTS_PER_SCOPE = 1000
 
 
 class IdempotencyAttemptRepository:
@@ -131,6 +139,50 @@ class IdempotencyAttemptRepository:
         self._session.add(attempt)
         self._session.flush()
         return attempt
+
+    def enforce_insert_ceiling(
+        self,
+        *,
+        principal_id: str,
+        tool_name: str,
+        account_id: str | None = None,
+        ceiling: int | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Raise ``RATE_LIMITED`` when the scope has no room for another cached success.
+
+        Called by the idempotency probe on a cache MISS, before any execution:
+        a fresh key would insert a new row, and the per-(tenant, principal,
+        account) scope is bounded to :data:`MAX_ACTIVE_ATTEMPTS_PER_SCOPE`
+        active rows so key-minting cannot grow storage unboundedly. Replays
+        and conflicts are not rate-limited — they insert nothing.
+
+        ``retry_after`` is the number of seconds until the OLDEST active row in
+        the scope expires, i.e. when capacity is next guaranteed to free up.
+        """
+        current = now or datetime.now(UTC)
+        limit = ceiling if ceiling is not None else MAX_ACTIVE_ATTEMPTS_PER_SCOPE
+        scope = (
+            IdempotencyAttempt.tenant_id == self._tenant_id,
+            IdempotencyAttempt.principal_id == principal_id,
+            # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
+            IdempotencyAttempt.account_id == account_id,
+            IdempotencyAttempt.tool_name == tool_name,
+            IdempotencyAttempt.expires_at > current,
+        )
+        active = self._session.scalar(select(func.count()).select_from(IdempotencyAttempt).where(*scope)) or 0
+        if active < limit:
+            return
+
+        oldest_expiry = self._session.scalar(select(func.min(IdempotencyAttempt.expires_at)).where(*scope))
+        retry_after = max(1, math.ceil((oldest_expiry - current).total_seconds())) if oldest_expiry else 1
+
+        from src.core.exceptions import AdCPRateLimitError
+
+        raise AdCPRateLimitError(
+            "too many active idempotency keys for this account — retry after the oldest replay window expires",
+            retry_after=retry_after,
+        )
 
     def expire_old(self, *, now: datetime | None = None) -> int:
         """Delete all expired attempts for this tenant. Returns the deleted count.

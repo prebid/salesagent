@@ -37,6 +37,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -46,11 +47,12 @@ from src.core.exceptions import (
     AdCPError,
     AdCPFormatNotFoundError,
     AdCPIdempotencyConflictError,
+    AdCPIdempotencyExpiredError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
-from src.core.idempotency_canonical import canonical_request_hash
+from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
 
 
 class PackageAssignmentDict(TypedDict):
@@ -1489,15 +1491,24 @@ def _build_idempotency_hit_result(
     idempotency_key: str,
     principal_id: str,
     context: ContextObject | None,
+    *,
+    account_id: str | None = None,
+    request_hash: str | None = None,
 ) -> CreateMediaBuyResult:
     """Degraded idempotency fallback: re-derive a response from the committed MediaBuy row.
 
     Reached only when a same-key buy exists (the ``MediaBuy.idempotency_key`` backstop
     fired) but the verbatim success cache has no usable row — the race winner has not
     committed its cache write yet, the row expired past the replay TTL, or the stored
-    envelope no longer validates. The verbatim cache (``_replay_cached_success``) is
-    the authoritative replay path; this fallback trades byte-for-byte fidelity for
-    availability and therefore deliberately:
+    envelope no longer validates. The lookup is account-scoped (the AdCP idempotency
+    scope is agent + account + key), a buy that outlived the advertised replay TTL
+    rejects as ``IDEMPOTENCY_EXPIRED`` instead of re-deriving, and a same-key request
+    whose canonical payload differs from the stored ``payload_hash`` rejects as
+    ``IDEMPOTENCY_CONFLICT`` — exactly as at the probe.
+
+    The verbatim cache (``_replay_cached_success``) is the authoritative replay path;
+    this fallback trades byte-for-byte fidelity for availability and therefore
+    deliberately:
 
     - re-derives packages in the spec-minimal shape (``package_id`` only),
     - omits the property_list advisory (the original is unrecoverable here, and a
@@ -1511,12 +1522,26 @@ def _build_idempotency_hit_result(
 
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
-        existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id)
+        existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
             raise AdCPValidationError(
                 f"Idempotency key {idempotency_key} not found after race resolution",
                 recovery="terminal",
             )
+
+        # Rule 6 (security.mdx#idempotency): a key the seller has seen whose
+        # replay window has expired rejects rather than silently re-deriving —
+        # the buyer cannot tell a faithful replay from a reconstruction this old.
+        if datetime.now(UTC) - existing.created_at > DEFAULT_REPLAY_TTL:
+            raise AdCPIdempotencyExpiredError(
+                "idempotency_key was seen before, but its replay window "
+                f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired"
+            )
+
+        # Rule 5: same key + different canonical payload conflicts even on the
+        # degraded path — never resolve a request to a buy it does not describe.
+        # Legacy rows without a stored hash carry no conflict signal.
+        _raise_on_payload_conflict(existing.payload_hash, request_hash)
 
         db_packages = uow.media_buys.get_packages(existing.media_buy_id)
         response_packages = [Package(package_id=pkg.package_id) for pkg in db_packages]
@@ -1584,6 +1609,7 @@ def _lookup_cached_replay(
     account_id: str | None,
     idempotency_key: str,
     request_hash: str | None,
+    enforce_ceiling: bool = False,
 ) -> CreateMediaBuyResult | None:
     """Probe the verbatim success cache: conflict-check the stored hash, then replay.
 
@@ -1592,6 +1618,11 @@ def _lookup_cached_replay(
     (checked BEFORE any replay); a hit whose stored envelope no longer validates
     returns ``None`` exactly like a miss, so callers fall through to fresh
     execution (probe) or the degraded fallback (post-race).
+
+    ``enforce_ceiling=True`` (the front probe) additionally rate-limits a MISS:
+    a fresh key would insert a new cache row, and the per-scope row count is
+    bounded — see ``IdempotencyAttemptRepository.enforce_insert_ceiling``. The
+    post-race path never enforces it (the loser inserts nothing).
     """
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
     from src.core.database.repositories import MediaBuyUoW
@@ -1605,6 +1636,12 @@ def _lookup_cached_replay(
             idempotency_key=idempotency_key,
         )
         if cached is None:
+            if enforce_ceiling:
+                uow.idempotency_attempts.enforce_insert_ceiling(
+                    principal_id=principal_id,
+                    account_id=account_id,
+                    tool_name=_IDEMPOTENCY_TOOL_NAME,
+                )
             return None
         _raise_on_payload_conflict(cached.payload_hash, request_hash)
         return _replay_cached_success(cached.response_envelope)
@@ -1704,6 +1741,8 @@ def _replay_after_race(
         idempotency_key=idempotency_key,
         principal_id=principal_id,
         context=context,
+        account_id=account_id,
+        request_hash=request_hash,
     )
 
 
@@ -1712,6 +1751,7 @@ async def _create_media_buy_impl(
     push_notification_config: dict[str, Any] | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
+    raw_request_payload: dict[str, Any] | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -1719,6 +1759,11 @@ async def _create_media_buy_impl(
         req: Validated CreateMediaBuyRequest with all protocol fields
         push_notification_config: Push notification config dict (transport wrapper serializes models)
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+        raw_request_payload: The request dict as sent on the wire, threaded by the
+            transport wrappers — the idempotency payload-hash input (AdCP defines
+            payload equivalence over the request AS SENT, RFC 8785 over the wire
+            JSON). ``None`` only for impl-direct callers (tests, internal), which
+            fall back to hashing the request model's own dump.
 
     Returns:
         CreateMediaBuyResult wrapping response and status
@@ -1768,8 +1813,16 @@ async def _create_media_buy_impl(
     # verbatim; the same key with a different canonical payload is a conflict; errors are
     # never cached, so a retry after an error re-executes. The MediaBuy.idempotency_key
     # unique index remains the dup-booking backstop — this cache holds the response to
-    # replay. request_hash is computed once here (in scope for the success-cache stores).
-    request_hash = canonical_request_hash(req) if req.idempotency_key else None
+    # replay. request_hash is computed once here (in scope for the success-cache stores),
+    # over the WIRE payload when the transport wrapper threaded it (the spec's
+    # equivalence input); the model-dump fallback exists only for impl-direct callers.
+    request_hash = None
+    if req.idempotency_key:
+        request_hash = (
+            canonical_payload_hash(raw_request_payload)
+            if raw_request_payload is not None
+            else canonical_request_hash(req)
+        )
     if req.idempotency_key:
         replay = _lookup_cached_replay(
             tenant["tenant_id"],
@@ -1777,6 +1830,7 @@ async def _create_media_buy_impl(
             account_id=identity.account_id,
             idempotency_key=req.idempotency_key,
             request_hash=request_hash,
+            enforce_ceiling=True,
         )
         if replay is not None:
             logger.info("Idempotency replay: returning cached success for key %s", req.idempotency_key)
@@ -2542,6 +2596,7 @@ async def _create_media_buy_impl(
                         by_alias=True,
                         account_id=identity.account_id if identity else None,
                         created_at=datetime.now(UTC),
+                        payload_hash=request_hash,
                     )
                     logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
             except IntegrityError as exc:
@@ -3399,6 +3454,7 @@ async def _create_media_buy_impl(
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
                     account_id=identity.account_id if identity else None,
+                    payload_hash=request_hash,
                 )
                 # UoW auto-commits on clean exit
         except IntegrityError as exc:
@@ -4118,9 +4174,12 @@ async def create_media_buy(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
 
-    # Read identity and context_id pre-resolved by MCPAuthMiddleware
+    # Read identity, context_id, and the raw wire arguments pre-stashed by
+    # MCPAuthMiddleware. The raw arguments (pre compat-normalization) are the
+    # idempotency payload-hash input — the request as the buyer sent it.
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+    raw_request_payload = (await ctx.get_state("raw_arguments")) if isinstance(ctx, Context) else None
 
     # Resolve account at transport boundary (before _impl)
     from src.core.transport_helpers import enrich_identity_with_account
@@ -4134,6 +4193,7 @@ async def create_media_buy(
         push_notification_config=pnc_dict,
         identity=identity,
         context_id=_ctx_id,
+        raw_request_payload=raw_request_payload,
     )
     return ToolResult(content=str(result), structured_content=result)
 
@@ -4152,6 +4212,7 @@ async def create_media_buy_raw(
     idempotency_key: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    raw_request_payload: dict[str, Any] | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
@@ -4172,6 +4233,8 @@ async def create_media_buy_raw(
         ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
+        raw_request_payload: The request dict as sent on the wire (A2A DataPart
+            params / REST JSON body) — the idempotency payload-hash input
 
     Returns:
         Dict with status and CreateMediaBuyResponse data
@@ -4228,6 +4291,7 @@ async def create_media_buy_raw(
         push_notification_config=pnc_dict,
         identity=identity,
         context_id=_ctx_id,
+        raw_request_payload=raw_request_payload,
     )
 
 

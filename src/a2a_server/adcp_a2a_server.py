@@ -1591,6 +1591,9 @@ class AdCPRequestHandler(RequestHandler):
             account=params.get("account"),
             idempotency_key=params.get("idempotency_key"),
             identity=identity,
+            # The DataPart params ARE the wire payload — the idempotency
+            # payload-hash input.
+            raw_request_payload=params,
         )
 
         return response
