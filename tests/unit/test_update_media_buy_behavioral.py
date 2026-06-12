@@ -1129,7 +1129,7 @@ class TestUC003UpdateCreativeIds:
         # Media buy lookup
         mock_mb = MagicMock()
         mock_mb.media_buy_id = "mb_creative"
-        env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+        env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
         # Build creative mocks
         creatives = []
@@ -1164,7 +1164,7 @@ class TestUC003UpdateCreativeIds:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_creative"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # Only C1 found, C999 missing
             c1 = MagicMock()
@@ -1257,7 +1257,7 @@ class TestUC003UpdateCreativeIds:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_creative"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # Creative with "video" format
             c1 = MagicMock()
@@ -1307,7 +1307,7 @@ class TestUC003UpdateCreativeIds:
             mock_mb.media_buy_id = "mb_creative"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             c1 = MagicMock()
             c1.creative_id = "C1"
@@ -1546,7 +1546,7 @@ class TestUC003UpdateCreativeAssignments:
             mock_mb.media_buy_id = "mb_assign"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # Package with product that has placements
             mock_pkg = MagicMock()
@@ -1597,7 +1597,7 @@ class TestUC003UpdateCreativeAssignments:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_no_placement"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
@@ -1641,7 +1641,7 @@ class TestUC003UpdateCreativeAssignments:
             mock_mb.media_buy_id = "mb_assign_not_found"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # No placement_ids in assignment -> skip placement validation
             # Existing assignments empty, new assignment for C999 (doesn't exist)
@@ -2329,7 +2329,7 @@ class TestUC003ExtI:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_all_missing"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # No creatives found
             mock_scalars = MagicMock()
@@ -2368,7 +2368,7 @@ class TestUC003ExtJ:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_rejected"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             c1 = MagicMock()
             c1.creative_id = "C1"
@@ -2414,7 +2414,7 @@ class TestUC003ExtJ:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_multi_err"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # C1 in error state, C2 in rejected state
             c1 = MagicMock()
@@ -2624,7 +2624,7 @@ class TestUC003ExtM:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_bad_placement"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
@@ -2667,7 +2667,7 @@ class TestUC003ExtM:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_no_placements"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}

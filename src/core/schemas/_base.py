@@ -226,6 +226,10 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # it (adapters/base.py _build_create_success). Declare it for parity/typing so
     # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
     creative_deadline: datetime | None = None
+    # SDK 5.7 wrongly declares buyer_ref on the parent (removed from AdCP 3.1
+    # create-media-buy-response; pinned 04f59d2d5). Override to keep it off the
+    # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
+    buyer_ref: str | None = Field(default=None, exclude=True)
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -379,6 +383,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     # while still being AdCP-compliant (those fields are excluded via exclude=True)
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
+
+    # SDK 5.7 wrongly declares buyer_ref on the parent (removed from AdCP 3.1
+    # update-media-buy-response; pinned 04f59d2d5). Override to keep it off the
+    # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
+    buyer_ref: str | None = Field(default=None, exclude=True)
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
