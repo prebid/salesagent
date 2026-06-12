@@ -80,6 +80,19 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
+    # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).
+    # NOTE: top-level targeting_overlay/creatives are intentionally omitted — the raw
+    # wrapper accepts them in its signature but drops them before _build_update_request,
+    # so declaring them here would be a silent no-op (see salesagent-tayq).
+    packages: list[dict[str, Any]] | None = None
+    pacing: str | None = None
+    daily_budget: float | None = None
+    push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    reporting_webhook: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
+    idempotency_key: str | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -258,6 +271,14 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         currency=body.currency,
         start_time=body.start_time,
         end_time=body.end_time,
+        pacing=body.pacing,
+        daily_budget=body.daily_budget,
+        packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by UpdateMediaBuyRequest
+        push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        reporting_webhook=body.reporting_webhook,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        ext=body.ext,
+        idempotency_key=body.idempotency_key,
         identity=identity,
     )
     return response.model_dump(mode="json")
