@@ -29,3 +29,15 @@ def test_no_unimported_class_usage_in_src() -> None:
             continue
         violations.extend(check_file(path))
     assert not violations, "\n".join(violations)
+
+
+@pytest.mark.arch_guard
+def test_import_usage_detector_catches_known_bad_snippet(tmp_path) -> None:
+    bad_file = tmp_path / "src" / "core" / "probe.py"
+    bad_file.parent.mkdir(parents=True)
+    bad_file.write_text(
+        "def f():\n    return UndefinedSymbol()\n",
+        encoding="utf-8",
+    )
+    hits = check_file(bad_file)
+    assert hits, "check_file must flag symbol used without import"

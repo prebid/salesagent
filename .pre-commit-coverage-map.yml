@@ -36,8 +36,8 @@ adcp-contract-tests:
   enforced_by: pre-push + ci
   location: stages_prepush + .github/workflows/ci.yml::schema-contract
 mcp-contract-validation:
-  enforced_by: pre-push + ci
-  location: stages_prepush + .github/workflows/ci.yml::schema-contract
+  enforced_by: ci
+  location: .github/workflows/ci.yml::schema-contract
 check-docs-links:
   enforced_by: pre-push
   location: stages_prepush

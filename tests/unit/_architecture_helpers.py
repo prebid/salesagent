@@ -19,7 +19,7 @@ from __future__ import annotations
 import ast
 import functools
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -39,12 +39,66 @@ def repo_root() -> Path:
 
 @functools.lru_cache(maxsize=4096)
 def _parse_cached(path_str: str, _mtime: float) -> ast.Module:
-    return ast.parse(Path(path_str).read_text(), filename=path_str)
+    return ast.parse(Path(path_str).read_text(encoding="utf-8"), filename=path_str)
 
 
 def parse_module(path: Path) -> ast.Module:
     """Parse a Python file. Cache key is (path, mtime) so edits invalidate."""
     return _parse_cached(str(path), path.stat().st_mtime)
+
+
+def base_expr_is_tenant(node: ast.expr) -> bool:
+    """True when *node* is a tenant reference (``tenant``, ``self.tenant``, ``ctx.tenant``, …)."""
+    if isinstance(node, ast.Name) and node.id == "tenant":
+        return True
+    return isinstance(node, ast.Attribute) and node.attr == "tenant"
+
+
+def assert_detector_catches_ast_snippets(
+    find_lineno_violations: Callable[[ast.Module], list[int]],
+    *,
+    snippets: dict[str, str],
+) -> None:
+    """Fail if an inline known-bad snippet is not flagged by the detector."""
+    missed: list[str] = []
+    for label, source in snippets.items():
+        tree = ast.parse(source, filename=f"<known-bad:{label}>")
+        if not find_lineno_violations(tree):
+            missed.append(label)
+    assert not missed, "Detector missed known-bad snippet(s):\n" + "\n".join(f"  {s}" for s in missed)
+
+
+def find_tenant_config_violations(tree: ast.Module) -> list[int]:
+    """Return line numbers of tenant.config / tenant['config'] access patterns."""
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "config" and base_expr_is_tenant(node.value):
+            lines.append(node.lineno)
+        elif isinstance(node, ast.Subscript) and base_expr_is_tenant(node.value):
+            sl = node.slice
+            if isinstance(sl, ast.Constant) and sl.value == "config":
+                lines.append(node.lineno)
+    return lines
+
+
+def find_plain_json_column_violations(tree: ast.Module) -> list[int]:
+    """Return line numbers of mapped_column/Column calls using plain JSON."""
+    lines: list[int] = []
+    for call in iter_call_expressions(tree):
+        func_name: str | None = None
+        if isinstance(call.func, ast.Name):
+            func_name = call.func.id
+        elif isinstance(call.func, ast.Attribute):
+            func_name = call.func.attr
+        if func_name not in {"Column", "mapped_column"} or not call.args:
+            continue
+        first_arg = call.args[0]
+        uses_plain_json = (isinstance(first_arg, ast.Name) and first_arg.id == "JSON") or (
+            isinstance(first_arg, ast.Attribute) and first_arg.attr == "JSON"
+        )
+        if uses_plain_json:
+            lines.append(call.lineno)
+    return lines
 
 
 def iter_function_defs(tree: ast.Module) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:

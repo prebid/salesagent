@@ -5,11 +5,20 @@ Replaces .pre-commit-hooks enforce-jsontype grep hook (PR 4 of #1234).
 
 from __future__ import annotations
 
-import ast
-
 import pytest
 
-from tests.unit._architecture_helpers import iter_call_expressions, parse_module, repo_root
+from tests.unit._architecture_helpers import (
+    assert_detector_catches_ast_snippets,
+    find_plain_json_column_violations,
+    format_failure,
+    parse_module,
+    repo_root,
+)
+
+_KNOWN_BAD_SNIPPETS = {
+    "bare_json": "from sqlalchemy import JSON\ndef f():\n    mapped_column(JSON)",
+    "sa_json": "import sqlalchemy as sa\ndef f():\n    mapped_column(sa.JSON)",
+}
 
 
 @pytest.mark.arch_guard
@@ -20,20 +29,15 @@ def test_json_columns_use_jsontype() -> None:
     for path in db_dir.rglob("*.py"):
         rel = str(path.relative_to(repo))
         tree = parse_module(path)
-        for call in iter_call_expressions(tree):
-            func_name: str | None = None
-            if isinstance(call.func, ast.Name):
-                func_name = call.func.id
-            elif isinstance(call.func, ast.Attribute):
-                func_name = call.func.attr
-            if func_name not in {"Column", "mapped_column"}:
-                continue
-            if not call.args:
-                continue
-            first_arg = call.args[0]
-            uses_plain_json = (isinstance(first_arg, ast.Name) and first_arg.id == "JSON") or (
-                isinstance(first_arg, ast.Attribute) and first_arg.attr == "JSON"
-            )
-            if uses_plain_json:
-                violations.append(f"{rel}:{call.lineno} — use JSONType, not JSON")
-    assert not violations, "\n".join(violations)
+        for lineno in find_plain_json_column_violations(tree):
+            violations.append(f"{rel}:{lineno} — use JSONType, not JSON")
+    assert not violations, format_failure(
+        summary="JSON DB columns must use JSONType, not plain JSON",
+        violations=violations,
+        docs_link="docs/development/structural-guards.md",
+    )
+
+
+@pytest.mark.arch_guard
+def test_jsontype_detector_catches_known_bad_snippets() -> None:
+    assert_detector_catches_ast_snippets(find_plain_json_column_violations, snippets=_KNOWN_BAD_SNIPPETS)

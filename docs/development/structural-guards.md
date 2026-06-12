@@ -499,9 +499,14 @@ or as part of `make quality`.
 | `test_architecture_query_type_safety.py` | `enforce-sqlalchemy-2-0` (partial) | `test_no_legacy_session_query`, `test_models_use_mapped_not_column` |
 | `test_architecture_pre_commit_hook_count.py` | — | Commit-stage hook count ≤12 (D27) |
 | `test_architecture_pre_commit_no_additional_deps.py` | — | No `additional_dependencies` in pre-commit config (PR 2) |
+| `test_architecture_ci_bdd_shard_manifest.py` | — | BDD CI shards partition suite; matrix matches `SHARD_COUNTS` |
+| `test_architecture_repo_invariants.py` | `repo-invariants` (partial) | Self-tests for `.fn()` detection in consolidated hook |
 
 Shared AST helpers live in `tests/unit/_architecture_helpers.py`. Guards use the
 `@pytest.mark.arch_guard` marker (distinct from the entity-marker `architecture`).
+
+Each PR 4 guard includes a **known-bad self-test** (inline snippet or tmp fixture)
+so a narrowed detector fails CI instead of passing green silently.
 
 CI-only hook enforcement moved to `make quality-ci`: duplication, GAM auth support,
 response attribute access, roundtrip tests. See `.pre-commit-coverage-map.yml`.

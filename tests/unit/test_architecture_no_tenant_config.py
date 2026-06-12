@@ -5,11 +5,23 @@ Replaces .pre-commit-hooks no-tenant-config grep hook (PR 4 of #1234).
 
 from __future__ import annotations
 
-import ast
-
 import pytest
 
-from tests.unit._architecture_helpers import parse_module, repo_root, src_python_files
+from tests.unit._architecture_helpers import (
+    assert_detector_catches_ast_snippets,
+    find_tenant_config_violations,
+    format_failure,
+    parse_module,
+    repo_root,
+    src_python_files,
+)
+
+_KNOWN_BAD_SNIPPETS = {
+    "name_attr": "def f(tenant):\n    return tenant.config",
+    "self_attr": "def f(self):\n    return self.tenant.config",
+    "name_subscript": "def f(tenant):\n    return tenant['config']",
+    "self_subscript": "def f(self):\n    return self.tenant['config']",
+}
 
 
 @pytest.mark.arch_guard
@@ -21,16 +33,16 @@ def test_no_tenant_config_access() -> None:
         if "test_migration" in rel or "postmortem" in rel or "pre-commit" in rel:
             continue
         tree = parse_module(path)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == "config":
-                if isinstance(node.value, ast.Name) and node.value.id == "tenant":
-                    violations.append(f"{rel}:{node.lineno}")
-            elif isinstance(node, ast.Subscript):
-                if (
-                    isinstance(node.value, ast.Name)
-                    and node.value.id == "tenant"
-                    and isinstance(node.slice, ast.Constant)
-                    and node.slice.value == "config"
-                ):
-                    violations.append(f"{rel}:{node.lineno}")
-    assert not violations, "Use per-field columns, not tenant.config:\n" + "\n".join(violations)
+        for lineno in find_tenant_config_violations(tree):
+            violations.append(f"{rel}:{lineno}")
+    assert not violations, format_failure(
+        summary="Use per-field columns, not tenant.config",
+        violations=violations,
+        fix_hint="Replace tenant.config / tenant['config'] with typed column access.",
+        docs_link="docs/development/structural-guards.md",
+    )
+
+
+@pytest.mark.arch_guard
+def test_tenant_config_detector_catches_known_bad_snippets() -> None:
+    assert_detector_catches_ast_snippets(find_tenant_config_violations, snippets=_KNOWN_BAD_SNIPPETS)

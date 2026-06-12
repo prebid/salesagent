@@ -72,14 +72,6 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      - id: mcp-contract-validation
-        name: MCP contract validation tests
-        entry: uv run pytest tests/integration/test_mcp_contract_validation.py -v --tb=short
-        language: system
-        files: '^(src/core/schemas\.py|src/core/main\.py)$'
-        pass_filenames: false
-        stages: [pre-push]
-
       - id: mcp-schema-alignment
         name: MCP tool-schema parameter alignment
         entry: uv run python scripts/hooks/validate_mcp_schemas.py
