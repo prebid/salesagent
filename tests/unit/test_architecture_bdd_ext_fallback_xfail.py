@@ -101,7 +101,7 @@ def test_ext_fallback_branches_xfail_in_conftest():
 
 # --- Meta-tests: verify the guard logic itself ---
 
-_GOOD_SNIPPET = '''
+_GOOD_SNIPPET = """
 def _harness_env(request, ctx):
     if uc == "UC-003":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -111,9 +111,9 @@ def _harness_env(request, ctx):
                 yield
         else:
             pytest.xfail("UC-003 harness not yet wired for non-extension scenarios")
-'''
+"""
 
-_BAD_SNIPPET = '''
+_BAD_SNIPPET = """
 def _harness_env(request, ctx):
     if uc == "UC-003":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -125,7 +125,7 @@ def _harness_env(request, ctx):
             with MediaBuyDualEnv() as env:
                 ctx["env"] = env
                 yield
-'''
+"""
 
 
 def test_guard_negative_accepts_xfail_fallback():
