@@ -1,11 +1,11 @@
 # e2e_rest ledger retirement — transport-aware harness setup
 
 **Status:** TODO / tracked design. Beads epic `salesagent-x0nl`.
-**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (293 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`).
+**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (308 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`).
 
 ## Problem
 
-The 293-entry ledger is a symptom of a leaky abstraction, not a property of the
+The 308-entry ledger is a symptom of a leaky abstraction, not a property of the
 scenarios. Transport awareness has bled up into the scenario/step-def layer.
 
 The BDD suite dispatches every scenario through 7 transports. Four run
@@ -93,7 +93,10 @@ already calls the real agent, so all three see the same formats by construction.
 > uc011 +1). Each was verified to **pass on all 4 in-process transports** and fail
 > only over real HTTP — same mock-visibility class, not a regression. Expected
 > behavior: the ledger grows when main adds scenarios and shrinks as the harness
-> mechanisms below land.
+> mechanisms below land. #1420 (`salesagent-yrdp`) then removed 4 stale
+> param-renamed nodeids → **308** live (the breakdown total below is the 312
+> snapshot at the #1370 analysis). On the harness branch (#1430) the ledger
+> reaches 47.
 
 | Mechanism | Test files | Count | % | Beads |
 |-----------|-----------|------:|--:|-------|

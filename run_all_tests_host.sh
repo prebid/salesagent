@@ -3,11 +3,12 @@
 #
 # Prerequisites: tox + tox-uv (install: uv tool install tox --with tox-uv)
 #
-# Usage:
-#   ./run_all_tests.sh           # Docker + all 6 suites via tox (default)
-#   ./run_all_tests.sh quick     # No Docker: unit + integration
-#   ./run_all_tests.sh ci tests/integration/test_file.py -k test_name
-#   ./run_all_tests.sh ci tests/integration/ -m creative     # scoped by entity
+# Usage (host path — invoked directly, or reached via `./run_all_tests.sh quick`
+# and `./run_all_tests.sh ci <target>`, which delegate here):
+#   ./run_all_tests_host.sh           # Docker + all 6 suites via tox (default)
+#   ./run_all_tests_host.sh quick     # No Docker: unit + integration
+#   ./run_all_tests_host.sh ci tests/integration/test_file.py -k test_name
+#   ./run_all_tests_host.sh ci tests/integration/ -m creative     # scoped by entity
 
 set -euo pipefail
 

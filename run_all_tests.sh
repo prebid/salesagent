@@ -32,8 +32,11 @@
 # collision, and NO published host ports anywhere.
 #
 # Usage:
-#   scripts/test-in-network.sh                          # all six suites
-#   scripts/test-in-network.sh unit,integration         # explicit suite list
+#   ./run_all_tests.sh                          # all six suites in-network (default)
+#   ./run_all_tests.sh ci                       # same, explicit
+#   ./run_all_tests.sh unit,integration         # explicit suite list
+#   ./run_all_tests.sh quick                    # no-Docker unit+integration (delegates to host runner)
+#   ./run_all_tests.sh ci tests/path -k name    # targeted run (delegates to host runner)
 set -euo pipefail
 
 COMPOSE_FILE="docker-compose.e2e.yml"
