@@ -76,7 +76,8 @@ def main() -> int:
     print("Scanning for code duplication (pylint R0801)...")
     src_count = count_duplications("src/")
     tests_count = count_duplications("tests/")
-    current = {"src": src_count, "tests": tests_count}
+    scripts_count = count_duplications("scripts/")
+    current = {"src": src_count, "tests": tests_count, "scripts": scripts_count}
 
     # Read baseline
     baseline = read_baseline(baseline_file)
@@ -85,21 +86,21 @@ def main() -> int:
     if baseline is None:
         print(f"No baseline found. Creating {BASELINE_FILE}:")
         print(f"  src/   = {src_count} duplicate blocks")
-        print(f"  tests/ = {tests_count} duplicate blocks")
+        print(f"  scripts/ = {scripts_count} duplicate blocks")
         write_baseline(baseline_file, current)
         return 0
 
     # Handle --update-baseline flag
     if args.update_baseline:
         print(
-            f"Updating baseline: src/ {baseline.get('src', '?')} -> {src_count}, tests/ {baseline.get('tests', '?')} -> {tests_count}"
+            f"Updating baseline: src/ {baseline.get('src', '?')} -> {src_count}, tests/ {baseline.get('tests', '?')} -> {tests_count}, scripts/ {baseline.get('scripts', '?')} -> {scripts_count}"
         )
         write_baseline(baseline_file, current)
         return 0
 
     # Compare counts
     failed = False
-    for scope in ("src", "tests"):
+    for scope in ("src", "tests", "scripts"):
         baseline_count = baseline.get(scope, 0)
         current_count = current[scope]
 

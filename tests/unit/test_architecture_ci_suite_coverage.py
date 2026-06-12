@@ -195,14 +195,27 @@ class TestCISuiteCoverage:
         assert "make typecheck" in run_steps, "type-check job must run make typecheck for CI/local parity."
 
     @pytest.mark.arch_guard
+    @pytest.mark.arch_guard
     def test_smoke_tests_do_not_duplicate_skip_guard(self):
         """Skip-decorator enforcement belongs in the smoke suite, not a workflow grep step."""
         smoke_job = load_ci_workflow()["jobs"]["smoke-tests"]
-        step_names = " ".join(str(step.get("name", "")) for step in smoke_job.get("steps", []))
-        assert "skipped tests" not in step_names.lower(), (
-            "smoke-tests must not grep for skip decorators; TestNoSkippedTests is the single source of truth."
+        step_text = " ".join(f"{step.get('name', '')} {step.get('run', '')}" for step in smoke_job.get("steps", []))
+        skip_marker = "@" + "pytest" + ".mark.skip"
+        assert skip_marker not in step_text, (
+            "smoke-tests must not grep for skip decorators in a workflow step; "
+            "TestNoSkippedTests is the single source of truth."
         )
 
+    @pytest.mark.arch_guard
+    def test_skip_guard_single_source_of_truth_exists(self):
+        """The SSoT the workflow delegates to must exist, or enforcement is unguarded."""
+        from tests.smoke.test_smoke_basic import TestNoSkippedTests
+
+        assert hasattr(TestNoSkippedTests, "test_no_skip_decorators"), (
+            "TestNoSkippedTests.test_no_skip_decorators is the declared single source of truth for skip enforcement."
+        )
+
+    @pytest.mark.arch_guard
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 

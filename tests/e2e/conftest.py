@@ -16,7 +16,8 @@ import httpx
 import pytest
 import requests
 
-# Bind before any test patches os.getpid (unit suite autouse mocks leak through).
+# Bind real os.getpid at import so a later patch("os.getpid") in-process cannot
+# leak a non-int into the pid-is-None default path.
 _GETPID = os.getpid
 
 # Import contract validation - this automatically validates tool calls at test collection time

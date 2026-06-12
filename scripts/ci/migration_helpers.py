@@ -110,8 +110,8 @@ def get_migration_heads() -> set[str]:
     return all_revisions - pointed_to
 
 
-def resolve_roundtrip_downgrade_target(head_revision: str | None = None) -> str:
-    """Return an explicit Alembic downgrade target one step back from head."""
+def _downgrade_parents_for_head(head_revision: str | None = None) -> list[str]:
+    """Resolve the head revision and return its down_revisions (parent list)."""
     if head_revision is None:
         heads = get_migration_heads()
         if len(heads) != 1:
@@ -126,36 +126,23 @@ def resolve_roundtrip_downgrade_target(head_revision: str | None = None) -> str:
         if not down_revisions:
             msg = f"Cannot downgrade from base revision {head_revision}"
             raise ValueError(msg)
-        if len(down_revisions) == 1:
-            return down_revisions[0]
-        return down_revisions[0]
+        return list(down_revisions)
 
     msg = f"Migration file not found for head revision {head_revision}"
     raise ValueError(msg)
+
+
+def resolve_roundtrip_downgrade_target(head_revision: str | None = None) -> str:
+    """Return an explicit Alembic downgrade target one step back from head."""
+    # At a merge head, downgrading to any one parent undoes the merge and restores
+    # all branch tips; the first parent is a valid single target for `alembic downgrade`.
+    return _downgrade_parents_for_head(head_revision)[0]
 
 
 def expected_heads_after_roundtrip_downgrade(head_revision: str | None = None) -> set[str]:
     """Return alembic_version heads expected after CI roundtrip downgrade from head."""
-    if head_revision is None:
-        heads = get_migration_heads()
-        if len(heads) != 1:
-            msg = f"Expected exactly 1 migration head, found {sorted(heads)}"
-            raise ValueError(msg)
-        head_revision = next(iter(heads))
-
-    for path in get_migration_files():
-        revision, down_revisions = extract_revision_info(path)
-        if revision != head_revision:
-            continue
-        if not down_revisions:
-            msg = f"Cannot downgrade from base revision {head_revision}"
-            raise ValueError(msg)
-        if len(down_revisions) == 1:
-            return {down_revisions[0]}
-        return set(down_revisions)
-
-    msg = f"Migration file not found for head revision {head_revision}"
-    raise ValueError(msg)
+    # Merge heads restore every branch tip; single-parent heads land on their one parent.
+    return set(_downgrade_parents_for_head(head_revision))
 
 
 def is_merge_migration(tree: ast.Module) -> bool:

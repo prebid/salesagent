@@ -15,7 +15,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.ci.migration_helpers import is_empty_body, is_merge_migration, parse_function, parse_migration_tree
+from scripts.ci.migration_helpers import (
+    MigrationParseError,
+    is_empty_body,
+    is_merge_migration,
+    parse_function,
+    parse_migration_tree,
+)
 
 
 def check_migration_file(path: Path) -> list[str]:
@@ -26,7 +32,7 @@ def check_migration_file(path: Path) -> list[str]:
     errors = []
     try:
         tree = parse_migration_tree(path)
-    except Exception as exc:
+    except MigrationParseError as exc:
         errors.append(f"{path}: {exc}")
         return errors
 
