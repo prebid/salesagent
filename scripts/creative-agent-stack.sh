@@ -31,24 +31,31 @@ _healthy() { curl -sf -m 3 "$HEALTH" >/dev/null 2>&1; }
 
 cmd_url() { echo "$CREATIVE_AGENT_URL"; }
 
-cmd_up() {
-    if _healthy; then
-        echo "[creative-agent] already healthy on :9999 (reuse)"
+# Fetch the pinned source + build the image only. Idempotent. Shared by `up`
+# (standalone host run) and `build` (in-network: docker-compose.e2e.yml reuses
+# the resulting `adcp-creative-agent` image as a network service, no :9999).
+cmd_build() {
+    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        echo "[creative-agent] image $IMAGE already built (reuse)"
         return 0
     fi
-
-    # Source tarball pinned to ADCP_PIN (cached by pin in the path)
     if [ ! -f "$SRC/Dockerfile" ]; then
         echo "[creative-agent] fetching adcp@${ADCP_PIN}"
         mkdir -p "$SRC"
         curl -sL "https://github.com/adcontextprotocol/adcp/archive/${ADCP_PIN}.tar.gz" \
             | tar xz -C "$SRC" --strip-components=1
     fi
+    echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
+    docker build -t "$IMAGE" "$SRC"
+}
 
-    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
-        docker build -t "$IMAGE" "$SRC"
+cmd_up() {
+    if _healthy; then
+        echo "[creative-agent] already healthy on :9999 (reuse)"
+        return 0
     fi
+
+    cmd_build
 
     docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
 
@@ -91,7 +98,8 @@ cmd_down() {
 
 case "${1:-}" in
     up) cmd_up ;;
+    build) cmd_build ;;
     down) cmd_down ;;
     url) cmd_url ;;
-    *) echo "usage: $0 {up|down|url}" >&2; exit 2 ;;
+    *) echo "usage: $0 {up|build|down|url}" >&2; exit 2 ;;
 esac

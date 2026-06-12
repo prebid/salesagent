@@ -30,7 +30,6 @@ from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
-from adcp.types import ImageFormatAsset
 from pydantic import ValidationError
 from yarl import URL
 
@@ -40,7 +39,8 @@ from src.core.exceptions import (
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
-from src.core.schemas import Format, FormatId, url
+from src.core.format_cache import load_reference_formats
+from src.core.schemas import Format, FormatId
 
 
 def _known_asset_types() -> frozenset[str]:
@@ -169,62 +169,20 @@ class FormatFetchResult:
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
 
 
-def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Format:
-    """Create a single mock format with proper typing for testing."""
-    from adcp.types import VideoFormatAsset
+def _get_reference_formats() -> list[Format]:
+    """Return the reference formats served in testing mode (ADCP_TESTING=true).
 
-    # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
-    # ImageFormatAsset = image, VideoFormatAsset = video. Pass asset_type as plain string (not enum).
-    if asset_type == "video":
-        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(
-            item_type="individual",
-            asset_id="primary",
-            asset_type="video",
-            required=True,
-        )
-    else:
-        asset_item = ImageFormatAsset(
-            item_type="individual",
-            asset_id="primary",
-            asset_type="image",
-            required=True,
-        )
-    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]
-    # Use Format (our extended class) instead of AdcpFormat to include is_standard field
-    # Explicitly pass None for optional internal fields to satisfy mypy
-    return Format(
-        format_id=FormatId(id=format_id_str, agent_url=url("https://creative.adcontextprotocol.org")),
-        name=name,
-        assets=assets,
-        is_standard=True,  # Mock formats are standard formats
-        platform_config=None,
-        category=None,
-        requirements=None,
-        iab_specification=None,
-        accepts_3p_tags=None,
-    )
+    These are loaded from the checked-in fixture
+    (tests/fixtures/creative_formats/reference_formats.json) captured from the
+    pinned reference creative agent (adcp@ca70dd1e2a6c). Reading from the fixture
+    — rather than a hand-maintained list — is what keeps the in-process harness
+    and the e2e server serving identical formats by construction, with no risk of
+    silent drift from the real agent.
 
-
-def _get_mock_formats() -> list[Format]:
-    """Return mock formats for testing mode (ADCP_TESTING=true).
-
-    These formats match what the real creative agent returns, but without
-    making external HTTP calls. Used in CI to avoid timeouts.
+    Refresh the fixture with `make creative-formats-refresh` when the pin or the
+    agent's catalog changes. See salesagent issue #1418.
     """
-    # Create mock formats using our Format class (which includes is_standard field)
-    return [
-        _create_mock_format("display_300x250_image", "Medium Rectangle", "image"),
-        _create_mock_format("display_728x90_image", "Leaderboard", "image"),
-        _create_mock_format("display_300x600_image", "Half Page", "image"),
-        _create_mock_format("display_160x600_image", "Wide Skyscraper", "image"),
-        _create_mock_format("display_320x50_image", "Mobile Leaderboard", "image"),
-        _create_mock_format("video_standard", "Standard Video", "video"),
-        _create_mock_format("video_standard_30s", "Standard Video 30s", "video"),
-        _create_mock_format("video_vast", "VAST Video", "video"),
-        _create_mock_format("display_image", "Display Image", "image"),
-        _create_mock_format("display_html", "Display HTML", "image"),
-        _create_mock_format("display_js", "Display JavaScript", "image"),
-    ]
+    return list(load_reference_formats())
 
 
 @dataclass
@@ -646,9 +604,10 @@ class CreativeAgentRegistry:
         Returns:
             List of Format objects
         """
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
+        # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
+        # to avoid external HTTP calls (and to match the e2e server by construction).
         if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            return _get_mock_formats()
+            return _get_reference_formats()
 
         # Check cache - only use cache if no filtering parameters provided
         has_filters = any(
@@ -754,10 +713,11 @@ class CreativeAgentRegistry:
 
         logger = logging.getLogger(__name__)
 
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
+        # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
+        # to avoid external HTTP calls (and to match the e2e server by construction).
         if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            logger.info("list_all_formats: Using mock formats (ADCP_TESTING=true)")
-            return FormatFetchResult(formats=_get_mock_formats(), errors=[])
+            logger.info("list_all_formats: Using reference formats (ADCP_TESTING=true)")
+            return FormatFetchResult(formats=_get_reference_formats(), errors=[])
 
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []

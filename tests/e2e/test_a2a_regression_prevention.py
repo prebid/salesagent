@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 def _a2a_base_url() -> str:
     """Get A2A server base URL from environment (supports dynamic ports)."""
     port = os.getenv("ADCP_SALES_PORT", "8080")
-    return f"http://localhost:{port}"
+    return f"http://{os.getenv('ADCP_TEST_HOST', 'localhost')}:{port}"
 
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, create_agent_card

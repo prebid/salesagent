@@ -21,9 +21,22 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Generator
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+
+# Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
+# to the separate server, so in-process mock injection (set_registry_formats /
+# set_adapter_response / account billing-state fixtures) is invisible to it and
+# the scenario cannot pass. xfail(strict=False)'d by exact nodeid in the
+# collection hook. Regenerate from a clean in-network e2e_rest run. See the beads
+# ledger task. File lives next to this conftest.
+_E2E_REST_KNOWN_FAILURES: frozenset[str] = frozenset(
+    line.strip()
+    for line in (Path(__file__).parent / "e2e_rest_known_failures.txt").read_text().splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+)
 
 if TYPE_CHECKING:
     pass
@@ -72,12 +85,21 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
     if report.when == "call" and report.failed and call.excinfo is not None:
         from pytest_bdd.exceptions import StepDefinitionNotFoundError
 
+        from tests.harness._realize import E2EUnsupportedSetup
+
         if call.excinfo.errisinstance(StepDefinitionNotFoundError):
             report.outcome = "skipped"
             report.wasxfail = f"Step definition not found: {call.excinfo.value}"
         elif call.excinfo.errisinstance(NotImplementedError):
             report.outcome = "skipped"
             report.wasxfail = f"Not implemented: {call.excinfo.value}"
+        elif call.excinfo.errisinstance(E2EUnsupportedSetup):
+            # A mock-setup intent the live e2e stack has no surface for. The
+            # reason is declared at the env method (not a nodeid ledger), so it
+            # is visible in the report. Non-strict xfail — in-process transports
+            # of the same scenario still run normally.
+            report.outcome = "skipped"
+            report.wasxfail = f"impl-only setup declared in env: {call.excinfo.value}"
 
 
 # ---------------------------------------------------------------------------
@@ -2357,6 +2379,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
             item.add_marker(pytest.mark.admin)
 
+        # ── E2E_REST ledger + non-strict policy ──────────────────────
+        # The e2e_rest transport dispatches over real HTTP to a separate server,
+        # so scenarios relying on in-process mock injection can't pass. xfail the
+        # known ones (ledger), and make EVERY e2e_rest xfail non-strict: e2e is
+        # environment-dependent, so an xpass must not fail CI (this also clears
+        # the strict-xfail scenarios that now pass over the live in-network stack).
+        if is_e2e_rest:
+            if nodeid in _E2E_REST_KNOWN_FAILURES:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: mock-incompatible scenario (tests/bdd/e2e_rest_known_failures.txt)",
+                        strict=False,
+                    )
+                )
+            xfails = [m for m in item.own_markers if m.name == "xfail"]
+            if xfails:
+                item.own_markers = [m for m in item.own_markers if m.name != "xfail"]
+                item.add_marker(
+                    pytest.mark.xfail(reason=xfails[0].kwargs.get("reason", "e2e_rest xfail"), strict=False)
+                )
+
     # ── Single-transport optimization for strict xfails ──────────────
     # Scenarios that xfail(strict=True) on ALL transports waste 3/4 of
     # their runtime running the same failure path on mcp/rest/a2a after
@@ -2461,18 +2504,102 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
 
 
+@pytest.fixture(scope="session")
+def e2e_stack():
+    """Detect the live E2E stack; return an E2EConfig or None (never skips here).
+
+    Reads E2E_BASE_URL / E2E_POSTGRES_URL (set by the in-network runner /
+    run_all_tests via tox pass_env). Health-checks base_url so non-e2e transports
+    still run when the stack is absent (returns None). For an e2e_* transport a
+    None here is a hard ERROR (the ctx fixture raises) — never a skip, because
+    e2e_* is only parametrized when BDD_E2E_ENABLED=true, so a missing stack means
+    an explicitly-requested transport could not run. The RestE2EDispatcher reads
+    config off the env, never the environment.
+    """
+    import httpx
+
+    from tests.harness.transport import E2EConfig
+
+    base_url = os.environ.get("E2E_BASE_URL")
+    postgres_url = os.environ.get("E2E_POSTGRES_URL")
+    if not base_url:
+        return None
+    try:
+        resp = httpx.get(f"{base_url}/health", timeout=5)
+        resp.raise_for_status()
+    except Exception:
+        return None
+    if not postgres_url:
+        postgres_url = (
+            f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
+        )
+    return E2EConfig(base_url=base_url, postgres_url=postgres_url)
+
+
+def _reset_e2e_db(e2e_config) -> None:
+    """Flush the live server DB to a clean baseline before an e2e scenario.
+
+    Live-server e2e shares ONE database and the server process commits
+    independently, so the transaction-rollback isolation the in-process
+    transports get (via the per-test integration_db) is impossible here. Instead
+    TRUNCATE every data table CASCADE so each scenario's harness setup recreates
+    exactly the rows it needs into a clean DB. The server reads the DB live, so it
+    observes the reset immediately. alembic_version is preserved (schema stays).
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(e2e_config.postgres_url)
+    try:
+        with engine.begin() as conn:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+                    )
+                )
+            ]
+            if tables:
+                joined = ", ".join(f'"{t}"' for t in tables)
+                conn.execute(text(f"TRUNCATE TABLE {joined} RESTART IDENTITY CASCADE"))
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture()
-def ctx(request: pytest.FixtureRequest) -> dict:
+def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
     """Per-scenario mutable context shared across Given/When/Then steps.
 
     When parametrized by pytest_generate_tests, ``request.param`` is a
     Transport enum injected as ctx["transport"]. Transport-specific
     scenarios (tagged @rest/@mcp/@a2a) are NOT parametrized and get
     an empty ctx (When steps handle dispatch explicitly).
+
+    For an e2e_* transport, stash the live-stack E2EConfig in ctx so
+    ``_harness_env`` passes it to the harness env (which then binds factories to
+    the server's DB and dispatches over real HTTP). Skip if the stack is absent.
     """
     d: dict = {}
     if hasattr(request, "param"):
         d["transport"] = request.param
+        t = request.param
+        if hasattr(t, "value") and str(t.value).startswith("e2e_"):
+            if e2e_stack is None:
+                # e2e_* transports are only parametrized when BDD_E2E_ENABLED=true
+                # (see pytest_generate_tests), so reaching here means e2e was
+                # EXPLICITLY requested but the live stack could not be reached. That
+                # is a hard ERROR, never a skip: a skipped e2e test masks the fact
+                # that the transport never ran, turning a non-executed test into a
+                # false green (No Quiet Failures / Test Integrity).
+                base_url = os.environ.get("E2E_BASE_URL")
+                cause = "E2E_BASE_URL is unset" if not base_url else f"{base_url}/health failed"
+                raise RuntimeError(
+                    f"BDD_E2E_ENABLED=true but the live E2E stack is unreachable ({cause}). "
+                    "The e2e_rest transport cannot run. Start the in-network stack "
+                    "(run_all_tests.sh) or unset BDD_E2E_ENABLED to run the in-process "
+                    "transports only. Refusing to skip — a skipped e2e test is a false green."
+                )
+            d["e2e_config"] = e2e_stack
     return d
 
 
@@ -2543,6 +2670,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     """
     uc = _detect_uc(request)
 
+    # E2E shares one live DB across all scenarios; flush it to a clean baseline so
+    # this scenario's harness setup starts fresh (no cross-scenario tenant_id
+    # collisions). No-op for the in-process transports (they use per-test DBs).
+    if ctx.get("e2e_config") is not None:
+        _reset_e2e_db(ctx["e2e_config"])
+
     if uc == "UC-002":
         marker_names = {m.name for m in request.node.iter_markers()}
         if "account" in marker_names:
@@ -2550,7 +2683,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_account import MediaBuyAccountEnv
 
-            with MediaBuyAccountEnv() as env:
+            with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2564,7 +2697,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.creative_sync import CreativeSyncEnv
 
-            with CreativeSyncEnv() as env:
+            with CreativeSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2574,7 +2707,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        with CreativeFormatsEnv() as env:
+        with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
 
@@ -2586,14 +2719,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.account_list import AccountListEnv
 
-            with AccountListEnv() as env:
+            with AccountListEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         elif harness_type == "sync":
             request.getfixturevalue("integration_db")
             from tests.harness.account_sync import AccountSyncEnv
 
-            with AccountSyncEnv() as env:
+            with AccountSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2613,7 +2746,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv() as env:
+        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
 
@@ -2628,7 +2761,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # _ensure_media_buy_in_db creates media buys owned by the
             # scenario's "owner" (usually "buyer-001"), and _impl filters
             # by the identity's principal. They must match.
-            with DeliveryPollEnv(principal_id="buyer-001") as env:
+            with DeliveryPollEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
                 tenant, principal = env.setup_default_data()
                 ctx["env"] = env
                 ctx["db_tenant"] = tenant
@@ -2638,7 +2771,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.delivery_webhook import WebhookEnv
 
-            with WebhookEnv() as env:
+            with WebhookEnv(e2e_config=ctx.get("e2e_config")) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -2646,7 +2779,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
-            with CircuitBreakerEnv() as env:
+            with CircuitBreakerEnv(e2e_config=ctx.get("e2e_config")) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -2656,7 +2789,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv() as env:
+        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
     else:

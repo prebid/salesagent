@@ -1,0 +1,156 @@
+#!/bin/bash
+# Test runner — orchestrates Docker lifecycle and tox-based test execution.
+#
+# Prerequisites: tox + tox-uv (install: uv tool install tox --with tox-uv)
+#
+# Usage:
+#   ./run_all_tests.sh           # Docker + all 6 suites via tox (default)
+#   ./run_all_tests.sh quick     # No Docker: unit + integration
+#   ./run_all_tests.sh ci tests/integration/test_file.py -k test_name
+#   ./run_all_tests.sh ci tests/integration/ -m creative     # scoped by entity
+
+set -eo pipefail
+
+cd "$( dirname "${BASH_SOURCE[0]}" )"
+[ -f .env ] && { set -a; source .env; set +a; }
+
+GREEN='\033[0;32m' RED='\033[0;31m' BLUE='\033[0;34m' NC='\033[0m'
+
+MODE=${1:-ci}
+PYTEST_TARGET="${2:-}"
+PYTEST_ARGS="${@:3}"
+RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
+mkdir -p "$RESULTS_DIR"
+
+# Keep only the last 10 result directories
+ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
+
+echo "Mode: $MODE | Reports: $RESULTS_DIR/"
+
+# --- Helpers ---
+
+validate_imports() {
+    echo "Validating imports..."
+    if ! uv run python -c "
+from src.core.tools import get_products_raw, create_media_buy_raw
+from src.core.tools.products import _get_products_impl
+from src.core.tools.media_buy_create import _create_media_buy_impl
+" 2>/dev/null; then
+        echo -e "${RED}Import validation failed!${NC}"; exit 1
+    fi
+    echo -e "${GREEN}Imports OK${NC}"; echo ""
+}
+
+collect_reports() {
+    # Copy JSON reports from .tox/ to results dir
+    mkdir -p "$RESULTS_DIR"
+    for name in unit integration e2e admin bdd ui; do
+        [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
+    done
+    # Explicit return 0 — without this, the function inherits the exit code
+    # of the last ``[ -f X ] && cp X Y`` test, which is 1 when the final
+    # file (ui.json) is missing in quick mode. Under ``set -e`` that would
+    # propagate to the caller and the script would exit before the summary.
+    return 0
+}
+
+# --- Quick mode (no Docker) ---
+if [ "$MODE" = "quick" ]; then
+    validate_imports
+    echo -e "${BLUE}Running unit + integration via tox...${NC}"
+    # Disable BOTH errexit and pipefail around the tox call:
+    # - errexit so a non-zero tox exit doesn't kill the script before the summary
+    # - pipefail so the async ``>(tee ...)`` subshell's exit code can't poison ``$?``
+    # Capture tox's own exit code via PIPESTATUS[0] (robust to both interpretations).
+    set +eo pipefail
+    # Redirect to file + stdout via process substitution to avoid tox-uv fd leak
+    # that causes pipes (| tee) to hang after tox exits.
+    tox -e unit,integration -p > >(tee "$RESULTS_DIR/tox.log") 2>&1
+    TOX_RC=${PIPESTATUS[0]}
+    set -eo pipefail
+    collect_reports
+    [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+
+# --- CI mode (Docker + all suites) ---
+elif [ "$MODE" = "ci" ]; then
+    _saved_db="${DATABASE_URL:-}"
+    unset DATABASE_URL
+    validate_imports
+    if [ -n "$_saved_db" ]; then export DATABASE_URL="$_saved_db"; fi
+
+    # Start Docker stack (writes .test-stack.env)
+    ./scripts/test-stack.sh up
+    source .test-stack.env
+
+    # Pinned reference creative agent (salesagent-kczg): the authoritative run
+    # must NOT silently hit the live public agent (its catalog drifts). This
+    # mirrors the CI `creative` matrix group exactly — the commit pin is
+    # single-sourced in scripts/creative-agent-stack.sh. Idempotent (reuses a
+    # healthy stack across runs); torn down with the Docker stack on EXIT.
+    ./scripts/creative-agent-stack.sh up
+    export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
+    trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
+
+    if [ -n "$PYTEST_TARGET" ]; then
+        # Targeted test run — see "set +eo pipefail / PIPESTATUS[0]" rationale in quick mode.
+        echo -e "${BLUE}Running targeted: $PYTEST_TARGET $PYTEST_ARGS${NC}"
+        set +eo pipefail
+        uv run pytest "$PYTEST_TARGET" \
+            -m "not requires_server and not skip_ci" \
+            --json-report --json-report-file="$RESULTS_DIR/targeted.json" --json-report-indent=2 \
+            -q --tb=line $PYTEST_ARGS > >(tee "$RESULTS_DIR/targeted.log") 2>&1
+        TOX_RC=${PIPESTATUS[0]}
+        set -eo pipefail
+        [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
+    else
+        echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
+        set +eo pipefail
+        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
+        TOX_RC=${PIPESTATUS[0]}
+        set -eo pipefail
+        collect_reports
+        # Determine success from JSON reports, not tox exit code —
+        # PIPESTATUS[0] with process substitution returns stale values.
+        _any_fail=false
+        for _rpt in "$RESULTS_DIR"/*.json; do
+            [ -f "$_rpt" ] || continue
+            if python3 -c "import json,sys; d=json.load(open('$_rpt')); sys.exit(0 if d.get('exitcode',1)==0 else 1)" 2>/dev/null; then
+                :
+            else
+                _any_fail=true; break
+            fi
+        done
+        [ "$_any_fail" = true ] && FAILURES="tox"
+
+        # Coverage combine runs separately — tox -p hangs when the coverage
+        # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).
+        # Coverage combine — run separately, non-fatal
+        echo -e "${BLUE}Combining coverage...${NC}"
+        tox -e coverage || echo -e "${BLUE}Coverage combine failed (non-fatal)${NC}"
+    fi
+else
+    echo "Usage: ./run_all_tests.sh [quick|ci]"
+    echo "  ci (default) — Docker + all 6 suites via tox"
+    echo "  quick        — no Docker: unit + integration"
+    exit 1
+fi
+
+# --- Security audit ---
+# Ignored-vulnerabilities list + uv-secure invocation are single-sourced in
+# scripts/security-audit.sh (same script is called by .github/workflows/ci.yml,
+# so CI and local cannot drift).
+echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
+if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+    echo -e "${GREEN}Security audit passed${NC}"
+else
+    echo -e "${RED}Security audit FAILED — run: ./scripts/security-audit.sh${NC}"
+    FAILURES="${FAILURES:+$FAILURES }security"
+fi
+
+# --- Summary ---
+FAILURES="${FAILURES:-}"
+echo "================================================================"
+echo "Reports: $RESULTS_DIR/"
+ls "$RESULTS_DIR"/*.json 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+[ -z "$FAILURES" ] && echo -e "${GREEN}ALL PASSED${NC}" && exit 0
+echo -e "${RED}FAILED:$FAILURES${NC}" && exit 1

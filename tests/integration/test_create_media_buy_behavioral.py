@@ -70,8 +70,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # A subdomain free of underscores is required: Product.publisher_properties derives
 # publisher_domain from the tenant subdomain (f"{subdomain}.example.com") and the
-# AdCP domain pattern rejects underscores. TenantFactory builds the subdomain as
-# f"pub-{tenant_id}", so the tenant_id must not contain underscores either.
+# AdCP domain pattern rejects underscores. TenantFactory derives the subdomain via
+# tenant_subdomain() (pub-<tenant_id> with underscores normalized to hyphens); a
+# hyphen-free tenant_id keeps the rest of the derived name predictable here.
 _TENANT_ID = "behavioraltenant"
 _PRINCIPAL_ID = "behavioralprincipal"
 

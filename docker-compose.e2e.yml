@@ -21,8 +21,11 @@ services:
       POSTGRES_PASSWORD: secure_password_change_me
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5435}:5432"
+    # NO host port here — publishing lives in docker-compose.e2e.ports.yml, which
+    # only the HOST paths overlay (conftest standalone branch, test-stack.sh). The
+    # in-network runner uses this base file alone and reaches Postgres by service
+    # name (postgres:5432), so it publishes ZERO host ports and many stacks can
+    # run concurrently without a port collision.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U adcp_user -d adcp"]
       interval: 10s
@@ -51,6 +54,10 @@ services:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Same Docker embedded-DNS concurrent-lookup race fix as the runner — the
+    # server resolves postgres/creative-agent and the webhook callback host.
+    dns_opt:
+      - single-request-reopen
     volumes:
       - .:/app
       - /app/.venv  # exclude local .venv — container uses its own
@@ -66,13 +73,161 @@ services:
       - ./config/nginx/nginx-development.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - adcp-server
-    ports:
-      - "127.0.0.1:${ADCP_SALES_PORT:-8092}:8000"
+    # NO host port here either — see the postgres note above. Publishing for the
+    # host paths is in docker-compose.e2e.ports.yml; the in-network runner reaches
+    # the proxy by service name (proxy:8000).
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # In-network test runner (Option 1). Reaches Postgres/the server by SERVICE
+  # NAME on the compose network — postgres:5432, proxy:8000 — so it needs NO
+  # published host ports. Each `docker compose -p <project>` gets its own
+  # isolated network, so `postgres` here can never collide with another stack's
+  # `postgres`. This removes the host-port TOCTOU race that scripts/test-stack.sh
+  # hits when guessing free ports in 50000-60000 under a crowded Docker host.
+  #
+  # Gated behind a profile so a normal `up` does not start it; the runner is
+  # launched explicitly via `docker compose run --rm tests ...`
+  # (see scripts/test-in-network.sh).
+  tests:
+    profiles: ["runner"]
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      # Fixed in-network DB address — never a host port, never collides. This is
+      # the SUITE database used by unit(skip)/integration/bdd/admin.
+      DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
+      # E2E and UI must hit the SERVER's database (/adcp), not the suite DB. The
+      # tox e2e/ui envs override DATABASE_URL from this var (host path leaves it
+      # unset and keeps its own DATABASE_URL).
+      E2E_DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      # bdd 5th transport (E2E_REST): real HTTP through the proxy to the live
+      # server, with Given-step factory data written to the SERVER's DB so the
+      # server sees it. E2E_BASE_URL = the in-network proxy; E2E_POSTGRES_URL =
+      # the server DB (/adcp). BDD_E2E_ENABLED=true adds the e2e_rest transport to
+      # the bdd parametrization (was off everywhere — needs this Docker stack).
+      BDD_E2E_ENABLED: "true"
+      E2E_BASE_URL: http://proxy:8000
+      E2E_POSTGRES_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      # Suites that hit the running server reach it in-network (no host port).
+      ADCP_SERVER_URL: http://proxy:8000
+      ADCP_SALES_PORT: "8000"
+      # e2e/ui address the server by service name (proxy) and the server DB by
+      # service name (postgres:5432) — resolved by conftest via these vars.
+      ADCP_TEST_HOST: proxy
+      ADCP_TEST_DB_HOST: postgres
+      ADCP_TEST_DB_PORT: "5432"
+      # Webhook reverse-addressing: the server calls back to this runner by its
+      # network alias (requires `docker compose run --use-aliases`). 'tests' is
+      # not 'localhost', so the server does NOT rewrite it to host.docker.internal.
+      ADCP_WEBHOOK_HOST: tests
+      # Pinned reference creative agent, reachable in-network by service name
+      # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
+      CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
+      # Playwright chromium is pre-installed in Dockerfile.test at this path.
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # bdd runs truly serial in-network: -n0 (no xdist subprocess). Two reasons:
+      # (1) all bdd workers share ONE live Postgres in e2e mode -> xdist races; and
+      # (2) under xdist BDD_E2E_ENABLED doesn't reach the worker's collection, so
+      # the e2e_rest 5th transport is silently dropped. -n0 collects in-process.
+      BDD_XDIST_N: "0"
+      # bdd is the only suite using `pytest -n auto`. It MUST run serial in-network:
+      # all bdd workers share ONE Postgres (postgres:5432/adcp_test), and the
+      # factory-boy fixtures create tenants/principals with fixed IDs, so >1 worker
+      # races on shared rows -> a large block of setup ERRORS (non-deterministic;
+      # it happened to pass with 4 workers on the dev branch, then failed hard on a
+      # clean main run). Pinning auto=1 serializes DB access -> deterministic green
+      # (verified: 1451 passed / 5122 xfailed / 0 errors). Also keeps memory bounded
+      # (the bare `-n auto` would otherwise spawn ~17 app-loading workers -> OOM).
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "1"
+      ADCP_TESTING: "true"
+      ADCP_AUTH_TEST_MODE: "true"
+      CREATE_SAMPLE_DATA: "true"
+      DELIVERY_WEBHOOK_INTERVAL: "5"
+      # The source is bind-mounted, so the host's in-tree __pycache__ comes with
+      # it — and those .pyc embed host absolute paths in co_filename, which makes
+      # pytest-bdd's scenarios() resolve feature files to /Users/... instead of
+      # /app/... (FileNotFoundError). Redirect bytecode to a container-local dir
+      # so Python recompiles from /app and paths resolve correctly.
+      PYTHONPYCACHEPREFIX: /tmp/pycache
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-test_key}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      creative-agent:
+        condition: service_healthy
+    # Fix the Docker embedded-DNS concurrent-lookup race (moby/moby#22142): under
+    # the e2e suite's connection churn, glibc fires the A and AAAA queries in
+    # parallel over one UDP socket to 127.0.0.11 and one response gets dropped,
+    # so getaddrinfo('proxy') intermittently returns EAI_NONAME ("Name or service
+    # not known") — the flaky tenant-isolation failures. single-request-reopen
+    # makes glibc issue the two queries sequentially on separate sockets, removing
+    # the race. (Host runs use localhost, so they never hit DNS at all.)
+    dns_opt:
+      - single-request-reopen
+    volumes:
+      - .:/app
+      - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
+    working_dir: /app
+    # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
+    # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
+    # Overridden by `docker compose run --rm tests <cmd>`; idle by default.
+    command: ["sleep", "infinity"]
+
+  # ─── Pinned reference creative agent (in-network) ──────────────────────────
+  # Mirror of scripts/creative-agent-stack.sh, but ON the compose network with
+  # NO published host port. The host path runs that script standalone (creative-net,
+  # :9999); in-network we reuse the SAME pre-built image (`adcp-creative-agent`,
+  # adcp@ca70dd1e2a6c) so CI/host/in-network cannot diverge on the pin. The
+  # image is built by `scripts/creative-agent-stack.sh build` (called from
+  # scripts/test-in-network.sh) before `up`. Gated behind the runner profile so a
+  # normal e2e `up` never pulls it.
+  creative-pg:
+    profiles: ["runner"]
+    image: postgres:16
+    environment:
+      POSTGRES_DB: adcp_registry
+      POSTGRES_USER: adcp
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - creative_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adcp -d adcp_registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  creative-agent:
+    profiles: ["runner"]
+    image: adcp-creative-agent  # built by scripts/creative-agent-stack.sh build
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      DATABASE_URL: postgresql://adcp:localdev@creative-pg:5432/adcp_registry
+      RUN_MIGRATIONS: "true"
+      ALLOW_INSECURE_COOKIES: "true"
+      DEV_USER_EMAIL: ci@test.com
+      DEV_USER_ID: ci-user
+      AGENT_TOKEN_ENCRYPTION_SECRET: local-ci-encryption-key-32chars!!
+      WORKOS_API_KEY: sk_test_dummy
+      WORKOS_CLIENT_ID: client_dummy
+    depends_on:
+      creative-pg:
+        condition: service_healthy
+    # Node is guaranteed in this image; curl/wget may not be. Use node http.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/api/creative-agent/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
 volumes:
   postgres_data:
+  tox_data:
+  creative_pg_data:

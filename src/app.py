@@ -295,6 +295,18 @@ def _create_dynamic_agent_card(request: Request):
     """Create agent card with tenant-specific URL from request headers."""
 
     def get_protocol(hostname: str) -> str:
+        # Prefer the scheme the edge proxy terminated and forwarded
+        # (X-Forwarded-Proto, set by our nginx) — the authoritative signal for the
+        # client-facing scheme. Fall back to a hostname heuristic only when the
+        # header is absent (e.g. direct, non-proxied access). This matches how the
+        # admin app already trusts X-Forwarded-Proto, and fixes the agent card
+        # advertising https for an http-only reverse proxy.
+        forwarded_proto = _get_header_case_insensitive(request.headers, "X-Forwarded-Proto")
+        if forwarded_proto:
+            # May be a comma-separated proxy chain; the first hop is client-facing.
+            proto = forwarded_proto.split(",")[0].strip().lower()
+            if proto in ("http", "https"):
+                return proto
         return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
 
     apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")

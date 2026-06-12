@@ -11,6 +11,7 @@ All TODOs are left for you to fill in assertions and any spec-specific checks.
 """
 
 import json
+import os
 import socket
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -76,10 +77,13 @@ def delivery_webhook_server():
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    # We still use localhost in the URL because the MCP server's
-    # protocol_webhook_service explicitly looks for 'localhost' to rewrite
-    # it to 'host.docker.internal'
-    webhook_url = f"http://localhost:{port}/webhook"
+    # Host path: 'localhost' — the server's protocol_webhook_service rewrites it
+    # to 'host.docker.internal' to reach this receiver running on the host.
+    # In-network the receiver runs inside the runner container, so the server
+    # reaches it by the runner's network alias (ADCP_WEBHOOK_HOST=tests); that
+    # is NOT 'localhost', so it is left un-rewritten and resolved on the network.
+    webhook_host = os.getenv("ADCP_WEBHOOK_HOST", "localhost")
+    webhook_url = f"http://{webhook_host}:{port}/webhook"
 
     yield {
         "url": webhook_url,

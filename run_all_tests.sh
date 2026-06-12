@@ -1,156 +1,114 @@
-#!/bin/bash
-# Test runner — orchestrates Docker lifecycle and tox-based test execution.
+#!/usr/bin/env bash
 #
-# Prerequisites: tox + tox-uv (install: uv tool install tox --with tox-uv)
+# In-network test runner (Option 1).
+#
+# Runs the test suites INSIDE the compose network instead of on the host. The
+# runner container reaches Postgres and the app server by SERVICE NAME
+# (postgres:5432, proxy:8000), so this path publishes NO host ports and cannot
+# hit the host-port TOCTOU race that scripts/test-stack.sh suffers when it
+# guesses a free port in 50000-60000 and a sibling stack grabs it before
+# `docker up` binds it.
+#
+# Each `docker compose -p <project>` gets its own isolated bridge network, so
+# `postgres`/`proxy` here can never collide with another stack's — many of these
+# can run concurrently with zero port coordination.
+#
+# STATUS — all six suites run in-network, addressing every dependency by SERVICE
+# NAME (postgres:5432, proxy:8000, creative-agent:8080, runner alias `tests`):
+#   unit              -> no DB (DATABASE_URL unset by the unit tox env)
+#   integration       -> suite DB (/adcp_test) + creative-agent for the 18
+#                        test_creative_agent_live tests (CREATIVE_AGENT_URL)
+#   bdd               -> suite DB (/adcp_test), xdist
+#   admin             -> suite DB (/adcp_test)
+#   e2e               -> SERVER DB (/adcp via E2E_DATABASE_URL, per-suite tox
+#                        override); server reached at proxy:8000; webhooks call
+#                        back to the runner via ADCP_WEBHOOK_HOST=tests
+#   ui                -> SERVER DB (/adcp) + playwright chromium baked into
+#                        Dockerfile.test; browser drives proxy:8000
+#
+# Per-suite DB split: integration/bdd/admin use the runner's DATABASE_URL
+# (/adcp_test); e2e/ui override it to E2E_DATABASE_URL (/adcp) in their tox envs.
+# Both DBs live on the same `postgres` service — different database names, no
+# collision, and NO published host ports anywhere.
 #
 # Usage:
-#   ./run_all_tests.sh           # Docker + all 6 suites via tox (default)
-#   ./run_all_tests.sh quick     # No Docker: unit + integration
-#   ./run_all_tests.sh ci tests/integration/test_file.py -k test_name
-#   ./run_all_tests.sh ci tests/integration/ -m creative     # scoped by entity
+#   scripts/test-in-network.sh                          # all six suites
+#   scripts/test-in-network.sh unit,integration         # explicit suite list
+set -uo pipefail
 
-set -eo pipefail
-
-cd "$( dirname "${BASH_SOURCE[0]}" )"
-[ -f .env ] && { set -a; source .env; set +a; }
-
-GREEN='\033[0;32m' RED='\033[0;31m' BLUE='\033[0;34m' NC='\033[0m'
-
-MODE=${1:-ci}
-PYTEST_TARGET="${2:-}"
-PYTEST_ARGS="${@:3}"
-RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
+COMPOSE_FILE="docker-compose.e2e.yml"
+# PID-suffixed project name -> isolated network per run. No host ports means
+# concurrent runs never contend; the suffix just keeps container names distinct.
+# Compose rejects uppercase project names — lowercase whatever we're given.
+export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$$}" | tr '[:upper:]' '[:lower:]')"
+# The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
+# interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
+# e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
+# gets a report. Compose interpolates this into the adcp-server service env.
+export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
+SUITES="${1:-unit,integration,bdd,admin,e2e,ui}"
+RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
-# Keep only the last 10 result directories
-ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
+dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
-echo "Mode: $MODE | Reports: $RESULTS_DIR/"
+cleanup() { dc down -v >/dev/null 2>&1 || true; }
+trap cleanup EXIT
 
-# --- Helpers ---
+# The pinned reference creative-agent image (adcp@<pin>) is built once by the
+# single-source script; compose reuses it as the `creative-agent` service (no
+# :9999). Host run_all_tests.sh uses the same script (same pin) — no divergence.
+echo "Building pinned creative-agent image (single-sourced)..."
+scripts/creative-agent-stack.sh build
 
-validate_imports() {
-    echo "Validating imports..."
-    if ! uv run python -c "
-from src.core.tools import get_products_raw, create_media_buy_raw
-from src.core.tools.products import _get_products_impl
-from src.core.tools.media_buy_create import _create_media_buy_impl
-" 2>/dev/null; then
-        echo -e "${RED}Import validation failed!${NC}"; exit 1
-    fi
-    echo -e "${GREEN}Imports OK${NC}"; echo ""
-}
+echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
+dc build postgres adcp-server proxy tests
 
-collect_reports() {
-    # Copy JSON reports from .tox/ to results dir
-    mkdir -p "$RESULTS_DIR"
-    for name in unit integration e2e admin bdd ui; do
-        [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
-    done
-    # Explicit return 0 — without this, the function inherits the exit code
-    # of the last ``[ -f X ] && cp X Y`` test, which is 1 when the final
-    # file (ui.json) is missing in quick mode. Under ``set -e`` that would
-    # propagate to the caller and the script would exit before the summary.
-    return 0
-}
+# Bring up Postgres + the app server + proxy + the pinned creative-agent (and its
+# own registry Postgres). None publish host ports — all reached by service name.
+dc up -d postgres adcp-server proxy creative-pg creative-agent
 
-# --- Quick mode (no Docker) ---
-if [ "$MODE" = "quick" ]; then
-    validate_imports
-    echo -e "${BLUE}Running unit + integration via tox...${NC}"
-    # Disable BOTH errexit and pipefail around the tox call:
-    # - errexit so a non-zero tox exit doesn't kill the script before the summary
-    # - pipefail so the async ``>(tee ...)`` subshell's exit code can't poison ``$?``
-    # Capture tox's own exit code via PIPESTATUS[0] (robust to both interpretations).
-    set +eo pipefail
-    # Redirect to file + stdout via process substitution to avoid tox-uv fd leak
-    # that causes pipes (| tee) to hang after tox exits.
-    tox -e unit,integration -p > >(tee "$RESULTS_DIR/tox.log") 2>&1
-    TOX_RC=${PIPESTATUS[0]}
-    set -eo pipefail
-    collect_reports
-    [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+echo "Waiting for Postgres + server health (in-network)..."
+deadline=$(( $(date +%s) + 360 ))
+pg=false srv=false
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    [ "$pg" = false ] && dc exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1 && pg=true && echo "  Postgres ready"
+    [ "$srv" = false ] && dc exec -T adcp-server curl -sf http://localhost:8080/health >/dev/null 2>&1 && srv=true && echo "  Server ready"
+    [ "$pg" = true ] && [ "$srv" = true ] && break
+    sleep 3
+done
+[ "$pg" = true ] || { echo "Postgres never became ready"; dc logs postgres; exit 1; }
 
-# --- CI mode (Docker + all suites) ---
-elif [ "$MODE" = "ci" ]; then
-    _saved_db="${DATABASE_URL:-}"
-    unset DATABASE_URL
-    validate_imports
-    if [ -n "$_saved_db" ]; then export DATABASE_URL="$_saved_db"; fi
+# The suites use the adcp_test database (matches scripts/test-stack.sh).
+dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" >/dev/null 2>&1 || true
 
-    # Start Docker stack (writes .test-stack.env)
-    ./scripts/test-stack.sh up
-    source .test-stack.env
+# Run the suites in-network. DATABASE_URL=postgres:5432 (service name) is baked
+# into the `tests` service environment — no host port, no scan, no race.
+# --use-aliases gives this run container the `tests` network alias so the server
+# can call webhooks back to it (ADCP_WEBHOOK_HOST=tests) by name.
+#
+# SERIAL (no `-p`): run_all_tests.sh runs `tox -p` on the HOST, where each env is
+# its own process tree with the full host RAM. Packing all six suites into ONE
+# container and running them concurrently OOM-kills them (exit -9) — and bdd's
+# `-n auto` alone spawns one worker per host CPU (~17), each loading the app.
+# Serial execution keeps peak memory to a single suite; PYTEST_XDIST_AUTO_NUM_WORKERS
+# (set on the tests service) caps bdd's worker count so it can't blow memory or
+# trip the xdist loadscope rescheduler. Same suites, same outcomes — just not
+# wall-clock parallel inside the one container.
+echo "Running suites in-network (serial): $SUITES"
+dc run --rm --use-aliases tests tox -e "$SUITES"
+RC=$?
 
-    # Pinned reference creative agent (salesagent-kczg): the authoritative run
-    # must NOT silently hit the live public agent (its catalog drifts). This
-    # mirrors the CI `creative` matrix group exactly — the commit pin is
-    # single-sourced in scripts/creative-agent-stack.sh. Idempotent (reuses a
-    # healthy stack across runs); torn down with the Docker stack on EXIT.
-    ./scripts/creative-agent-stack.sh up
-    export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
-    trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
-
-    if [ -n "$PYTEST_TARGET" ]; then
-        # Targeted test run — see "set +eo pipefail / PIPESTATUS[0]" rationale in quick mode.
-        echo -e "${BLUE}Running targeted: $PYTEST_TARGET $PYTEST_ARGS${NC}"
-        set +eo pipefail
-        uv run pytest "$PYTEST_TARGET" \
-            -m "not requires_server and not skip_ci" \
-            --json-report --json-report-file="$RESULTS_DIR/targeted.json" --json-report-indent=2 \
-            -q --tb=line $PYTEST_ARGS > >(tee "$RESULTS_DIR/targeted.log") 2>&1
-        TOX_RC=${PIPESTATUS[0]}
-        set -eo pipefail
-        [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
-    else
-        echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
-        set +eo pipefail
-        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
-        TOX_RC=${PIPESTATUS[0]}
-        set -eo pipefail
-        collect_reports
-        # Determine success from JSON reports, not tox exit code —
-        # PIPESTATUS[0] with process substitution returns stale values.
-        _any_fail=false
-        for _rpt in "$RESULTS_DIR"/*.json; do
-            [ -f "$_rpt" ] || continue
-            if python3 -c "import json,sys; d=json.load(open('$_rpt')); sys.exit(0 if d.get('exitcode',1)==0 else 1)" 2>/dev/null; then
-                :
-            else
-                _any_fail=true; break
-            fi
-        done
-        [ "$_any_fail" = true ] && FAILURES="tox"
-
-        # Coverage combine runs separately — tox -p hangs when the coverage
-        # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).
-        # Coverage combine — run separately, non-fatal
-        echo -e "${BLUE}Combining coverage...${NC}"
-        tox -e coverage || echo -e "${BLUE}Coverage combine failed (non-fatal)${NC}"
-    fi
-else
-    echo "Usage: ./run_all_tests.sh [quick|ci]"
-    echo "  ci (default) — Docker + all 6 suites via tox"
-    echo "  quick        — no Docker: unit + integration"
-    exit 1
-fi
-
-# --- Security audit ---
-# Ignored-vulnerabilities list + uv-secure invocation are single-sourced in
-# scripts/security-audit.sh (same script is called by .github/workflows/ci.yml,
-# so CI and local cannot drift).
-echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
-if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
-    echo -e "${GREEN}Security audit passed${NC}"
-else
-    echo -e "${RED}Security audit FAILED — run: ./scripts/security-audit.sh${NC}"
-    FAILURES="${FAILURES:+$FAILURES }security"
-fi
-
-# --- Summary ---
-FAILURES="${FAILURES:-}"
-echo "================================================================"
+# tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
+# (kept off the bind mount so venvs don't live on the slow host tree). The host
+# .tox is therefore empty — extract the reports from the volume with a throwaway
+# container before the cleanup trap runs `down -v` and removes it.
+echo "Extracting JSON reports from the tox_data volume..."
+docker run --rm \
+    -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
+    -v "$(pwd)/${RESULTS_DIR}:/out" \
+    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true'
 echo "Reports: $RESULTS_DIR/"
-ls "$RESULTS_DIR"/*.json 2>/dev/null | while read f; do echo "  $(basename $f)"; done
-[ -z "$FAILURES" ] && echo -e "${GREEN}ALL PASSED${NC}" && exit 0
-echo -e "${RED}FAILED:$FAILURES${NC}" && exit 1
+ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
+
+exit $RC

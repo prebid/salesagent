@@ -1,0 +1,115 @@
+# Known-failing e2e_rest BDD scenarios — GENUINE production / harness gaps only.
+#
+# These dispatch through the real server over HTTP. After Wave 3 triage (#1418)
+# every mock-injection-only entry was either graduated (it now passes in-network)
+# or moved to an env-level E2EUnsupportedSetup declaration (raised during harness
+# realization in tests/harness/, surfaced as xfail by the conftest report hook —
+# NOT listed here). What remains below are scenarios that fail for a real reason:
+# a production behaviour gap, an unseeded server-side billing/account state, or a
+# harness observability/seeding gap that needs a code change to fix. Each block is
+# annotated with the gap it represents.
+#
+# Loaded by tests/bdd/conftest.py to xfail(strict=False) exactly these nodeids.
+# Locked by tests/unit/test_e2e_rest_ledger_state.py — keep that test in sync.
+# Design + execution plan + per-mechanism breakdown:
+#   docs/test-redesign/e2e-rest-ledger-retirement.md
+#
+# Wave-3 graduation (#1418, against the in-network wave2 report): removed 163
+# now-passing entries, 4 stale (renamed by #1370), and 98 format-injection
+# entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
+# entries remain, grouped by gap below.
+
+# --- uc004 invalid-input validation — wire shape (6) ---
+# GENUINE GAP: live REST returns a FastAPI 422 envelope ({"detail":[...]}) for these
+# invalid requests; the Then step expects an AdCPError/ValidationError instance. The
+# input IS rejected, but the harness REST dispatcher surfaces the 422 as a plain
+# Exception, not a structured AdCPError. Fix is in the harness REST error translation
+# (tests/harness, exec-n48i lane) — not a production change.
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-interval=0 (below minimum)-{"post_click": {"interval": 0, "unit": "days"}}-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-model=last_click (not in enum)-{"model": "last_click"}-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-unit=weeks (not in enum)-{"post_click": {"interval": 1, "unit": "weeks"}}-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo without geo_level (required field missing)-{"geo": {"limit": 10}}-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit negative-{"device_type": {"limit": -1}}-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit=0 (below minimum)-{"geo": {"geo_level": "country", "limit": 0}}-invalid]
+
+# --- uc004 invalid-input validation — accepted by live server (10) ---
+# GENUINE GAP: the live server accepts these inputs that the spec marks invalid
+# (start==end / start>end date ranges, owner-mismatch principal, out-of-enum sampling,
+# campaign-unit interval!=1, string "true" daily-breakdown, geo metro without system).
+# Production does not validate them — a real spec-production gap, tracked for src/ fix.
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-unit=campaign with interval=2 (desc says must be 1)-{"post_click": {"interval": 2, "unit": "campaign"}}-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_equals_end-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
+
+# --- uc006 account billing-state resolution (12) ---
+# GENUINE GAP: ACCOUNT_PAYMENT_REQUIRED / ACCOUNT_SETUP_REQUIRED / ACCOUNT_SUSPENDED /
+# ACCOUNT_NOT_FOUND / ACCOUNT_AMBIGUOUS are not raised by the live server because the
+# billing/setup/suspension state for these synthetic accounts is never seeded into the
+# server-side DB. Needs server-seeded account billing fixtures (harness, exec-n48i).
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_payment_required-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_setup_required-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-explicit_not_found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_ambiguous-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_not_found-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + payment due-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + setup incomplete-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account_id present + not found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + multiple matches-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]
+tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + no match-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
+
+# --- uc011 account sync DB read-back (6) ---
+# GENUINE GAP: delete_missing / dry_run / sandbox read-back assertions find 0 accounts
+# in the server DB. The pre-existing accounts the scenario asserts on are never seeded
+# server-side (the sync that would create them dispatches into the live server but the
+# expected pre-state is absent). Needs server-side account seeding (harness, exec-n48i).
+tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_false_preserves_absent_accounts_delete_missing__false_with_absent_accounts[e2e_rest]
+tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_omitted__default_preserves_accounts_delete_missing_omitted[e2e_rest]
+tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_scoped_to_authenticated_agent_only[e2e_rest]
+tests/bdd/test_uc011_manage_accounts.py::test_dry_run_false__normal_sync_applies_changes_dry_run__false[e2e_rest]
+tests/bdd/test_uc011_manage_accounts.py::test_dry_run_omitted__default_behavior_applies_changes_dry_run_omitted[e2e_rest]
+tests/bdd/test_uc011_manage_accounts.py::test_sandbox_account_provisioned_via_sync_accounts_with_sandbox_flag[e2e_rest]
+
+# --- get_products inventory-profile tenant duplicate (6) ---
+# GENUINE GAP: the Given seeds TenantFactory(tenant_id="test_tenant") directly into the
+# shared server DB on every scenario; the second e2e_rest scenario hits a tenants_pkey
+# UniqueViolation because the row from the prior scenario was never cleaned. Needs an
+# idempotent / get-or-create tenant seed over e2e (harness, exec-n48i).
+tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_preserves_them[e2e_rest]
+tests/bdd/test_get_products_inventory_profile.py::test_profile_with_invalid_property_ids_falls_back_to_selection_type_all[e2e_rest]
+tests/bdd/test_get_products_inventory_profile.py::test_profile_with_only_publisher_domain_infers_selection_type_all[e2e_rest]
+tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_ids_infers_selection_type_by_id[e2e_rest]
+tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_tags_infers_selection_type_by_tag[e2e_rest]
+tests/bdd/test_get_products_inventory_profile.py::test_profile_with_selection_type_already_present_passes_through[e2e_rest]
+
+# --- uc004 webhook retry/backoff/sequence observability (4) ---
+# GENUINE GAP (impossible to observe over e2e as written): retry-on-5xx, retry-on-network,
+# sequence-monotonic, and no-retry-on-4xx assert on env.mock["post"] call counts and
+# CircuitBreakerEnv.captured_logs — neither is visible through the live Docker HTTP path.
+# To retire: declare as impl-only in WebhookEnv/CircuitBreakerEnv (harness, exec-n48i),
+# OR add an e2e webhook receiver. These are the design F-bucket residuals.
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_does_not_retry_on_4xx_response[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_5xx_response[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_network_error[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_sequence_numbers_are_monotonically_increasing[e2e_rest]
+
+# --- explicit inline-xfail production gaps (2) ---
+# GENUINE GAP (already inline-xfailed in the step body): seller attribution-default not
+# implemented (production echoes the buyer request), and push_notification_config webhook
+# registration acknowledgement not implemented. src/ feature work.
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]
+tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
+
+# --- uc004 missing Then step definition (1) ---
+# GENUINE GAP: Then "the aggregated_totals should include roas..." has no step definition.
+# Needs a step def asserting roas / cost_per_acquisition in aggregated_totals (BDD wiring).
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]
+
