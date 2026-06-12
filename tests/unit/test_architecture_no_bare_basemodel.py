@@ -23,8 +23,9 @@ and context objects that are not on the AdCP wire boundary and have no
 Pattern-#7 obligation. Widening to those is a separate concern.
 
 Allowlist: Violations that predate this guard are tracked here. The list
-can only shrink. Every entry must have a matching ``# FIXME(#1442)``
-comment at the source location.
+can only shrink. Every entry must have a matching ``# FIXME(#<gh-issue>)``
+comment at the source location. Currently empty — the api_v1 REST request
+bodies were migrated to SalesAgentBaseModel (#1442).
 """
 
 import ast
@@ -32,27 +33,13 @@ from pathlib import Path
 
 # ── Allowlist ────────────────────────────────────────────────────────────
 # Format: (filename, class_name)
-# Every entry must have a matching FIXME comment at the source location.
+# Every entry must have a matching # FIXME(#<gh-issue>) comment at the source
+# location. The list can only shrink.
 #
-# api_v1.py REST request bodies: these parse buyer REST input and therefore
-# fall under Pattern #7. They currently inherit bare BaseModel. Migrating them
-# to SalesAgentBaseModel changes extra-field handling on the REST boundary
-# (forbid in dev/CI, ignore in prod), a behavioral change that needs REST
-# integration coverage -- tracked as a follow-up. Allowlisted, not silently
-# narrowed away. See FIXME(#1442) at each source class.
-ALLOWLIST: set[tuple[str, str]] = {
-    ("api_v1.py", "GetProductsBody"),
-    ("api_v1.py", "CreateMediaBuyBody"),
-    ("api_v1.py", "UpdateMediaBuyBody"),
-    ("api_v1.py", "GetMediaBuyDeliveryBody"),
-    ("api_v1.py", "SyncCreativesBody"),
-    ("api_v1.py", "ListCreativesBody"),
-    ("api_v1.py", "UpdatePerformanceIndexBody"),
-    ("api_v1.py", "ListCreativeFormatsBody"),
-    ("api_v1.py", "ListAuthorizedPropertiesBody"),
-    ("api_v1.py", "ListAccountsBody"),
-    ("api_v1.py", "SyncAccountsBody"),
-}
+# Empty: the api_v1.py REST request bodies that used to live here were migrated
+# to SalesAgentBaseModel (#1442), so they now carry the Pattern #7 extra-field
+# policy and are no longer bare-BaseModel violations.
+ALLOWLIST: set[tuple[str, str]] = set()
 
 # Base class names that carry no Pattern-#7 extra-field policy on their own.
 _BARE_BASE_NAMES = frozenset({"BaseModel", "RootModel"})
