@@ -46,7 +46,34 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
 # gets a report. Compose interpolates this into the adcp-server service env.
 export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
-SUITES="${1:-unit,integration,bdd,admin,e2e,ui}"
+# Argument contract — back-compat with the historical MODE words so the
+# pre-existing callers (Makefile quality-full/test-full, docs) keep working:
+#   (no arg) | ci                 -> all six suites, in-network (the default)
+#   ci <pytest-target> [args...]  -> targeted run  (delegated to the host runner)
+#   quick                         -> no-Docker unit+integration (host runner)
+#   <comma,list>                  -> explicit tox suite list, in-network
+# The in-network path always builds the full compose stack, so it can't honor
+# the "quick == no Docker" or the targeted contracts — those delegate to the
+# verbatim host runner that already implements them (DRY, single source).
+ALL_SUITES="unit,integration,bdd,admin,e2e,ui"
+DELEGATE=0
+case "${1:-ci}" in
+    quick) DELEGATE=1 ;;
+    ci) if [ -n "${2:-}" ]; then DELEGATE=1; else SUITES="$ALL_SUITES"; fi ;;
+    *) SUITES="$1" ;;
+esac
+
+# Testability seam: resolve the argument contract and exit BEFORE any Docker
+# call so tests/unit/test_run_all_tests_contract.py can assert it without a stack.
+if [ -n "${RUN_ALL_TESTS_RESOLVE_ONLY:-}" ]; then
+    if [ "$DELEGATE" = 1 ]; then echo "RESOLVED delegate-host: $*"; else echo "RESOLVED suites=$SUITES"; fi
+    exit 0
+fi
+
+if [ "$DELEGATE" = 1 ]; then
+    exec "$(dirname "$0")/run_all_tests_host.sh" "$@"
+fi
+
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
