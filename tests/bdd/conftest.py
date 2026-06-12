@@ -2384,11 +2384,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
+            # Collapse the e2e_rest xfail markers into ONE, but PRESERVE authored
+            # strictness: if any source marker is strict=True (the #1270 validation
+            # tripwires at ~1475/~1502), the collapsed marker stays strict so a
+            # production fix surfaces as a strict xpass instead of being silently
+            # swallowed. Ledger-only items carry only non-strict markers, so they
+            # stay non-strict — an environment-dependent xpass must not fail CI.
             xfails = [m for m in item.own_markers if m.name == "xfail"]
             if xfails:
+                strict = next((m for m in xfails if m.kwargs.get("strict", False)), None)
+                chosen = strict or xfails[0]
                 item.own_markers = [m for m in item.own_markers if m.name != "xfail"]
                 item.add_marker(
-                    pytest.mark.xfail(reason=xfails[0].kwargs.get("reason", "e2e_rest xfail"), strict=False)
+                    pytest.mark.xfail(
+                        reason=chosen.kwargs.get("reason", "e2e_rest xfail"),
+                        strict=strict is not None,
+                    )
                 )
 
     # ── Single-transport optimization for strict xfails ──────────────
