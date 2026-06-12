@@ -401,14 +401,14 @@ def generate_full_valid_request(schema: dict[str, Any]) -> dict[str, Any]:
     """Generate a complete valid request with all fields.
 
     Handles oneOf constraints by only including ONE field from all mutually exclusive options.
-    For example, if oneOf says "either media_buy_id OR buyer_ref", only include media_buy_id.
+    For example, if oneOf says "either field_a OR field_b", only include one.
     """
     all_fields = extract_all_fields(schema)
     oneof_groups = get_oneof_field_groups(schema)
 
     # Flatten: all fields mentioned in ANY oneOf group are mutually exclusive
-    # For example, if oneOf says [{"required": ["media_buy_id"]}, {"required": ["buyer_ref"]}]
-    # then media_buy_id and buyer_ref are mutually exclusive
+    # For example, if oneOf says [{"required": ["field_a"]}, {"required": ["field_b"]}]
+    # then field_a and field_b are mutually exclusive
     all_oneof_fields = set()
     for group in oneof_groups:
         all_oneof_fields.update(group)

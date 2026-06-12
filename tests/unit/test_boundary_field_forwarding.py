@@ -19,7 +19,7 @@ from pathlib import Path
 def _extract_request_constructor_kwargs(file_path: Path, wrapper_name: str, request_class: str) -> set[str]:
     """Extract keyword arguments passed to a request constructor within a wrapper function.
 
-    Finds calls like `CreateMediaBuyRequest(buyer_ref=..., brand=..., ...)` inside
+    Finds calls like `CreateMediaBuyRequest(brand=..., packages=..., ...)` inside
     the named wrapper function and returns the set of keyword argument names.
     """
     source = file_path.read_text()
@@ -112,7 +112,6 @@ CREATE_FILE = Path("src/core/tools/media_buy_create.py")
 
 # AdCP spec fields that MUST be forwarded from wrappers into CreateMediaBuyRequest
 # AdCP spec fields that MUST be forwarded from wrappers into CreateMediaBuyRequest
-# buyer_ref and buyer_campaign_ref removed in adcp 3.12
 CREATE_SPEC_FIELDS = {"brand", "packages", "start_time", "end_time", "po_number", "reporting_webhook", "context", "ext"}
 
 
@@ -161,7 +160,6 @@ class TestCreateMediaBuyFieldForwarding:
 UPDATE_FILE = Path("src/core/tools/media_buy_update.py")
 
 # AdCP spec fields that must reach the UpdateMediaBuyRequest via _build_update_request
-# buyer_ref removed in adcp 3.12
 UPDATE_SPEC_FIELDS = {
     "media_buy_id",
     "paused",

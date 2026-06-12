@@ -30,7 +30,7 @@ class TestBrandManifestTranslation:
         """A dict with 'url' key is converted to BrandReference with domain."""
         result = normalize_request_params(
             "create_media_buy",
-            {"brand_manifest": {"url": "https://nike.com/brand"}, "buyer_ref": "ref1"},
+            {"brand_manifest": {"url": "https://nike.com/brand"}},
         )
         assert result.params["brand"] == {"domain": "nike.com"}
         assert "brand_manifest" not in result.params
@@ -67,7 +67,7 @@ class TestCampaignRefTranslation:
     def test_campaign_ref_renamed(self):
         result = normalize_request_params(
             "create_media_buy",
-            {"campaign_ref": "camp-123", "buyer_ref": "ref1"},
+            {"campaign_ref": "camp-123"},
         )
         assert result.params["buyer_campaign_ref"] == "camp-123"
         assert "campaign_ref" not in result.params
@@ -111,7 +111,6 @@ class TestOptimizationGoalTranslation:
         result = normalize_request_params(
             "create_media_buy",
             {
-                "buyer_ref": "ref1",
                 "packages": [
                     {"product_id": "p1", "optimization_goal": "ctr"},
                 ],
@@ -134,7 +133,6 @@ class TestCatalogTranslation:
         result = normalize_request_params(
             "create_media_buy",
             {
-                "buyer_ref": "ref1",
                 "packages": [
                     {"product_id": "p1", "catalog": {"id": "cat-1"}},
                 ],
@@ -226,7 +224,6 @@ class TestPrecedence:
             {
                 "buyer_campaign_ref": "new-ref",
                 "campaign_ref": "old-ref",
-                "buyer_ref": "ref1",
             },
         )
         assert result.params["buyer_campaign_ref"] == "new-ref"
@@ -260,7 +257,6 @@ class TestMultipleTranslations:
                 "brand_manifest": "https://acme.com/brand",
                 "campaign_ref": "camp-1",
                 "account_id": "acc-1",
-                "buyer_ref": "ref1",
             },
         )
         assert result.params["brand"] == {"domain": "acme.com"}
