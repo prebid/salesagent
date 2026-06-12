@@ -10,7 +10,7 @@ CRITICAL: These tests catch protocol mismatches like 'updates' vs 'packages'
 before they reach production.
 """
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -240,7 +240,18 @@ class TestA2AParameterMapping:
 
             asyncio.run(handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY))
 
-            mock_delivery.assert_called_once()
+            mock_delivery.assert_called_once_with(
+                media_buy_ids=ANY,
+                status_filter=ANY,
+                start_date=ANY,
+                end_date=ANY,
+                reporting_dimensions=ANY,
+                attribution_window=ANY,
+                include_package_daily_breakdown=ANY,
+                account=ANY,
+                context=ANY,
+                identity=ANY,
+            )
             account = mock_delivery.call_args.kwargs["account"]
 
             assert account is not parameters["account"], "Should not forward the raw A2A account dict"
