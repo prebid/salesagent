@@ -688,7 +688,7 @@ class TestA2AErrorPropagation:
         from datetime import UTC, datetime, timedelta
         from decimal import Decimal
 
-        from tests.factories import MediaBuyFactory
+        from tests.factories import MediaBuyFactory, MediaPackageFactory
 
         now = datetime.now(UTC)
         media_buy = MediaBuyFactory(
@@ -703,6 +703,11 @@ class TestA2AErrorPropagation:
             start_time=now,
             end_time=now + timedelta(days=30),
         )
+        # The package-existence guard in _update_media_buy_impl resolves
+        # referenced packages before the financial validators run; seed the
+        # package the budget test targets so the wire envelope pins
+        # BUDGET_TOO_LOW rather than PACKAGE_NOT_FOUND.
+        MediaPackageFactory(media_buy=media_buy, package_id="pkg-1")
         return media_buy.media_buy_id
 
     async def test_update_media_buy_campaign_budget_exceeded_wire_envelope(
