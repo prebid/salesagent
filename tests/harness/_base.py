@@ -352,6 +352,20 @@ class BaseTestEnv:
         self._identity_cache: dict[str, ResolvedIdentity] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
 
+    # -- Transport mode -----------------------------------------------------
+
+    @property
+    def is_e2e(self) -> bool:
+        """True when this env dispatches over the live HTTP server (e2e mode).
+
+        Keys on ``e2e_config`` — the same signal ``conftest`` uses to thread the
+        live-stack config and ``RestE2EDispatcher`` uses to select HTTP
+        dispatch. A bare ``database_url`` rebinds factories to another DB but is
+        NOT e2e mode (no server-surface realization needed). Mock-setup methods
+        dispatch on this via :func:`tests.harness._realize.realize_e2e`.
+        """
+        return self.e2e_config is not None
+
     # -- Identity (one function, all transports) ----------------------------
 
     def identity_for(self, transport: Transport) -> ResolvedIdentity:
@@ -887,6 +901,31 @@ class BaseTestEnv:
         if self._session:
             self._session.commit()
 
+    def _seed_e2e_identity(self) -> None:
+        """Seed tenant + principal into the server DB for discovery scenarios (e2e).
+
+        Discovery scenarios (list_creative_formats, get_products) never run a
+        Given step that creates a tenant/principal — in-process they don't need
+        one (identity is a mock). Over e2e the live HTTP server authenticates the
+        request against its own DB, so the buyer's tenant/principal/token MUST
+        exist there or auth fails before the handler runs.
+
+        Called from ``__enter__`` in e2e mode. Delegates to the idempotent
+        ``setup_default_data`` (get-or-create) so it shares ONE seeding path and
+        envs that also call ``setup_default_data()`` themselves don't
+        double-create. Seeds the SAME ``tenant_id`` / ``principal_id`` the env's
+        identity uses, so the token ``identity_for`` later resolves matches the
+        seeded row.
+        """
+        if not self._session:
+            return
+        # Only IntegrationEnv exposes setup_default_data; e2e mode is always
+        # an IntegrationEnv (use_real_db=True), so this is the seeding path.
+        setup = getattr(self, "setup_default_data", None)
+        if setup is not None:
+            setup()
+            self._session.commit()
+
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).
 
@@ -956,6 +995,13 @@ class BaseTestEnv:
             self._patchers.append(patcher)
 
         self._configure_mocks()
+
+        # 3. E2E discovery-path seeding: the live server authenticates against
+        #    its own DB, so seed tenant/principal even for scenarios that never
+        #    run a tenant-creating Given step. Idempotent; no-op in-process.
+        if self.use_real_db and self.is_e2e:
+            self._seed_e2e_identity()
+
         return self
 
     def __exit__(self, *exc: object) -> bool:
@@ -1015,18 +1061,30 @@ class IntegrationEnv(BaseTestEnv):
     use_real_db = True
 
     def setup_default_data(self) -> tuple[Any, Any]:
-        """Create default tenant + principal via factories.
+        """Get-or-create default tenant + principal via factories.
 
         Must be called inside the ``with env:`` block (factories are bound
         to the session during ``__enter__``).
 
         Returns (tenant, principal) ORM instances. Uses self._tenant_id
-        and self._principal_id from constructor.
+        and self._principal_id from constructor. Idempotent: reuses existing
+        rows rather than re-creating, so it is safe to call after the e2e
+        discovery-path auto-seed (``_seed_e2e_identity``) already created them.
         """
+        from sqlalchemy import select
+
+        from src.core.database.models import Principal, Tenant
         from tests.factories import PrincipalFactory, TenantFactory
 
-        tenant = TenantFactory(tenant_id=self._tenant_id)
-        principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        if tenant is None:
+            tenant = TenantFactory(tenant_id=self._tenant_id)
+
+        principal = self._session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+        ).first()
+        if principal is None:
+            principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
 
     # -- Public query API (step functions must use these, not env._session) ----

@@ -85,12 +85,21 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
     if report.when == "call" and report.failed and call.excinfo is not None:
         from pytest_bdd.exceptions import StepDefinitionNotFoundError
 
+        from tests.harness._realize import E2EUnsupportedSetup
+
         if call.excinfo.errisinstance(StepDefinitionNotFoundError):
             report.outcome = "skipped"
             report.wasxfail = f"Step definition not found: {call.excinfo.value}"
         elif call.excinfo.errisinstance(NotImplementedError):
             report.outcome = "skipped"
             report.wasxfail = f"Not implemented: {call.excinfo.value}"
+        elif call.excinfo.errisinstance(E2EUnsupportedSetup):
+            # A mock-setup intent the live e2e stack has no surface for. The
+            # reason is declared at the env method (not a nodeid ledger), so it
+            # is visible in the report. Non-strict xfail — in-process transports
+            # of the same scenario still run normally.
+            report.outcome = "skipped"
+            report.wasxfail = f"impl-only setup declared in env: {call.excinfo.value}"
 
 
 # ---------------------------------------------------------------------------
