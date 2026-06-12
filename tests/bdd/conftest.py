@@ -121,6 +121,15 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-003-alt-pause": "sandbox not populated in pause response — spec-production gap",
     # FIXME(salesagent-ghgx): UC-003 optimization_goals — affected_packages empty in response
     "T-UC-003-alt-optimization-goals": "affected_packages not populated for optimization_goals changes — spec-production gap",
+    # FIXME(salesagent-javy): UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
+    # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
+    "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap salesagent-javy",
+    # FIXME(salesagent-kxzs): UC-003 ext-w — immutable product_id rejection maps to VALIDATION_ERROR
+    # via schema extra=forbid, not the spec-expected INVALID_REQUEST (BR-RULE-198).
+    "T-UC-003-ext-w": "immutable product_id rejection emits VALIDATION_ERROR not spec INVALID_REQUEST (BR-RULE-198) — production gap salesagent-kxzs",
+    # FIXME(salesagent-u35g): UC-003 ext-u — new_packages midflight-additions capability check
+    # (BR-RULE-217 -> UNSUPPORTED_FEATURE) not implemented; production accepts new_packages unhandled.
+    "T-UC-003-ext-u": "new_packages midflight capability check not implemented (BR-RULE-217) — production gap salesagent-u35g",
     # FIXME(salesagent-12nd): UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME(salesagent-fie): UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST

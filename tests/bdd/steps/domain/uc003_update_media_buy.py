@@ -223,6 +223,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "packages",
         "budget",
         "idempotency_key",
+        "invoice_recipient",
     }
     kwargs = _ensure_update_defaults(ctx)
     clock = ctx["env"].clock
@@ -254,6 +255,26 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             # Expand <N character string> placeholders (e.g. "<256 character string>")
             length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", value)
             kwargs["idempotency_key"] = "x" * int(length_match.group(1)) if length_match else value
+        elif field == "invoice_recipient":
+            # BusinessEntity requires legal_name; the override is rejected by production
+            # only when authorized — that authorization check is a production gap
+            # (salesagent-javy), so the scenario is xfailed (T-UC-003-ext-t).
+            kwargs["invoice_recipient"] = {"legal_name": value}
+
+
+@given(parsers.parse('the invoice_recipient "{recipient}" is not authorized for this account'))
+def given_invoice_recipient_not_authorized(ctx: dict, recipient: str) -> None:
+    """Precondition: the invoice_recipient is not authorized for the account.
+
+    No authorization record links this recipient to the account, so an
+    authorized-invoice-recipient check would reject the update. Production does
+    not yet implement that check (BR-RULE-214, salesagent-javy), so the scenario
+    is xfailed (T-UC-003-ext-t) until production catches up. Assert the request
+    carries the override so the resolution path is exercised when implemented.
+    """
+    assert ctx.get("update_kwargs", {}).get("invoice_recipient") is not None, (
+        "update_kwargs must carry invoice_recipient for the authorization check"
+    )
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
@@ -291,7 +312,11 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     """Add a package update to the request from a data table."""
     import json
 
-    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay"}
+    # product_id is intentionally accepted here so the immutable-field override
+    # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
+    # rejected — currently as VALIDATION_ERROR rather than the spec-expected
+    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (salesagent-kxzs).
+    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "product_id"}
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
@@ -311,6 +336,8 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["paused"] = value.lower() == "true"
         elif field == "targeting_overlay":
             pkg_update["targeting_overlay"] = json.loads(value)
+        elif field == "product_id":
+            pkg_update["product_id"] = value
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
 
@@ -1893,6 +1920,18 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         kwargs["paused"] = False
         kwargs["start_time"] = "2026-05-01T00:00:00Z"
         kwargs["end_time"] = "2026-07-01T00:00:00Z"
+    elif "new_packages" in stripped:
+        # A complete package-request added mid-flight. Production has no
+        # midflight-additions capability check (BR-RULE-217 -> UNSUPPORTED_FEATURE),
+        # so it accepts new_packages unhandled instead of rejecting — T-UC-003-ext-u
+        # is xfailed (salesagent-u35g).
+        kwargs["new_packages"] = [
+            {
+                "product_id": "guaranteed_display",
+                "budget": 5000.0,
+                "pricing_option_id": "cpm_usd_fixed",
+            }
+        ]
     else:
         raise ValueError(f"Unknown update_fields pattern: {stripped}")
 
