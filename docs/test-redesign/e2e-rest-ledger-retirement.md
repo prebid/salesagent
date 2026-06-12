@@ -34,6 +34,29 @@ first-failure layer was **auth/account-seed**, not formats — the "Formats"
 attribution for uc006 in the mechanism table below was wrong; uc006's residual
 12 are account billing-state, not format injection.
 
+### The 98 env-owned entries are a settled end state — graduation is upstream
+
+The 98 synthetic-format scenarios are **correctly declared env-owned** (the
+`E2EUnsupportedSetup` raised during harness realization, surfaced as xfail with a
+declared reason by the conftest report hook). This is their settled end state —
+they are **not** bare nodeids and they are **not** to be graduated by local Given
+rewrites.
+
+A local rewrite (swapping `FormatFactory.build()` synthetic ids for
+`pick_reference_formats` real-catalog ids in `tests/bdd/steps/`) is the wrong
+move: each such scenario sources its request params **and** its Then assertions
+from the **generated** feature-file example tables (`BR-UC-005-*.feature`), which
+are overwritten on every regen and must never be edited locally. Rewriting the
+Given to seed a real catalog format while the table still sends/asserts a
+synthetic `fmt_3` is fragile and, for explicit-format-id scenarios, impossible.
+
+The future graduation path is **upstream**, per the source-of-truth hierarchy:
+regenerate the uc005 example tables with real reference-catalog format ids in the
+requirements repo (`adcp-req`), then re-run the in-network gate — the scenarios
+graduate the same way the 163 already did, and the env declaration stops firing
+because the requested ids are now in the catalog. Do this in the requirements
+repo, not here.
+
 ## Problem
 
 The 293-entry ledger is a symptom of a leaky abstraction, not a property of the
