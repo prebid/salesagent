@@ -333,6 +333,7 @@ class XandrAdapter(AdServerAdapter):
         """Get available products (placement groups in Xandr)."""
         try:
             # Use V3 consolidated pricing types
+            # FIXME(#1360): SDK types have local subclasses; import from src.core.schemas (Pattern #7/#4).
             from adcp.types import CpmPricingOption, DeliveryMeasurement, DeliveryType
             from adcp.types import PriceGuidance as AdCPPriceGuidance
             from adcp.types.generated_poc.core.publisher_property_selector import (

@@ -16,6 +16,7 @@ import time
 from collections.abc import Sequence
 from typing import Annotated, TypeVar
 
+# FIXME(#1360): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
 from adcp.types import (
     AssetContentType,

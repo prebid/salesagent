@@ -4,6 +4,8 @@ import asyncio
 import logging
 
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+
+# FIXME(#1360): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp.types import CreateMediaBuySuccessResponse, Package
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from flask import Blueprint, request

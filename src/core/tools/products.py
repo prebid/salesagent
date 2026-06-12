@@ -9,6 +9,7 @@ import os
 import time
 from typing import Annotated, Any, cast
 
+# FIXME(#1360): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
