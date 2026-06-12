@@ -423,6 +423,54 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
 
 
+@then("the error recovery hint should indicate correctable")
+def then_error_recovery_correctable(ctx: dict) -> None:
+    """Assert recovery=correctable — the buyer's own request is the fix lever."""
+    then_error_recovery(ctx, "correctable")
+
+
+@then("the response should echo the context.correlation_id unchanged")
+def then_error_echoes_correlation_id(ctx: dict) -> None:
+    """Assert the error envelope echoes the request's context.correlation_id.
+
+    The wire envelope (stashed on reconstructed errors by the harness) is the
+    primary authority; falls back to the exception's own ``context`` for the
+    impl transport where no wire bytes exist.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    sent = ctx.get("sent_correlation_id")
+    assert sent, "When step did not record ctx['sent_correlation_id'] — cannot verify echo"
+
+    echoed = None
+    envelope = getattr(error, "_wire_error_envelope", None)
+    if isinstance(envelope, dict) and isinstance(envelope.get("context"), dict):
+        echoed = envelope["context"].get("correlation_id")
+    else:
+        request_context = getattr(error, "context", None)
+        if isinstance(request_context, dict):
+            echoed = request_context.get("correlation_id")
+        elif request_context is not None:
+            echoed = getattr(request_context, "correlation_id", None)
+    assert echoed == sent, f"Expected correlation_id '{sent}' echoed unchanged, got '{echoed}'"
+
+
+@then("the response should NOT be a 500 or non-AdCP error shape")
+def then_error_is_structured_adcp_shape(ctx: dict) -> None:
+    """Assert the failure surfaced as a typed AdCP error, not a raw 500."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    from src.core.exceptions import AdCPError
+
+    assert isinstance(error, AdCPError), f"Expected a structured AdCP error, got {type(error).__name__}: {error}"
+    assert error.status_code != 500, f"Expected non-500 status, got {error.status_code}"
+    envelope = getattr(error, "_wire_error_envelope", None)
+    if isinstance(envelope, dict):
+        assert "errors" in envelope and "adcp_error" in envelope, (
+            f"Wire envelope missing two-layer shape keys: {sorted(envelope.keys())}"
+        )
+
+
 @then('the error should include a "suggestion" field')
 @then('the error should include "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:
