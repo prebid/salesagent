@@ -4687,6 +4687,11 @@ class TestAsyncLifecycle:
         response = SyncCreativesSubmitted(task_id="task_1")
         assert response.task_id == "task_1"
 
+        # context and ext remain available on the 5.7 schema (both optional)
+        model_fields = SyncCreativesSubmitted.model_fields
+        assert "context" in model_fields
+        assert "ext" in model_fields
+
         # Can be constructed with just task_id (other fields optional)
         empty = SyncCreativesSubmitted(task_id="task_2")
         assert empty.task_id == "task_2"
