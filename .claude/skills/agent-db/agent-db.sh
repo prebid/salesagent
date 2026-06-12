@@ -16,7 +16,11 @@
 set -eo pipefail
 
 SCRIPT_DIR="$( dirname "${BASH_SOURCE[0]}" )"
-PROJECT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
+# This script lives at <worktree>/.claude/skills/agent-db/ — three levels up is
+# the worktree root. Resolving only one level (".." → .claude/skills) makes
+# WORKTREE_ID "skills" for EVERY worktree, collapsing them onto one shared
+# container + state file (the cause of cross-worktree port desync).
+PROJECT_DIR="$( cd "$SCRIPT_DIR/../../.." && pwd )"
 
 PG_USER="adcp_user"
 PG_PASS="secure_password_change_me"
