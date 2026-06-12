@@ -179,21 +179,6 @@ class TestCreateMediaBuySchemaCompliance:
                 # brand omitted
             )
 
-    def test_create_request_buyer_ref_no_longer_accepted(self):
-        """UC-002-S02: buyer_ref removed from AdCP spec in 3.12.
-
-        Spec: UPDATED -- buyer_ref removed from create-media-buy-request.json in adcp 3.12
-        Covers: UC-002-MAIN-02
-        """
-        with pytest.raises(ValidationError, match="buyer_ref"):
-            CreateMediaBuyRequest(
-                buyer_ref="test",
-                brand={"domain": "test.com"},
-                start_time=_future(1),
-                end_time=_future(8),
-                packages=[{"product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm_usd_fixed"}],
-            )
-
     def test_create_request_accepts_valid_minimal(self):
         """UC-002-S03: minimal valid request parses without error.
 
@@ -581,19 +566,6 @@ class TestCreateMediaBuyValidation:
         # (at validation time or _impl time)
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
         assert req.get_total_budget() == 0
-
-    def test_buyer_ref_no_longer_on_request(self):
-        """UC-002-V09: buyer_ref removed from AdCP spec in 3.12.
-
-        Spec: UPDATED -- buyer_ref removed from create-media-buy-request.json in adcp 3.12.
-        Duplicate buyer_ref validation is no longer applicable at the request level.
-        Priority: P1
-        Type: unit
-        Source: UC-002, BR-RULE-009
-        Covers: UC-002-EXT-E-01
-        """
-        with pytest.raises(ValidationError, match="buyer_ref"):
-            _make_request(buyer_ref="duplicate-ref")
 
     def test_missing_start_time_rejected(self):
         """UC-002-V10: missing start_time rejected.
@@ -1547,7 +1519,7 @@ class TestUpdateMediaBuySchemaCompliance:
     def test_update_request_accepts_media_buy_id(self):
         """UC-003-S01: media_buy_id accepted as optional field.
 
-        Spec: CONFIRMED -- update-media-buy-request.json oneOf requires media_buy_id OR buyer_ref
+        Spec: CONFIRMED -- update-media-buy-request.json requires media_buy_id
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Covers: UC-003-MAIN-01
         """
@@ -1651,7 +1623,7 @@ class TestUpdateMediaBuyResponseShapes:
     def test_error_response_atomic(self):
         """UC-003-R02 / BR-RULE-018: error has no success fields.
 
-        Spec: CONFIRMED -- update-media-buy-response.json error: not anyOf [media_buy_id, buyer_ref, affected_packages]
+        Spec: CONFIRMED -- update-media-buy-response.json error: not anyOf [media_buy_id, affected_packages]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Covers: UC-003-EXT-O-05
         """
@@ -1687,7 +1659,7 @@ class TestUpdateMediaBuyMainFlow:
     def test_package_budget_update_via_media_buy_id(self):
         """UC-003-MF01/MF02: media_buy_id resolves to media buy, update succeeds.
 
-        Spec: UPDATED -- adcp 3.12 requires media_buy_id (buyer_ref identification removed)
+        Spec: media_buy_id is the sole update identifier
         Priority: P0
         Type: unit
         Source: UC-003, BR-RULE-021
@@ -2683,7 +2655,7 @@ class TestUpdateMediaBuyIdentification:
     def test_media_buy_id_is_required(self):
         """UC-003-ID01: media_buy_id is required for update.
 
-        Spec: UPDATED -- adcp 3.12 requires media_buy_id (buyer_ref identification removed)
+        Spec: media_buy_id is the sole update identifier
         Priority: P1
         Type: unit
         Source: UC-003 ext-b, BR-RULE-021
@@ -2705,7 +2677,7 @@ class TestUpdateMediaBuyIdentification:
         Source: UC-003 ext-b, BR-RULE-021
         Covers: UC-003-EXT-B-04
         """
-        # Per AdCP spec, providing neither media_buy_id nor buyer_ref is invalid (oneOf)
+        # Per AdCP spec, media_buy_id is required for update
         with pytest.raises(ValidationError):
             UpdateMediaBuyRequest(
                 packages=[],
@@ -2753,17 +2725,15 @@ class TestUpdateMediaBuyIdentification:
             ):
                 _update_media_buy_impl(req=req, identity=identity)
 
-    def test_buyer_ref_no_longer_accepted_on_update(self):
-        """UC-003-ID04: buyer_ref removed from update request in adcp 3.12.
+    def test_update_request_requires_media_buy_id(self):
+        """UC-003-ID04: media_buy_id is the sole identifier for update requests.
 
-        Spec: UPDATED -- buyer_ref identification removed from update-media-buy-request in adcp 3.12.
-        media_buy_id is now the sole identifier.
+        Spec: update-media-buy-request.json requires media_buy_id.
         Priority: P1
         Type: unit
         Source: UC-003 ext-b
         Covers: UC-003-EXT-B-02
         """
-        # buyer_ref is no longer a valid identifier for update requests
         with pytest.raises(ValidationError, match="media_buy_id"):
             UpdateMediaBuyRequest(packages=[])
 
@@ -3184,7 +3154,7 @@ class TestDeliveryImplSingleBuy:
     def test_fetch_by_media_buy_ids(self):
         """UC-004-D02: media_buy_ids resolution returns delivery data.
 
-        Spec: UPDATED -- buyer_refs removed in adcp 3.12, media_buy_ids is the identifier
+        Spec: media_buy_ids is the delivery identifier
         Priority: P0
         Type: unit
         Source: UC-004 main flow, BR-RULE-030
@@ -3297,7 +3267,7 @@ class TestDeliveryImplSingleBuy:
     def test_no_ids_fetches_all(self):
         """UC-004-D04: no identifiers = all buys for principal.
 
-        Spec: CONFIRMED -- get-media-buy-delivery-request.json: media_buy_ids and buyer_refs both optional
+        Spec: CONFIRMED -- get-media-buy-delivery-request.json: media_buy_ids optional
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/get-media-buy-delivery-request.json
         Priority: P1
         Type: unit
@@ -3353,23 +3323,6 @@ class TestDeliveryImplSingleBuy:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert len(resp.media_buy_deliveries) == 2
-
-    def test_buyer_refs_no_longer_accepted_on_delivery(self):
-        """UC-004-D05: buyer_refs removed from delivery request in adcp 3.12.
-
-        Spec: UPDATED -- buyer_refs removed from get-media-buy-delivery-request in adcp 3.12.
-        media_buy_ids is now the sole identifier for delivery requests.
-        Priority: P1
-        Type: unit
-        Source: UC-004, BR-RULE-030
-        """
-        with pytest.raises(ValidationError, match="buyer_refs"):
-            GetMediaBuyDeliveryRequest(
-                media_buy_ids=["mb_1"],
-                buyer_refs=["ref_other"],
-                start_date="2025-01-01",
-                end_date="2025-06-30",
-            )
 
 
 class TestDeliveryImplStatusFilter:
