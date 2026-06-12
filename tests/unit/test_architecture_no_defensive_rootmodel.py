@@ -14,7 +14,6 @@ from tests.unit._architecture_helpers import repo_root
 PATTERN = re.compile(r"""hasattr\([^,]+,\s*["']root["']\)""")
 
 ALLOWED_FILES = {
-    "src/a2a_server/adcp_a2a_server.py",
     "tests/unit/test_architecture_no_defensive_rootmodel.py",
 }
 

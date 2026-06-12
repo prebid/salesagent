@@ -31,6 +31,9 @@ def test_json_columns_use_jsontype() -> None:
             if not call.args:
                 continue
             first_arg = call.args[0]
-            if isinstance(first_arg, ast.Name) and first_arg.id == "JSON":
+            uses_plain_json = (isinstance(first_arg, ast.Name) and first_arg.id == "JSON") or (
+                isinstance(first_arg, ast.Attribute) and first_arg.attr == "JSON"
+            )
+            if uses_plain_json:
                 violations.append(f"{rel}:{call.lineno} — use JSONType, not JSON")
     assert not violations, "\n".join(violations)

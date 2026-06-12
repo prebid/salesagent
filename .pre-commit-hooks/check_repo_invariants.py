@@ -31,7 +31,7 @@ def check_no_fn_calls(files: list[Path]) -> list[str]:
         parts = filepath.parts
         if "src" not in parts:
             continue
-        if "test" in filepath.name:
+        if "tests" in parts:
             continue
         for lineno, line in enumerate(filepath.read_text().splitlines(), 1):
             if ".fn(" in line:
