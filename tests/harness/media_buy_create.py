@@ -235,6 +235,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
         """Call _create_media_buy_impl with real DB."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.transport_helpers import enrich_identity_with_account
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
@@ -244,6 +245,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         if req is None:
             req = CreateMediaBuyRequest(**kwargs)
 
+        identity = enrich_identity_with_account(identity, req.account)
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
 
     def call_a2a(self, **kwargs: Any) -> Any:
@@ -256,8 +258,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         req = kwargs.pop("req", None)
         if req is not None:
             flat = req.model_dump(mode="json", exclude_none=True)
-            # A2A wrapper doesn't accept these fields directly
-            for key in ("account", "proposal_id", "total_budget"):
+            for key in ("proposal_id", "total_budget"):
                 flat.pop(key, None)
             # Preserve creative_ids — exclude=True strips them from model_dump
             _restore_creative_ids(req, flat)
@@ -282,7 +283,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         req = kwargs.pop("req", None)
         if req is not None:
             flat = req.model_dump(mode="json", exclude_none=True)
-            for key in ("account", "proposal_id", "total_budget"):
+            for key in ("proposal_id", "total_budget"):
                 flat.pop(key, None)
             # Preserve creative_ids — exclude=True strips them from model_dump
             _restore_creative_ids(req, flat)

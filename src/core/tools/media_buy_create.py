@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
@@ -3869,6 +3870,7 @@ async def create_media_buy(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
     ext: dict[str, Any] | None = None,
+    account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Create a media buy with the specified parameters.
@@ -3913,6 +3915,7 @@ async def create_media_buy(
             reporting_webhook=reporting_webhook,
             context=context,
             ext=ext,
+            account=account,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
@@ -3947,6 +3950,7 @@ async def create_media_buy_raw(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
+    account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -3989,6 +3993,7 @@ async def create_media_buy_raw(
             reporting_webhook=to_reporting_webhook(reporting_webhook),
             context=to_context_object(context),
             ext=ext,
+            account=account,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="request")) from e
