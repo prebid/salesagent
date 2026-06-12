@@ -222,6 +222,30 @@ class TestA2AParameterMapping:
             assert call_kwargs["start_date"] == "2025-01-01", "Should pass start_date"
             assert call_kwargs["end_date"] == "2025-01-31", "Should pass end_date"
 
+    def test_get_media_buy_delivery_forwards_typed_account_reference(self):
+        """A2A get_media_buy_delivery must pass the validated account model."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery,
+        ):
+            mock_delivery.return_value = {"media_buys": []}
+
+            parameters = {"account": {"account_id": "acct-1"}}
+
+            import asyncio
+
+            asyncio.run(handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY))
+
+            mock_delivery.assert_called_once()
+            account = mock_delivery.call_args.kwargs["account"]
+
+            assert account is not parameters["account"], "Should not forward the raw A2A account dict"
+            assert hasattr(account, "root"), "Should forward a validated AccountReference"
+
     def test_create_media_buy_validates_required_adcp_parameters(self):
         """
         Test that create_media_buy validates required AdCP parameters.
