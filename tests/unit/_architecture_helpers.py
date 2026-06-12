@@ -273,7 +273,7 @@ def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
 
     for path in candidates:
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         for pattern, suffix_hint in _PY_VERSION_PATTERNS:
@@ -290,41 +290,93 @@ def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
                 yield path, version
 
 
-_PG_IMAGE_PATTERNS: tuple[str, ...] = (
-    # Dockerfile / Dockerfile.* — `FROM postgres:17-alpine`
-    r"^\s*FROM\s+postgres:([0-9]+(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)",
-    # docker-compose*.yml + .github/workflows/*.yml — `image: postgres:17-alpine`
-    r"^\s+image:\s+postgres:([0-9]+(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)",
-    # tests/conftest*.py — `"postgres:17-alpine"` or 'postgres:17'
-    r'["\']postgres:([0-9]+(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)["\']',
+_PG_IMAGE_LITERAL = re.compile(r"postgres:([0-9]{1,2}(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)(?![0-9])")
+
+# Whole-tree scan skips binary/cache dirs; catches postgres: in .sh/.md/.yml alike.
+_PG_SCAN_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "node_modules",
+        "htmlcov",
+        "__pycache__",
+        ".tox",
+        "test-results",
+        ".beads",
+        "uv.lock",
+    }
 )
+_PG_SCAN_SUFFIXES = frozenset({".py", ".yml", ".yaml", ".md", ".sh", ".toml", ".ini", ".txt", ".mdc"})
 
 
 def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
-    """Yield (file_path, image_tag) for every postgres image reference across repo surfaces.
+    """Yield (file_path, image_tag) for every ``postgres:`` literal in tracked text surfaces.
 
-    Surfaces scanned: Dockerfile / Dockerfile.*, docker-compose*.yml, .github/workflows/*.yml,
-    tests/conftest*.py. The yielded `image_tag` is the part after `postgres:` (e.g.,
-    "17-alpine", "17.9", "16").
-
-    Used by structural guards to assert cross-file Postgres-version consistency under PR 5.
+    Scans the whole repo tree (not just compose/workflows/conftest) so drift in scripts
+    and docs fails CI the same way as drift in CI YAML.
     """
-    candidates: list[Path] = []
-    candidates.extend(repo.glob("Dockerfile*"))
-    candidates.extend(iter_compose_files(repo))
-    candidates.extend(iter_workflow_files(repo))
-    tests_dir = repo / "tests"
-    if tests_dir.exists():
-        candidates.extend(tests_dir.rglob("conftest*.py"))
-
-    for path in candidates:
+    for path in repo.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in _PG_SCAN_SKIP_DIRS for part in path.parts):
+            continue
+        if path.name.startswith("Dockerfile") or path.suffix in _PG_SCAN_SUFFIXES:
+            pass
+        elif path.name in {"compose.yaml", "Dockerfile"}:
+            pass
+        else:
+            continue
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for pattern in _PG_IMAGE_PATTERNS:
-            for m in re.finditer(pattern, text, flags=re.MULTILINE):
-                yield path, m.group(1)
+        for m in _PG_IMAGE_LITERAL.finditer(text):
+            yield path, m.group(1)
+
+
+# ---------------------------------------------------------------------------
+# Dockerfile supply-chain helpers (PR 5)
+# ---------------------------------------------------------------------------
+
+_ROOT_USER_DIRECTIVES = frozenset({"USER root", "USER 0", "USER root:root", "USER 0:0"})
+
+
+def find_unpinned_dockerfile_from_lines(lines: Iterable[str]) -> list[str]:
+    """Return external FROM lines that lack a digest pin (@sha256 or @${…} ARG)."""
+    stage_names: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.upper().startswith("FROM "):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 4 and parts[2].upper() == "AS":
+            stage_names.add(parts[3])
+    violations: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.upper().startswith("FROM "):
+            continue
+        ref = stripped[5:].split(" AS ")[0].split(" as ")[0].strip()
+        if ref in stage_names:
+            continue
+        if "/" not in ref and ":" not in ref:
+            continue
+        if "@sha256:" in stripped:
+            continue
+        if re.search(r"@\$\{[^}]+\}", stripped):
+            continue
+        violations.append(stripped)
+    return violations
+
+
+def runtime_user_directives(lines: Iterable[str]) -> list[str]:
+    """USER directives in the final Dockerfile stage."""
+    line_list = list(lines)
+    from_indices = [i for i, line in enumerate(line_list) if line.strip().upper().startswith("FROM ")]
+    if not from_indices:
+        return []
+    runtime_stage = line_list[from_indices[-1] :]
+    return [line.strip() for line in runtime_stage if line.strip().upper().startswith("USER ")]
 
 
 # ---------------------------------------------------------------------------

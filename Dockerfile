@@ -6,8 +6,9 @@ ARG PYTHON_BASE_DIGEST=sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893d
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
 ARG UV_VERSION=0.11.15
+ARG UV_IMAGE_DIGEST=sha256:5a43f4a15487710d5831c998c99f56abcd0d460020d65150f7dd00b5028db8e7
 
-FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+FROM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DIGEST} AS uv
 FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST} AS builder
 
 # Disable man pages and docs to speed up apt operations

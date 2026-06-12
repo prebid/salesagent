@@ -8,38 +8,50 @@ from __future__ import annotations
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import (
+    _ROOT_USER_DIRECTIVES,
+    find_unpinned_dockerfile_from_lines,
+    format_failure,
+    repo_root,
+    runtime_user_directives,
+)
+
+_KNOWN_BAD_FROM = [
+    "FROM ghcr.io/astral-sh/uv:0.11.15 AS uv",
+    "FROM node:20-slim AS build",
+]
 
 
 @pytest.mark.arch_guard
 def test_dockerfile_base_image_digest_pinned() -> None:
     """Every external FROM must include @sha256: or digest ARG — not tag-only."""
-    dockerfile = (repo_root() / "Dockerfile").read_text()
-    violations: list[str] = []
-    for line in dockerfile.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("FROM "):
-            continue
-        if " AS " in stripped.upper() and "${" not in stripped and "@" not in stripped:
-            # Intra-file stage alias (e.g. FROM builder) — skip.
-            ref_part = stripped.split()[1]
-            if ":" not in ref_part and "/" not in ref_part:
-                continue
-        if "@sha256:" in stripped or "@${PYTHON_BASE_DIGEST}" in stripped or "${PYTHON_BASE_DIGEST}" in stripped:
-            continue
-        if stripped.startswith("FROM python:") and "@" not in stripped:
-            violations.append(f"Dockerfile FROM line lacks digest pin: {stripped}")
-    assert not violations, "\n".join(violations)
+    lines = (repo_root() / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    violations = find_unpinned_dockerfile_from_lines(lines)
+    assert not violations, format_failure(
+        summary="Dockerfile has tag-only external FROM lines",
+        violations=violations,
+    )
+
+
+@pytest.mark.arch_guard
+def test_dockerfile_digest_detector_catches_known_bad_from() -> None:
+    assert find_unpinned_dockerfile_from_lines(_KNOWN_BAD_FROM), "Detector must flag tag-only external FROM lines"
 
 
 @pytest.mark.arch_guard
 def test_dockerfile_runs_as_non_root() -> None:
     """Runtime stage must end with USER set to a non-root identity."""
-    dockerfile = (repo_root() / "Dockerfile").read_text()
-    from_indices = [i for i, line in enumerate(dockerfile.splitlines()) if line.strip().startswith("FROM ")]
-    assert from_indices, "no FROM lines in Dockerfile"
-    runtime_stage = dockerfile.splitlines()[from_indices[-1] :]
-    user_lines = [line.strip() for line in runtime_stage if line.strip().startswith("USER ")]
+    lines = (repo_root() / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    user_lines = runtime_user_directives(lines)
     assert user_lines, "Dockerfile runtime stage has no USER directive (D34)"
     last_user = user_lines[-1]
-    assert last_user not in ("USER root", "USER 0"), f"Dockerfile runtime stage runs as root: {last_user}"
+    assert last_user not in _ROOT_USER_DIRECTIVES, format_failure(
+        summary="Dockerfile runtime stage runs as root",
+        violations=[last_user],
+    )
+
+
+@pytest.mark.arch_guard
+def test_dockerfile_non_root_detector_catches_root_group_form() -> None:
+    assert "USER root:root" in _ROOT_USER_DIRECTIVES
+    assert "USER 0:0" in _ROOT_USER_DIRECTIVES
