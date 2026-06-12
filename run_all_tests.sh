@@ -138,4 +138,16 @@ docker run --rm \
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
+# Security audit (uv-secure) — runs on the HOST (scans uv.lock; no Docker). The
+# host runner runs this too; keep parity so the canonical local gate still scans
+# for known vulnerabilities. Single-sourced in scripts/security-audit.sh (also
+# called by .github/workflows/ci.yml, so CI and local can't drift).
+echo "Running security audit (uv-secure)..."
+if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+    echo "Security audit passed"
+else
+    echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+    [ "$RC" -eq 0 ] && RC=1
+fi
+
 exit $RC
