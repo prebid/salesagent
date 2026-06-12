@@ -5,7 +5,7 @@ See GitHub issue #812: Incremental Sync incorrectly marks unchanged Placements a
 """
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 
 def _setup_mock_dependencies():
@@ -43,7 +43,10 @@ def _make_mock_db_session(scalars_side_effect, scalar_return=None):
     mock_db = MagicMock()
     mock_db.scalars.side_effect = scalars_side_effect
     if scalar_return is not None:
-        mock_db.scalar.return_value = scalar_return
+        if isinstance(scalar_return, list):
+            mock_db.scalar.side_effect = scalar_return
+        else:
+            mock_db.scalar.return_value = scalar_return
 
     mock_db_session = MagicMock()
     mock_db_session.__enter__ = MagicMock(return_value=mock_db)
@@ -78,7 +81,7 @@ def _cleanup_mocked_modules(added):
         sys.modules.pop(mod_name, None)
 
 
-def _run_sync_with_mode(sync_mode, mocks, *, adapter_config_overrides=None):
+def _run_sync_with_mode(sync_mode, mocks, *, adapter_config_overrides=None, current_ad_unit_count=1):
     """Run _run_sync_thread with the given sync_mode and mocked dependencies.
 
     Args:
@@ -86,6 +89,8 @@ def _run_sync_with_mode(sync_mode, mocks, *, adapter_config_overrides=None):
         mocks: Dict from _setup_mock_dependencies()
         adapter_config_overrides: Optional dict of attrs to override on the
             mock adapter_config (e.g. simulate a stale gam_auth_method).
+        current_ad_unit_count: Cached ad-unit count returned for incremental
+            fallback detection.
     """
     mock_tenant = MagicMock()
     mock_adapter_config = MagicMock()
@@ -118,7 +123,7 @@ def _run_sync_with_mode(sync_mode, mocks, *, adapter_config_overrides=None):
             result.first.return_value = mock_adapter_config
         return result
 
-    scalar_return = 0 if sync_mode == "incremental" else None
+    scalar_return = [current_ad_unit_count, 0, 0, 0, 0, 0] if sync_mode == "incremental" else None
     mock_db_session = _make_mock_db_session(scalars_side_effect, scalar_return=scalar_return)
 
     added_modules = _ensure_googleads_mocked()
@@ -183,6 +188,13 @@ def test_incremental_sync_should_skip_stale_marking():
     mocks["inventory_service"]._mark_stale_inventory.assert_not_called()
 
 
+def test_incremental_sync_with_empty_ad_unit_cache_falls_back_to_full():
+    """An emptied catalog needs a full pass, not a delta from last success."""
+    mocks = _setup_mock_dependencies()
+    _run_sync_with_mode("incremental", mocks, current_ad_unit_count=0)
+    mocks["inventory_service"]._mark_stale_inventory.assert_called_once_with("test-tenant", ANY)
+
+
 def test_full_sync_should_call_mark_stale():
     """Verify that full sync DOES call _mark_stale_inventory.
 
@@ -192,6 +204,19 @@ def test_full_sync_should_call_mark_stale():
     mocks = _setup_mock_dependencies()
     _run_sync_with_mode("full", mocks)
     mocks["inventory_service"]._mark_stale_inventory.assert_called_once()
+
+
+def test_full_sync_should_not_delete_existing_inventory_before_discovery():
+    """Full sync must not empty the catalog before the first GAM API call.
+
+    If credentials fail or the worker dies after an up-front delete, selectors
+    disappear and subsequent refreshes can remain blocked behind a stale
+    running row. Full sync should upsert fresh data, then mark stale rows only
+    after the discovery pass succeeds.
+    """
+    mocks = _setup_mock_dependencies()
+    _run_sync_with_mode("full", mocks)
+    mocks["inventory_service"].db.execute.assert_not_called()
 
 
 def test_sync_uses_service_account_when_auth_method_is_stale_oauth():

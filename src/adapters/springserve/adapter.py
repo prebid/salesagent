@@ -120,14 +120,13 @@ class SpringServeAdapter(AdServerAdapter):
         super().__init__(config, principal, dry_run, creative_engine, tenant_id)
 
         # SpringServe identifies the demand side by a Demand Partner ID.
+        # Required only for buyer-facing operations (campaign/demand-tag/creative
+        # creation) -- sync paths (inventory, reporting) do not need it.
+        # Resolved at construction so it is available when needed; validated
+        # lazily via _require_demand_partner_id() at each call site.
         self.demand_partner_id = self.principal.get_adapter_id("springserve") or self.config.get(
             "default_demand_partner_id"
         )
-        if not self.demand_partner_id and not self.dry_run:
-            raise ValueError(
-                f"Principal {principal.principal_id} does not have a SpringServe demand_partner_id "
-                "and no default_demand_partner_id is configured"
-            )
         # Cast to int -- ORM/JSON may give us a string but the SpringServe
         # API expects integers for IDs.
         if self.demand_partner_id is not None:
@@ -183,6 +182,20 @@ class SpringServeAdapter(AdServerAdapter):
             )
 
     # ----- capabilities -----
+
+    def _require_demand_partner_id(self) -> int:
+        """Return the configured demand partner ID, raising if absent.
+
+        Call this at the entry point of any buyer-facing mutating operation
+        (campaign, demand-tag, or creative creation) that must write to a
+        specific demand partner account in SpringServe.
+        """
+        if not self.demand_partner_id:
+            raise ValueError(
+                f"Principal {self.principal.principal_id} does not have a SpringServe demand_partner_id "
+                "and no default_demand_partner_id is configured"
+            )
+        return int(self.demand_partner_id)
 
     def get_supported_pricing_models(self) -> set[str]:
         return {"cpm", "flat_rate"}
@@ -343,11 +356,10 @@ class SpringServeAdapter(AdServerAdapter):
         as a searchable code on the tag.
         """
         product_config = self._product_config_from_package(package)
-        assert self.demand_partner_id is not None  # enforced in __init__ for live mode
         kwargs: dict[str, Any] = {
             "name": package.name or package.package_id,
             "campaign_id": campaign_id,
-            "demand_partner_id": int(self.demand_partner_id),
+            "demand_partner_id": self.demand_partner_id or 0,
             "start_date": start_time,
             "end_date": end_time,
             "format": self._demand_tag_format(package),
@@ -410,7 +422,7 @@ class SpringServeAdapter(AdServerAdapter):
         # -> SS Demand Tag. Both created paused; the operator (or a later
         # Stage 3 creative-bind call) flips them active.
         assert self._client is not None
-        assert self.demand_partner_id is not None
+        demand_partner_id = self._require_demand_partner_id()
         try:
             # SpringServe requires a numeric rate on campaign create. Pick the
             # first package's rate as a representative figure -- per-package
@@ -418,7 +430,7 @@ class SpringServeAdapter(AdServerAdapter):
             first_rate, _ = self._resolve_pricing_rate(packages[0], package_pricing_info) if packages else (0.0, "")
             campaign = self._client.campaigns.create(
                 name=buy_name,
-                demand_partner_id=int(self.demand_partner_id),
+                demand_partner_id=demand_partner_id,
                 is_active=False,
                 code=request.po_number,
                 secondary_code=f"adcp_{request.po_number}" if request.po_number else None,
@@ -608,7 +620,7 @@ class SpringServeAdapter(AdServerAdapter):
             return dry_run_statuses
 
         assert self._client is not None
-        assert self.demand_partner_id is not None
+        demand_partner_id = self._require_demand_partner_id()
         live_statuses: list[AssetStatus] = []
         for asset in assets:
             creative_id = str(asset.get("creative_id") or "")
@@ -633,7 +645,7 @@ class SpringServeAdapter(AdServerAdapter):
             try:
                 created = self._client.creatives.create(
                     name=asset.get("name") or f"adcp-{creative_id}",
-                    demand_partner_id=int(self.demand_partner_id),
+                    demand_partner_id=demand_partner_id,
                     creative_remote_url=str(remote_url),
                     creative_format=media_format,
                     creative_content_type=content_type,

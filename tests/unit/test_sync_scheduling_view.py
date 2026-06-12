@@ -19,9 +19,12 @@ from src.services.sync_scheduling_view import (
     FRESHNESS_CRITICAL,
     FRESHNESS_OK,
     FRESHNESS_WARNING,
+    LONG_RUNNING_CRITICAL_AFTER,
+    LONG_RUNNING_WARNING_AFTER,
     SchedulingRow,
     _build_row,
     _capability_flag,
+    _format_age_seconds,
     build_scheduling_matrix,
 )
 
@@ -209,6 +212,74 @@ class TestBuildRowFreshness:
             now=now,
         )
         assert row.freshness == FRESHNESS_WARNING
+        assert row.long_running is False
+        assert row.last_run_age_seconds is not None
+
+    def test_running_past_warning_threshold_is_marked_long_running(self):
+        now = datetime.now(UTC)
+        job = MagicMock()
+        job.status = "running"
+        job.started_at = now - (LONG_RUNNING_WARNING_AFTER + timedelta(seconds=1))
+        job.completed_at = None
+        job.sync_id = "sync_long"
+        job.error_message = None
+
+        row = _build_row(
+            tenant_id="t1",
+            tenant_name="T",
+            adapter_type="freewheel",
+            sync_kind=KIND_INVENTORY,
+            job=job,
+            now=now,
+        )
+
+        assert row.freshness == FRESHNESS_WARNING
+        assert row.long_running is True
+        assert row.last_run_age_label == "30m"
+        assert row.notes == "sync has been in flight longer than expected"
+
+    def test_running_past_critical_threshold_is_critical(self):
+        now = datetime.now(UTC)
+        job = MagicMock()
+        job.status = "running"
+        job.started_at = now - (LONG_RUNNING_CRITICAL_AFTER + timedelta(seconds=1))
+        job.completed_at = None
+        job.sync_id = "sync_wedged"
+        job.error_message = None
+
+        row = _build_row(
+            tenant_id="t1",
+            tenant_name="T",
+            adapter_type="freewheel",
+            sync_kind=KIND_INVENTORY,
+            job=job,
+            now=now,
+        )
+
+        assert row.freshness == FRESHNESS_CRITICAL
+        assert row.long_running is True
+        assert row.last_run_age_label == "1h"
+
+    def test_pending_counts_as_in_flight_for_long_running_detection(self):
+        now = datetime.now(UTC)
+        job = MagicMock()
+        job.status = "pending"
+        job.started_at = now - (LONG_RUNNING_CRITICAL_AFTER + timedelta(minutes=5))
+        job.completed_at = None
+        job.sync_id = "sync_pending"
+        job.error_message = None
+
+        row = _build_row(
+            tenant_id="t1",
+            tenant_name="T",
+            adapter_type="freewheel",
+            sync_kind=KIND_INVENTORY,
+            job=job,
+            now=now,
+        )
+
+        assert row.freshness == FRESHNESS_CRITICAL
+        assert row.long_running is True
 
     def test_gam_row_gets_bundled_notes(self):
         now = datetime.now(UTC)
@@ -240,6 +311,10 @@ class TestSchedulingRowToDict:
             last_error_message=None,
             freshness=FRESHNESS_OK,
             never_run=False,
+            last_run_age_seconds=600,
+            last_run_age_label="10m",
+            long_running=False,
+            long_running_threshold_seconds=1800,
         )
         d = row.to_dict()
         assert d["tenant_id"] == "t1"
@@ -250,7 +325,18 @@ class TestSchedulingRowToDict:
         assert d["last_sync_id"] == "sync_abc"
         assert d["freshness_age_seconds"] is not None
         assert d["freshness_age_seconds"] >= 0
+        assert d["last_run_age_seconds"] is not None
+        assert d["last_run_age_label"] is not None
+        assert d["long_running"] is False
+        assert d["long_running_threshold_seconds"] == 1800
         assert d["notes"] is None
+
+    def test_age_formatting_matches_api_labels(self):
+        assert _format_age_seconds(None) is None
+        assert _format_age_seconds(42) == "42s"
+        assert _format_age_seconds(20 * 60) == "20m"
+        assert _format_age_seconds(65 * 60) == "1h 5m"
+        assert _format_age_seconds(49 * 60 * 60) == "2d 1h"
 
 
 class TestBuildMatrixSkipsUnsupportedKinds:

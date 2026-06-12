@@ -174,3 +174,18 @@ class TestRunReportingSync:
         assert result.succeeded is True
         assert result.counts == {"demand_tags": 42}
         assert result.metadata == {"report_id": "rpt-1"}
+
+    def test_no_demand_tags_is_successful_noop(self):
+        from src.adapters.springserve.reporting_sync import SpringServeReportingSync
+
+        syncer = SpringServeReportingSync(
+            client=MagicMock(),
+            tenant_id="tenant_ss_1",
+            session=MagicMock(),
+        )
+
+        result = syncer.run(demand_tag_ids=[])
+
+        assert result.rows_updated == 0
+        assert result.report_id is None
+        assert result.error is None

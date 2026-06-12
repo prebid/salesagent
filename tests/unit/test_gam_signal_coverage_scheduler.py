@@ -35,7 +35,7 @@ def _patch_eligibility_layer(monkeypatch, *, pairs, latest_map, has_signals: boo
         lambda self, triples: latest_map,
     )
     monkeypatch.setattr(
-        "src.services.gam_signal_coverage_scheduler._tenant_has_custom_key_value_signals",
+        "src.services.gam_signal_coverage_scheduler.tenant_has_custom_key_value_signals",
         lambda session, tenant_id: has_signals,
     )
     monkeypatch.setattr(

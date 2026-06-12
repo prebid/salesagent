@@ -12,6 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal, cast
 
+from adcp.types import Error as LibraryError
 from pydantic import (
     AnyHttpUrl,
     BaseModel,
@@ -527,6 +528,12 @@ class ProvisionTenantRequest(BaseModel):
     # create_media_buy time, not by an explicit /activate endpoint).
     default_gam_advertiser_id: str | None = Field(default=None, max_length=64)
 
+    # When True, the provision endpoint will ensure adapter-specific default
+    # resources exist (e.g. the Interchange default advertiser for GAM), creating
+    # them if absent. Requires the adapter credentials to have create permission.
+    # Defaults to False — callers must opt in explicitly.
+    provision_default_resources: bool = False
+
     # Optional convenience: create one principal in the same call
     initial_principal: InitialPrincipalRequest | None = None
 
@@ -823,6 +830,9 @@ class FormatIdRef(BaseModel):
 
     agent_url: str = Field(..., min_length=1, max_length=2048)
     id: str = Field(..., min_length=1, max_length=255)
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    duration_ms: int | None = Field(default=None, ge=1)
 
 
 class WholesalePricingOptionResponse(BaseModel):
@@ -1075,7 +1085,58 @@ class SignalMappingKindCapability(BaseModel):
     candidate_type: str | None = Field(default=None, max_length=80)
     supports_search: bool = True
     supports_parent_filter: bool = False
-    adapter_config_schema: dict[str, Any] = Field(default_factory=dict)
+    adapter_config_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "JSON Schema for adapter_config. Mapping kinds may include x-authoring metadata "
+            "for generic signal-authoring UI construction."
+        ),
+    )
+
+
+class SignalCandidateTypeCapability(BaseModel):
+    """One adapter candidate type that a signal-authoring client can browse."""
+
+    model_config = _config()
+
+    candidate_type: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=200)
+    description: str | None = None
+    mapping_kind: str | None = Field(default=None, max_length=80)
+    directly_mappable: bool = False
+    browse_only: bool = False
+    parent_candidate_type: str | None = Field(default=None, max_length=80)
+    child_candidate_types: list[str] = Field(default_factory=list)
+    supports_search: bool = True
+    supports_pagination: bool = True
+    supports_parent_filter: bool = False
+
+
+class SignalMappingKindTargetingSemantics(BaseModel):
+    """Targeting behavior for one signal mapping kind."""
+
+    model_config = _config()
+
+    mapping_kind: str = Field(..., min_length=1, max_length=80)
+    supports_composed: bool = False
+    composition_models: list[str] = Field(default_factory=list)
+    supported_modes: list[str] = Field(default_factory=list)
+    buyer_targeting_fields: list[str] = Field(default_factory=list)
+    participates_in_composed_authoring: bool = False
+    exclusive_with_other_signals: bool = False
+    notes: str | None = None
+
+
+class SignalTargetingSemantics(BaseModel):
+    """Adapter-level signal targeting and composition behavior."""
+
+    model_config = _config()
+
+    supports_composed: bool = False
+    composition_models: list[str] = Field(default_factory=list)
+    supported_modes: list[str] = Field(default_factory=list)
+    buyer_targeting_fields: list[str] = Field(default_factory=list)
+    mapping_kinds: list[SignalMappingKindTargetingSemantics] = Field(default_factory=list)
 
 
 class SignalAdapterCapabilitiesResponse(BaseModel):
@@ -1086,6 +1147,10 @@ class SignalAdapterCapabilitiesResponse(BaseModel):
     adapter: str
     supports_signal_mapping_authoring: bool
     mapping_kinds: list[SignalMappingKindCapability] = Field(default_factory=list)
+    supported_candidate_types: list[str] = Field(default_factory=list)
+    candidate_types: list[SignalCandidateTypeCapability] = Field(default_factory=list)
+    default_candidate_type: str | None = None
+    targeting_semantics: SignalTargetingSemantics = Field(default_factory=SignalTargetingSemantics)
     value_types: list[str] = Field(default_factory=lambda: ["binary", "categorical", "numeric"])
 
 
@@ -1255,6 +1320,21 @@ class CreativeFormatSummary(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreativeFormatDiscoveryError(LibraryError):
+    """Creative-format discovery error context for authoring clients."""
+
+    model_config = _config()
+
+
+class ListCreativeFormatsForAuthoringQuery(BaseModel):
+    """Filters for creative-format discovery in wholesale-product authoring."""
+
+    model_config = _config()
+
+    q: str | None = Field(default=None, max_length=255)
+    asset_type: list[str] = Field(default_factory=list)
+
+
 class ListCreativeFormatsForAuthoringResponse(BaseModel):
     """Creative-format discovery for wholesale-product authoring."""
 
@@ -1262,6 +1342,7 @@ class ListCreativeFormatsForAuthoringResponse(BaseModel):
 
     creative_formats: list[CreativeFormatSummary]
     count: int
+    errors: list[CreativeFormatDiscoveryError] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1364,18 +1445,15 @@ class StatusCreativesBlock(BaseModel):
 
 
 class StatusProductsBlock(BaseModel):
-    """Product-level counters.
+    """Wholesale product-level counters.
 
     Distinct from :class:`StatusPackagesBlock` — one product can have
     multiple priced packages, so package counts don't answer "what is
     the publisher actually selling?". Storefront surfaces ``active_count``
     on its homepage as the primary "what's the publisher doing" signal.
 
-    Note: the Product model doesn't carry an explicit ``status`` field
-    today. ``archived_at IS NULL`` rows count as active; non-null rows
-    count as archived. ``draft_count`` is 0 until a draft state lands
-    (forward-compatible field — Storefront can render a "Drafts" badge
-    without an API shape change when it does).
+    Counts are based on complete, wholesale-owned InventoryProfile rows,
+    which are the durable source for the wholesale product feed.
     """
 
     model_config = _config()
@@ -1383,6 +1461,24 @@ class StatusProductsBlock(BaseModel):
     active_count: int = 0
     draft_count: int = 0
     archived_count: int = 0
+
+
+class StatusInventoryProfilesBlock(BaseModel):
+    """Inventory-profile counters.
+
+    Inventory profiles are the reusable ingredient layer: the ad-server
+    selectors, publisher properties, and creative-format constraints that
+    wholesale products are composed from. These counts are intentionally
+    separate from :class:`StatusProductsBlock`, which counts sellable
+    wholesale products.
+    """
+
+    model_config = _config()
+
+    total_count: int = 0
+    complete_count: int = 0
+    incomplete_count: int = 0
+    wholesale_owned_count: int = 0
 
 
 class StatusWebhooksBlock(BaseModel):
@@ -1452,6 +1548,7 @@ class TenantStatusResponse(BaseModel):
     media_buys: StatusMediaBuysBlock = Field(default_factory=StatusMediaBuysBlock)
     packages: StatusPackagesBlock = Field(default_factory=StatusPackagesBlock)
     products: StatusProductsBlock = Field(default_factory=StatusProductsBlock)
+    inventory_profiles: StatusInventoryProfilesBlock = Field(default_factory=StatusInventoryProfilesBlock)
     creatives: StatusCreativesBlock = Field(default_factory=StatusCreativesBlock)
     webhooks: StatusWebhooksBlock | None = None
     setup_tasks: SetupTasksBlock = Field(default_factory=SetupTasksBlock)

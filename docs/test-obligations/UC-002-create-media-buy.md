@@ -27,8 +27,8 @@ boundary may not propagate to the adapter or persist in the database:
 | `ext` | Yes (optional, `ExtensionObject`) | Yes (optional, `ExtensionObject`) | Accepted at boundary but not propagated through pipeline or stored. Round-trip broken: buyer sends ext, response has no ext. |
 | `account_id` | Yes (optional) | No (response has `account` object) | Accepted at boundary but ignored in most validation. Not stored. Not propagated to response. |
 | `creative_deadline` | No (request-side) | Yes (optional, `AwareDatetime`) | Adapters set `creative_deadline` on success response but salesagent boundary may not pass it through to the MCP/A2A caller. |
-| `account` | No (request-side) | Yes (optional, `Account` object) | New in 3.6 response. Adapters do not populate it. |
-| `sandbox` | No (request-side) | Yes (optional, `bool`) | New in 3.6 response. Adapters do not populate it. |
+| `account` | No (request-side) | Yes (optional, `Account` object) | New in 3.6 response. Populated as a buyer-safe `{account_id, name, status}` projection when the request resolves an account (UC-002-UPG-07); seller financials are redacted by construction. |
+| `sandbox` | No (request-side) | Yes (optional, `bool`) | New in 3.6 response. Populated `true` when the tenant is in sandbox mode, absent otherwise (UC-002-UPG-09). |
 
 ### salesagent-goy2: Creative Extends Wrong adcp Type
 
@@ -336,8 +336,11 @@ Source: UC-002-main-mcp.md
 **Obligation ID** UC-002-UPG-07
 **Layer** behavioral
 **Given** the adcp 3.6 `CreateMediaBuySuccess` has an optional `account` field
-**When** a media buy is created with `account_id` in the request
-**Then** the response should include an `account` object if the seller supports account-based isolation
+**When** a media buy is created and the request resolves an account
+**Then** the response includes a buyer-safe `account` projection containing only
+`{account_id, name, status}` — seller financials are redacted by construction (never
+set), and `status` uses the same wire projection as `get_accounts` (internal lifecycle
+states map to spec `AccountStatus`, e.g. `pending_provision` → `pending_approval`, #332)
 **Priority:** P2 (salesagent-7gnv)
 
 #### Scenario: creative_deadline in Success Response

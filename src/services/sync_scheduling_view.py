@@ -51,6 +51,9 @@ GUIDANCE_STALE_AFTER = DEFAULT_GUIDANCE_WARNING
 
 GUIDANCE_SYNC_KINDS = (KIND_PRICE_GUIDANCE, KIND_AVAILABILITY_GUIDANCE, KIND_SIGNAL_COVERAGE)
 _SYNC_KINDS = tuple(sorted(SUPPORTED_SYNC_KINDS))
+IN_FLIGHT_STATUSES = frozenset({"pending", "queued", "running", "in_progress"})
+LONG_RUNNING_WARNING_AFTER = timedelta(minutes=30)
+LONG_RUNNING_CRITICAL_AFTER = timedelta(hours=1)
 
 # Freshness levels, in increasing severity. The HTML template renders
 # each as a distinct badge color (green / amber / red).
@@ -75,6 +78,10 @@ class SchedulingRow:
     last_error_message: str | None
     freshness: str  # FRESHNESS_OK / FRESHNESS_WARNING / FRESHNESS_CRITICAL
     never_run: bool  # True when no SyncJob row exists at all for this triple
+    last_run_age_seconds: int | None = None
+    last_run_age_label: str | None = None
+    long_running: bool = False
+    long_running_threshold_seconds: int | None = None
     notes: str | None = None  # Human-readable hint (e.g. "reporting bundled with inventory")
 
     @property
@@ -109,6 +116,10 @@ class SchedulingRow:
             "stale": self.stale,
             "never_run": self.never_run,
             "freshness_age_seconds": self.freshness_age_seconds,
+            "last_run_age_seconds": self.last_run_age_seconds,
+            "last_run_age_label": self.last_run_age_label,
+            "long_running": self.long_running,
+            "long_running_threshold_seconds": self.long_running_threshold_seconds,
             "notes": self.notes,
         }
 
@@ -201,9 +212,13 @@ def _classify_freshness(
         if age <= critical_after:
             return FRESHNESS_WARNING
         return FRESHNESS_CRITICAL
-    if job.status in ("queued", "running"):
-        # No prior completed run on this row — running is the best we
-        # can say. Soft-stale, not red.
+    if job.status in IN_FLIGHT_STATUSES:
+        started_at = job.started_at
+        if started_at is not None and now - started_at > LONG_RUNNING_CRITICAL_AFTER:
+            return FRESHNESS_CRITICAL
+        # A recent in-flight row is soft-stale, not red. The matrix only
+        # carries the latest row per stream, so it cannot inspect an older
+        # successful baseline here.
         return FRESHNESS_WARNING
     # Failed (no completed_at on this row, but the prior completed run
     # isn't joined here). Treat as critical — the failure means the
@@ -225,6 +240,49 @@ def _notes_for(adapter_type: str, sync_kind: str) -> str | None:
     return None
 
 
+def _last_run_age_seconds(job: SyncJob | None, now: datetime) -> int | None:
+    if job is None or job.started_at is None:
+        return None
+    return int((now - job.started_at).total_seconds())
+
+
+def _format_age_seconds(seconds: int | None) -> str | None:
+    if seconds is None:
+        return None
+    total = max(0, seconds)
+    if total < 60:
+        return f"{total}s"
+    minutes = total // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+    if hours < 48:
+        if remaining_minutes:
+            return f"{hours}h {remaining_minutes}m"
+        return f"{hours}h"
+    days = hours // 24
+    remaining_hours = hours % 24
+    if remaining_hours:
+        return f"{days}d {remaining_hours}h"
+    return f"{days}d"
+
+
+def _is_long_running(job: SyncJob | None, now: datetime) -> bool:
+    if job is None or job.status not in IN_FLIGHT_STATUSES or job.started_at is None:
+        return False
+    return now - job.started_at > LONG_RUNNING_WARNING_AFTER
+
+
+def _long_running_note(notes: str | None, job: SyncJob | None, now: datetime) -> str | None:
+    if not _is_long_running(job, now):
+        return notes
+    warning = "sync has been in flight longer than expected"
+    if notes:
+        return f"{notes}; {warning}"
+    return warning
+
+
 def _build_row(
     *,
     tenant_id: str,
@@ -242,7 +300,11 @@ def _build_row(
         sync_cadence_minutes=sync_cadence_minutes,
     )
     freshness = _classify_freshness(job=job, now=now, warning_after=warning_after, critical_after=critical_after)
-    notes = _notes_for(adapter_type, sync_kind)
+    notes = _long_running_note(_notes_for(adapter_type, sync_kind), job, now)
+    last_run_age_seconds = _last_run_age_seconds(job, now)
+    last_run_age_label = _format_age_seconds(last_run_age_seconds)
+    long_running = _is_long_running(job, now)
+    long_running_threshold_seconds = int(LONG_RUNNING_WARNING_AFTER.total_seconds())
 
     if job is None:
         return SchedulingRow(
@@ -258,6 +320,10 @@ def _build_row(
             last_error_message=None,
             freshness=freshness,
             never_run=True,
+            last_run_age_seconds=None,
+            last_run_age_label=None,
+            long_running=False,
+            long_running_threshold_seconds=long_running_threshold_seconds,
             notes=notes,
         )
 
@@ -274,6 +340,10 @@ def _build_row(
         last_error_message=job.error_message,
         freshness=freshness,
         never_run=False,
+        last_run_age_seconds=last_run_age_seconds,
+        last_run_age_label=last_run_age_label,
+        long_running=long_running,
+        long_running_threshold_seconds=long_running_threshold_seconds,
         notes=notes,
     )
 

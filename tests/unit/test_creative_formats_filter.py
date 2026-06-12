@@ -71,6 +71,42 @@ def test_list_creative_formats_filter_matches_duration_parameter():
     assert [(f.format_id.id, f.format_id.duration_ms) for f in response.formats] == [("video_vast", 15000)]
 
 
+def test_list_creative_formats_output_format_filter_respects_parameters():
+    formats = [
+        create_test_format(
+            FormatId(
+                agent_url="https://creative.adcontextprotocol.org",
+                id="generative_display",
+            ),
+            name="Generative 728x90",
+            output_format_ids=[
+                FormatId(
+                    agent_url="https://creative.adcontextprotocol.org",
+                    id="display_image",
+                    width=728,
+                    height=90,
+                )
+            ],
+        )
+    ]
+
+    response = _run_list_creative_formats(
+        formats,
+        ListCreativeFormatsRequest(
+            output_format_ids=[
+                FormatId(
+                    agent_url="https://creative.adcontextprotocol.org",
+                    id="display_image",
+                    width=300,
+                    height=250,
+                )
+            ]
+        ),
+    )
+
+    assert response.formats == []
+
+
 def test_list_creative_formats_preserves_supported_macros_for_sdk_schema_validation():
     supported_macros = ["MEDIA_BUY_ID", "CACHEBUSTER", "CUSTOM_PUBLISHER_MACRO"]
     formats = [

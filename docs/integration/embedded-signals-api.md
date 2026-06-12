@@ -35,7 +35,7 @@ All endpoints require `X-Tenant-Management-API-Key`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/tenants/{tenant_id}/signals/adapter-capabilities` | Adapter mapping kinds and required `adapter_config` shape. |
+| `GET` | `/tenants/{tenant_id}/signals/adapter-capabilities` | Adapter mapping kinds, candidate browsing metadata, and targeting semantics. |
 | `GET` | `/tenants/{tenant_id}/signals/candidates` | Search cached adapter objects that can become signals. |
 | `POST` | `/tenants/{tenant_id}/signals:validate` | Validate a draft without persisting it. |
 | `GET` | `/tenants/{tenant_id}/signals` | List persisted mappings. |
@@ -46,24 +46,61 @@ All endpoints require `X-Tenant-Management-API-Key`.
 
 ## Adapter Shapes
 
+`signals/adapter-capabilities` is the machine-readable starting point for
+generic signal authoring UIs. In addition to `mapping_kinds[]`, it returns:
+
+- `supported_candidate_types[]` and `candidate_types[]` so clients can browse
+  adapter candidates without hard-coding parent/child traversal.
+- `default_candidate_type`, the preferred first browse view for the adapter.
+- `targeting_semantics`, including composed-signal support, composition models,
+  per-kind include/exclude modes, buyer targeting fields, and exclusivity rules.
+
 GAM supports:
 
 - `audience_segment`: candidate type `audience_segment`, requires
   `segment_id`.
 - `custom_key_value`: candidate type `custom_targeting_value`, requires
   `key_id` and `value_id`. Search values with `parent_id={key_id}`.
-- `gam_targeting_groups`: advanced manually-authored targeting groups.
+- `gam_targeting_groups`: advanced manually-authored targeting groups. This
+  mapping is exclusive with other selected signals in one audience list.
+
+GAM targeting-group authoring uses the TargetingWidget/GAM materializer shape:
+
+```json
+{
+  "type": "passthrough",
+  "kind": "gam_targeting_groups",
+  "groups": [
+    {
+      "criteria": [
+        {
+          "keyId": "key_interest",
+          "values": ["val_sports", "val_news"],
+          "exclude": false
+        }
+      ]
+    }
+  ]
+}
+```
+
+The boolean model is `groups` OR, `criteria` within a group AND, and `values`
+within one criterion OR. Set `exclude: true` to negate that criterion. The
+canonical group criterion casing is camelCase: `keyId`, `values`, `exclude`.
+Browse keys with `candidate_type=custom_targeting_key`; browse values with
+`candidate_type=custom_targeting_value&parent_id={keyId}`. The simpler
+`custom_key_value` mapping keeps its snake_case `key_id` / `value_id` payload.
 
 SpringServe supports:
 
 - `springserve_value_list`: candidate type `value_list`, requires `key_id` and
   `value_list_id`. Search value lists with `parent_id={key_id}`.
 
-FreeWheel supports manual mappings for:
+FreeWheel supports:
 
-- `freewheel_viewership_profile`
-- `freewheel_audience_item`
-- `freewheel_custom_kv`
+- `freewheel_viewership_profile`: candidate type `viewership_profile`, backed
+  by FreeWheel standard attributes under the viewership-profile bucket.
+- Manual mappings for `freewheel_audience_item` and `freewheel_custom_kv`.
 
 ### FreeWheel Targeting Profiles And Custom Signals
 
@@ -149,9 +186,10 @@ Composed signal:
 }
 ```
 
-FreeWheel signal mappings are include-only in buyer targeting. The API accepts
-`mode` for shape consistency, but FreeWheel has no native exclusion semantic
-for viewership profiles, audience items, or custom criteria; references in
+FreeWheel signal mappings are include-only in buyer targeting. Omit `mode` or
+set `mode="include"` on FreeWheel signal criteria; validation rejects
+`mode="exclude"` because FreeWheel has no native exclusion semantic for
+viewership profiles, audience items, or custom criteria. References in
 `audience_exclude` are rejected during media-buy targeting validation.
 
 Broadstreet and Mock currently return no signal mapping kinds.

@@ -1,20 +1,24 @@
 """FreeWheel adapter configuration schemas.
 
-Connection schema supports two auth flows, in priority order:
+Connection schema supports three auth flows:
 
-  1. **OAuth2 password grant (canonical)** — ``username`` + ``password``. The
-     client mints a bearer at ``POST /auth/token`` on first use, caches it
-     with TTL tracking, and auto-refreshes on 401 or expiry. This is what
-     production users want — set credentials once, forget about rotation.
+  1. **OAuth2 client_credentials (API-Access)** — ``client_id`` +
+     ``client_secret``. The client mints a short-lived (~1h) bearer from the
+     API-Access token service (``token_url``, a different host than the data
+     plane) and auto-refreshes. Pair with ``environment="sandbox"`` to target
+     ``api.sandbox.freewheel.tv``.
 
-  2. **Pre-minted bearer token (escape hatch)** — ``api_token``. Used when a
-     partner provisions a token for us out-of-band (e.g. publisher mints one
-     on our behalf), or for testing without managing real credentials. No
-     auto-refresh — when the 7-day TTL expires, rotate manually.
+  2. **OAuth2 password grant** — ``username`` + ``password``. The client mints
+     a bearer at ``POST {base_url}/auth/token`` on first use, caches it with
+     TTL tracking, and auto-refreshes on 401 or expiry.
 
-Exactly one of (username+password) OR api_token must be set. Both ``password``
-and ``api_token`` are encrypted at rest with Fernet — same pattern as
-``TritonConnectionConfig.password``.
+  3. **Pre-minted bearer token (escape hatch)** — ``api_token``. Used when a
+     partner provisions a token out-of-band, or for testing. No auto-refresh —
+     when the TTL expires, rotate manually.
+
+At least one of (client_id+client_secret), (username+password), or api_token
+must be set. ``password``, ``api_token``, and ``client_secret`` are encrypted
+at rest with Fernet — same pattern as ``TritonConnectionConfig.password``.
 """
 
 from typing import Literal
@@ -23,19 +27,21 @@ from pydantic import Field, field_serializer, field_validator, model_validator
 
 from src.adapters._secret_fields import decrypt_secret_value, encrypt_secret_value
 from src.adapters.base import BaseConnectionConfig, BaseProductConfig
+from src.adapters.freewheel._transport import DEFAULT_CLIENT_CREDENTIALS_TOKEN_URL
 
-# Environment -> API host mapping. Tokens are environment-scoped — staging
-# tokens won't work in prod and vice versa.
+# Environment -> API host mapping. Tokens are environment-scoped — a token
+# minted for one environment won't work against another.
 FREEWHEEL_HOSTS = {
     "production": "https://api.freewheel.tv",
     "staging": "https://api.stg.freewheel.tv",
+    "sandbox": "https://api.sandbox.freewheel.tv",
 }
 
 
 class FreeWheelConnectionConfig(BaseConnectionConfig):
-    """OAuth2-password-grant or pre-minted-bearer config for the FreeWheel
-    Publisher API. Exactly one of (username + password) or api_token is
-    required."""
+    """Auth config for the FreeWheel Publisher API. At least one of
+    (client_id + client_secret), (username + password), or api_token is
+    required. See the module docstring for the three auth flows."""
 
     username: str | None = Field(
         default=None,
@@ -56,10 +62,25 @@ class FreeWheelConnectionConfig(BaseConnectionConfig):
         ),
         json_schema_extra={"secret": True, "ui_order": 3},
     )
-    environment: Literal["production", "staging"] = Field(
+    client_id: str | None = Field(
+        default=None,
+        description="API-Access OAuth2 client ID (client_credentials grant)",
+        json_schema_extra={"ui_order": 6},
+    )
+    client_secret: str | None = Field(
+        default=None,
+        description="API-Access OAuth2 client secret — used to mint bearer tokens via the token service",
+        json_schema_extra={"secret": True, "ui_order": 7},
+    )
+    token_url: str = Field(
+        default=DEFAULT_CLIENT_CREDENTIALS_TOKEN_URL,
+        description="API-Access token service endpoint for the client_credentials grant",
+        json_schema_extra={"ui_order": 8},
+    )
+    environment: Literal["production", "staging", "sandbox"] = Field(
         default="production",
         description="Which FreeWheel environment to target",
-        json_schema_extra={"ui_order": 4, "enum": ["production", "staging"]},
+        json_schema_extra={"ui_order": 4, "enum": ["production", "staging", "sandbox"]},
     )
     default_advertiser_id: str | None = Field(
         default=None,
@@ -89,13 +110,35 @@ class FreeWheelConnectionConfig(BaseConnectionConfig):
     def _decrypt_token(cls, value: str | None) -> str | None:
         return decrypt_secret_value(value)
 
+    @field_serializer("client_secret")
+    def _encrypt_client_secret(self, value: str | None) -> str | None:
+        return encrypt_secret_value(value)
+
+    @field_validator("client_secret", mode="after")
+    @classmethod
+    def _decrypt_client_secret(cls, value: str | None) -> str | None:
+        return decrypt_secret_value(value)
+
+    @field_validator("token_url", mode="after")
+    @classmethod
+    def _token_url_must_be_https(cls, value: str) -> str:
+        # A tenant admin who can edit connection config must not be able to
+        # point the client_credentials mint at an attacker host and exfiltrate
+        # the client_secret.
+        if not value.startswith("https://"):
+            raise ValueError(f"token_url must be an https:// URL — got {value!r}")
+        return value
+
     @model_validator(mode="after")
     def _require_credentials(self) -> "FreeWheelConnectionConfig":
-        """Require either (username + password) or api_token."""
+        """Require one of (client_id + client_secret), (username + password), or api_token."""
+        has_client_credentials = bool(self.client_id) and bool(self.client_secret)
         has_password_grant = bool(self.username) and bool(self.password)
         has_token = bool(self.api_token)
-        if not has_password_grant and not has_token:
-            raise ValueError("FreeWheel config requires either (username + password) or api_token")
+        if not (has_client_credentials or has_password_grant or has_token):
+            raise ValueError(
+                "FreeWheel config requires one of: (client_id + client_secret), (username + password), or api_token"
+            )
         return self
 
 

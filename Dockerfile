@@ -3,14 +3,14 @@
 # Cache bust: 2026-02-27
 
 # ── supercronic build stage ───────────────────────────────────────────
-# We build from source on Go 1.26.3 rather than pulling the upstream
+# We build from source on a patched Go toolchain rather than pulling the upstream
 # release binary because upstream v0.2.45 is still compiled against
 # Go 1.26.2, which carries 5 stdlib HIGH CVEs (DNS, HTTP/2, mail, Dial):
 #   CVE-2026-3388, CVE-2026-33854, CVE-2026-39820, CVE-2026-39836, CVE-2026-42499
-# All are fixed in Go 1.25.10 / 1.26.3. Pinning the toolchain here lets
-# us clear the gate without waiting on aptible/supercronic to cut a
-# new release.
-FROM golang:1.26.3-alpine AS supercronic-builder
+# CVE-2026-42504 is fixed in Go 1.25.11 / 1.26.4. Pinning the toolchain
+# here lets us clear the gate without waiting on aptible/supercronic to
+# cut a new release.
+FROM golang:1.26.4-alpine AS supercronic-builder
 RUN apk add --no-cache git
 ARG SUPERCRONIC_VERSION=v0.2.45
 RUN git clone --depth 1 --branch ${SUPERCRONIC_VERSION} https://github.com/aptible/supercronic.git /src
@@ -107,9 +107,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq5 \
     nginx
 
-# Copy the per-arch supercronic binary we just built from source on Go
-# 1.26.3. See the ``supercronic-builder`` stage header for the CVE list
-# that drove this off the upstream release binary.
+# Install runtime dependencies (no gcc/libpq-dev/git/curl — build deps stay in builder)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update --error-on=any && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libpq5
+
+# Copy the per-arch supercronic binary we just built from source on a
+# patched Go toolchain. See the ``supercronic-builder`` stage header for
+# the CVE list that drove this off the upstream release binary.
 ARG TARGETARCH
 COPY --from=supercronic-builder /out/supercronic-linux-${TARGETARCH} /usr/local/bin/supercronic
 RUN chmod +x /usr/local/bin/supercronic
@@ -155,6 +162,7 @@ COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 RUN mkdir -p /var/log/nginx /var/run && \
     chown -R www-data:www-data /var/log/nginx /var/run
 
+# Add .venv to PATH and set PYTHONPATH for module imports
 # Add .venv to PATH and set PYTHONPATH for module imports
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app"

@@ -116,6 +116,19 @@ class TestFreeWheelProbe:
         assert result.error_code == INVALID_CONFIG
         assert "username + password" in result.error_message or "api_token" in result.error_message
 
+    def test_client_credentials_skips_token_info_and_probes_inventory(self):
+        """API-Access client_credentials tokens 401 on /auth/token/info, so the
+        probe must validate via list_sites only — never call token_info."""
+        with patch("src.adapters.freewheel.client.FreeWheelClient") as mock_cls:
+            client = mock_cls.return_value
+            result = probe_adapter_connection(
+                "freewheel",
+                {"client_id": "cid", "client_secret": "sec", "environment": "sandbox"},
+            )
+        assert result.success is True
+        client.token_info.assert_not_called()
+        client.inventory.list_sites.assert_called_once_with(per_page=1)
+
     def test_auth_rejection_classified_as_invalid_credentials(self):
         from src.adapters.freewheel._transport import FreeWheelAuthError
 

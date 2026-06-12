@@ -51,7 +51,7 @@ class GAMDataFreshnessValidator:
         # Check 1: Is it too early in the day for yesterday's data?
         if now.hour < cls.DAILY_DATA_READY_HOUR_ET:
             message = f"Too early for fresh data (current hour: {now.hour}, need {cls.DAILY_DATA_READY_HOUR_ET}+)"
-            logger.error(message)
+            logger.info(message)
 
             return (False, message)
 

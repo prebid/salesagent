@@ -283,6 +283,9 @@ Supported query parameters:
 | `limit` | Page size, 1-100. Defaults to 50. |
 | `cursor` | Offset cursor returned by the previous page. |
 
+The endpoint also accepts `selectorType` and `parentId` as query-parameter
+aliases for storefront clients that use camelCase request names.
+
 Each selector contains:
 
 ```json

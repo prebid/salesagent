@@ -160,13 +160,13 @@ class TestResponseStrMethods:
 
     def test_create_media_buy_response_with_id(self):
         """CreateMediaBuySuccess shows created media buy ID."""
-        resp = CreateMediaBuySuccess(buyer_ref="ref_123", media_buy_id="mb_456", packages=[])
+        resp = CreateMediaBuySuccess(media_buy_id="mb_456", packages=[])
         assert str(resp) == "Media buy mb_456 created successfully."
 
     def test_create_media_buy_response_without_id(self):
         """CreateMediaBuySuccess shows buyer ref (manual approval case)."""
         # Note: In success branch, media_buy_id is always required
-        resp = CreateMediaBuySuccess(buyer_ref="ref_123", media_buy_id="pending", packages=[])
+        resp = CreateMediaBuySuccess(media_buy_id="pending", packages=[])
         assert str(resp) == "Media buy pending created successfully."
 
     def test_update_media_buy_response(self):
@@ -198,7 +198,7 @@ class TestResponseStrMethods:
                 creatives=[],
                 dry_run=False,
             ),
-            CreateMediaBuySuccess(buyer_ref="ref", media_buy_id="mb_123", packages=[]),
+            CreateMediaBuySuccess(media_buy_id="mb_123", packages=[]),
         ]
 
         for resp in responses:

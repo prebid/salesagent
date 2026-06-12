@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 
+from src.admin.blueprints.products import _validate_format_entries
 from src.core.schemas import Format
 
 
@@ -330,3 +331,84 @@ class TestProductFormatFieldParsing:
                 validated.append(fmt)
 
         assert len(validated) == 0  # Empty agent_url should be rejected
+
+
+class TestNamespaceAwareProductFormatValidation:
+    """Regression tests for the production format validation helper."""
+
+    def _create_mock_format(
+        self, format_id: str, agent_url: str = "https://creative.adcontextprotocol.org"
+    ) -> MagicMock:
+        mock_format = MagicMock(spec=Format)
+        mock_format_id = MagicMock()
+        mock_format_id.id = format_id
+        mock_format_id.agent_url = agent_url
+        mock_format.format_id = mock_format_id
+        return mock_format
+
+    def test_rejects_same_format_id_from_different_agent(self):
+        """A bare ID match is not enough; the creative agent namespace must match."""
+        submitted_formats = [
+            {
+                "agent_url": "https://custom-creative.example.com",
+                "id": "display_image",
+                "width": 300,
+                "height": 250,
+            }
+        ]
+        available_formats = [self._create_mock_format("display_image")]
+
+        validated_formats, invalid_formats = _validate_format_entries(submitted_formats, available_formats)
+
+        assert validated_formats == []
+        assert invalid_formats == ["https://custom-creative.example.com/display_image"]
+
+    def test_normalizes_reference_agent_url_aliases(self):
+        """Reference-agent aliases and trailing slash differences should still validate."""
+        submitted_formats = [
+            {
+                "agent_url": "https://adcontextprotocol.org/agents/formats/mcp",
+                "id": "display_image",
+                "width": 300,
+                "height": 250,
+            }
+        ]
+        available_formats = [self._create_mock_format("display_image", "https://creative.adcontextprotocol.org/")]
+
+        validated_formats, invalid_formats = _validate_format_entries(submitted_formats, available_formats)
+
+        assert invalid_formats == []
+        assert validated_formats == [
+            {
+                "agent_url": "https://creative.adcontextprotocol.org",
+                "id": "display_image",
+                "width": 300,
+                "height": 250,
+            }
+        ]
+
+    def test_accepts_nested_format_id_shape(self):
+        """The admin route accepts the nested AdCP FormatId shape as well as flat form data."""
+        submitted_formats = [
+            {
+                "format_id": {
+                    "agent_url": "https://creative.adcontextprotocol.org",
+                    "id": "display_image",
+                },
+                "width": 300,
+                "height": 250,
+            }
+        ]
+        available_formats = [self._create_mock_format("display_image")]
+
+        validated_formats, invalid_formats = _validate_format_entries(submitted_formats, available_formats)
+
+        assert invalid_formats == []
+        assert validated_formats == [
+            {
+                "agent_url": "https://creative.adcontextprotocol.org",
+                "id": "display_image",
+                "width": 300,
+                "height": 250,
+            }
+        ]

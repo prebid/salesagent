@@ -32,7 +32,7 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 
 
 from src.core.audit_logger import get_audit_logger
-from src.core.format_cache import canonical_format_matches
+from src.core.format_cache import canonical_format_identity, canonical_format_matches
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from src.core.tracing import traced
@@ -120,10 +120,10 @@ def _list_creative_formats_impl(
             if adapter_type == "broadstreet":
                 from src.adapters.broadstreet.formats import broadstreet_creative_format_models
 
-                existing_keys = {(str(f.format_id.agent_url).rstrip("/"), f.format_id.id) for f in formats}
+                existing_keys = {canonical_format_identity(f.format_id) for f in formats}
                 added_count = 0
                 for fmt in broadstreet_creative_format_models():
-                    key = (str(fmt.format_id.agent_url).rstrip("/"), fmt.format_id.id)
+                    key = canonical_format_identity(fmt.format_id)
                     if key in existing_keys:
                         continue
                     formats.append(fmt)
@@ -241,8 +241,16 @@ def _list_creative_formats_impl(
         (req.input_format_ids, "input_format_ids"),
     ):
         if req_ids:
-            requested = {fmt.id for fmt in req_ids}
-            formats = [f for f in formats if getattr(f, attr) and {fid.id for fid in getattr(f, attr)} & requested]
+            formats = [
+                f
+                for f in formats
+                if getattr(f, attr)
+                and any(
+                    canonical_format_matches(requested_format_id, supported_format_id)
+                    for requested_format_id in req_ids
+                    for supported_format_id in getattr(f, attr)
+                )
+            ]
 
     # Sort formats by name for consistent ordering
     # (type field removed in adcp 3.12)

@@ -267,7 +267,7 @@ def test_sync_creatives_response_properties_success():
     # adcp 3.9: SyncCreativesResponse subclasses success variant only;
     # error variant is a separate type, no .errors attr on success
     assert not hasattr(response, "errors")
-    assert not hasattr(response, "context")
+    assert response.context is None
 
 
 # ── ListCreativeFormatsResponse __str__ ──────────────────────────────────

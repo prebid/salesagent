@@ -24,6 +24,15 @@ from src.core.sandbox import (
 
 logger = logging.getLogger(__name__)
 
+
+class GAMOrderApprovalPermissionDenied(Exception):
+    """Raised when the service account lacks order-approval permission in GAM.
+
+    The order was created successfully (DRAFT); a human must approve it in GAM.
+    Callers should start status-polling instead of retrying approval.
+    """
+
+
 # Line item type constants for GAM automation
 GUARANTEED_LINE_ITEM_TYPES = {"STANDARD", "SPONSORSHIP"}
 NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
@@ -321,6 +330,14 @@ class GAMOrdersManager:
                         )
                         return False
                 else:
+                    # PERMISSION_DENIED means the service account can never approve — raise
+                    # so callers can switch to external-approval status polling.
+                    if "PERMISSION_DENIED" in error_str or "OrderActionError.PERMISSION_DENIED" in error_str:
+                        raise GAMOrderApprovalPermissionDenied(
+                            f"Service account cannot approve GAM order {order_id} "
+                            f"(OrderActionError.PERMISSION_DENIED). "
+                            f"The order will remain in DRAFT until approved manually in GAM."
+                        ) from e
                     # Other errors - don't retry
                     logger.error(f"Failed to approve GAM Order {order_id}: {error_str}")
                     return False

@@ -114,7 +114,12 @@ def classify_sync_error(message: str | None) -> SyncIssueCategory:
             "invalid_grant",
             "unauthoriz",
             "permission denied",
+            "permissionerror.permission_denied",
+            "permission_denied",
             "insufficient permissions",
+            "no_networks_to_access",
+            "authenticationerror.no_networks_to_access",
+            "not_allowed",
             "403",
             "401",
         )

@@ -23,8 +23,10 @@ adapters_bp = Blueprint("adapters", __name__)
 def _freewheel_auth_mode(config_data: dict) -> str | None:
     """Return the intended FreeWheel auth mode and remove UI-only metadata."""
     explicit_mode = config_data.pop("auth_mode", None)
-    if explicit_mode in {"password_grant", "api_token"}:
+    if explicit_mode in {"password_grant", "api_token", "client_credentials"}:
         return explicit_mode
+    if config_data.get("client_id"):
+        return "client_credentials"
     if config_data.get("api_token"):
         return "api_token"
     if config_data.get("username"):
@@ -43,10 +45,14 @@ def _secret_fields_for_connection_schema(connection_config: type[BaseModel] | No
 
 
 def _freewheel_secret_fields_to_clear(auth_mode: str | None) -> set[str]:
+    # Switching to a mode clears the secrets belonging to the other modes so a
+    # stale password/token/secret can't linger and shadow the active credential.
     if auth_mode == "password_grant":
-        return {"api_token"}
+        return {"api_token", "client_secret"}
     if auth_mode == "api_token":
-        return {"password"}
+        return {"password", "client_secret"}
+    if auth_mode == "client_credentials":
+        return {"password", "api_token"}
     return set()
 
 
@@ -453,11 +459,18 @@ def test_freewheel_connection(tenant_id, **kwargs):
         username = data.get("username")
         password = data.get("password")
         api_token = data.get("api_token")
+        client_id = data.get("client_id")
+        client_secret = data.get("client_secret")
+        token_url = data.get("token_url")
         environment = data.get("environment", "production")
 
         # Reject submitted ciphertext on secret fields — only the DB-fallback
         # path is allowed to use stored ciphertext.
-        for field_name, field_value in [("password", password), ("api_token", api_token)]:
+        for field_name, field_value in [
+            ("password", password),
+            ("api_token", api_token),
+            ("client_secret", client_secret),
+        ]:
             if field_value and is_encrypted(field_value):
                 return (
                     jsonify(
@@ -469,8 +482,9 @@ def test_freewheel_connection(tenant_id, **kwargs):
                     400,
                 )
 
+        has_cc = bool(client_id) and bool(client_secret)
         # Fill in missing fields from stored config so partial submissions work.
-        if not (username and password) and not api_token:
+        if not has_cc and not (username and password) and not api_token:
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             with get_db_session() as session:
@@ -483,16 +497,30 @@ def test_freewheel_connection(tenant_id, **kwargs):
                         username = username or rehydrated.username
                         password = password or rehydrated.password
                         api_token = api_token or rehydrated.api_token
+                        client_id = client_id or rehydrated.client_id
+                        client_secret = client_secret or rehydrated.client_secret
+                        token_url = token_url or rehydrated.token_url
                     except ValidationError:
                         pass
+            has_cc = bool(client_id) and bool(client_secret)
 
-        auth_mode = "api_token" if api_token else ("password_grant" if username and password else "stored")
-        if not (username and password) and not api_token:
+        if has_cc:
+            auth_mode = "client_credentials"
+        elif api_token:
+            auth_mode = "api_token"
+        elif username and password:
+            auth_mode = "password_grant"
+        else:
+            auth_mode = "stored"
+        if not (has_cc or (username and password) or api_token):
             return (
                 jsonify(
                     {
                         "success": False,
-                        "error": "Connection test requires either (username + password) or api_token",
+                        "error": (
+                            "Connection test requires one of: (client_id + client_secret), "
+                            "(username + password), or api_token"
+                        ),
                     }
                 ),
                 400,
@@ -502,18 +530,37 @@ def test_freewheel_connection(tenant_id, **kwargs):
         from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS
 
         base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
-        client = FreeWheelClient(username=username, password=password, api_token=api_token, base_url=base_url)
+        client_kwargs: dict = {
+            "username": username,
+            "password": password,
+            "api_token": api_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "base_url": base_url,
+        }
+        if token_url:
+            client_kwargs["token_url"] = token_url
+        client = FreeWheelClient(**client_kwargs)
+        # client_credentials tokens 401 on /auth/token/info (legacy introspection),
+        # so an inventory read proves validity + publisher binding instead.
+        probe_phase = "list_sites" if has_cc else "token_info"
         try:
-            info = client.token_info()
+            if has_cc:
+                client.inventory.list_sites(per_page=1)
+                expires_in = None
+            else:
+                info = client.token_info()
+                expires_in = info.get("expires_in") or info.get("expires_in_seconds")
         except FreeWheelError as exc:
             # Keep the UI response generic, but log enough phase/status
             # context for operators to diagnose upstream auth failures.
             logger.warning(
                 "FreeWheel connection test failed: tenant_id=%s environment=%s auth_mode=%s "
-                "phase=token_info status=%s error=%s body_excerpt=%s",
+                "phase=%s status=%s error=%s body_excerpt=%s",
                 tenant_id,
                 environment,
                 auth_mode,
+                probe_phase,
                 exc.status_code,
                 exc,
                 safe_upstream_body_excerpt(exc.body),
@@ -521,17 +568,18 @@ def test_freewheel_connection(tenant_id, **kwargs):
             return jsonify({"success": False, "error": "FreeWheel rejected the credentials"}), 200
 
         logger.info(
-            "FreeWheel connection test succeeded: tenant_id=%s environment=%s auth_mode=%s phase=token_info",
+            "FreeWheel connection test succeeded: tenant_id=%s environment=%s auth_mode=%s phase=%s",
             tenant_id,
             environment,
-            "password_grant" if (username and password) else "api_token",
+            auth_mode,
+            probe_phase,
         )
         return jsonify(
             {
                 "success": True,
                 "environment": environment,
-                "expires_in": info.get("expires_in") or info.get("expires_in_seconds"),
-                "auth_mode": "password_grant" if (username and password) else "pre_minted_token",
+                "expires_in": expires_in,
+                "auth_mode": auth_mode,
             }
         )
 

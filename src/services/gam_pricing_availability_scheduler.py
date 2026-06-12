@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.adapter_config import AdapterConfigAdminRepository
-from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.sync_job import SyncJobAdminRepository
 from src.services._scheduler_lifecycle import cancel_scheduler_task
 from src.services.catalog_sync_helpers import run_catalog_sync_scheduler_cycle
 from src.services.gam_pricing_availability_sync import KIND_PRICING_AVAILABILITY, run_gam_pricing_availability_sync
+from src.services.gam_sync_applicability import tenant_has_pricing_availability_targets
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def _list_eligible_tenants(now: datetime) -> list[str]:
         pairs = AdapterConfigAdminRepository(session).list_all()
         gam_tenant_ids = [p.tenant_id for p in pairs if p.adapter_type == "google_ad_manager"]
         product_tenant_ids = [
-            tenant_id for tenant_id in gam_tenant_ids if _tenant_has_priced_placements(session, tenant_id)
+            tenant_id for tenant_id in gam_tenant_ids if tenant_has_pricing_availability_targets(session, tenant_id)
         ]
         if not product_tenant_ids:
             return []
@@ -100,15 +100,6 @@ def _list_eligible_tenants(now: datetime) -> list[str]:
                 continue
         eligible.append(tenant_id)
     return eligible
-
-
-def _tenant_has_priced_placements(session, tenant_id: str) -> bool:
-    products = ProductRepository(session, tenant_id).list_all_with_inventory()
-    for product in products:
-        config = product.effective_implementation_config
-        if config.get("targeted_placement_ids"):
-            return True
-    return False
 
 
 _scheduler: GAMPricingAvailabilityScheduler | None = None

@@ -75,6 +75,9 @@ class TestSchemaFieldMapping:
             "cancellation_policy",  # Cancellation policy from adcp 4.4 spec
             "measurement_terms",  # Measurement terms from adcp 4.4 spec
             "performance_standards",  # Performance standards from adcp 4.4 spec
+            # AdCP 6.3+ fields - inherited from library Product, not yet stored in database
+            "sponsored_placement_types",  # Sponsored placement types from adcp 6.3 spec
+            "social_placement_surfaces",  # Social placement surfaces from adcp 6.3 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

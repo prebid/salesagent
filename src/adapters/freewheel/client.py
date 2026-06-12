@@ -23,7 +23,9 @@ from src.adapters.freewheel._forecasting import FreeWheelForecastingClient
 from src.adapters.freewheel._inventory import FreeWheelInventoryClient
 from src.adapters.freewheel._transport import (
     DEFAULT_BASE_URL,
+    DEFAULT_CLIENT_CREDENTIALS_TOKEN_URL,
     DEFAULT_TIMEOUT,
+    SANDBOX_BASE_URL,
     STAGING_BASE_URL,
     FreeWheelAuthError,
     FreeWheelError,
@@ -49,6 +51,8 @@ __all__ = [
     "FreeWheelValidationError",
     "DEFAULT_BASE_URL",
     "STAGING_BASE_URL",
+    "SANDBOX_BASE_URL",
+    "DEFAULT_CLIENT_CREDENTIALS_TOKEN_URL",
 ]
 
 
@@ -67,6 +71,9 @@ class FreeWheelClient:
         *,
         username: str | None = None,
         password: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        token_url: str = DEFAULT_CLIENT_CREDENTIALS_TOKEN_URL,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
         session: requests.Session | None = None,
@@ -75,6 +82,9 @@ class FreeWheelClient:
             api_token=api_token,
             username=username,
             password=password,
+            client_id=client_id,
+            client_secret=client_secret,
+            token_url=token_url,
             base_url=base_url,
             timeout=timeout,
             session=session,

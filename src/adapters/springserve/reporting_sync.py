@@ -115,12 +115,9 @@ class SpringServeReportingSync:
             # The Reporting API doesn't tag rows with their source demand_tag_id
             # and sums across multi-id filters, so per-tag stats require one job
             # per tag. The scheduler may call us before any packages have been
-            # pushed -- soft-fail with a descriptive error rather than crash.
-            return ReportingSyncResult(
-                rows_updated=0,
-                report_id=None,
-                error="no demand_tag_ids supplied (nothing to sync yet)",
-            )
+            # pushed -- treat this as a successful no-op, not a sync failure.
+            logger.info("SpringServe reporting sync skipped: no demand_tag_ids supplied")
+            return ReportingSyncResult(rows_updated=0, report_id=None, error=None)
         use_async = (end - start).days > self.SYNC_MAX_DAYS
 
         all_rows = []

@@ -56,6 +56,9 @@ class TestJobsApiReturnsMatrixJson:
         kinds = {r["sync_kind"] for r in rows}
         assert kinds == {"inventory", "reporting"}
         assert all(r["never_run"] is True for r in rows)
+        assert all("long_running" in r for r in rows)
+        assert all("last_run_age_seconds" in r for r in rows)
+        assert all("last_run_age_label" in r for r in rows)
 
 
 class TestRunNowValidatesBody:

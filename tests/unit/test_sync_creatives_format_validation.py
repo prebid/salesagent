@@ -11,10 +11,35 @@ from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CreativeAsset
+from src.core.schemas import CreativeAsset, FormatId
 from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives._processing import _find_matching_format
 from src.core.tools.creatives._validation import _validate_creative_input, get_registered_creative_agent_urls
 from tests.harness import make_mock_uow
+
+
+def test_find_matching_format_uses_canonical_agent_url_identity():
+    requested = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_image")
+    discovered_format = MagicMock()
+    discovered_format.format_id = FormatId(
+        agent_url="https://adcontextprotocol.org/agents/formats/mcp/",
+        id="display_image",
+    )
+
+    assert _find_matching_format(requested, [discovered_format]) is discovered_format
+
+
+def test_find_matching_format_requires_parameter_identity():
+    requested = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_image")
+    discovered_format = MagicMock()
+    discovered_format.format_id = FormatId(
+        agent_url="https://creative.adcontextprotocol.org",
+        id="display_image",
+        width=300,
+        height=250,
+    )
+
+    assert _find_matching_format(requested, [discovered_format]) is None
 
 
 def _make_creative_uow():

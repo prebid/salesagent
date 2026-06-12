@@ -18,6 +18,7 @@ from flask import Blueprint, Flask, flash, jsonify, redirect, render_template, r
 from sqlalchemy import func, select
 
 from src.adapters.gam.formats import canonical_format_dict
+from src.admin.services.tenant_status_service import invalidate_status_cache
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.canonical_formats import (
@@ -1238,6 +1239,7 @@ def add_inventory_profile(tenant_id: str):
                 # write so the two share a transaction (#485).
                 recompute_bundle_references(session, tenant_id)
                 session.commit()
+                invalidate_status_cache(tenant_id)
 
                 flash(f"Inventory bundle '{name}' created successfully!", "success")
                 return redirect(url_for("inventory_profiles.list_inventory_profiles", tenant_id=tenant_id))
@@ -1488,6 +1490,7 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 # Reconcile InventoryBundleReference for the new bundle config (#485).
                 recompute_bundle_references(session, tenant_id)
                 session.commit()
+                invalidate_status_cache(tenant_id)
 
                 # Success message with warning about future updates
                 flash(f"Inventory bundle '{profile.name}' updated successfully!", "success")
@@ -1771,6 +1774,7 @@ def reuse_inventory_bundles_save(tenant_id: str):
             added_to.append(bundle.name)
         recompute_bundle_references(session, tenant_id)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
     if added_to:
         flash(
@@ -1821,6 +1825,7 @@ def duplicate_inventory_profile(tenant_id: str, profile_id: int):
         # Pick up the new bundle in the bundle-reference index (#485).
         recompute_bundle_references(session, tenant_id)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         flash(f"Duplicated '{source.name}' — editing the copy now.", "success")
         # ``duplicated=1`` lets the editor autofocus + select the name field
@@ -1869,6 +1874,7 @@ def delete_inventory_profile(tenant_id: str, profile_id: int):
         # back to ``pending`` (#485).
         recompute_bundle_references(session, tenant_id)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         if request.method == "DELETE":
             return jsonify({"success": True, "message": f"Inventory bundle '{profile_name}' deleted successfully"})

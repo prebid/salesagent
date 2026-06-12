@@ -82,6 +82,12 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "include_webhook_activity",
         "webhook_activity_limit",
     },
+    # The live spec added ``push_notification_config`` to GetProductsRequest
+    # but the installed adcp library has not yet exposed it on
+    # ``GetProductsWholesaleRequest``. Remove when the library catches up.
+    "/schemas/latest/media-buy/get-products-request.json": {
+        "push_notification_config",
+    },
 }
 
 

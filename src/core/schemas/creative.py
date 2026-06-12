@@ -454,11 +454,10 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         exclude=True,
         description="Legacy internal approval status accepted for compatibility with existing result construction.",
     )
-    platform_id: str | None = Field(
-        None,
-        exclude=True,
-        description="Legacy internal platform creative ID accepted for compatibility with existing result construction.",
-    )
+    # platform_id is inherited from the adcp 6.3 library parent as a wire-visible
+    # field (we no longer override it with exclude=True). Exposing the ad-server's
+    # creative ID lets buyers reconcile creatives that exist on the platform —
+    # including ones created before this account onboarded to AdCP.
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
@@ -474,8 +473,12 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         default_factory=list, description="Validation or processing errors (for 'failed' action)"
     )
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
-    assigned_to: list[Any] | None = Field(default=None, description="Packages this creative was assigned to")
-    assignment_errors: dict[str, str] | None = Field(default=None, description="Assignment errors for this creative")
+    # assigned_to / assignment_errors are inherited from the adcp 6.3 library parent
+    # (promoted onto SyncCreativeResult). Our prior redeclarations only widened the
+    # lib types; production assigns values that satisfy the stricter parent. NOTE: the
+    # parent constrains assignment_errors keys to ^[a-zA-Z0-9_-]+$ — fine for current
+    # paths (set to None or via attribute assignment, neither validated), but a future
+    # validating construct with buyer-supplied package_id keys would now be checked.
 
     @field_validator("action", mode="before")
     @classmethod

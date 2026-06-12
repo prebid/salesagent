@@ -31,20 +31,22 @@ class TestMediaBuyCreatedEmission:
 
         success = CreateMediaBuySuccess.model_construct(
             media_buy_id="mb_123",
-            buyer_ref="po_456",
             status="pending_start",
             packages=[],
             creative_deadline=None,
         )
         result = SimpleNamespace(status="completed", response=success)
+        # adcp b9 dropped top-level buyer_ref; the emitted payload sources it from
+        # the request's context.buyer_ref (the AdCP v3 correlation successor).
+        req_model = SimpleNamespace(context=SimpleNamespace(buyer_ref="ref_abc"))
 
         with patch("src.admin.services.webhook_publisher.emit_event") as mock_emit:
-            _emit_media_buy_created_if_success("t1", result)
+            _emit_media_buy_created_if_success("t1", result, req_model)
 
         mock_emit.assert_called_once_with(
             "t1",
             "media_buy.created",
-            {"media_buy_id": "mb_123", "buyer_ref": "po_456", "status": "pending_start"},
+            {"media_buy_id": "mb_123", "buyer_ref": "ref_abc", "status": "pending_start"},
         )
 
     def test_does_not_fire_on_submitted_pending(self):
@@ -55,7 +57,6 @@ class TestMediaBuyCreatedEmission:
         submitted = CreateMediaBuySubmitted.model_construct(
             status="submitted",
             task_id="task_abc",
-            buyer_ref="po_456",
         )
         result = SimpleNamespace(status="submitted", response=submitted)
 

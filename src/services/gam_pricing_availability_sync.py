@@ -114,6 +114,7 @@ def run_gam_pricing_availability_sync(
         summary = {
             "updated_products": len(updated_product_ids),
             "placement_ids_queried": counts.get("placement_ids_queried", 0),
+            "ad_unit_ids_queried": counts.get("ad_unit_ids_queried", 0),
         }
         finish_catalog_sync_job(tenant_id, sync_id, succeeded, counts, errors, summary, progress, finished_at)
 
@@ -180,8 +181,9 @@ def _sync_product_guidance(
         ]
 
     placement_ids = sorted({placement_id for spec in product_specs for placement_id in spec["placement_ids"]})
-    if not placement_ids:
-        return [], _empty_counts(products_seen=len(products) + len(inventory_profiles), products_with_placements=0), {}
+    ad_unit_ids = sorted({ad_unit_id for spec in product_specs for ad_unit_id in spec["ad_unit_ids"]})
+    if not placement_ids and not ad_unit_ids:
+        return [], _empty_counts(products_seen=len(products) + len(inventory_profiles)), {}
     report_countries = _report_country_filters(product_specs)
 
     capacity_guidance = reporting.get_line_item_capacity_guidance(
@@ -191,21 +193,18 @@ def _sync_product_guidance(
         estimated_line_items_per_package=estimated_line_items_per_package,
         requested_timezone=reporting.network_timezone,
     )
-    report = reporting.get_placement_country_price_guidance(
-        date_range,
+    report = _get_complete_price_guidance_report(
+        reporting,
+        date_range=date_range,
         placement_ids=placement_ids,
+        ad_unit_ids=ad_unit_ids,
         countries=report_countries,
         line_item_types=line_item_types,
         min_group_impressions=min_group_impressions,
         min_line_item_impressions=min_line_item_impressions,
-        min_package_budget=None,
         bookability_safety_factor=bookability_safety_factor,
         currency=currency,
-        requested_timezone=reporting.network_timezone,
-        include_eligible_line_items=True,
     )
-    if report.get("possibly_truncated"):
-        raise ValueError("pricing/availability report truncated; rerun in smaller chunks")
     line_item_rows = list(report.get("line_item_rows") or [])
 
     updated_product_ids: list[str] = []
@@ -259,25 +258,257 @@ def _sync_product_guidance(
 
     counts = {
         "products_seen": len(products) + len(inventory_profiles),
-        "products_with_placements": len(product_specs),
+        "products_with_placements": sum(1 for spec in product_specs if spec["placement_ids"]),
+        "products_with_inventory_targets": len(product_specs),
         "products_updated": len(updated_product_ids),
         "products_unbookable": products_unbookable,
         "pricing_options_updated": pricing_options_updated,
         "placement_ids_queried": len(placement_ids),
+        "ad_unit_ids_queried": len(ad_unit_ids),
         "report_rows": int(report.get("raw_rows") or 0),
         "eligible_line_item_rows": int(report.get("eligible_line_item_rows") or 0),
+        "report_chunks": int(report.get("chunk_count") or 1),
+        "incomplete_report_chunks": int(report.get("incomplete_report_chunks") or 0),
     }
     return updated_product_ids, counts, {}
 
 
-def _empty_counts(*, products_seen: int, products_with_placements: int) -> dict[str, int]:
+def _get_complete_price_guidance_report(
+    reporting: GAMReportingService,
+    *,
+    date_range: Literal["lifetime", "this_month", "today"],
+    placement_ids: list[str],
+    ad_unit_ids: list[str],
+    countries: list[str] | None,
+    line_item_types: list[str],
+    min_group_impressions: int,
+    min_line_item_impressions: int,
+    bookability_safety_factor: float,
+    currency: str,
+) -> dict[str, Any]:
+    report = _get_price_guidance_report(
+        reporting,
+        date_range=date_range,
+        placement_ids=placement_ids,
+        ad_unit_ids=ad_unit_ids,
+        countries=countries,
+        line_item_types=line_item_types,
+        min_group_impressions=min_group_impressions,
+        min_line_item_impressions=min_line_item_impressions,
+        bookability_safety_factor=bookability_safety_factor,
+        currency=currency,
+    )
+    if not report.get("possibly_truncated"):
+        return report
+    if _inventory_target_count(placement_ids=placement_ids, ad_unit_ids=ad_unit_ids) <= 1:
+        return _mark_single_inventory_report_incomplete(report, placement_ids=placement_ids, ad_unit_ids=ad_unit_ids)
+
+    chunk_reports = _get_complete_price_guidance_report_chunks(
+        reporting,
+        date_range=date_range,
+        placement_ids=placement_ids,
+        ad_unit_ids=ad_unit_ids,
+        countries=countries,
+        line_item_types=line_item_types,
+        min_group_impressions=min_group_impressions,
+        min_line_item_impressions=min_line_item_impressions,
+        bookability_safety_factor=bookability_safety_factor,
+        currency=currency,
+    )
+    logger.info(
+        "GAM pricing/availability report was truncated; split tenant report into %s inventory-target chunks",
+        len(chunk_reports),
+    )
+    return _combine_price_guidance_reports(
+        report,
+        chunk_reports,
+        placement_ids=placement_ids,
+        ad_unit_ids=ad_unit_ids,
+    )
+
+
+def _get_complete_price_guidance_report_chunks(
+    reporting: GAMReportingService,
+    *,
+    date_range: Literal["lifetime", "this_month", "today"],
+    placement_ids: list[str],
+    ad_unit_ids: list[str],
+    countries: list[str] | None,
+    line_item_types: list[str],
+    min_group_impressions: int,
+    min_line_item_impressions: int,
+    bookability_safety_factor: float,
+    currency: str,
+) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for chunk_placement_ids, chunk_ad_unit_ids in _split_inventory_targets(
+        placement_ids=placement_ids,
+        ad_unit_ids=ad_unit_ids,
+    ):
+        if not chunk_placement_ids and not chunk_ad_unit_ids:
+            continue
+        report = _get_price_guidance_report(
+            reporting,
+            date_range=date_range,
+            placement_ids=chunk_placement_ids,
+            ad_unit_ids=chunk_ad_unit_ids,
+            countries=countries,
+            line_item_types=line_item_types,
+            min_group_impressions=min_group_impressions,
+            min_line_item_impressions=min_line_item_impressions,
+            bookability_safety_factor=bookability_safety_factor,
+            currency=currency,
+        )
+        if report.get("possibly_truncated"):
+            if _inventory_target_count(placement_ids=chunk_placement_ids, ad_unit_ids=chunk_ad_unit_ids) <= 1:
+                reports.append(
+                    _mark_single_inventory_report_incomplete(
+                        report,
+                        placement_ids=chunk_placement_ids,
+                        ad_unit_ids=chunk_ad_unit_ids,
+                    )
+                )
+                continue
+            reports.extend(
+                _get_complete_price_guidance_report_chunks(
+                    reporting,
+                    date_range=date_range,
+                    placement_ids=chunk_placement_ids,
+                    ad_unit_ids=chunk_ad_unit_ids,
+                    countries=countries,
+                    line_item_types=line_item_types,
+                    min_group_impressions=min_group_impressions,
+                    min_line_item_impressions=min_line_item_impressions,
+                    bookability_safety_factor=bookability_safety_factor,
+                    currency=currency,
+                )
+            )
+        else:
+            reports.append(report)
+    return reports
+
+
+def _get_price_guidance_report(
+    reporting: GAMReportingService,
+    *,
+    date_range: Literal["lifetime", "this_month", "today"],
+    placement_ids: list[str],
+    ad_unit_ids: list[str],
+    countries: list[str] | None,
+    line_item_types: list[str],
+    min_group_impressions: int,
+    min_line_item_impressions: int,
+    bookability_safety_factor: float,
+    currency: str,
+) -> dict[str, Any]:
+    return reporting.get_placement_country_price_guidance(
+        date_range,
+        placement_ids=placement_ids,
+        ad_unit_ids=ad_unit_ids,
+        countries=countries,
+        line_item_types=line_item_types,
+        min_group_impressions=min_group_impressions,
+        min_line_item_impressions=min_line_item_impressions,
+        min_package_budget=None,
+        bookability_safety_factor=bookability_safety_factor,
+        currency=currency,
+        requested_timezone=reporting.network_timezone,
+        include_eligible_line_items=True,
+    )
+
+
+def _mark_single_inventory_report_incomplete(
+    report: dict[str, Any],
+    *,
+    placement_ids: list[str],
+    ad_unit_ids: list[str],
+) -> dict[str, Any]:
+    placement_id = placement_ids[0] if placement_ids else None
+    ad_unit_id = ad_unit_ids[0] if ad_unit_ids else None
+    target_kind = "placement_id" if placement_id else "ad_unit_id"
+    target_id = placement_id or ad_unit_id or "unknown"
+    logger.warning(
+        "GAM pricing/availability report for %s=%s was still truncated after splitting; "
+        "using capped report rows and marking guidance incomplete",
+        target_kind,
+        target_id,
+    )
+    return {
+        **report,
+        "possibly_truncated": False,
+        "incomplete_report": True,
+        "incomplete_report_chunks": 1,
+        "truncated_single_placement_ids": [placement_id] if placement_id else [],
+        "truncated_single_ad_unit_ids": [ad_unit_id] if ad_unit_id else [],
+    }
+
+
+def _combine_price_guidance_reports(
+    base_report: dict[str, Any],
+    chunk_reports: list[dict[str, Any]],
+    *,
+    placement_ids: list[str],
+    ad_unit_ids: list[str],
+) -> dict[str, Any]:
+    line_item_rows = [row for report in chunk_reports for row in report.get("line_item_rows") or []]
+    filters = dict(base_report.get("filters") or {})
+    filters["placement_ids"] = placement_ids
+    filters["ad_unit_ids"] = ad_unit_ids
+    incomplete_placement_ids = sorted(
+        {
+            str(placement_id)
+            for report in chunk_reports
+            for placement_id in report.get("truncated_single_placement_ids") or []
+        }
+    )
+    incomplete_ad_unit_ids = sorted(
+        {str(ad_unit_id) for report in chunk_reports for ad_unit_id in report.get("truncated_single_ad_unit_ids") or []}
+    )
+    return {
+        **base_report,
+        "filters": filters,
+        "possibly_truncated": False,
+        "incomplete_report": bool(incomplete_placement_ids or incomplete_ad_unit_ids),
+        "incomplete_report_chunks": sum(int(report.get("incomplete_report_chunks") or 0) for report in chunk_reports),
+        "truncated_single_placement_ids": incomplete_placement_ids,
+        "truncated_single_ad_unit_ids": incomplete_ad_unit_ids,
+        "chunked": True,
+        "chunk_count": len(chunk_reports),
+        "raw_rows": sum(int(report.get("raw_rows") or 0) for report in chunk_reports),
+        "eligible_line_item_rows": sum(int(report.get("eligible_line_item_rows") or 0) for report in chunk_reports),
+        "line_item_rows": line_item_rows,
+        "groups": [],
+        "group_count": 0,
+        "bookable_group_count": 0,
+        "forecast": {},
+    }
+
+
+def _inventory_target_count(*, placement_ids: list[str], ad_unit_ids: list[str]) -> int:
+    return len(placement_ids) + len(ad_unit_ids)
+
+
+def _split_inventory_targets(*, placement_ids: list[str], ad_unit_ids: list[str]) -> list[tuple[list[str], list[str]]]:
+    targets = [("placement", value) for value in placement_ids] + [("ad_unit", value) for value in ad_unit_ids]
+    midpoint = max(1, len(targets) // 2)
+    chunks: list[tuple[list[str], list[str]]] = []
+    for chunk_targets in (targets[:midpoint], targets[midpoint:]):
+        chunk_placement_ids = [value for kind, value in chunk_targets if kind == "placement"]
+        chunk_ad_unit_ids = [value for kind, value in chunk_targets if kind == "ad_unit"]
+        chunks.append((chunk_placement_ids, chunk_ad_unit_ids))
+    return chunks
+
+
+def _empty_counts(*, products_seen: int) -> dict[str, int]:
     return {
         "products_seen": products_seen,
-        "products_with_placements": products_with_placements,
+        "products_with_placements": 0,
+        "products_with_inventory_targets": 0,
         "products_updated": 0,
         "products_unbookable": 0,
         "pricing_options_updated": 0,
         "placement_ids_queried": 0,
+        "ad_unit_ids_queried": 0,
         "report_rows": 0,
         "eligible_line_item_rows": 0,
     }
@@ -298,7 +529,8 @@ def _product_specs(
     specs: list[dict[str, Any]] = []
     for product in products:
         placement_ids = _product_targeted_placement_ids(product)
-        if not placement_ids:
+        ad_unit_ids = _product_targeted_ad_unit_ids(product)
+        if not placement_ids and not ad_unit_ids:
             continue
         country_values = [str(country).strip() for country in product.countries or [] if str(country).strip()]
         specs.append(
@@ -306,6 +538,7 @@ def _product_specs(
                 "product_id": product.product_id,
                 "source": source,
                 "placement_ids": placement_ids,
+                "ad_unit_ids": ad_unit_ids,
                 "countries": _normalized_country_filters(country_values),
                 "report_countries": country_values,
             }
@@ -324,9 +557,17 @@ def _report_country_filters(product_specs: list[dict[str, Any]]) -> list[str] | 
 
 
 def _product_targeted_placement_ids(product: Product) -> list[str]:
+    return _product_targeted_ids(product, "targeted_placement_ids")
+
+
+def _product_targeted_ad_unit_ids(product: Product) -> list[str]:
+    return _product_targeted_ids(product, "targeted_ad_unit_ids")
+
+
+def _product_targeted_ids(product: Product, config_key: str) -> list[str]:
     config = product.effective_implementation_config
-    placement_ids = config.get("targeted_placement_ids") or []
-    return sorted({str(value) for value in placement_ids if str(value).strip()})
+    values = config.get(config_key) or []
+    return sorted({str(value) for value in values if str(value).strip()})
 
 
 def _normalized_country_filters(countries: list[str]) -> set[str]:
@@ -335,10 +576,13 @@ def _normalized_country_filters(countries: list[str]) -> set[str]:
 
 def _rows_for_product(line_item_rows: list[dict[str, Any]], spec: dict[str, Any]) -> list[dict[str, Any]]:
     placement_ids = set(spec["placement_ids"])
+    ad_unit_ids = set(spec["ad_unit_ids"])
     countries = set(spec["countries"])
     rows = []
     for row in line_item_rows:
-        if str(row.get("placement_id")) not in placement_ids:
+        matches_placement = str(row.get("placement_id")) in placement_ids
+        matches_ad_unit = str(row.get("ad_unit_id")) in ad_unit_ids
+        if not (matches_placement or matches_ad_unit):
             continue
         if countries and not _row_matches_country(row, countries):
             continue
@@ -576,6 +820,12 @@ def _delivery_forecast(
                 "window_start": report.get("window_start"),
                 "window_end": report.get("window_end"),
                 "line_item_types": (report.get("filters") or {}).get("line_item_types"),
+                "chunked": bool(report.get("chunked")),
+                "chunk_count": report.get("chunk_count"),
+                "incomplete_report": bool(report.get("incomplete_report")),
+                "incomplete_report_chunks": report.get("incomplete_report_chunks"),
+                "truncated_single_placement_ids": report.get("truncated_single_placement_ids"),
+                "truncated_single_ad_unit_ids": report.get("truncated_single_ad_unit_ids"),
             },
             "bookable": product_bookable,
             "line_item_capacity_guidance": capacity_guidance,

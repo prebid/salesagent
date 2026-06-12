@@ -16,10 +16,10 @@ from datetime import datetime, timedelta
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.adapter_config import AdapterConfigAdminRepository
 from src.core.database.repositories.sync_job import SyncJobAdminRepository
-from src.core.database.repositories.tenant_signal import TenantSignalRepository
 from src.services._scheduler_lifecycle import cancel_scheduler_task
 from src.services.catalog_sync_helpers import run_catalog_sync_scheduler_cycle
 from src.services.gam_signal_coverage_sync import KIND_SIGNAL_COVERAGE, run_gam_signal_coverage_sync
+from src.services.gam_sync_applicability import tenant_has_custom_key_value_signals
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ def _list_eligible_tenants(now: datetime) -> list[str]:
         pairs = AdapterConfigAdminRepository(session).list_all()
         gam_tenant_ids = [p.tenant_id for p in pairs if p.adapter_type == "google_ad_manager"]
         signal_tenant_ids = [
-            tenant_id for tenant_id in gam_tenant_ids if _tenant_has_custom_key_value_signals(session, tenant_id)
+            tenant_id for tenant_id in gam_tenant_ids if tenant_has_custom_key_value_signals(session, tenant_id)
         ]
         if not signal_tenant_ids:
             return []
@@ -106,11 +106,6 @@ def _list_eligible_tenants(now: datetime) -> list[str]:
                 continue
         eligible.append(tenant_id)
     return eligible
-
-
-def _tenant_has_custom_key_value_signals(session, tenant_id: str) -> bool:
-    repo = TenantSignalRepository(session, tenant_id)
-    return any((signal.adapter_config or {}).get("kind") == "custom_key_value" for signal in repo.list_all())
 
 
 _scheduler: GAMSignalCoverageScheduler | None = None

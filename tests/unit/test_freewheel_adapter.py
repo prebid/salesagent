@@ -122,14 +122,21 @@ class TestLiveCreateMediaBuy:
         # timestamp (unpredictable from the test's POV) so we use ANY there,
         # but the ID linkage and advertiser scoping are exact.
         adapter._client.commercial.create_campaign.assert_called_once_with(name=ANY, advertiser_id=1356511)
-        adapter._client.commercial.create_insertion_order.assert_called_once_with(name=ANY, campaign_id=900001)
+        # IO carries the buyer PO as external_id for lineage (validated against sandbox).
+        adapter._client.commercial.create_insertion_order.assert_called_once_with(
+            name=ANY, campaign_id=900001, external_id=sample_request.po_number
+        )
 
-        # One placement per AdCP package, all parented to the new IO.
+        # One placement per AdCP package, all parented to the new IO, each
+        # tagged with its AdCP package_id as external_id for traceability.
         assert adapter._client.commercial.create_placement.call_count == len(sample_packages)
         for package, call in zip(
             sample_packages, adapter._client.commercial.create_placement.call_args_list, strict=True
         ):
-            assert call == ((), {"name": package.name, "insertion_order_id": 900002})
+            assert call == (
+                (),
+                {"name": package.name, "insertion_order_id": 900002, "external_id": package.package_id},
+            )
 
         # media_buy_id reflects the IO (not the Campaign) — IO is the
         # commercial transaction in Mapping A.

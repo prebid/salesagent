@@ -33,7 +33,7 @@ class TestBearerAuth:
         assert headers["Authorization"] == "Bearer tok-abc"
 
     def test_no_credentials_rejected(self):
-        with pytest.raises(ValueError, match="api_token or .username \\+ password"):
+        with pytest.raises(ValueError, match="requires one of"):
             FreeWheelTransport()
 
     def test_username_without_password_rejected(self):
@@ -132,6 +132,107 @@ class TestPasswordGrant:
         assert session.post.call_count == 0
         # Only one attempt — no refresh+retry on static-token mode
         assert session.request.call_count == 1
+
+
+class TestClientCredentialsGrant:
+    """OAuth2 client_credentials grant (FreeWheel API-Access): mint from a
+    separate token-service host with Basic auth, cache, refresh on 401."""
+
+    TOKEN_URL = "https://token.apiaccess.freewheel.tv/oauth2/token"
+    SANDBOX_BASE = "https://api.sandbox.freewheel.tv"
+
+    def _mint_response(self, token: str = "cc-tok", expires_in: int = 3599) -> MagicMock:
+        mock = MagicMock()
+        mock.status_code = 200
+        mock.ok = True
+        mock.content = b'{"access_token": "...", "expires_in": ...}'
+        mock.text = f'{{"access_token": "{token}", "expires_in": {expires_in}}}'
+        mock.json.return_value = {"access_token": token, "expires_in": expires_in}
+        return mock
+
+    def test_first_call_mints_via_token_service_with_basic_auth(self):
+        import base64
+
+        session = MagicMock()
+        session.post.return_value = self._mint_response("cc-1")
+        session.request.return_value = _stub_response(200, content=b"{}", text="{}")
+
+        FreeWheelTransport(
+            client_id="cid",
+            client_secret="csecret",
+            token_url=self.TOKEN_URL,
+            base_url=self.SANDBOX_BASE,
+            session=session,
+        ).get_json("/services/v4/sites")
+
+        # Mint POSTs grant_type=client_credentials with HTTP Basic to the token service.
+        post_call = session.post.call_args
+        assert post_call.args[0] == self.TOKEN_URL
+        assert post_call.kwargs["data"] == {"grant_type": "client_credentials"}
+        expected_basic = base64.b64encode(b"cid:csecret").decode()
+        assert post_call.kwargs["headers"]["Authorization"] == f"Basic {expected_basic}"
+        # The data request used the minted token as the bearer.
+        assert session.request.call_args.kwargs["headers"]["Authorization"] == "Bearer cc-1"
+
+    def test_token_service_host_is_decoupled_from_data_host(self):
+        session = MagicMock()
+        session.post.return_value = self._mint_response()
+        session.request.return_value = _stub_response(200, content=b"{}", text="{}")
+
+        FreeWheelTransport(
+            client_id="cid",
+            client_secret="csecret",
+            token_url=self.TOKEN_URL,
+            base_url=self.SANDBOX_BASE,
+            session=session,
+        ).get_json("/services/v4/sites")
+
+        # Token mint hits token.apiaccess.*; data hits api.sandbox.* — never conflated.
+        assert session.post.call_args.args[0] == self.TOKEN_URL
+        data_url = session.request.call_args.kwargs["url"]
+        assert data_url.startswith(self.SANDBOX_BASE)
+        assert "token.apiaccess" not in data_url
+
+    def test_token_is_cached_across_calls(self):
+        session = MagicMock()
+        session.post.return_value = self._mint_response("cached-cc")
+        session.request.return_value = _stub_response(200, content=b"{}", text="{}")
+
+        transport = FreeWheelTransport(client_id="c", client_secret="s", session=session)
+        transport.get_json("/a")
+        transport.get_json("/b")
+
+        assert session.post.call_count == 1
+        assert session.request.call_count == 2
+
+    def test_401_triggers_refresh_and_retry(self):
+        session = MagicMock()
+        session.post.return_value = self._mint_response("fresh-cc")
+        session.request.side_effect = [
+            _stub_response(401, content=b"stale", text="stale"),
+            _stub_response(200, content=b"{}", text="{}"),
+        ]
+
+        FreeWheelTransport(client_id="c", client_secret="s", session=session).get_json("/x")
+
+        # Re-mint + retry, because client_credentials is a mint mode (has_mint=True).
+        assert session.post.call_count == 2
+        assert session.request.call_count == 2
+
+    def test_mint_failure_raises_auth_error(self, caplog):
+        session = MagicMock()
+        bad = MagicMock()
+        bad.status_code = 401
+        bad.ok = False
+        bad.content = b'{"error":"invalid_client"}'
+        bad.text = '{"error":"invalid_client"}'
+        session.post.return_value = bad
+
+        transport = FreeWheelTransport(client_id="c", client_secret="wrong", session=session)
+        with caplog.at_level(logging.WARNING, logger="src.adapters.freewheel._transport"):
+            with pytest.raises(FreeWheelAuthError):
+                transport.get_json("/x")
+        assert "phase=client_credentials status=401" in caplog.text
 
 
 class TestContentTypeNegotiation:

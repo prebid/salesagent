@@ -141,7 +141,7 @@ Already configured in `.pre-commit-config.yaml`:
 ```yaml
 - id: detect-test-antipatterns
   entry: uv run python scripts/detect_test_antipatterns.py
-  files: '^(tests/.*\.py|src/a2a_server/adcp_a2a_server\.py)$'
+  files: '^tests/.*\.py$'
 ```
 
 ## Testing Philosophy

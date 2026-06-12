@@ -99,6 +99,51 @@ class TestCredentialRequirement:
         assert cfg.api_token == "t"
 
 
+class TestClientCredentialsConfig:
+    """API-Access machine auth — client_id + client_secret, sandbox host."""
+
+    def test_accepts_client_id_and_secret(self):
+        cfg = FreeWheelConnectionConfig(client_id="cid", client_secret="csecret", environment="sandbox")
+        assert cfg.client_id == "cid"
+        assert cfg.client_secret == "csecret"
+        assert cfg.environment == "sandbox"
+
+    def test_sandbox_environment_resolves_to_sandbox_host(self):
+        cfg = FreeWheelConnectionConfig(client_id="c", client_secret="s", environment="sandbox")
+        assert cfg.base_url == "https://api.sandbox.freewheel.tv"
+
+    def test_default_token_url_is_api_access_endpoint(self):
+        cfg = FreeWheelConnectionConfig(client_id="c", client_secret="s")
+        assert cfg.token_url == "https://token.apiaccess.freewheel.tv/oauth2/token"
+
+    def test_token_url_must_be_https(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="https"):
+            FreeWheelConnectionConfig(client_id="c", client_secret="s", token_url="http://evil.example/token")
+
+    def test_client_secret_serializes_to_ciphertext(self, encryption_key):
+        cfg = FreeWheelConnectionConfig(client_id="c", client_secret="super-secret-cc")
+        dumped = cfg.model_dump()
+        assert dumped["client_secret"] != "super-secret-cc"
+        assert is_encrypted(dumped["client_secret"])
+
+    def test_client_secret_round_trips(self, encryption_key):
+        original = FreeWheelConnectionConfig(client_id="c", client_secret="super-secret-cc")
+        rehydrated = FreeWheelConnectionConfig.model_validate(original.model_dump())
+        assert rehydrated.client_secret == "super-secret-cc"
+
+    def test_client_id_without_secret_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            FreeWheelConnectionConfig(client_id="c")
+
+    def test_client_secret_field_marked_secret_in_schema(self):
+        schema = FreeWheelConnectionConfig.model_json_schema()
+        assert schema["properties"]["client_secret"].get("secret") is True
+
+
 class TestEnvironmentAndOptional:
     def test_staging_environment_resolves_to_staging_host(self):
         cfg = FreeWheelConnectionConfig(api_token="t", environment="staging")
@@ -126,9 +171,10 @@ class TestEnvironmentAndOptional:
         schema = FreeWheelConnectionConfig.model_json_schema()
         assert schema["properties"]["api_token"].get("secret") is True
 
-    def test_hosts_table_has_both_envs(self):
+    def test_hosts_table_has_all_envs(self):
         assert "production" in FREEWHEEL_HOSTS
         assert "staging" in FREEWHEEL_HOSTS
+        assert FREEWHEEL_HOSTS["sandbox"] == "https://api.sandbox.freewheel.tv"
 
 
 class TestFreeWheelProductConfig:

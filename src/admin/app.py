@@ -281,7 +281,6 @@ def create_app(config=None):
     cache_config = {
         "CACHE_TYPE": "SimpleCache",  # In-memory cache (good for single-process deployments)
         "CACHE_DEFAULT_TIMEOUT": 300,  # 5 minutes default
-        # "CACHE_THRESHOLD": 50,  # Evict old entries before accumulating large Response objects
     }
     app.config.update(cache_config)
     cache = Cache(app)

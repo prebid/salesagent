@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from adcp.types import Error as AdCPResponseError
 
 from src.core.canonical_formats import DEFAULT_CREATIVE_AGENT_URL
 from src.core.database.models import AuthorizedProperty
@@ -20,6 +22,7 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
     PublisherPartnerFactory,
+    SpringServeInventoryFactory,
     TenantFactory,
 )
 from tests.helpers.managed_tenant_api import (
@@ -192,6 +195,207 @@ def test_inventory_discovery_surfaces_adapter_selectors_and_publisher_properties
     assert body["domains"][0]["publisher_domain"] == "wonderstruck.com"
     assert body["properties"][0]["property_id"] == "wonderstruck_site"
     assert {selector["selection_type"] for selector in body["allowed_selectors"]} == {"all", "by_id", "by_tag"}
+
+
+def test_inventory_discovery_surfaces_springserve_selectors(management_api_client, bound_factories):
+    def assert_single_selector_response(response, expected_selector):
+        assert response.status_code == 200, response.get_data(as_text=True)
+        body = response.get_json()
+        assert set(body) == {"selectors", "count", "next_cursor"}
+        assert body["count"] == 1
+        assert body["selectors"] == [expected_selector]
+
+    client, auth_headers = management_api_client
+    tenant = TenantFactory(
+        tenant_id="tenant_wholesale_springserve_selectors",
+        name="Wonderstruck SpringServe",
+        subdomain="wonderstruck-springserve",
+        ad_server="springserve",
+        is_embedded=True,
+    )
+    AdapterConfigFactory(tenant=tenant, adapter_type="springserve")
+    SpringServeInventoryFactory(
+        tenant=tenant,
+        entity_type="supply_partner",
+        entity_id="63440",
+        name="Talpa Media",
+        supply_partner_id=None,
+        supply_router_id=None,
+        key_id=None,
+        raw_json={"id": 63440, "name": "Talpa Media", "account_id": 1730},
+    )
+    SpringServeInventoryFactory(
+        tenant=tenant,
+        entity_type="supply_tag",
+        entity_id="945295",
+        name="KIJK CTV",
+        supply_partner_id="63440",
+        supply_router_id="148010",
+        key_id=None,
+        raw_json={
+            "id": 945295,
+            "name": "KIJK CTV",
+            "supply_partner_id": 63440,
+            "format": "video",
+        },
+    )
+    bound_factories.commit()
+
+    partner_response = client.get(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/inventory/selectors?selectorType=supply_partner&q=Talpa",
+        headers=auth_headers,
+    )
+    tag_response = client.get(
+        f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/inventory/selectors"
+        "?selectorType=supply_tag&parentId=148010&q=KIJK",
+        headers=auth_headers,
+    )
+
+    assert_single_selector_response(
+        partner_response,
+        {
+            "selector_type": "supply_partner",
+            "external_id": "63440",
+            "name": "Talpa Media",
+            "path": None,
+            "parent_id": None,
+            "status": None,
+            "metadata": {"id": 63440, "name": "Talpa Media", "account_id": 1730},
+        },
+    )
+    assert_single_selector_response(
+        tag_response,
+        {
+            "selector_type": "supply_tag",
+            "external_id": "945295",
+            "name": "KIJK CTV",
+            "path": None,
+            "parent_id": "148010",
+            "status": None,
+            "metadata": {
+                "id": 945295,
+                "name": "KIJK CTV",
+                "supply_partner_id": 63440,
+                "format": "video",
+            },
+        },
+    )
+
+
+def test_creative_formats_authoring_endpoint_surfaces_discovery_errors(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    discovery_error = AdCPResponseError(
+        code="REGISTRY_ERROR",
+        message="Creative agent registry initialization failed: registry unavailable",
+        recovery="transient",
+        retry_after=5,
+    )
+
+    with patch(
+        "src.core.format_resolver.list_available_formats_with_errors",
+        return_value=SimpleNamespace(formats=[], errors=[discovery_error]),
+    ):
+        response = client.get(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/creative-formats",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["creative_formats"] == []
+    assert body["count"] == 0
+    assert len(body["errors"]) == 1
+    error = body["errors"][0]
+    assert error["code"] == discovery_error.code
+    assert error["message"] == discovery_error.message
+    assert error["recovery"] == discovery_error.recovery.value
+    assert error["retry_after"] == 5
+
+
+def test_creative_formats_authoring_endpoint_filters_standard_catalog_locally(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+
+    response = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/creative-formats?asset_type=display&q=Display",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["count"] > 0
+    assert body["creative_formats"]
+    assert body["errors"] == []
+    assert all("display" in format_summary["name"].lower() for format_summary in body["creative_formats"])
+    assert all(format_summary["raw"].get("type") == "display" for format_summary in body["creative_formats"])
+    assert "video_standard" not in {format_summary["format_id"]["id"] for format_summary in body["creative_formats"]}
+
+
+def test_creative_formats_authoring_endpoint_canonicalizes_format_refs(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_format_catalog",
+        return_value=SimpleNamespace(
+            formats=[
+                {
+                    "format_id": {
+                        "agent_url": "https://adcontextprotocol.org/agents/formats/mcp/",
+                        "id": "display_image",
+                    },
+                    "name": "Display Image",
+                    "asset_types": ["image"],
+                    "requirements": {},
+                }
+            ],
+            errors=[],
+        ),
+    ):
+        response = client.get(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/creative-formats",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["creative_formats"][0]["format_id"]["agent_url"] == "https://creative.adcontextprotocol.org"
+    assert body["creative_formats"][0]["format_id"]["id"] == "display_image"
+
+
+def test_creative_formats_authoring_endpoint_preserves_format_parameters(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_format_catalog",
+        return_value=SimpleNamespace(
+            formats=[
+                {
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org/",
+                        "id": "display_image",
+                        "width": 970,
+                        "height": 250,
+                    },
+                    "name": "Display 970x250 Image",
+                    "asset_types": ["image"],
+                    "requirements": {},
+                }
+            ],
+            errors=[],
+        ),
+    ):
+        response = client.get(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/creative-formats",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    body = response.get_json()
+    assert body["creative_formats"][0]["format_id"] == {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_image",
+        "width": 970,
+        "height": 250,
+    }
 
 
 def test_publisher_properties_lookup_enables_api_only_product_authoring(management_api_client, bound_factories):
@@ -399,6 +603,32 @@ def test_wholesale_product_crud_persists_inventory_profile_and_derived_pricing(
         headers=auth_headers,
     )
     assert missing.status_code == 404
+
+
+def test_wholesale_create_invalidates_cached_status(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+
+    before = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/status",
+        headers=auth_headers,
+    )
+    assert before.status_code == 200, before.get_data(as_text=True)
+    assert before.get_json()["products"]["active_count"] == 0
+
+    created = client.post(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products",
+        headers=auth_headers,
+        json=_wholesale_payload(),
+    )
+    assert created.status_code == 201, created.get_data(as_text=True)
+
+    after = client.get(
+        f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/status",
+        headers=auth_headers,
+    )
+    assert after.status_code == 200, after.get_data(as_text=True)
+    assert after.get_json()["products"]["active_count"] == 1
+    assert after.get_json()["inventory_profiles"]["total_count"] == 1
 
 
 def test_wholesale_product_authoring_rejects_system_metadata_inputs(management_api_client, gam_tenant):
@@ -830,6 +1060,166 @@ def test_wholesale_validation_checks_discovered_creative_formats(management_api_
     body = validation.get_json()
     assert body["valid"] is False
     assert {issue["code"] for issue in body["issues"]} >= {"creative_format_not_found"}
+
+
+def test_wholesale_validation_canonicalizes_catalog_creative_format_agent_url(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload()
+    payload["inventory"]["creative_formats"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_970x250_image",
+    }
+    payload["inventory"]["execution"]["format_bindings"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_970x250_image",
+    }
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_formats",
+        return_value=[
+            {
+                "format_id": {
+                    "agent_url": "https://creative.adcontextprotocol.org/",
+                    "id": "display_970x250_image",
+                },
+                "name": "Display 970x250 Image",
+            }
+        ],
+    ):
+        validation = client.post(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:validate",
+            headers=auth_headers,
+            json=payload,
+        )
+
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    body = validation.get_json()
+    assert body["valid"] is True
+    assert body["issues"] == []
+
+
+def test_wholesale_validation_preserves_catalog_creative_format_parameters(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload()
+    payload["inventory"]["creative_formats"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_image",
+        "width": 970,
+        "height": 250,
+    }
+    payload["inventory"]["execution"]["format_bindings"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_image",
+        "width": 970,
+        "height": 250,
+    }
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_formats",
+        return_value=[
+            {
+                "format_id": {
+                    "agent_url": "https://creative.adcontextprotocol.org/",
+                    "id": "display_image",
+                    "width": 300,
+                    "height": 250,
+                },
+                "name": "Display 300x250 Image",
+            }
+        ],
+    ):
+        validation = client.post(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:validate",
+            headers=auth_headers,
+            json=payload,
+        )
+
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    body = validation.get_json()
+    assert body["valid"] is False
+    assert {issue["code"] for issue in body["issues"]} >= {"creative_format_not_found"}
+
+
+def test_wholesale_validation_accepts_parameterized_creative_format_refs(management_api_client, gam_tenant):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload()
+    payload["inventory"]["creative_formats"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_image",
+        "width": 970,
+        "height": 250,
+    }
+    payload["inventory"]["execution"]["format_bindings"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "display_image",
+        "width": 970,
+        "height": 250,
+    }
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_formats",
+        return_value=[
+            {
+                "format_id": {
+                    "agent_url": "https://creative.adcontextprotocol.org/",
+                    "id": "display_image",
+                    "width": 970,
+                    "height": 250,
+                },
+                "name": "Display 970x250 Image",
+            }
+        ],
+    ):
+        validation = client.post(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:validate",
+            headers=auth_headers,
+            json=payload,
+        )
+
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    body = validation.get_json()
+    assert body["valid"] is True
+    assert body["issues"] == []
+
+
+@pytest.mark.parametrize(
+    "catalog_agent_url",
+    [
+        "https://creative.adcontextprotocol.org/mcp",  # /mcp transport suffix
+        "https://adcontextprotocol.org/agents/formats",  # legacy reference alias
+    ],
+)
+def test_wholesale_validation_canonicalizes_non_canonical_catalog_format_refs(
+    management_api_client, gam_tenant, catalog_agent_url
+):
+    client, auth_headers = management_api_client
+    payload = _wholesale_payload()
+    payload["inventory"]["creative_formats"][0]["format_id"] = {
+        "agent_url": "https://creative.adcontextprotocol.org",
+        "id": "homepage_takeover",
+    }
+
+    with patch(
+        "src.admin.blueprints.products.get_creative_formats",
+        return_value=[
+            {
+                "format_id": {
+                    "agent_url": catalog_agent_url,
+                    "id": "homepage_takeover",
+                },
+                "name": "Homepage Takeover",
+            }
+        ],
+    ):
+        validation = client.post(
+            f"/api/v1/tenant-management/tenants/{gam_tenant.tenant_id}/wholesale-products:validate",
+            headers=auth_headers,
+            json=payload,
+        )
+
+    assert validation.status_code == 200, validation.get_data(as_text=True)
+    body = validation.get_json()
+    assert "creative_format_not_found" not in {issue["code"] for issue in body["issues"]}
 
 
 def test_wholesale_create_rejects_existing_unowned_inventory_profile(

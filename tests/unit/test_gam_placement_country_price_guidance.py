@@ -25,6 +25,8 @@ def _row(
     *,
     placement_id: str = "123",
     placement_name: str = "Sports ROS",
+    ad_unit_id: str = "",
+    ad_unit_name: str = "",
     country_code: str = "US",
     country: str = "United States",
     line_item_id: str,
@@ -41,6 +43,8 @@ def _row(
     return {
         "Dimension.PLACEMENT_ID": placement_id,
         "Dimension.PLACEMENT_NAME": placement_name,
+        "Dimension.AD_UNIT_ID": ad_unit_id,
+        "Dimension.AD_UNIT_NAME": ad_unit_name,
         "Dimension.COUNTRY_CODE": country_code,
         "Dimension.COUNTRY_NAME": country,
         "Dimension.LINE_ITEM_ID": line_item_id,
@@ -233,6 +237,92 @@ def test_price_guidance_query_filters_iso_country_codes_by_country_code():
     assert captured["report_query"]["reportQuery"]["statement"]["query"] == (
         "WHERE PLACEMENT_ID IN (1) AND COUNTRY_CRITERIA_ID IN (2840) AND LINE_ITEM_TYPE IN ('PRICE_PRIORITY')"
     )
+
+
+def test_price_guidance_query_applies_ad_unit_filter():
+    captured: dict[str, Any] = {}
+    service = _service_with_rows([], captured)
+
+    service.get_placement_country_price_guidance(
+        "this_month",
+        ad_unit_ids=["987", "654"],
+        countries=["US"],
+    )
+
+    report_query = captured["report_query"]["reportQuery"]
+    assert report_query["dimensions"] == [
+        "AD_UNIT_ID",
+        "AD_UNIT_NAME",
+        "COUNTRY_CODE",
+        "COUNTRY_NAME",
+        "LINE_ITEM_ID",
+        "LINE_ITEM_NAME",
+        "LINE_ITEM_TYPE",
+    ]
+    assert report_query["statement"]["query"] == (
+        "WHERE AD_UNIT_ID IN (654, 987) AND COUNTRY_CRITERIA_ID IN (2840) AND LINE_ITEM_TYPE IN ('PRICE_PRIORITY')"
+    )
+
+
+def test_price_guidance_query_applies_combined_inventory_filter():
+    captured: dict[str, Any] = {}
+    service = _service_with_rows([], captured)
+
+    service.get_placement_country_price_guidance(
+        "this_month",
+        placement_ids=["1"],
+        ad_unit_ids=["987"],
+    )
+
+    report_query = captured["report_query"]["reportQuery"]
+    assert report_query["dimensions"] == [
+        "PLACEMENT_ID",
+        "PLACEMENT_NAME",
+        "AD_UNIT_ID",
+        "AD_UNIT_NAME",
+        "COUNTRY_CODE",
+        "COUNTRY_NAME",
+        "LINE_ITEM_ID",
+        "LINE_ITEM_NAME",
+        "LINE_ITEM_TYPE",
+    ]
+    assert report_query["statement"]["query"] == (
+        "WHERE (PLACEMENT_ID IN (1) OR AD_UNIT_ID IN (987)) AND LINE_ITEM_TYPE IN ('PRICE_PRIORITY')"
+    )
+
+
+def test_price_guidance_groups_ad_unit_rows():
+    service = _service_with_rows(
+        [
+            _row(
+                placement_id="",
+                placement_name="",
+                ad_unit_id="987",
+                ad_unit_name="Homepage Leaderboard",
+                line_item_id="li_1",
+                line_item_name="Ad unit line item",
+                impressions=10_000,
+                cpm=1.0,
+                line_item_type="PRICE_PRIORITY",
+            )
+        ]
+    )
+
+    result = service.get_placement_country_price_guidance(
+        "this_month",
+        ad_unit_ids=["987"],
+        min_group_impressions=1,
+        min_line_item_impressions=1,
+    )
+
+    group = result["groups"][0]
+    assert group["inventory_target_kind"] == "ad_unit"
+    assert group["inventory_target_id"] == "987"
+    assert group["inventory_target_name"] == "Homepage Leaderboard"
+    assert group["placement_id"] == ""
+    assert group["ad_unit_id"] == "987"
+    assert result["forecast"]["points"][0]["label"] == "Homepage Leaderboard / United States"
+    assert result["forecast"]["points"][0]["dimensions"][0]["placement_ref"] == {"ad_unit_id": "987"}
 
 
 def test_price_guidance_marks_unbookable_groups_outside_minimum_budget_capacity():

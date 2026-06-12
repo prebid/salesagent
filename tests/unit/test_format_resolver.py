@@ -18,9 +18,12 @@ not the adcp library Format (which does not).
 #   test_search_all_agents_no_match_raises_not_found — AdCP error.json: unknown format_id is an error
 #   test_success_returns_formats — AdCP list-creative-formats-response.json: returns formats array
 #
-# DECISION_BACKED (2 tests):
+# DECISION_BACKED (5 tests):
 #   test_base_platform_config_preserved_during_override — bug fix (salesagent-c4s)
 #   test_override_merges_into_existing_platform — bug fix (salesagent-c4s)
+#   test_registry_creation_failure_returns_error_context — FD-ERR-03
+#   test_format_fetch_failure_returns_error_context — FD-ERR-03
+#   test_filters_are_applied_locally_after_unfiltered_registry_fetch — FD-ERR-03 regression
 #
 # CHARACTERIZATION (10 tests):
 #   test_no_platform_config_override_preserves_base — locks: base preserved when no override
@@ -41,7 +44,7 @@ not the adcp library Format (which does not).
 # ---
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -272,15 +275,8 @@ class TestGetFormat:
         assert result.name == "Agent Format"
 
     def test_search_all_agents_no_agent_url(self):
-        """get_format searches all agents when agent_url is None.
-
-        Note: The search loop at L53-56 compares Format.format_id (FormatId)
-        with the string parameter. To match, we use a mock with matching
-        format_id attribute instead of a real Format object.
-        """
-        mock_fmt = MagicMock()
-        mock_fmt.format_id = "display_300x250"  # Plain string to match parameter
-        mock_fmt.name = "Found Format"
+        """get_format searches all agents when agent_url is None."""
+        mock_fmt = _make_format("display_300x250", name="Found Format")
 
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
@@ -291,6 +287,37 @@ class TestGetFormat:
             result = get_format("display_300x250", tenant_id="t1")
 
         assert result.name == "Found Format"
+
+    def test_search_all_agents_matches_legacy_request_to_canonical_parameters(self):
+        """get_format maps legacy fixed-size IDs to canonical parameterized formats."""
+        mock_fmt = _make_format("display_image", name="Found Format")
+        mock_fmt.format_id.width = 300
+        mock_fmt.format_id.height = 250
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=[mock_fmt]),
+        ):
+            from src.core.format_resolver import get_format
+
+            result = get_format("display_300x250", tenant_id="t1")
+
+        assert result.name == "Found Format"
+
+    def test_search_all_agents_does_not_match_generic_request_to_parameterized_variant(self):
+        """A generic format lookup should not choose an arbitrary fixed-size variant."""
+        mock_fmt = _make_format("display_image", name="Found Format")
+        mock_fmt.format_id.width = 300
+        mock_fmt.format_id.height = 250
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=[mock_fmt]),
+        ):
+            from src.core.format_resolver import get_format
+
+            with pytest.raises(AdCPNotFoundError, match="Unknown format_id 'display_image'"):
+                get_format("display_image", tenant_id="t1")
 
     def test_search_all_agents_no_match_raises_not_found(self):
         """get_format raises AdCPNotFoundError when format not found in any agent."""
@@ -440,6 +467,70 @@ class TestListAvailableFormats:
             result = list_available_formats(tenant_id="t1")
 
         assert result == []
+
+    def test_registry_creation_failure_returns_error_context(self):
+        """Error-aware helper distinguishes registry failure from empty catalog."""
+        with patch(
+            "src.core.creative_agent_registry.get_creative_agent_registry",
+            side_effect=RuntimeError("Registry initialization failed"),
+        ):
+            from src.core.format_resolver import list_available_formats_with_errors
+
+            result = list_available_formats_with_errors(tenant_id="t1")
+
+        assert result.formats == []
+        assert len(result.errors) == 1
+        assert result.errors[0].code == "REGISTRY_ERROR"
+        assert "Registry initialization failed" in result.errors[0].message
+
+    def test_format_fetch_failure_returns_error_context(self):
+        """Error-aware helper distinguishes fetch failure from empty catalog."""
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry"),
+            patch(
+                "src.core.format_resolver.run_async_in_sync_context",
+                side_effect=RuntimeError("Connection failed"),
+            ),
+        ):
+            from src.core.format_resolver import list_available_formats_with_errors
+
+            result = list_available_formats_with_errors(tenant_id="t1")
+
+        assert result.formats == []
+        assert len(result.errors) == 1
+        assert result.errors[0].code == "FORMAT_DISCOVERY_ERROR"
+        assert "Connection failed" in result.errors[0].message
+
+    def test_filters_are_applied_locally_after_unfiltered_registry_fetch(self):
+        """Filtered product-form discovery must not force a remote filtered agent call."""
+        from src.core.creative_agent_registry import FormatFetchResult
+
+        display_format = _make_format("display_300x250", name="Display 300x250")
+        video_format = Format(
+            format_id=create_test_format_id("video_640x480"),
+            name="Video 640x480",
+            type="video",
+            assets=[
+                {"item_type": "individual", "asset_id": "video", "asset_type": "video", "required": True},
+            ],
+        )
+        registry = MagicMock()
+        registry.list_all_formats_with_errors = AsyncMock(
+            return_value=FormatFetchResult(formats=[display_format, video_format], errors=[])
+        )
+
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=registry):
+            from src.core.format_resolver import list_available_formats_with_errors
+
+            result = list_available_formats_with_errors(
+                tenant_id="t1",
+                asset_types=["display"],
+                name_search="300x250",
+            )
+
+        registry.list_all_formats_with_errors.assert_called_once_with(tenant_id="t1")
+        assert result.errors == []
+        assert [fmt.format_id.id for fmt in result.formats] == ["display_300x250"]
 
     def test_success_returns_formats(self):
         """Returns formats from registry on success."""

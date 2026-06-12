@@ -171,10 +171,14 @@ class TestTargetingModelDumpSerialization:
 
     def test_model_dump_mode_override(self):
         """Explicit mode='python' still works when caller needs it."""
+        import enum
+
         t = Targeting(geo_metros=[{"system": "nielsen_dma", "values": ["501"]}])
         d = t.model_dump(exclude_none=True, mode="python")
-        # In python mode, system is the enum object
-        assert not isinstance(d["geo_metros"][0]["system"], str)
+        # In python mode, system stays the enum member (adcp enums are now
+        # StrEnum-based, so it is also a str instance — assert the enum identity
+        # rather than "not a str", which json mode would coerce to a plain value).
+        assert isinstance(d["geo_metros"][0]["system"], enum.Enum)
 
 
 # ---------------------------------------------------------------------------

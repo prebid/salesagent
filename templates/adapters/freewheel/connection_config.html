@@ -2,9 +2,9 @@
 FreeWheel Adapter Connection Configuration Template
 
 Included in the settings page when the FreeWheel adapter is selected.
-Supports two auth flows: OAuth2 password grant (canonical) and pre-minted
-bearer (escape hatch). Exactly one of (username+password) or api_token
-must be provided.
+Supports three auth flows: API-Access client_credentials (client_id +
+client_secret), OAuth2 password grant (username + password), and pre-minted
+bearer (api_token, escape hatch). At least one must be provided.
 
 Expected context:
 - adapter_config: dict with current adapter configuration
@@ -50,6 +50,40 @@ Expected context:
             </small>
         </div>
 
+        <details style="margin-top: 1rem; margin-bottom: 1rem;" {% if adapter_config and adapter_config.get('client_id') %}open{% endif %}>
+            <summary style="cursor: pointer; font-weight: 500;">API-Access credentials (client_credentials)</summary>
+            <p class="text-muted" style="margin-top: 0.5rem;">
+                Machine-to-machine auth via FreeWheel's API-Access token service. Provide the
+                Client ID and Client Secret from your Sandbox/Production API Application — the
+                adapter mints and auto-refreshes short-lived bearer tokens. Pair with the
+                <em>Sandbox</em> environment to target <code>api.sandbox.freewheel.tv</code>.
+            </p>
+            <div class="form-group">
+                <label for="freewheel_client_id">Client ID</label>
+                <input type="text" id="freewheel_client_id" name="freewheel_client_id"
+                       value="{{ adapter_config.get('client_id', '') if adapter_config else '' }}"
+                       placeholder="API-Access OAuth2 client ID">
+            </div>
+            <div class="form-group">
+                <label for="freewheel_client_secret">Client Secret</label>
+                <input type="password" id="freewheel_client_secret" name="freewheel_client_secret"
+                       value=""
+                       placeholder="{% if adapter_config and adapter_config.get('client_id') %}(leave blank to keep existing){% else %}Enter client secret{% endif %}">
+                <small class="form-text text-muted">
+                    Stored encrypted at rest. Leave blank to keep the previously saved secret.
+                </small>
+            </div>
+            <div class="form-group">
+                <label for="freewheel_token_url">Token Service URL</label>
+                <input type="text" id="freewheel_token_url" name="freewheel_token_url"
+                       value="{{ adapter_config.get('token_url', '') if adapter_config else '' }}"
+                       placeholder="https://token.apiaccess.freewheel.tv/oauth2/token">
+                <small class="form-text text-muted">
+                    Optional — defaults to the API-Access token service. Must be https.
+                </small>
+            </div>
+        </details>
+
         <details style="margin-top: 1rem; margin-bottom: 1rem;">
             <summary style="cursor: pointer; font-weight: 500;">Advanced: pre-minted bearer token</summary>
             <p class="text-muted" style="margin-top: 0.5rem;">
@@ -76,6 +110,9 @@ Expected context:
                 </option>
                 <option value="staging" {% if adapter_config and adapter_config.get('environment') == 'staging' %}selected{% endif %}>
                     Staging (api.stg.freewheel.tv)
+                </option>
+                <option value="sandbox" {% if adapter_config and adapter_config.get('environment') == 'sandbox' %}selected{% endif %}>
+                    Sandbox (api.sandbox.freewheel.tv)
                 </option>
             </select>
             <small class="form-text text-muted">
@@ -175,14 +212,23 @@ function _freewheelPayload() {
     const usernameEl = document.getElementById('freewheel_username');
     const passwordEl = document.getElementById('freewheel_password');
     const tokenEl = document.getElementById('freewheel_api_token');
+    const clientIdEl = document.getElementById('freewheel_client_id');
+    const clientSecretEl = document.getElementById('freewheel_client_secret');
+    const tokenUrlEl = document.getElementById('freewheel_token_url');
     const config = {
         username: usernameEl.value || null,
+        client_id: clientIdEl.value || null,
         environment: document.getElementById('freewheel_environment').value,
         default_advertiser_id: document.getElementById('freewheel_default_advertiser_id').value || null,
         manual_approval_required: document.getElementById('freewheel_manual_approval_required').checked
     };
     if (passwordEl.value) config.password = passwordEl.value;
-    if (tokenEl.value) {
+    if (clientSecretEl.value) config.client_secret = clientSecretEl.value;
+    if (tokenUrlEl.value) config.token_url = tokenUrlEl.value;
+    // Mode precedence mirrors the adapter: client_credentials, then api_token, then password.
+    if (clientIdEl.value) {
+        config.auth_mode = 'client_credentials';
+    } else if (tokenEl.value) {
         config.api_token = tokenEl.value;
         config.auth_mode = 'api_token';
     } else if (usernameEl.value) {
@@ -198,10 +244,12 @@ function saveFreeWheelConfig() {
 
     const hasStoredPasswordGrant = {{ 'true' if adapter_config and adapter_config.get('username') and adapter_config.get('password') else 'false' }};
     const hasStoredToken = {{ 'true' if adapter_config and adapter_config.get('api_token') else 'false' }};
+    const hasStoredClientCreds = {{ 'true' if adapter_config and adapter_config.get('client_id') and adapter_config.get('client_secret') else 'false' }};
     const submittingPasswordGrant = config.username && (config.password || hasStoredPasswordGrant);
     const submittingToken = config.api_token || hasStoredToken;
-    if (!submittingPasswordGrant && !submittingToken) {
-        showNotification('Provide either a User ID + Password or an API Token', 'error');
+    const submittingClientCreds = config.client_id && (config.client_secret || hasStoredClientCreds);
+    if (!submittingPasswordGrant && !submittingToken && !submittingClientCreds) {
+        showNotification('Provide one of: Client ID + Secret, User ID + Password, or an API Token', 'error');
         return;
     }
 
@@ -217,6 +265,7 @@ function saveFreeWheelConfig() {
             showNotification('Configuration saved successfully', 'success');
             document.getElementById('freewheel_password').value = '';
             document.getElementById('freewheel_api_token').value = '';
+            document.getElementById('freewheel_client_secret').value = '';
         } else {
             showNotification('Failed to save: ' + (data.error || 'Unknown error'), 'error');
         }
@@ -385,6 +434,9 @@ function testFreeWheelConnection() {
     const username = document.getElementById('freewheel_username').value;
     const password = document.getElementById('freewheel_password').value;
     const apiToken = document.getElementById('freewheel_api_token').value;
+    const clientId = document.getElementById('freewheel_client_id').value;
+    const clientSecret = document.getElementById('freewheel_client_secret').value;
+    const tokenUrl = document.getElementById('freewheel_token_url').value;
     const environment = document.getElementById('freewheel_environment').value;
 
     statusEl.innerHTML = '<span style="color: #6b7280;">Testing...</span>';
@@ -393,6 +445,9 @@ function testFreeWheelConnection() {
     if (username) payload.username = username;
     if (password) payload.password = password;
     if (apiToken) payload.api_token = apiToken;
+    if (clientId) payload.client_id = clientId;
+    if (clientSecret) payload.client_secret = clientSecret;
+    if (tokenUrl) payload.token_url = tokenUrl;
 
     fetch(scriptRoot + '/api/tenant/' + tenantId + '/adapters/freewheel/test-connection', {
         method: 'POST',
@@ -404,7 +459,12 @@ function testFreeWheelConnection() {
     .then(data => {
         if (data.success) {
             const ttl = data.expires_in ? Math.round(data.expires_in / 86400) + ' days' : '';
-            const mode = data.auth_mode === 'password_grant' ? ' via password grant' : ' via pre-minted token';
+            const modeLabels = {
+                client_credentials: ' via API-Access client credentials',
+                password_grant: ' via password grant',
+                api_token: ' via pre-minted token'
+            };
+            const mode = modeLabels[data.auth_mode] || '';
             statusEl.innerHTML = '<span style="color: #10b981;">✓ Authenticated on ' +
                 data.environment + mode + (ttl ? ' (~' + ttl + ' remaining)' : '') + '</span>';
         } else {

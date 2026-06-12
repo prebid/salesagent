@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
@@ -22,6 +24,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.format_references import format_id_identity, format_id_storage_dict, try_format_id_from_ref
 from src.core.schemas import Format
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -30,6 +33,14 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 products_bp = Blueprint("products", __name__)
+
+
+@dataclass(frozen=True)
+class CreativeFormatCatalog:
+    """Frontend-ready creative formats plus any discovery errors."""
+
+    formats: list[dict[str, Any]]
+    errors: list[dict[str, Any]]
 
 
 def _require_compose_products():
@@ -93,31 +104,40 @@ def _format_to_dict(fmt: Format) -> dict:
 
 
 def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
-    """Parse format entries from form JSON without validation.
-
-    Extracts agent_url, id, and optional dimension/duration parameters
-    from each parsed format dict. Used when validation is skipped
-    (creative agent unreachable or returned no formats).
-    """
+    """Parse format entries from form JSON through the typed FormatId model."""
     entries = []
     for fmt in formats_parsed:
-        if not fmt.get("agent_url"):
+        format_id = try_format_id_from_ref(fmt)
+        if format_id is None:
             continue
-        format_id = fmt.get("id") or fmt.get("format_id")
-        if not format_id:
-            continue
-        format_entry: dict = {"agent_url": fmt["agent_url"], "id": format_id}
-        if fmt.get("width") is not None:
-            format_entry["width"] = int(fmt["width"])
-        if fmt.get("height") is not None:
-            format_entry["height"] = int(fmt["height"])
-        for key in ("min_width", "max_width", "min_height", "max_height"):
-            if fmt.get(key) is not None:
-                format_entry[key] = int(fmt[key])
-        if fmt.get("duration_ms") is not None:
-            format_entry["duration_ms"] = float(fmt["duration_ms"])
-        entries.append(format_entry)
+        entries.append(format_id_storage_dict(format_id))
     return entries
+
+
+def _validate_format_entries(
+    formats_parsed: list[dict],
+    available_formats: list[Format],
+) -> tuple[list[dict], list[str]]:
+    """Validate submitted FormatId entries against discovered creative formats."""
+    valid_format_identities = {
+        format_id_identity(format_id)
+        for fmt in available_formats
+        if (format_id := try_format_id_from_ref(getattr(fmt, "format_id", None))) is not None
+    }
+
+    validated_formats: list[dict] = []
+    invalid_formats: list[str] = []
+    for entry in formats_parsed:
+        format_id = try_format_id_from_ref(entry)
+        if format_id is None:
+            continue
+        submitted_identity = format_id_identity(format_id)
+        if submitted_identity in valid_format_identities:
+            validated_formats.append(format_id_storage_dict(format_id))
+        else:
+            invalid_formats.append(f"{submitted_identity[0]}/{submitted_identity[1]}")
+
+    return validated_formats, invalid_formats
 
 
 def _format_id_to_display_name(format_id: str) -> str:
@@ -144,6 +164,84 @@ def _format_id_to_display_name(format_id: str) -> str:
         return f"{base_name} ({size_match.group(0)})"
     else:
         return base_name
+
+
+def _format_error_to_dict(error: Any) -> dict[str, Any]:
+    """Serialize an AdCP error object for tenant-management/admin responses."""
+    if hasattr(error, "model_dump"):
+        data = error.model_dump(mode="json", exclude_none=True)
+    elif isinstance(error, dict):
+        data = {key: value for key, value in error.items() if value is not None}
+    else:
+        data = {}
+
+    code = data.get("code") or getattr(error, "code", None) or "FORMAT_DISCOVERY_ERROR"
+    message = data.get("message") or getattr(error, "message", None) or str(error)
+    data["code"] = str(code)
+    data["message"] = str(message)
+    return data
+
+
+def _format_catalog_for_product_form(formats: list[Format]) -> list[dict[str, Any]]:
+    """Convert Format models to sorted dictionaries used by admin/product forms."""
+    formats_list = []
+    for idx, fmt in enumerate(formats):
+        # Use helper function for consistent serialization
+        format_dict = _format_to_dict(fmt)
+
+        # Debug: Log first few formats
+        if idx < 5:
+            logger.info(
+                f"[DEBUG] Format {idx}: {fmt.name} - "
+                f"format_id={format_dict['format_id']}, "
+                f"dimensions={format_dict.get('dimensions')}"
+            )
+
+        # Add duration for video/audio formats from internal requirements field
+        if fmt.requirements and "duration" in fmt.requirements:
+            format_dict["duration"] = f"{fmt.requirements['duration']}s"
+        elif fmt.requirements and "duration_max" in fmt.requirements:
+            format_dict["duration"] = f"{fmt.requirements['duration_max']}s"
+
+        formats_list.append(format_dict)
+
+    # Sort by name (type field was removed from Format in adcp 3.12)
+    formats_list.sort(key=lambda x: x["name"])
+    return formats_list
+
+
+def get_creative_format_catalog(
+    tenant_id: str | None = None,
+    max_width: int | None = None,
+    max_height: int | None = None,
+    min_width: int | None = None,
+    min_height: int | None = None,
+    is_responsive: bool | None = None,
+    asset_types: list[str] | None = None,
+    name_search: str | None = None,
+) -> CreativeFormatCatalog:
+    """Get frontend-ready creative formats and discovery errors."""
+    from src.core.format_resolver import list_available_formats_with_errors
+
+    result = list_available_formats_with_errors(
+        tenant_id=tenant_id,
+        max_width=max_width,
+        max_height=max_height,
+        min_width=min_width,
+        min_height=min_height,
+        is_responsive=is_responsive,
+        asset_types=asset_types,
+        name_search=name_search,
+    )
+    formats = _format_catalog_for_product_form(result.formats)
+    errors = [_format_error_to_dict(error) for error in result.errors]
+
+    logger.info(
+        f"get_creative_formats: Returning {len(formats)} formatted formats "
+        f"and {len(errors)} discovery errors for tenant {tenant_id}"
+    )
+
+    return CreativeFormatCatalog(formats=formats, errors=errors)
 
 
 def get_creative_formats(
@@ -174,11 +272,9 @@ def get_creative_formats(
     Returns:
         List of format dictionaries for frontend
     """
-    from src.core.format_resolver import list_available_formats
-
     # Get formats from creative agent registry with optional filtering
     try:
-        formats = list_available_formats(
+        catalog = get_creative_format_catalog(
             tenant_id=tenant_id,
             max_width=max_width,
             max_height=max_height,
@@ -190,43 +286,15 @@ def get_creative_formats(
         )
     except (asyncio.CancelledError, TimeoutError, ADCPTimeoutError) as e:
         logger.warning(f"Timeout fetching formats from creative agent registry: {e}")
-        formats = []  # Return empty list if format fetching fails
+        return []  # Return empty list if format fetching fails
     except (ADCPConnectionError, ADCPError) as e:
         logger.warning(f"Failed to connect to creative agent registry: {e}")
-        formats = []  # Return empty list if format fetching fails
+        return []  # Return empty list if format fetching fails
     except RuntimeError as e:
         logger.warning(f"Runtime error fetching formats (event loop issue): {e}")
-        formats = []  # Return empty list if format fetching fails
+        return []  # Return empty list if format fetching fails
 
-    logger.info(f"get_creative_formats: Fetched {len(formats)} formats from registry for tenant {tenant_id}")
-
-    formats_list = []
-    for idx, fmt in enumerate(formats):
-        # Use helper function for consistent serialization
-        format_dict = _format_to_dict(fmt)
-
-        # Debug: Log first few formats
-        if idx < 5:
-            logger.info(
-                f"[DEBUG] Format {idx}: {fmt.name} - "
-                f"format_id={format_dict['format_id']}, "
-                f"dimensions={format_dict.get('dimensions')}"
-            )
-
-        # Add duration for video/audio formats from internal requirements field
-        if fmt.requirements and "duration" in fmt.requirements:
-            format_dict["duration"] = f"{fmt.requirements['duration']}s"
-        elif fmt.requirements and "duration_max" in fmt.requirements:
-            format_dict["duration"] = f"{fmt.requirements['duration_max']}s"
-
-        formats_list.append(format_dict)
-
-    # Sort by name (type field was removed from Format in adcp 3.12)
-    formats_list.sort(key=lambda x: x["name"])
-
-    logger.info(f"get_creative_formats: Returning {len(formats_list)} formatted formats")
-
-    return formats_list
+    return catalog.formats
 
 
 def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
@@ -788,12 +856,11 @@ def add_product(tenant_id):
                                     "warning",
                                 )
                             else:
-                                # Agent reachable — validate format IDs
-                                valid_format_ids = {fmt.format_id.id for fmt in result.formats}
-
-                                all_entries = _parse_format_entries(formats_parsed)
-                                invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                                formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
+                                # Agent reachable — validate format IDs in their agent namespace
+                                validated_formats, invalid_formats = _validate_format_entries(
+                                    formats_parsed, result.formats
+                                )
+                                formats.extend(validated_formats)
 
                                 if invalid_formats:
                                     flash(
@@ -1424,12 +1491,9 @@ def edit_product(tenant_id, product_id):
                             "warning",
                         )
                     else:
-                        # Agent reachable — validate format IDs
-                        valid_format_ids = {fmt.format_id.id for fmt in result.formats}
-
-                        all_entries = _parse_format_entries(formats_parsed)
-                        invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
-                        validated_formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
+                        # Agent reachable — validate format IDs in their agent namespace
+                        valid_entries, invalid_formats = _validate_format_entries(formats_parsed, result.formats)
+                        validated_formats.extend(valid_entries)
 
                         if invalid_formats:
                             flash(

@@ -752,7 +752,7 @@ def reset_stuck_sync(tenant_id):
 
 @gam_bp.route("/create-service-account", methods=["POST"])
 @log_admin_action("create_gam_service_account")
-@require_tenant_access(api_mode=True, role=("admin",))
+@require_tenant_access(role=("admin",))
 def create_service_account(tenant_id):
     """Create a GCP service account for GAM integration.
 

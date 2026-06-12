@@ -210,18 +210,55 @@ class TestAdapterDryRun:
                 tenant_id="tenant_ss_1",
             )
 
-    def test_live_mode_requires_demand_partner_id(self):
+    def test_construction_succeeds_without_demand_partner_id(self):
+        # Sync-only callers (e.g. the scheduler's stub principal) must be able
+        # to construct the adapter without a demand_partner_id configured.
+        principal = MagicMock()
+        principal.principal_id = "__sync_orchestrator__"
+        principal.get_adapter_id.return_value = None
+
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+        assert adapter.demand_partner_id is None
+
+    def test_buyer_operations_require_demand_partner_id(self):
+        # The ValueError must surface at operation time, not at construction,
+        # so that sync paths can instantiate the adapter without a principal
+        # that has a demand_partner_id configured (e.g. __sync_orchestrator__).
         principal = MagicMock()
         principal.principal_id = "principal_no_dp"
-        principal.get_adapter_id.return_value = None  # no mapping
+        principal.get_adapter_id.return_value = None
+
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=principal,
+            dry_run=False,
+            tenant_id="tenant_ss_1",
+        )
+        assert adapter.demand_partner_id is None
 
         with pytest.raises(ValueError, match="demand_partner_id"):
-            SpringServeAdapter(
-                config={"api_token": "tok"},
-                principal=principal,
-                dry_run=False,
-                tenant_id="tenant_ss_1",
-            )
+            adapter._require_demand_partner_id()
+
+    def test_dry_run_create_media_buy_succeeds_without_demand_partner_id(self, sample_request, sample_packages):
+        # dry_run must succeed even without a demand_partner_id — operators
+        # scaffold adapters in dry-run before provisioning is complete.
+        principal = MagicMock()
+        principal.principal_id = "__sync_orchestrator__"
+        principal.get_adapter_id.return_value = None
+
+        adapter = SpringServeAdapter(
+            config={"api_token": "tok"},
+            principal=principal,
+            dry_run=True,
+            tenant_id="tenant_ss_1",
+        )
+        result = invoke_create_media_buy(adapter, sample_request, sample_packages)
+        assert result is not None
 
     def test_default_demand_partner_id_fallback(self):
         principal = MagicMock()

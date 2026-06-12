@@ -83,6 +83,7 @@ from src.admin.services.publisher_property_authorization import (
     seed_local_example_publisher_authorization_for_selectors,
     validate_publisher_property_selectors,
 )
+from src.admin.services.tenant_status_service import invalidate_status_cache
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdvertiserRoutingRule,
@@ -264,6 +265,7 @@ def create_inventory_profile(tenant_id: str):
         session.flush()
         _refresh_inventory_profile_etag(profile)
         session.commit()
+        invalidate_status_cache(tenant_id)
         body = _inventory_profile_to_read(profile)
         return jsonify(body), 201, {"ETag": f'"{profile.etag}"'}
 
@@ -320,6 +322,7 @@ def update_inventory_profile(tenant_id: str, profile_id: str):
             profile.constraints = payload.constraints.model_dump()
         _refresh_inventory_profile_etag(profile)
         session.commit()
+        invalidate_status_cache(tenant_id)
         return jsonify(_inventory_profile_to_read(profile)), 200, {"ETag": f'"{profile.etag}"'}
 
 
@@ -339,6 +342,7 @@ def delete_inventory_profile(tenant_id: str, profile_id: str):
             )
         repo.delete(profile)
         session.commit()
+        invalidate_status_cache(tenant_id)
         return "", 204
 
 

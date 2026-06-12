@@ -39,6 +39,7 @@ from src.core.schemas.account import (
     SyncAccountsResponse,
     SyncResponseAccount,
 )
+from src.core.tools.account_status import wire_status
 from src.core.tracing import traced
 from src.services.protocol_change_webhooks import notify_account_status_changed_async
 from src.services.push_notification_registration import (
@@ -50,41 +51,12 @@ from src.services.push_notification_registration import (
 logger = logging.getLogger(__name__)
 
 
-# Internal status values that the wire spec doesn't model. Mapped to spec
-# enums at every wire-emit boundary so SyncResponseAccount / Account
-# Pydantic validation accepts them. Internal logic (routing in
-# media_buy_create, provisioning in account_provisioning) still reads the
-# raw DB column to distinguish the two.
-#
-# #332: ``pending_provision`` collapses to ``pending_approval`` — both mean
-# "buyer can't use this account yet, operator-side work pending"; the AdCP
-# Account.status enum doesn't distinguish "waiting for human approval"
-# from "waiting for technical provisioning" at the buyer-visible level.
-_INTERNAL_TO_WIRE_STATUS = {
-    "pending_provision": "pending_approval",
-}
-
-
-def _wire_status(status: str | None) -> str | None:
-    """Translate internal lifecycle status to a spec-valid AccountStatus.
-
-    Spec enum (``adcp.types.AccountStatus``):
-        active, pending_approval, rejected, payment_required, suspended, closed
-
-    Anything not in the translation map passes through unchanged — only
-    internal-only states need rewriting.
-    """
-    if status is None:
-        return None
-    return _INTERNAL_TO_WIRE_STATUS.get(status, status)
-
-
 def _db_account_to_schema(db_account: DBAccount, notification_configs: list[dict[str, Any]] | None = None) -> Account:
     """Convert ORM Account to Pydantic schema Account."""
     return Account(
         account_id=db_account.account_id,
         name=db_account.name,
-        status=_wire_status(db_account.status),
+        status=wire_status(db_account.status),
         advertiser=db_account.advertiser,
         billing_proxy=db_account.billing_proxy,
         brand=db_account.brand,
@@ -357,7 +329,7 @@ def _build_sync_result(
         brand=brand,
         operator=operator,
         action=action,
-        status=_wire_status(status),
+        status=wire_status(status),
         name=name,
         billing=billing,
         sandbox=sandbox,

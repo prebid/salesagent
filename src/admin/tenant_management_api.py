@@ -74,6 +74,7 @@ from src.admin.api_schemas.tenant_management import (
     ListAdaptersResponse,
     ListAuditLogResponse,
     ListBuyerAdvertiserMappingsResponse,
+    ListCreativeFormatsForAuthoringQuery,
     ListCreativeFormatsForAuthoringResponse,
     ListGamAdvertisersResponse,
     ListInventorySelectorsResponse,
@@ -105,11 +106,14 @@ from src.admin.api_schemas.tenant_management import (
     RejectWorkflowRequest,
     SignalAdapterCapabilitiesResponse,
     SignalCandidateSummary,
+    SignalCandidateTypeCapability,
     SignalMappingKindCapability,
+    SignalMappingKindTargetingSemantics,
     SignalMappingRequest,
     SignalMappingResponse,
     SignalMappingValidationIssue,
     SignalMappingValidationResponse,
+    SignalTargetingSemantics,
     SpringServeAdapterConfig,
     SpringServeSettings,
     TargetingValuesRefreshResponse,
@@ -1120,8 +1124,67 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                 "properties": {
                     "type": {"const": "passthrough"},
                     "kind": {"const": "gam_targeting_groups"},
-                    "groups": {"type": "array", "minItems": 1},
+                    "groups": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "OR-ed targeting groups. Criteria within one group are AND-ed.",
+                        "items": {
+                            "type": "object",
+                            "required": ["criteria"],
+                            "properties": {
+                                "criteria": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "description": "AND-ed criteria for one group.",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["keyId", "values"],
+                                        "properties": {
+                                            "keyId": {
+                                                "type": "string",
+                                                "description": (
+                                                    "GAM custom targeting key ID. Browse keys with "
+                                                    "candidate_type=custom_targeting_key."
+                                                ),
+                                            },
+                                            "values": {
+                                                "type": "array",
+                                                "minItems": 1,
+                                                "description": (
+                                                    "OR-ed GAM custom targeting value IDs or names under keyId. "
+                                                    "Browse values with candidate_type=custom_targeting_value "
+                                                    "and parent_id={keyId}."
+                                                ),
+                                                "items": {"type": "string"},
+                                            },
+                                            "exclude": {
+                                                "type": "boolean",
+                                                "default": False,
+                                                "description": "When true, negates this criterion in GAM targeting.",
+                                            },
+                                        },
+                                        "additionalProperties": False,
+                                    },
+                                }
+                            },
+                            "additionalProperties": False,
+                        },
+                    },
                     "mode": {"enum": ["include", "exclude"]},
+                },
+                "x-authoring": {
+                    "composition_model": "groups",
+                    "canonical_criterion_casing": "camelCase",
+                    "operators": {
+                        "groups": "OR",
+                        "criteria": "AND",
+                        "values": "OR",
+                    },
+                    "candidate_browser": {
+                        "key_candidate_type": "custom_targeting_key",
+                        "value_candidate_type": "custom_targeting_value",
+                        "value_parent_filter": "keyId",
+                    },
                 },
             },
         ),
@@ -1131,7 +1194,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
             mapping_kind="freewheel_viewership_profile",
             label="FreeWheel Viewership Profile",
             description="FreeWheel viewership profile ID exposed as a binary buyer-facing signal.",
-            candidate_type="standard_attribute",
+            candidate_type="viewership_profile",
             adapter_config_schema={
                 "type": "object",
                 "required": ["kind", "profile_id"],
@@ -1139,7 +1202,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                     "type": {"const": "passthrough"},
                     "kind": {"const": "freewheel_viewership_profile"},
                     "profile_id": {"type": "string"},
-                    "mode": {"enum": ["include", "exclude"]},
+                    "mode": {"enum": ["include"]},
                 },
             },
         ),
@@ -1156,7 +1219,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                     "type": {"const": "passthrough"},
                     "kind": {"const": "freewheel_audience_item"},
                     "item_id": {"type": "string"},
-                    "mode": {"enum": ["include", "exclude"]},
+                    "mode": {"enum": ["include"]},
                 },
             },
         ),
@@ -1174,7 +1237,7 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
                     "kind": {"const": "freewheel_custom_kv"},
                     "key": {"type": "string"},
                     "value_id": {"type": "string"},
-                    "mode": {"enum": ["include", "exclude"]},
+                    "mode": {"enum": ["include"]},
                 },
             },
         ),
@@ -1204,6 +1267,207 @@ _SIGNAL_MAPPING_CAPABILITIES: dict[str, list[SignalMappingKindCapability]] = {
 }
 
 
+def _candidate_type_capability(
+    *,
+    candidate_type: str,
+    label: str,
+    description: str | None = None,
+    mapping_kind: str | None = None,
+    parent_candidate_type: str | None = None,
+    child_candidate_types: list[str] | None = None,
+    supports_search: bool = True,
+    supports_pagination: bool = True,
+    supports_parent_filter: bool = False,
+) -> SignalCandidateTypeCapability:
+    directly_mappable = mapping_kind is not None
+    return SignalCandidateTypeCapability(
+        candidate_type=candidate_type,
+        label=label,
+        description=description,
+        mapping_kind=mapping_kind,
+        directly_mappable=directly_mappable,
+        browse_only=not directly_mappable,
+        parent_candidate_type=parent_candidate_type,
+        child_candidate_types=list(child_candidate_types or []),
+        supports_search=supports_search,
+        supports_pagination=supports_pagination,
+        supports_parent_filter=supports_parent_filter,
+    )
+
+
+_SIGNAL_CANDIDATE_TYPE_CAPABILITIES: dict[str, list[SignalCandidateTypeCapability]] = {
+    "google_ad_manager": [
+        _candidate_type_capability(
+            candidate_type="audience_segment",
+            label="GAM Audience Segment",
+            description="Directly mappable Google Ad Manager audience segment.",
+            mapping_kind="audience_segment",
+        ),
+        _candidate_type_capability(
+            candidate_type="custom_targeting_key",
+            label="GAM Custom Targeting Key",
+            description="Browse-only parent key used to discover custom targeting values.",
+            child_candidate_types=["custom_targeting_value"],
+        ),
+        _candidate_type_capability(
+            candidate_type="custom_targeting_value",
+            label="GAM Custom Targeting Value",
+            description="Directly mappable value under a custom targeting key.",
+            mapping_kind="custom_key_value",
+            parent_candidate_type="custom_targeting_key",
+            supports_parent_filter=True,
+        ),
+    ],
+    "springserve": [
+        _candidate_type_capability(
+            candidate_type="key",
+            label="SpringServe Key",
+            description="Browse-only parent key used to discover value lists.",
+            child_candidate_types=["value_list"],
+        ),
+        _candidate_type_capability(
+            candidate_type="value_list",
+            label="SpringServe Value List",
+            description="Directly mappable value list under a SpringServe key.",
+            mapping_kind="springserve_value_list",
+            parent_candidate_type="key",
+            supports_parent_filter=True,
+        ),
+    ],
+    "freewheel": [
+        _candidate_type_capability(
+            candidate_type="viewership_profile",
+            label="FreeWheel Viewership Profile",
+            description="Directly mappable FreeWheel viewership profile candidate.",
+            mapping_kind="freewheel_viewership_profile",
+        ),
+    ],
+    "broadstreet": [],
+    "mock": [],
+}
+
+
+def _mapping_targeting_semantics(
+    *,
+    mapping_kind: str,
+    supports_composed: bool,
+    composition_models: list[str],
+    supported_modes: list[str],
+    buyer_targeting_fields: list[str],
+    participates_in_composed_authoring: bool,
+    exclusive_with_other_signals: bool = False,
+    notes: str | None = None,
+) -> SignalMappingKindTargetingSemantics:
+    return SignalMappingKindTargetingSemantics(
+        mapping_kind=mapping_kind,
+        supports_composed=supports_composed,
+        composition_models=composition_models,
+        supported_modes=supported_modes,
+        buyer_targeting_fields=buyer_targeting_fields,
+        participates_in_composed_authoring=participates_in_composed_authoring,
+        exclusive_with_other_signals=exclusive_with_other_signals,
+        notes=notes,
+    )
+
+
+_AUDIENCE_TARGETING_FIELDS = ["audience_include", "audience_exclude"]
+
+_SIGNAL_TARGETING_SEMANTICS: dict[str, SignalTargetingSemantics] = {
+    "google_ad_manager": SignalTargetingSemantics(
+        supports_composed=True,
+        composition_models=["flat_criteria", "groups"],
+        supported_modes=["include", "exclude"],
+        buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+        mapping_kinds=[
+            _mapping_targeting_semantics(
+                mapping_kind="audience_segment",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="custom_key_value",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="gam_targeting_groups",
+                supports_composed=True,
+                composition_models=["groups"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=True,
+                exclusive_with_other_signals=True,
+                notes="Group-based GAM targeting signals must be selected alone in a media-buy audience list.",
+            ),
+        ],
+    ),
+    "springserve": SignalTargetingSemantics(
+        supports_composed=False,
+        composition_models=["passthrough"],
+        supported_modes=["include", "exclude"],
+        buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+        mapping_kinds=[
+            _mapping_targeting_semantics(
+                mapping_kind="springserve_value_list",
+                supports_composed=False,
+                composition_models=["passthrough"],
+                supported_modes=["include", "exclude"],
+                buyer_targeting_fields=_AUDIENCE_TARGETING_FIELDS,
+                participates_in_composed_authoring=False,
+                notes="SpringServe resolves one publisher-curated value list per signal; composed signals are not supported.",
+            ),
+        ],
+    ),
+    "freewheel": SignalTargetingSemantics(
+        supports_composed=True,
+        composition_models=["flat_criteria"],
+        supported_modes=["include"],
+        buyer_targeting_fields=["audience_include"],
+        mapping_kinds=[
+            _mapping_targeting_semantics(
+                mapping_kind="freewheel_viewership_profile",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include"],
+                buyer_targeting_fields=["audience_include"],
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="freewheel_audience_item",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include"],
+                buyer_targeting_fields=["audience_include"],
+                participates_in_composed_authoring=True,
+            ),
+            _mapping_targeting_semantics(
+                mapping_kind="freewheel_custom_kv",
+                supports_composed=True,
+                composition_models=["passthrough", "flat_criteria"],
+                supported_modes=["include"],
+                buyer_targeting_fields=["audience_include"],
+                participates_in_composed_authoring=True,
+                notes="FreeWheel has no native signal exclusion; audience_exclude references are rejected.",
+            ),
+        ],
+    ),
+    "broadstreet": SignalTargetingSemantics(),
+    "mock": SignalTargetingSemantics(),
+}
+
+_DEFAULT_SIGNAL_CANDIDATE_TYPE: dict[str, str] = {
+    "google_ad_manager": "audience_segment",
+    "springserve": "key",
+    "freewheel": "viewership_profile",
+}
+
+
 def _tenant_adapter_type(tenant: Tenant, adapter: AdapterConfig | None = None) -> str:
     """Return the canonical adapter type for a tenant."""
     configured = adapter.adapter_type if adapter is not None else tenant.ad_server
@@ -1228,24 +1492,21 @@ def _supported_signal_mapping_kinds(adapter_type: str) -> set[str]:
 
 
 def _supported_signal_candidate_types(adapter_type: str) -> set[str]:
-    candidate_types = {
-        cap.candidate_type for cap in _SIGNAL_MAPPING_CAPABILITIES.get(adapter_type, []) if cap.candidate_type
-    }
-    if adapter_type == "google_ad_manager":
-        candidate_types.add("custom_targeting_key")
-    if adapter_type == "springserve":
-        candidate_types.add("key")
-    return candidate_types
+    return {cap.candidate_type for cap in _SIGNAL_CANDIDATE_TYPE_CAPABILITIES.get(adapter_type, [])}
 
 
-def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, str]:
+def _format_id_dict(format_id: FormatIdRef | dict[str, Any]) -> dict[str, Any]:
     from src.core.canonical_formats import canonicalize_format_ref
 
     canonical = canonicalize_format_ref(format_id)
-    return {"agent_url": str(canonical["agent_url"]), "id": str(canonical["id"])}
+    result: dict[str, Any] = {"agent_url": str(canonical["agent_url"]), "id": str(canonical["id"])}
+    for key in ("width", "height", "duration_ms"):
+        if canonical.get(key) is not None:
+            result[key] = canonical[key]
+    return result
 
 
-def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -> list[dict[str, str]]:
+def _creative_format_id_dicts(creative_formats: list[WholesaleCreativeFormat]) -> list[dict[str, Any]]:
     return [_format_id_dict(fmt.format_id) for fmt in creative_formats]
 
 
@@ -1342,7 +1603,7 @@ def _creative_format_schema_from_stored(
             slot_requirements = list(binding.get("slot_requirements") or [])
             break
     return WholesaleCreativeFormat(
-        format_id=FormatIdRef(agent_url=str(canonical_format_id["agent_url"]), id=str(canonical_format_id["id"])),
+        format_id=FormatIdRef.model_validate(canonical_format_id),
         slot_requirements=slot_requirements,
     )
 
@@ -1538,8 +1799,15 @@ def _publisher_property_validation_issues(
     ]
 
 
-def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None:
+def _creative_format_identity(format_id: FormatIdRef | dict[str, Any]):
+    from src.core.format_cache import canonical_format_identity
+
+    return canonical_format_identity(_format_id_dict(format_id))
+
+
+def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str, int | None, int | None, int | None]] | None:
     from src.admin.blueprints.products import get_creative_formats
+    from src.core.format_cache import canonical_format_identity
 
     try:
         formats = get_creative_formats(tenant_id=tenant_id)
@@ -1547,7 +1815,7 @@ def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None
         logger.warning("Unable to validate wholesale creative format IDs for tenant %s", tenant_id, exc_info=True)
         return None
 
-    refs: set[tuple[str, str]] = set()
+    refs: set[tuple[str, str, int | None, int | None, int | None]] = set()
     for fmt in formats:
         raw_format_id = fmt.get("format_id") or {}
         if not raw_format_id and fmt.get("agent_url") and fmt.get("id"):
@@ -1555,7 +1823,7 @@ def _catalog_creative_format_refs(tenant_id: str) -> set[tuple[str, str]] | None
         agent_url = raw_format_id.get("agent_url")
         format_id = raw_format_id.get("id")
         if agent_url and format_id:
-            refs.add((str(agent_url), str(format_id)))
+            refs.add(canonical_format_identity(raw_format_id))
     return refs
 
 
@@ -1580,7 +1848,7 @@ def _creative_format_validation_issues(
     issues: list[WholesaleValidationIssue] = []
     for idx, creative_format in enumerate(req.inventory.creative_formats):
         raw_format_id = _format_id_dict(creative_format.format_id)
-        if (raw_format_id["agent_url"], raw_format_id["id"]) not in catalog_refs:
+        if _creative_format_identity(creative_format.format_id) not in catalog_refs:
             issues.append(
                 WholesaleValidationIssue(
                     code="creative_format_not_found",
@@ -1810,7 +2078,7 @@ def _springserve_signal_candidate(row: SpringServeInventory) -> SignalCandidateS
     )
 
 
-def _freewheel_signal_candidate(row: FreeWheelInventory) -> SignalCandidateSummary:
+def _freewheel_signal_candidate(row: FreeWheelInventory, candidate_type: str | None = None) -> SignalCandidateSummary:
     metadata = dict(row.raw_json or {})
     raw_id = str(metadata.get("id") or row.entity_id.split(":")[-1])
     adapter_config: dict[str, Any] | None = None
@@ -1826,7 +2094,7 @@ def _freewheel_signal_candidate(row: FreeWheelInventory) -> SignalCandidateSumma
             adapter_config=adapter_config,
         )
     return SignalCandidateSummary(
-        candidate_type=row.entity_type,
+        candidate_type=candidate_type or row.entity_type,
         external_id=row.entity_id,
         name=row.name,
         parent_id=row.parent_id,
@@ -1882,6 +2150,15 @@ def _signal_candidate_rows(
         )
         return [_springserve_signal_candidate(row) for row in rows]
     if adapter_type == "freewheel":
+        if candidate_type == "viewership_profile":
+            rows = FreeWheelInventoryRepository(session, tenant_id).search(
+                "standard_attribute",
+                q=q,
+                parent_id="viewership_profiles",
+                offset=offset,
+                limit=limit,
+            )
+            return [_freewheel_signal_candidate(row, candidate_type="viewership_profile") for row in rows]
         rows = FreeWheelInventoryRepository(session, tenant_id).search(
             candidate_type,
             q=q,
@@ -1953,6 +2230,19 @@ def _signal_config_atoms(adapter_config: dict[str, Any]) -> list[dict[str, Any]]
     return [adapter_config]
 
 
+def _signal_mapping_semantics_for_kind(
+    adapter_type: str,
+    mapping_kind: str,
+) -> SignalMappingKindTargetingSemantics | None:
+    semantics = _SIGNAL_TARGETING_SEMANTICS.get(adapter_type)
+    if semantics is None:
+        return None
+    for mapping_semantics in semantics.mapping_kinds:
+        if mapping_semantics.mapping_kind == mapping_kind:
+            return mapping_semantics
+    return None
+
+
 def _validate_signal_config_shape(
     req: SignalMappingRequest,
     adapter_type: str,
@@ -1993,6 +2283,19 @@ def _validate_signal_config_shape(
                 message="adapter_config.type='composed' requires a non-empty criteria list.",
             )
         )
+    composed_config = req.adapter_config.get("type") == "composed"
+    adapter_supports_composed = True
+    if composed_config:
+        adapter_semantics = _SIGNAL_TARGETING_SEMANTICS.get(adapter_type, SignalTargetingSemantics())
+        adapter_supports_composed = adapter_semantics.supports_composed
+        if not adapter_supports_composed:
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="unsupported_composed_config",
+                    field="adapter_config.type",
+                    message=f"Adapter {adapter_type!r} does not support composed signal mappings.",
+                )
+            )
     if not atoms:
         issues.append(
             SignalMappingValidationIssue(
@@ -2016,6 +2319,20 @@ def _validate_signal_config_shape(
                 )
             )
             continue
+        mapping_semantics = _signal_mapping_semantics_for_kind(adapter_type, str(kind))
+        if (
+            composed_config
+            and adapter_supports_composed
+            and mapping_semantics
+            and "flat_criteria" not in mapping_semantics.composition_models
+        ):
+            issues.append(
+                SignalMappingValidationIssue(
+                    code="unsupported_signal_composed_mapping_kind",
+                    field=f"{field_prefix}.kind",
+                    message=(f"Signal mapping kind {kind!r} cannot be used inside adapter_config.type='composed'."),
+                )
+            )
         if atom.get("mode", "include") not in {"include", "exclude"}:
             issues.append(
                 SignalMappingValidationIssue(
@@ -2024,6 +2341,17 @@ def _validate_signal_config_shape(
                     message="mode must be either 'include' or 'exclude'.",
                 )
             )
+        else:
+            supported_modes = set(mapping_semantics.supported_modes if mapping_semantics else [])
+            mode = atom.get("mode", "include")
+            if supported_modes and mode not in supported_modes:
+                issues.append(
+                    SignalMappingValidationIssue(
+                        code="unsupported_signal_mapping_mode",
+                        field=f"{field_prefix}.mode",
+                        message=f"Signal mapping kind {kind!r} supports mode(s): {', '.join(sorted(supported_modes))}.",
+                    )
+                )
         for required_field in _required_signal_config_fields(str(kind)):
             if not atom.get(required_field):
                 issues.append(
@@ -2507,9 +2835,9 @@ def get_inventory_adapter_capabilities(tenant_id: str):
 @spec.validate(resp=Response(HTTP_200=ListInventorySelectorsResponse, HTTP_400=ApiError, HTTP_404=ApiError))
 def list_inventory_selectors(tenant_id: str):
     """Search cached ad-server inventory selectors for wholesale-product setup."""
-    selector_type = request.args.get("selector_type")
+    selector_type = request.args.get("selector_type") or request.args.get("selectorType")
     q = request.args.get("q")
-    parent_id = request.args.get("parent_id")
+    parent_id = request.args.get("parent_id") or request.args.get("parentId")
     try:
         limit = min(max(int(request.args.get("limit", "50")), 1), 100)
         offset = max(int(request.args.get("cursor", "0")), 0)
@@ -2773,8 +3101,11 @@ def lookup_publisher_properties_for_authoring(tenant_id: str):
 
 @tenant_management_api.route("/tenants/<tenant_id>/creative-formats", methods=["GET"])
 @require_tenant_management_api_key
-@spec.validate(resp=Response(HTTP_200=ListCreativeFormatsForAuthoringResponse, HTTP_404=ApiError))
-def list_creative_formats_for_authoring(tenant_id: str):
+@spec.validate(
+    query=ListCreativeFormatsForAuthoringQuery,
+    resp=Response(HTTP_200=ListCreativeFormatsForAuthoringResponse, HTTP_404=ApiError),
+)
+def list_creative_formats_for_authoring(tenant_id: str, query: ListCreativeFormatsForAuthoringQuery):
     """Return creative formats usable in wholesale-product authoring."""
     with get_db_session() as session:
         tenant, _adapter, error = _require_tenant_for_authoring(session, tenant_id)
@@ -2782,24 +3113,25 @@ def list_creative_formats_for_authoring(tenant_id: str):
             return error
         assert tenant is not None
 
-    from src.admin.blueprints.products import get_creative_formats
+    from src.admin.blueprints.products import get_creative_format_catalog
 
-    formats = get_creative_formats(
+    catalog = get_creative_format_catalog(
         tenant_id=tenant_id,
-        name_search=request.args.get("q"),
-        asset_types=request.args.getlist("asset_type") or None,
+        name_search=query.q,
+        asset_types=query.asset_type or None,
     )
     response_formats: list[CreativeFormatSummary] = []
-    for fmt in formats:
+    for fmt in catalog.formats:
         raw_format_id = fmt.get("format_id") or {}
         if not raw_format_id and fmt.get("agent_url") and fmt.get("id"):
             raw_format_id = {"agent_url": fmt["agent_url"], "id": fmt["id"]}
         if not raw_format_id.get("agent_url") or not raw_format_id.get("id"):
             continue
+        canonical_format_id = _format_id_dict(raw_format_id)
         response_formats.append(
             CreativeFormatSummary(
-                format_id=FormatIdRef(agent_url=str(raw_format_id["agent_url"]), id=str(raw_format_id["id"])),
-                name=str(fmt.get("name") or raw_format_id["id"]),
+                format_id=FormatIdRef.model_validate(canonical_format_id),
+                name=str(fmt.get("name") or canonical_format_id["id"]),
                 dimensions=fmt.get("dimensions"),
                 asset_types=list(fmt.get("asset_types") or []),
                 requirements=dict(fmt.get("requirements") or {}),
@@ -2809,8 +3141,9 @@ def list_creative_formats_for_authoring(tenant_id: str):
     response = ListCreativeFormatsForAuthoringResponse(
         creative_formats=response_formats,
         count=len(response_formats),
+        errors=catalog.errors,
     )
-    return jsonify(response.model_dump())
+    return jsonify(response.model_dump(mode="json", exclude_none=True))
 
 
 @tenant_management_api.route("/tenants/<tenant_id>/signals/adapter-capabilities", methods=["GET"])
@@ -2825,10 +3158,15 @@ def get_signal_adapter_capabilities(tenant_id: str):
         assert tenant is not None
         adapter_type = _tenant_adapter_type(tenant, adapter)
         mapping_kinds = _SIGNAL_MAPPING_CAPABILITIES.get(adapter_type, [])
+        candidate_types = _SIGNAL_CANDIDATE_TYPE_CAPABILITIES.get(adapter_type, [])
         response = SignalAdapterCapabilitiesResponse(
             adapter=adapter_type,
             supports_signal_mapping_authoring=bool(mapping_kinds),
             mapping_kinds=mapping_kinds,
+            supported_candidate_types=[cap.candidate_type for cap in candidate_types],
+            candidate_types=candidate_types,
+            default_candidate_type=_DEFAULT_SIGNAL_CANDIDATE_TYPE.get(adapter_type),
+            targeting_semantics=_SIGNAL_TARGETING_SEMANTICS.get(adapter_type, SignalTargetingSemantics()),
         )
         return jsonify(response.model_dump())
 
@@ -3175,6 +3513,7 @@ def create_wholesale_product(tenant_id: str):
         if existing_profile is None:
             profile_repo.add(profile)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         publish_product_catalog_change(
             tenant_id=tenant_id,
@@ -3260,6 +3599,7 @@ def put_wholesale_product(tenant_id: str, product_id: str):
         if legacy_product is not None:
             ProductRepository(session, tenant_id).delete(legacy_product)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         publish_product_catalog_change(
             tenant_id=tenant_id,
@@ -3295,6 +3635,7 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
         ):
             ProductRepository(session, tenant_id).delete(legacy_product)
             session.commit()
+            invalidate_status_cache(tenant_id)
             publish_product_record_catalog_change(tenant_id=tenant_id, action="deleted", product=legacy_product)
             response = DeleteWholesaleProductResponse(success=True, message=f"Wholesale product {product_id!r} deleted")
             return jsonify(response.model_dump())
@@ -3308,6 +3649,7 @@ def delete_wholesale_product(tenant_id: str, product_id: str):
             ProductRepository(session, tenant_id).delete(legacy_product)
         profile_repo.delete(profile)
         session.commit()
+        invalidate_status_cache(tenant_id)
 
         publish_product_catalog_change(
             tenant_id=tenant_id,
@@ -4289,6 +4631,71 @@ def delete_tenant(tenant_id):
 # ---------------------------------------------------------------------------
 
 
+def _auto_provision_gam_default_advertiser(tenant_id: str, adapter_dict: dict) -> None:
+    """Ensure the default GAM advertiser exists and record it on the tenant.
+
+    Checks the local sync cache first. If the advertiser is already cached,
+    records it without a GAM API call. Otherwise calls ensure to find-or-create
+    it in GAM, then records the result.
+
+    Only called when the caller has explicitly opted in via
+    ``provision_default_resources=True``. Failures are logged but do not
+    propagate — the tenant is still valid.
+    """
+    try:
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            tenant_row = session.get(Tenant, tenant_id)
+            if tenant_row is None:
+                logger.warning("[provision] tenant not found when setting default GAM advertiser tenant=%s", tenant_id)
+                return
+            cached = GAMSyncRepository(session, tenant_id).find_advertiser_by_name(_GAM_DEFAULT_ADVERTISER_NAME)
+            if cached is not None:
+                tenant_row.default_gam_advertiser_id = cached.advertiser_id
+                session.commit()
+                logger.info(
+                    "[provision] default GAM advertiser set from cache tenant=%s advertiser_id=%s",
+                    tenant_id,
+                    cached.advertiser_id,
+                )
+                return
+
+        result = gam_ensure_advertiser_companyservice(
+            network_code=str(adapter_dict["network_code"]),
+            config=adapter_dict,
+            name=_GAM_DEFAULT_ADVERTISER_NAME,
+        )
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            tenant_row = session.get(Tenant, tenant_id)
+            if tenant_row is None:
+                return
+            tenant_row.default_gam_advertiser_id = result.advertiser_id
+            GAMSyncRepository(session, tenant_id).upsert_advertiser(
+                advertiser_id=result.advertiser_id,
+                name=_GAM_DEFAULT_ADVERTISER_NAME,
+                status="active",
+                synced_at=datetime.now(UTC),
+            )
+            if result.created:
+                adapter = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+                if adapter is not None:
+                    adapter.gam_advertiser_create_permission_proven_at = datetime.now(UTC)
+            session.commit()
+        logger.info(
+            "[provision] default GAM advertiser set tenant=%s advertiser_id=%s created=%s",
+            tenant_id,
+            result.advertiser_id,
+            result.created,
+        )
+    except Exception:
+        logger.exception(
+            "[provision] default GAM advertiser auto-provision failed for tenant=%s — "
+            "tenant is still provisioned; use the ensure endpoint to set default_gam_advertiser_id manually",
+            tenant_id,
+        )
+
+
 @tenant_management_api.route("/tenants/provision", methods=["POST"])
 @require_tenant_management_api_key
 @spec.validate(
@@ -4491,6 +4898,10 @@ def provision_tenant():
             "tenant is still provisioned; next /refresh or cron tick will sync",
             tenant_id,
         )
+
+    if req.provision_default_resources and not req.default_gam_advertiser_id:
+        if adapter_dict.get("type") == "google_ad_manager":
+            _auto_provision_gam_default_advertiser(tenant_id, adapter_dict)
 
     mcp_url, a2a_url, admin_url_path = _surface_urls(tenant_id, subdomain, request.url_root)
     response = ProvisionTenantResponse(
@@ -5865,6 +6276,7 @@ def refresh_targeting_values(tenant_id: str, key_id: str):
 
 _GAM_ADVERTISERS_DEFAULT_LIMIT = 50
 _GAM_ADVERTISERS_MAX_LIMIT = 500
+_GAM_DEFAULT_ADVERTISER_NAME = "Interchange - Default"
 
 
 def _decode_advertisers_cursor(raw: str | None) -> int:

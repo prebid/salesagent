@@ -71,6 +71,32 @@ def _rounded_guidance(guidance: dict[str, float | None]) -> dict[str, float | No
     return {key: (round(value, 2) if value is not None else None) for key, value in guidance.items()}
 
 
+def _price_guidance_dimensions(*, include_placements: bool, include_ad_units: bool) -> list[str]:
+    dimensions: list[str] = []
+    if include_placements:
+        dimensions.extend(["PLACEMENT_ID", "PLACEMENT_NAME"])
+    if include_ad_units:
+        dimensions.extend(["AD_UNIT_ID", "AD_UNIT_NAME"])
+    dimensions.extend(["COUNTRY_CODE", "COUNTRY_NAME", "LINE_ITEM_ID", "LINE_ITEM_NAME", "LINE_ITEM_TYPE"])
+    return dimensions
+
+
+def _price_guidance_inventory_target(row: dict[str, Any]) -> dict[str, str]:
+    placement_id = str(row.get("placement_id") or "").strip()
+    if placement_id:
+        return {
+            "kind": "placement",
+            "id": placement_id,
+            "name": str(row.get("placement_name") or placement_id),
+        }
+    ad_unit_id = str(row.get("ad_unit_id") or "").strip()
+    return {
+        "kind": "ad_unit",
+        "id": ad_unit_id,
+        "name": str(row.get("ad_unit_name") or ad_unit_id),
+    }
+
+
 def _total_result_set_size(page: Any) -> int:
     if page is None:
         return 0
@@ -624,6 +650,7 @@ class GAMReportingService:
         date_range: Literal["lifetime", "this_month", "today"],
         *,
         placement_ids: list[str] | None = None,
+        ad_unit_ids: list[str] | None = None,
         countries: list[str] | None = None,
         line_item_types: list[str] | None = None,
         min_group_impressions: int = 10_000,
@@ -649,15 +676,10 @@ class GAMReportingService:
             requested_tz=requested_timezone,
             include_date=False,
         )
-        dimensions = [
-            "PLACEMENT_ID",
-            "PLACEMENT_NAME",
-            "COUNTRY_CODE",
-            "COUNTRY_NAME",
-            "LINE_ITEM_ID",
-            "LINE_ITEM_NAME",
-            "LINE_ITEM_TYPE",
-        ]
+        include_placements = bool(placement_ids) or not ad_unit_ids
+        dimensions = _price_guidance_dimensions(
+            include_placements=include_placements, include_ad_units=bool(ad_unit_ids)
+        )
 
         effective_line_item_types = ["PRICE_PRIORITY"] if line_item_types is None else line_item_types
 
@@ -666,6 +688,7 @@ class GAMReportingService:
             start_date=start_date,
             end_date=end_date,
             placement_ids=placement_ids,
+            ad_unit_ids=ad_unit_ids,
             countries=countries,
             line_item_types=effective_line_item_types,
         )
@@ -711,6 +734,7 @@ class GAMReportingService:
             },
             "filters": {
                 "placement_ids": placement_ids or [],
+                "ad_unit_ids": ad_unit_ids or [],
                 "countries": countries or [],
                 "line_item_types": effective_line_item_types,
             },
@@ -1161,13 +1185,14 @@ class GAMReportingService:
         start_date: datetime,
         end_date: datetime,
         placement_ids: list[str] | None,
+        ad_unit_ids: list[str] | None,
         countries: list[str] | None,
         line_item_types: list[str] | None,
     ) -> dict[str, Any]:
         where_clauses: list[str] = []
-        placement_filter = self._numeric_in_filter("PLACEMENT_ID", placement_ids)
-        if placement_filter:
-            where_clauses.append(placement_filter)
+        inventory_filter = self._inventory_target_filter(placement_ids=placement_ids, ad_unit_ids=ad_unit_ids)
+        if inventory_filter:
+            where_clauses.append(inventory_filter)
         country_filter = self._country_filter(countries)
         if country_filter:
             where_clauses.append(country_filter)
@@ -1320,6 +1345,22 @@ class GAMReportingService:
         if not numeric_values:
             return None
         return f"{field} IN ({', '.join(numeric_values)})"
+
+    @staticmethod
+    def _inventory_target_filter(*, placement_ids: list[str] | None, ad_unit_ids: list[str] | None) -> str | None:
+        filters = [
+            value
+            for value in (
+                GAMReportingService._numeric_in_filter("PLACEMENT_ID", placement_ids),
+                GAMReportingService._numeric_in_filter("AD_UNIT_ID", ad_unit_ids),
+            )
+            if value
+        ]
+        if not filters:
+            return None
+        if len(filters) == 1:
+            return filters[0]
+        return "(" + " OR ".join(filters) + ")"
 
     @staticmethod
     def _string_in_filter(field: str, values: list[str] | None) -> str | None:
@@ -1506,15 +1547,18 @@ class GAMReportingService:
             measurable_impressions = _parse_report_int(normalized.get("AD_SERVER_ACTIVE_VIEW_MEASURABLE_IMPRESSIONS"))
 
             placement_id = str(normalized.get("PLACEMENT_ID") or "").strip()
+            ad_unit_id = str(normalized.get("AD_UNIT_ID") or "").strip()
             country = str(normalized.get("COUNTRY_NAME") or "").strip()
             line_item_id = str(normalized.get("LINE_ITEM_ID") or "").strip()
-            if not placement_id or not country or not line_item_id:
+            if not (placement_id or ad_unit_id) or not country or not line_item_id:
                 continue
 
             rows.append(
                 {
                     "placement_id": placement_id,
                     "placement_name": str(normalized.get("PLACEMENT_NAME") or ""),
+                    "ad_unit_id": ad_unit_id,
+                    "ad_unit_name": str(normalized.get("AD_UNIT_NAME") or ""),
                     "country_code": str(normalized.get("COUNTRY_CODE") or "").strip().upper(),
                     "country": country,
                     "line_item_id": line_item_id,
@@ -1557,14 +1601,20 @@ class GAMReportingService:
         publisher_domain: str | None,
         viewability_standard: str,
     ) -> list[dict[str, Any]]:
-        grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         for row in line_item_rows:
-            key = (row["placement_id"], row["country_code"], row["country"])
+            target = _price_guidance_inventory_target(row)
+            key = (target["kind"], target["id"], row["country_code"], row["country"])
             group = grouped.setdefault(
                 key,
                 {
-                    "placement_id": row["placement_id"],
-                    "placement_name": row["placement_name"],
+                    "inventory_target_kind": target["kind"],
+                    "inventory_target_id": target["id"],
+                    "inventory_target_name": target["name"],
+                    "placement_id": row.get("placement_id") or "",
+                    "placement_name": row.get("placement_name") or "",
+                    "ad_unit_id": row.get("ad_unit_id") or "",
+                    "ad_unit_name": row.get("ad_unit_name") or "",
                     "country_code": row["country_code"],
                     "country": row["country"],
                     "line_items": [],
@@ -1623,8 +1673,9 @@ class GAMReportingService:
                     min_billable_units=100,
                 ),
             }
+            label = f"{group['inventory_target_name']} / {group['country']}"
             delivery_guidance = GAMReportingService._delivery_guidance(
-                label=f"{group['placement_name']} / {group['country']}",
+                label=label,
                 impressions=total_impressions,
                 viewable_impressions=total_viewable_impressions,
                 measurable_impressions=total_measurable_impressions,
@@ -1640,6 +1691,8 @@ class GAMReportingService:
             forecast_point = GAMReportingService._forecast_point(
                 placement_id=group["placement_id"],
                 placement_name=group["placement_name"],
+                ad_unit_id=group["ad_unit_id"],
+                ad_unit_name=group["ad_unit_name"],
                 country_code=group["country_code"],
                 country=group["country"],
                 impressions=total_impressions,
@@ -1653,8 +1706,13 @@ class GAMReportingService:
             )
             results.append(
                 {
+                    "inventory_target_kind": group["inventory_target_kind"],
+                    "inventory_target_id": group["inventory_target_id"],
+                    "inventory_target_name": group["inventory_target_name"],
                     "placement_id": group["placement_id"],
                     "placement_name": group["placement_name"],
+                    "ad_unit_id": group["ad_unit_id"],
+                    "ad_unit_name": group["ad_unit_name"],
                     "country_code": group["country_code"],
                     "country": group["country"],
                     "bookable": bookability["bookable"],
@@ -1747,8 +1805,10 @@ class GAMReportingService:
     @staticmethod
     def _forecast_point(
         *,
-        placement_id: str,
-        placement_name: str,
+        placement_id: str | None,
+        placement_name: str | None,
+        ad_unit_id: str | None,
+        ad_unit_name: str | None,
         country_code: str,
         country: str,
         impressions: int,
@@ -1760,7 +1820,12 @@ class GAMReportingService:
         publisher_domain: str | None,
         viewability_standard: str,
     ) -> dict[str, Any]:
-        placement_ref: dict[str, str] = {"placement_id": placement_id}
+        target_name = placement_name or ad_unit_name or "Inventory"
+        placement_ref: dict[str, str] = {}
+        if placement_id:
+            placement_ref["placement_id"] = placement_id
+        if ad_unit_id:
+            placement_ref["ad_unit_id"] = ad_unit_id
         if publisher_domain:
             placement_ref["publisher_domain"] = publisher_domain
 
@@ -1768,7 +1833,7 @@ class GAMReportingService:
             {
                 "kind": "placement",
                 "placement_ref": placement_ref,
-                "placement_name": placement_name,
+                "placement_name": target_name,
             }
         ]
         if country_code:
@@ -1791,7 +1856,7 @@ class GAMReportingService:
             metrics["completed_views"] = {"mid": float(completed_views)}
 
         point: dict[str, Any] = {
-            "label": f"{placement_name} / {country}",
+            "label": f"{target_name} / {country}",
             "dimensions": dimensions,
             "metrics": metrics,
         }

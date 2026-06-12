@@ -211,6 +211,25 @@ class TestAdapterFormatsMerged:
         # Total = agent formats + Broadstreet-supported canonical formats
         assert len(response.formats) == 1 + len(BROADSTREET_CANONICAL_FORMAT_IDS)
 
+    def test_broadstreet_merge_dedupes_reference_agent_aliases(self, integration_db):
+        """UC-005-MAIN-MCP-03: Broadstreet merge de-dupes canonical reference-agent aliases."""
+        agent_format = _make_format(
+            "https://adcontextprotocol.org/agents/formats/mcp/",
+            "display_image",
+            "Display Image",
+        )
+
+        with CreativeFormatsEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            AdapterConfigFactory(tenant=tenant, adapter_type="broadstreet")
+
+            env.set_registry_formats([agent_format])
+            response = env.call_impl()
+
+        matching = [fmt for fmt in response.formats if fmt.format_id.id == "display_image"]
+        assert len(matching) == 1
+        assert len(response.formats) == len(BROADSTREET_CANONICAL_FORMAT_IDS)
+
     def test_broadstreet_formats_are_canonical_reference_agent_formats(self, integration_db):
         """UC-005-MAIN-MCP-03: Broadstreet adapter contributes canonical reference-agent formats."""
         with CreativeFormatsEnv() as env:

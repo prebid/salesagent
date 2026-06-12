@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp==6.3.0b7",
+    "adcp==6.3.0b9",
     "fastmcp>=3.2.0", # v3.2 fixes GHSA-m8x7-r2rg-vh5g, GHSA-rww4-4w9c-7733
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
@@ -22,12 +22,14 @@ dependencies = [
     # alongside psycopg2-binary because the rest of salesagent still uses
     # psycopg2 (SQLAlchemy default driver).
     "psycopg[pool]>=3.2.0",
-    "authlib>=1.6.11",  # GHSA-jj8c-mmj3-mmgv
+    # Upper bound keeps us on the 1.6.x patch line (1.7 is a joserfc-backed
+    # refactor) — minimal change to clear the advisory.
+    "authlib>=1.6.12,<1.7",  # GHSA-jj8c-mmj3-mmgv, PYSEC-2026-188
     "requests-oauthlib>=1.3.1",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "beautifulsoup4>=4.12.0",
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.14.0",  # GHSA-jg22-mg44-37j8, GHSA-hg6j-4rv6-33pg
     "alembic>=1.13.0",
     "sqlalchemy>=2.0.0",
     "watchdog>=6.0.0",
@@ -53,7 +55,7 @@ dependencies = [
     # Upper bound avoids local safe-chain minimum-age block on bleeding-edge releases.
     "pydantic-ai>=1.99.0,<1.100.0",
     # Security patches for transitive dependencies
-    "pyjwt>=2.12.0",  # GHSA-752w-5fwx-jx9f
+    "pyjwt>=2.13.0",  # GHSA-752w-5fwx-jx9f, PYSEC-2026-175/177/178/179
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw
     "urllib3>=2.6.3",  # GHSA-38jv-5279-wg99
     "werkzeug>=3.1.6",  # GHSA-87hc-h4r5-73f7 + GHSA-29vq-49wr-vm6x

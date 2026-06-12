@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.admin.services.sync_health import (
     SyncRunSnapshot,
     build_sync_health_changed_payload,
+    classify_sync_error,
     derive_sync_health,
     normalize_sync_status,
     previous_runs_for_transition,
@@ -50,6 +53,19 @@ class TestNormalizeSyncStatus:
         assert normalize_sync_status("success") == "success"
         assert normalize_sync_status("error") == "failed"
         assert normalize_sync_status(None) == "never_run"
+
+
+class TestClassifySyncError:
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Exception: Error running GAM report: [PermissionError.PERMISSION_DENIED @ ]",
+            "Exception: Error running GAM report: [AuthenticationError.NO_NETWORKS_TO_ACCESS @ ]",
+            "GAM authentication failed: [AuthenticationError.NO_NETWORKS_TO_ACCESS @ ]",
+        ],
+    )
+    def test_gam_permission_reason_codes_are_auth_issues(self, message):
+        assert classify_sync_error(message) == "auth"
 
 
 class TestDeriveSyncHealth:

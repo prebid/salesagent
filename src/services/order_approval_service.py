@@ -337,6 +337,207 @@ def _mark_approval_failed(
         logger.error(f"Failed to mark approval failed: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Status polling — for tenants whose service account lacks approval permission.
+# Polls get_order_status() (read-only) until GAM shows APPROVED, then activates
+# the media buy.  Intended as a long-running watcher (poll every 30 s, up to 24 h).
+# ---------------------------------------------------------------------------
+
+_STATUS_POLL_INTERVAL_SECONDS = 30
+_STATUS_POLL_MAX_ATTEMPTS = 2880  # 30 s × 2880 = 24 h
+
+
+def start_order_status_polling(
+    order_id: str,
+    media_buy_id: str,
+    tenant_id: str,
+    principal_id: str,
+    webhook_url: str | None = None,
+    poll_interval_seconds: int = _STATUS_POLL_INTERVAL_SECONDS,
+    max_attempts: int = _STATUS_POLL_MAX_ATTEMPTS,
+) -> str:
+    """Start a background thread that polls the GAM order status.
+
+    Unlike :func:`start_order_approval_background`, this function never tries
+    to call ``performOrderAction``.  It simply reads the order status every
+    ``poll_interval_seconds`` seconds and activates the media buy as soon as
+    GAM reports ``APPROVED``.  Use this when the service account lacks the
+    ``ORDER_APPROVAL`` permission.
+
+    Returns:
+        approval_id: The SyncJob ID for tracking progress.
+
+    Raises:
+        ValueError: If status polling is already running for this order.
+    """
+    with get_db_session() as db:
+        stmt = select(SyncJob).where(
+            SyncJob.sync_type == "order_status_watch",
+            SyncJob.status == "running",
+        )
+        for existing in db.scalars(stmt).all():
+            if existing.progress and existing.progress.get("order_id") == order_id:
+                raise ValueError(f"Status polling already running for order {order_id}: {existing.sync_id}")
+
+        approval_id = _generate_approval_id(order_id)
+        job = SyncJob(
+            sync_id=approval_id,
+            tenant_id=tenant_id,
+            adapter_type="google_ad_manager",
+            sync_type="order_status_watch",
+            status="running",
+            started_at=datetime.now(UTC),
+            triggered_by="order_creation",
+            triggered_by_id=media_buy_id,
+            progress={
+                "order_id": order_id,
+                "media_buy_id": media_buy_id,
+                "principal_id": principal_id,
+                "webhook_url": webhook_url,
+                "attempts": 0,
+                "max_attempts": max_attempts,
+                "phase": "Waiting for external order approval",
+            },
+        )
+        db.add(job)
+        db.commit()
+
+    thread = threading.Thread(
+        target=_run_status_watch_thread,
+        args=(
+            approval_id,
+            order_id,
+            media_buy_id,
+            tenant_id,
+            principal_id,
+            webhook_url,
+            max_attempts,
+            poll_interval_seconds,
+        ),
+        daemon=True,
+        name=f"status-watch-{approval_id}",
+    )
+    with _approval_lock:
+        _active_approvals[approval_id] = thread
+    thread.start()
+    logger.info(f"Started background status watch thread: {approval_id}")
+    return approval_id
+
+
+def _run_status_watch_thread(
+    approval_id: str,
+    order_id: str,
+    media_buy_id: str,
+    tenant_id: str,
+    principal_id: str,
+    webhook_url: str | None,
+    max_attempts: int,
+    poll_interval_seconds: int,
+):
+    """Poll GAM order status until APPROVED, then activate the media buy."""
+    try:
+        logger.info(f"[{approval_id}] Starting status watch for order {order_id}")
+
+        from src.adapters.gam.managers.orders import GAMOrdersManager
+
+        with get_db_session() as db:
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            adapter_repo = AdapterConfigRepository(db, tenant_id)
+            adapter_config = adapter_repo.find_by_tenant()
+            if not adapter_config or not adapter_config.gam_network_code:
+                _mark_approval_failed(
+                    approval_id, "GAM not configured for tenant", webhook_url, tenant_id, principal_id, media_buy_id
+                )
+                return
+            gam_config = adapter_repo.get_gam_config(adapter_config)
+
+        from src.adapters.gam.client import GAMClientManager
+
+        client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
+        orders_manager = GAMOrdersManager(client_manager, dry_run=False)
+
+        for attempt in range(1, max_attempts + 1):
+            _update_approval_progress(
+                approval_id,
+                {"attempts": attempt, "phase": f"Status check {attempt}/{max_attempts}"},
+            )
+
+            try:
+                status = orders_manager.get_order_status(order_id)
+                logger.info(f"[{approval_id}] Order {order_id} status: {status} (attempt {attempt})")
+
+                if status == "APPROVED":
+                    _activate_media_buy(media_buy_id, order_id, tenant_id)
+                    _mark_approval_complete(
+                        approval_id,
+                        {"order_id": order_id, "media_buy_id": media_buy_id, "attempts": attempt, "status": status},
+                        webhook_url,
+                        tenant_id,
+                        principal_id,
+                        media_buy_id,
+                    )
+                    return
+
+                if status in ("CANCELED", "DELETED"):
+                    _mark_approval_failed(
+                        approval_id,
+                        f"Order {order_id} is {status} — cannot activate media buy.",
+                        webhook_url,
+                        tenant_id,
+                        principal_id,
+                        media_buy_id,
+                    )
+                    return
+
+            except Exception as e:
+                logger.warning(f"[{approval_id}] Status check error: {e}")
+
+            if attempt < max_attempts:
+                time.sleep(poll_interval_seconds)
+            else:
+                _mark_approval_failed(
+                    approval_id,
+                    f"Order {order_id} was not approved within {max_attempts * poll_interval_seconds}s.",
+                    webhook_url,
+                    tenant_id,
+                    principal_id,
+                    media_buy_id,
+                )
+
+    except Exception as e:
+        logger.error(f"[{approval_id}] Status watch failed: {e}", exc_info=True)
+        _mark_approval_failed(approval_id, str(e), webhook_url, tenant_id, principal_id, media_buy_id)
+    finally:
+        with _approval_lock:
+            _active_approvals.pop(approval_id, None)
+
+
+def _activate_media_buy(media_buy_id: str, order_id: str, tenant_id: str) -> None:
+    """Set the media buy status to 'active' and sync the GAM order status after external approval."""
+    try:
+        from src.core.database.repositories import MediaBuyUoW
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            uow.media_buys.update_status(media_buy_id, "active")
+        logger.info(f"Media buy {media_buy_id} activated after external GAM order approval")
+    except Exception as e:
+        logger.error(f"Failed to activate media buy {media_buy_id} after order approval: {e}", exc_info=True)
+
+    try:
+        from src.core.database.models import GAMOrder
+
+        with get_db_session() as db:
+            gam_order = db.scalars(select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order_id)).first()
+            if gam_order:
+                gam_order.status = "APPROVED"
+                db.commit()
+                logger.info(f"GAM order {order_id} status updated to APPROVED in gam_orders table")
+    except Exception as e:
+        logger.error(f"Failed to update gam_orders status for order {order_id}: {e}", exc_info=True)
+
+
 def _send_approval_webhook(
     webhook_url: str,
     tenant_id: str,

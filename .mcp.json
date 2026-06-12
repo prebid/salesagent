@@ -1,8 +1,11 @@
 {
   "mcpServers": {
-    "vibium": {
-      "command": "npx",
-      "args": ["vibium"]
+    "local": {
+      "type": "http",
+      "url": "http://0.0.0.0:8000/mcp/",
+      "headers": {
+        "Authorization": "Bearer tok_TsDB5qiLETTMCZab_UAHmUES1cI3tInHt69sxf14TWE"
+      }
     }
   }
 }

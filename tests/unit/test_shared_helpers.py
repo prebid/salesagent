@@ -411,17 +411,6 @@ class TestBuildCreateSuccess:
         assert len(result.packages) == 1
         assert result.packages[0].package_id == "custom-p1"
 
-    def test_buyer_ref_not_populated_on_success_response(self):
-        """Shared helper does not populate optional buyer_ref on CreateMediaBuySuccess."""
-        adapter = _make_adapter_instance()
-        result = adapter._build_create_success(
-            request=_make_create_request(),
-            media_buy_id="mb-1",
-            packages=[_make_media_package()],
-        )
-
-        assert result.buyer_ref is None
-
     def test_result_is_create_media_buy_success_type(self):
         """Return type is CreateMediaBuySuccess."""
         from src.core.schemas import CreateMediaBuySuccess

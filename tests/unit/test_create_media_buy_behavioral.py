@@ -3194,37 +3194,45 @@ class TestUpgradeObligations:
         req = _make_request(ext={"custom_field": "value", "custom_num": 42})
         assert req.ext is not None
 
-    def test_account_field_removed_from_success_response(self):
-        """CreateMediaBuySuccess no longer has account field.
+    def test_account_field_present_on_success_response(self):
+        """CreateMediaBuySuccess accepts an optional account field.
+
+        The obligation requires the account context to be returned on the
+        success response. account is an accepted optional field on
+        CreateMediaBuySuccess and constructing the response with it succeeds.
 
         Covers: UC-002-UPG-07
         """
-        assert "account" not in CreateMediaBuySuccess.model_fields
+        assert "account" in CreateMediaBuySuccess.model_fields
 
         from src.core.schemas import Package as RespPkg
 
-        with pytest.raises(ValidationError, match="account"):
-            CreateMediaBuySuccess(
-                media_buy_id="mb_1",
-                packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
-                account=None,
-            )
+        success = CreateMediaBuySuccess(
+            media_buy_id="mb_1",
+            packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
+            account=None,
+        )
+        assert success.account is None
 
-    def test_sandbox_flag_removed_from_success_response(self):
-        """CreateMediaBuySuccess no longer has sandbox field.
+    def test_sandbox_flag_present_on_success_response(self):
+        """CreateMediaBuySuccess accepts an optional sandbox flag.
+
+        The obligation requires the sandbox flag to be returned on the success
+        response in sandbox mode. sandbox is an accepted optional field on
+        CreateMediaBuySuccess and constructing the response with it succeeds.
 
         Covers: UC-002-UPG-09
         """
-        assert "sandbox" not in CreateMediaBuySuccess.model_fields
+        assert "sandbox" in CreateMediaBuySuccess.model_fields
 
         from src.core.schemas import Package as RespPkg
 
-        with pytest.raises(ValidationError, match="sandbox"):
-            CreateMediaBuySuccess(
-                media_buy_id="mb_1",
-                packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
-                sandbox=True,
-            )
+        success = CreateMediaBuySuccess(
+            media_buy_id="mb_1",
+            packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
+            sandbox=True,
+        )
+        assert success.sandbox is True
 
 
 # ===========================================================================

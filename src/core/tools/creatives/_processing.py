@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from adcp.types import Error
 from pydantic import BaseModel
 
+from src.core.format_cache import canonical_format_identity
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeAsset, CreativeStatusEnum, SyncCreativeResult
 from src.core.validation_helpers import run_async_in_sync_context
@@ -21,6 +22,18 @@ if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _find_matching_format(format_ref: Any, all_formats: list[Any]) -> Any | None:
+    """Return the discovered format matching ``format_ref`` under canonical identity rules."""
+    requested_identity = canonical_format_identity(format_ref)
+    for fmt in all_formats:
+        discovered_format_ref = getattr(fmt, "format_id", None)
+        if isinstance(discovered_format_ref, str) or discovered_format_ref is None:
+            continue
+        if canonical_format_identity(discovered_format_ref) == requested_identity:
+            return fmt
+    return None
 
 
 def _update_existing_creative(
@@ -152,12 +165,7 @@ def _update_existing_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            format_obj = _find_matching_format(creative_format, all_formats)
 
             if format_obj and format_obj.agent_url:
                 # Check if format is generative (has output_format_ids)
@@ -506,12 +514,7 @@ def _create_new_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            format_obj = _find_matching_format(creative_format, all_formats)
 
             if format_obj and format_obj.agent_url:
                 # Check if format is generative (has output_format_ids)

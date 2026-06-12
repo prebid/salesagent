@@ -26,7 +26,7 @@ def main():
         print(f"Startup error: {e}")
         sys.exit(1)
 
-    port = int(os.environ.get("ADCP_SALES_PORT", "8000"))
+    port = int(os.environ.get("ADCP_SALES_PORT", "8080"))
     host = os.environ.get("ADCP_SALES_HOST", "0.0.0.0")
     if os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"):
         host = "0.0.0.0"

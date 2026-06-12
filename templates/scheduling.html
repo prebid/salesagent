@@ -30,6 +30,7 @@
                 <th>Sync</th>
                 <th>Last Status</th>
                 <th>Last Completed</th>
+                <th>Running For</th>
                 <th>Freshness</th>
                 <th>Actions</th>
             </tr>
@@ -58,16 +59,26 @@
                     {% if row.last_error_message %}
                     <br><small class="sa-text-danger" title="{{ row.last_error_message }}">{{ row.last_error_message[:80] }}{% if row.last_error_message|length > 80 %}…{% endif %}</small>
                     {% endif %}
-                    {% elif row.last_status == 'running' %}
-                    <span class="status">⏳ running</span>
-                    {% elif row.last_status == 'queued' %}
-                    <span class="status">⏳ queued</span>
+                    {% elif row.last_status in ['pending', 'queued', 'running', 'in_progress'] %}
+                    <span class="status">⏳ {{ row.last_status }}</span>
+                    {% if row.last_run_age_label %}
+                    <br><small class="{% if row.long_running %}sa-text-danger{% else %}sa-text-muted{% endif %}">running for {{ row.last_run_age_label }}</small>
+                    {% endif %}
                     {% else %}
                     {{ row.last_status or '—' }}
                     {% endif %}
                 </td>
                 <td class="sa-cell-completed sa-text-muted">
                     {% if row.last_completed_at %}{{ row.last_completed_at }}{% else %}—{% endif %}
+                </td>
+                <td class="sa-cell-running-age sa-text-muted">
+                    {% if row.long_running %}
+                    <span class="sa-text-danger">{{ row.last_run_age_label }}</span>
+                    {% elif row.last_status in ['pending', 'queued', 'running', 'in_progress'] and row.last_run_age_label %}
+                    {{ row.last_run_age_label }}
+                    {% else %}
+                    —
+                    {% endif %}
                 </td>
                 <td class="sa-cell-freshness">
                     {% if row.freshness == 'ok' %}
@@ -217,9 +228,42 @@
             }
             return html;
         }
-        if (row.last_status === 'running') return '<span class="status">⏳ running</span>';
-        if (row.last_status === 'queued') return '<span class="status">⏳ queued</span>';
+        if (row.last_status === 'running') return runningStatus(row, 'running');
+        if (row.last_status === 'queued') return runningStatus(row, 'queued');
+        if (row.last_status === 'pending' || row.last_status === 'in_progress') return runningStatus(row, row.last_status);
         return escapeHtml(row.last_status || '—');
+    }
+
+    function runningStatus(row, label) {
+        let html = '<span class="status">⏳ ' + escapeHtml(label) + '</span>';
+        if (row.last_run_age_seconds != null) {
+            const age = row.last_run_age_label || formatAge(row.last_run_age_seconds);
+            const klass = row.long_running ? 'sa-text-danger' : 'sa-text-muted';
+            html += '<br><small class="' + klass + '">running for ' + escapeHtml(age) + '</small>';
+        }
+        return html;
+    }
+
+    function runningAge(row) {
+        if (!['pending', 'queued', 'running', 'in_progress'].includes(row.last_status) || row.last_run_age_seconds == null) {
+            return '—';
+        }
+        const age = row.last_run_age_label || formatAge(row.last_run_age_seconds);
+        if (row.long_running) return '<span class="sa-text-danger">' + escapeHtml(age) + '</span>';
+        return escapeHtml(age);
+    }
+
+    function formatAge(seconds) {
+        const total = Math.max(0, Number(seconds) || 0);
+        if (total < 60) return total + 's';
+        const minutes = Math.floor(total / 60);
+        if (minutes < 60) return minutes + 'm';
+        const hours = Math.floor(minutes / 60);
+        const remMinutes = minutes % 60;
+        if (hours < 48) return remMinutes ? hours + 'h ' + remMinutes + 'm' : hours + 'h';
+        const days = Math.floor(hours / 24);
+        const remHours = hours % 24;
+        return remHours ? days + 'd ' + remHours + 'h' : days + 'd';
     }
 
     function escapeHtml(value) {
@@ -245,6 +289,7 @@
             if (!row) continue;
             tr.querySelector('.sa-cell-status').innerHTML = statusBadge(row);
             tr.querySelector('.sa-cell-completed').textContent = row.last_completed_at || '—';
+            tr.querySelector('.sa-cell-running-age').innerHTML = runningAge(row);
             tr.querySelector('.sa-cell-freshness').innerHTML = freshnessBadge(row.freshness);
         }
     }

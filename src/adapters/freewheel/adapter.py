@@ -83,7 +83,7 @@ from src.adapters.base import (
     TargetingCapabilities,
 )
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
-from src.adapters.freewheel.client import FreeWheelClient, FreeWheelError
+from src.adapters.freewheel.client import DEFAULT_CLIENT_CREDENTIALS_TOKEN_URL, FreeWheelClient, FreeWheelError
 from src.adapters.freewheel.formats import freewheel_creative_formats
 from src.adapters.freewheel.schemas import FREEWHEEL_HOSTS, FreeWheelConnectionConfig, FreeWheelProductConfig
 from src.adapters.freewheel.targeting import build_targeting, validate_targeting
@@ -161,6 +161,9 @@ class FreeWheelAdapter(AdServerAdapter):
         self.username = self.config.get("username")
         self.password = self.config.get("password")
         self.api_token = self.config.get("api_token")
+        self.client_id = self.config.get("client_id")
+        self.client_secret = self.config.get("client_secret")
+        self.token_url = self.config.get("token_url") or DEFAULT_CLIENT_CREDENTIALS_TOKEN_URL
         self.environment = self.config.get("environment", "production")
         self.base_url = FREEWHEEL_HOSTS.get(self.environment, FREEWHEEL_HOSTS["production"])
 
@@ -168,14 +171,20 @@ class FreeWheelAdapter(AdServerAdapter):
             self.log("Running in dry-run mode — FreeWheel Publisher API calls will be simulated", dry_run_prefix=False)
             self._client: FreeWheelClient | None = None
         else:
+            has_client_credentials = bool(self.client_id) and bool(self.client_secret)
             has_password_grant = bool(self.username) and bool(self.password)
             has_token = bool(self.api_token)
-            if not has_password_grant and not has_token:
-                raise ValueError("FreeWheel config requires either (username + password) or api_token")
+            if not (has_client_credentials or has_password_grant or has_token):
+                raise ValueError(
+                    "FreeWheel config requires one of: (client_id + client_secret), (username + password), or api_token"
+                )
             self._client = FreeWheelClient(
                 username=self.username,
                 password=self.password,
                 api_token=self.api_token,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                token_url=self.token_url,
                 base_url=self.base_url,
             )
 
@@ -657,13 +666,26 @@ class FreeWheelAdapter(AdServerAdapter):
         assert self.advertiser_id is not None  # enforced in __init__ for non-dry-run
         try:
             campaign = self._client.commercial.create_campaign(name=buy_name, advertiser_id=int(self.advertiser_id))
-            io = self._client.commercial.create_insertion_order(name=buy_name, campaign_id=campaign.id)
+            # external_id carries AdCP lineage into FreeWheel so an operator can
+            # trace an FW IO/placement back to the buy/package. Validated against
+            # the sandbox (persists on both IO and placement). Budget, currency,
+            # schedule, and inventory/targeting are NOT sent here: budget/currency
+            # require FW network functions disabled on the sandbox (delivery
+            # subsystem; MULTI_CURRENCY_SUPPORT) and inventory binding needs the
+            # v4 ad_unit_nodes write scope — see the module docstring + the
+            # FreeWheel enablement asks. We wire only what we can validate.
+            io = self._client.commercial.create_insertion_order(
+                name=buy_name,
+                campaign_id=campaign.id,
+                external_id=request.po_number,
+            )
             platform_line_item_ids: dict[str, str] = {}
             package_responses: list[ResponsePackage] = []
             for package in packages:
                 placement = self._client.commercial.create_placement(
                     name=package.name or package.package_id,
                     insertion_order_id=io.id,
+                    external_id=package.package_id,
                 )
                 placement_id = str(placement.id)
                 platform_line_item_ids[package.package_id] = placement_id

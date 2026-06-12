@@ -44,12 +44,14 @@ from tests.factories import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
     GamAdvertiserFactory,
+    InventoryProfileFactory,
     MediaBuyFactory,
     PrincipalFactory,
     ProductFactory,
     PublisherPartnerFactory,
     SyncJobFactory,
     TenantFactory,
+    TenantSignalFactory,
 )
 from tests.helpers.managed_tenant_api import (
     bind_factories_to_session,
@@ -1493,6 +1495,45 @@ class TestTenantStatus:
         assert sync["last_success_at"] is None
         assert sync["issue"]["action"] == "wait"
 
+    def test_inapplicable_gam_derived_streams_are_ok_at_status_endpoint(
+        self, client, auth_headers, cleanup_tenants, bound_factories
+    ):
+        """GAM-derived streams with no runnable prerequisites should not block status."""
+        tenant = TenantFactory(tenant_id="tenant_status_gam_inapplicable", ad_server="google_ad_manager")
+        cleanup_tenants.append(tenant.tenant_id)
+        AdapterConfigFactory(
+            tenant=tenant,
+            adapter_type="google_ad_manager",
+            gam_network_code="23312659540",
+        )
+        ProductFactory(
+            tenant=tenant,
+            product_id="untargeted_product",
+            implementation_config={},
+        )
+        TenantSignalFactory(
+            tenant=tenant,
+            signal_id="audience_only",
+            adapter_config={"kind": "audience_segment", "segment_id": "98765"},
+        )
+        bound_factories.commit()
+
+        resp = client.get(f"/api/v1/tenant-management/tenants/{tenant.tenant_id}/status", headers=auth_headers)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        syncs = resp.get_json()["syncs"]
+
+        assert syncs["signal_coverage"]["status"] == "success"
+        assert syncs["signal_coverage"]["severity"] == "ok"
+        assert syncs["signal_coverage"]["issue"] is None
+        assert syncs["signal_coverage"]["item_count"] == 0
+
+        assert syncs["pricing_availability"]["status"] == "success"
+        assert syncs["pricing_availability"]["severity"] == "ok"
+        assert syncs["pricing_availability"]["issue"] is None
+        assert syncs["pricing_availability"]["item_count"] == 0
+
+        assert syncs["inventory"]["status"] == "never_run"
+
     def test_latest_successful_custom_targeting_clears_retry_health(
         self, client, auth_headers, cleanup_tenants, bound_factories
     ):
@@ -1882,11 +1923,11 @@ class TestStatusSetupTasks:
 
 
 class TestStatusProductsBlock:
-    """Sprint 1.8 follow-up — products rollup on the /status response.
+    """Wholesale products rollup on the /status response.
 
-    Distinct from packages: one Product fans out to multiple priced
-    packages, so packages.active_count doesn't answer "what is the
-    publisher selling?". Storefront's homepage card reads from this
+    Distinct from packages: one wholesale product fans out to multiple
+    priced packages, so packages.active_count doesn't answer "what is
+    the publisher selling?". Storefront's homepage card reads from this
     block.
     """
 
@@ -1899,8 +1940,21 @@ class TestStatusProductsBlock:
         cleanup_tenants.append(tid)
         return tid
 
+    @staticmethod
+    def _wholesale_profile(tenant, profile_id: str, *, status: str = "active", **overrides):
+        constraints = {"managed_by": "wholesale_products_api", "owner_product_id": profile_id}
+        if status != "active":
+            constraints["status"] = status
+        return InventoryProfileFactory(
+            tenant=tenant,
+            profile_id=profile_id,
+            name=profile_id.replace("_", " ").title(),
+            constraints=constraints,
+            **overrides,
+        )
+
     def test_products_block_present_with_zero_counts_when_no_products(self, client, auth_headers, managed_tenant):
-        """A freshly-provisioned tenant has no Products → all counters zero."""
+        """A freshly-provisioned tenant has no wholesale InventoryProfiles → all counters zero."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         invalidate_status_cache(managed_tenant)
@@ -1909,49 +1963,104 @@ class TestStatusProductsBlock:
         body = resp.get_json()
         assert "products" in body
         assert body["products"] == {"active_count": 0, "draft_count": 0, "archived_count": 0}
+        assert body["inventory_profiles"] == {
+            "total_count": 0,
+            "complete_count": 0,
+            "incomplete_count": 0,
+            "wholesale_owned_count": 0,
+        }
 
-    def test_active_products_counted(self, client, auth_headers, managed_tenant, bound_factories):
-        """``archived_at IS NULL`` → ``active_count``."""
+    def test_active_wholesale_profiles_counted(self, client, auth_headers, managed_tenant, bound_factories):
+        """Complete wholesale-owned InventoryProfiles with active status count as active products."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_active_1", name="Active 1")
-        ProductFactory(tenant=tenant, product_id="prod_active_2", name="Active 2")
+        self._wholesale_profile(tenant, "prod_active_1")
+        self._wholesale_profile(tenant, "prod_active_2")
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         assert resp.get_json()["products"]["active_count"] == 2
 
-    def test_archived_products_split_from_active(self, client, auth_headers, managed_tenant, bound_factories):
-        """``archived_at IS NOT NULL`` → ``archived_count``, not ``active_count``."""
+    def test_wholesale_profile_statuses_split_counts(self, client, auth_headers, managed_tenant, bound_factories):
+        """Wholesale profile lifecycle status drives active/draft/archived counts."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_active", name="Active")
-        archived = ProductFactory(tenant=tenant, product_id="prod_archived", name="Archived")
-        archived.archived_at = datetime.now(UTC)
+        self._wholesale_profile(tenant, "prod_active")
+        self._wholesale_profile(tenant, "prod_draft", status="draft")
+        self._wholesale_profile(tenant, "prod_archived", status="archived")
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
         body = resp.get_json()["products"]
         assert body["active_count"] == 1
+        assert body["draft_count"] == 1
         assert body["archived_count"] == 1
 
-    def test_draft_count_always_zero(self, client, auth_headers, managed_tenant, bound_factories):
-        """``draft_count`` reserved for a future draft-state column —
-        always 0 today, but the field is in the response shape so
-        Storefront can render a "Drafts" badge without an API change."""
+    def test_legacy_product_rows_do_not_inflate_wholesale_status(
+        self, client, auth_headers, managed_tenant, bound_factories
+    ):
+        """Legacy Product rows without matching profiles are not listable wholesale products."""
         from src.admin.services.tenant_status_service import invalidate_status_cache
 
         tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
-        ProductFactory(tenant=tenant, product_id="prod_d_1", name="P1")
+        ProductFactory(tenant=tenant, product_id="orphan_legacy_product", name="Orphan Legacy Product")
         bound_factories.commit()
 
         invalidate_status_cache(managed_tenant)
         resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
-        assert resp.get_json()["products"]["draft_count"] == 0
+        assert resp.get_json()["products"] == {"active_count": 0, "draft_count": 0, "archived_count": 0}
+
+    def test_inventory_profiles_block_counts_ingredient_layer(
+        self, client, auth_headers, managed_tenant, bound_factories
+    ):
+        """Inventory profile counts describe ingredients separately from sellable products."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        self._wholesale_profile(tenant, "complete_wholesale")
+        self._wholesale_profile(tenant, "incomplete_wholesale", format_ids=[])
+        InventoryProfileFactory(tenant=tenant, profile_id="complete_unowned", constraints={"formats": ["display"]})
+        bound_factories.commit()
+
+        invalidate_status_cache(managed_tenant)
+        resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        body = resp.get_json()
+        assert body["inventory_profiles"] == {
+            "total_count": 3,
+            "complete_count": 2,
+            "incomplete_count": 1,
+            "wholesale_owned_count": 2,
+        }
+        assert body["products"] == {"active_count": 1, "draft_count": 0, "archived_count": 0}
+
+    def test_status_product_buckets_match_wholesale_products_list_count(
+        self, client, auth_headers, managed_tenant, bound_factories
+    ):
+        """Status products count the same listable recipes as the wholesale-products API."""
+        from src.admin.services.tenant_status_service import invalidate_status_cache
+
+        tenant = bound_factories.scalars(select(Tenant).filter_by(tenant_id=managed_tenant)).first()
+        self._wholesale_profile(tenant, "prod_active")
+        self._wholesale_profile(tenant, "prod_draft", status="draft")
+        self._wholesale_profile(tenant, "prod_archived", status="archived")
+        InventoryProfileFactory(tenant=tenant, profile_id="ingredient_only", constraints={"formats": ["display"]})
+        bound_factories.commit()
+
+        invalidate_status_cache(managed_tenant)
+        status_resp = client.get(f"/api/v1/tenant-management/tenants/{managed_tenant}/status", headers=auth_headers)
+        list_resp = client.get(
+            f"/api/v1/tenant-management/tenants/{managed_tenant}/wholesale-products",
+            headers=auth_headers,
+        )
+
+        assert list_resp.status_code == 200, list_resp.get_data(as_text=True)
+        product_counts = status_resp.get_json()["products"]
+        status_total = product_counts["active_count"] + product_counts["draft_count"] + product_counts["archived_count"]
+        assert status_total == list_resp.get_json()["count"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -2563,6 +2672,113 @@ class TestDefaultGamAdvertiserId:
 
         assert resp.status_code == 200
         assert resp.get_json()["default_gam_advertiser_id"] is None
+
+    def test_provision_default_resources_false_by_default(self, client, auth_headers, cleanup_tenants, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+
+        def _should_not_be_called(**_kw):
+            raise AssertionError("ensure must not be called when provision_default_resources is False")
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _should_not_be_called)
+
+        payload = _provision_payload(external_org_id="org_no_default_resources")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.get_json()["default_gam_advertiser_id"] is None
+
+    def test_provision_sets_default_advertiser_from_cache(self, client, auth_headers, cleanup_tenants, integration_db):
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.gam_sync import GAMSyncRepository
+
+        payload = _provision_payload(external_org_id="org_cached_adv")
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        adapter_dict = payload["adapter"]
+        with get_db_session() as session:
+            session.info["management_api_caller"] = True
+            GAMSyncRepository(session, tid).upsert_advertiser(
+                advertiser_id="cached-adv-456",
+                name="Interchange - Default",
+                status="active",
+            )
+            session.commit()
+
+        import src.admin.tenant_management_api as api_module
+
+        api_module._auto_provision_gam_default_advertiser(tid, adapter_dict)
+
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.status_code == 200
+        assert get_resp.get_json()["default_gam_advertiser_id"] == "cached-adv-456"
+
+    def test_provision_calls_ensure_when_opted_in(self, client, auth_headers, cleanup_tenants, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+        from src.core.helpers.account_provisioning import GamAdvertiserProvisionResult
+
+        monkeypatch.setattr(
+            api_module,
+            "gam_ensure_advertiser_companyservice",
+            lambda **_kw: GamAdvertiserProvisionResult(
+                advertiser_id="ensured-adv-789", name="Interchange - Default", created=True
+            ),
+        )
+
+        payload = _provision_payload(external_org_id="org_opted_in_adv", provision_default_resources=True)
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.status_code == 200
+        assert get_resp.get_json()["default_gam_advertiser_id"] == "ensured-adv-789"
+
+    def test_provision_skips_auto_provision_when_default_already_provided(
+        self, client, auth_headers, cleanup_tenants, monkeypatch
+    ):
+        import src.admin.tenant_management_api as api_module
+
+        def _should_not_be_called(**_kw):
+            raise AssertionError("ensure must not be called when default_gam_advertiser_id is already provided")
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _should_not_be_called)
+
+        payload = _provision_payload(
+            external_org_id="org_explicit_default_adv",
+            default_gam_advertiser_id="explicit-99",
+            provision_default_resources=True,
+        )
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        cleanup_tenants.append(resp.get_json()["tenant_id"])
+
+        tid = resp.get_json()["tenant_id"]
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.get_json()["default_gam_advertiser_id"] == "explicit-99"
+
+    def test_provision_succeeds_if_auto_provision_fails(self, client, auth_headers, cleanup_tenants, monkeypatch):
+        import src.admin.tenant_management_api as api_module
+
+        def _fail(**_kw):
+            raise RuntimeError("GAM unavailable")
+
+        monkeypatch.setattr(api_module, "gam_ensure_advertiser_companyservice", _fail)
+
+        payload = _provision_payload(external_org_id="org_auto_adv_fail", provision_default_resources=True)
+        resp = client.post("/api/v1/tenant-management/tenants/provision", headers=auth_headers, json=payload)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        tid = resp.get_json()["tenant_id"]
+        cleanup_tenants.append(tid)
+
+        get_resp = client.get(f"/api/v1/tenant-management/tenants/{tid}", headers=auth_headers)
+        assert get_resp.get_json()["default_gam_advertiser_id"] is None
 
 
 class TestRuntimeGamAdvertiserRouting:
@@ -3268,6 +3484,59 @@ class TestRefresh:
         # Same sync_run_id is reused — caller's repeat refresh doesn't
         # double-spawn the work that just started.
         assert resp.get_json()["sync_run_ids"]["inventory"] == pending_sync_id
+
+    def test_inventory_worker_creates_custom_targeting_companion_for_full_runs(self, bound_factories, monkeypatch):
+        """Scheduler/admin inventory runs do the custom-targeting work too.
+
+        They do not pre-create the ``custom_targeting`` row the way
+        ``/refresh`` does, so the worker must create it or embedded
+        storefront status reads will show stale targeting health even
+        after a successful full inventory run.
+        """
+        import src.services.background_sync_service as bg_mod
+        from tests.factories import AdapterConfigFactory, TenantFactory
+
+        tenant = TenantFactory(
+            tenant_id="tenant_inventory_companion",
+            ad_server="google_ad_manager",
+        )
+        AdapterConfigFactory(
+            tenant=tenant,
+            adapter_type="google_ad_manager",
+            gam_network_code="123456",
+            gam_refresh_token="test-refresh-token",
+        )
+        bound_factories.commit()
+
+        spawned = []
+
+        class _NoopThread:
+            def __init__(self, *args, **kwargs):
+                spawned.append(kwargs)
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr(bg_mod.threading, "Thread", _NoopThread)
+
+        sync_id = bg_mod.start_inventory_sync_background(
+            tenant_id=tenant.tenant_id,
+            sync_mode="full",
+            triggered_by="scheduler_inventory",
+        )
+        bg_mod._active_syncs.pop(sync_id, None)
+
+        assert spawned
+        bound_factories.expire_all()
+        jobs = bound_factories.scalars(select(SyncJob).filter_by(tenant_id=tenant.tenant_id)).all()
+
+        assert {job.sync_type for job in jobs} == {"inventory", "custom_targeting"}
+        inventory = next(job for job in jobs if job.sync_type == "inventory")
+        targeting = next(job for job in jobs if job.sync_type == "custom_targeting")
+        assert inventory.sync_id == sync_id
+        assert targeting.status == "running"
+        assert targeting.triggered_by == "scheduler_inventory"
+        assert targeting.progress == {"phase": "Starting", "bundled_with": sync_id}
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ Handles media buy creation including:
 """
 
 import logging
+import os
 import time
 import uuid
 from collections.abc import Sequence
@@ -21,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-from adcp.types import ContextObject, MediaBuyStatus
+from adcp.types import Account, ContextObject, MediaBuyStatus
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
@@ -1657,6 +1658,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # and creatives may have been uploaded after the initial approval attempt.
             logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
             try:
+                from src.adapters.gam.managers.orders import GAMOrderApprovalPermissionDenied
+
                 adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_context)
                 if hasattr(adapter, "orders_manager") and adapter.orders_manager:
                     approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
@@ -1673,6 +1676,17 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         return False, error_msg
                 else:
                     logger.info("[APPROVAL] Adapter does not support order approval, skipping")
+            except GAMOrderApprovalPermissionDenied:
+                # Expected: service account has no approval permission.
+                # Background status polling was already started during adapter creation.
+                # The media buy will be activated once a human approves the order in GAM.
+                logger.info(
+                    f"[APPROVAL] Service account cannot approve GAM order {response.media_buy_id} — "
+                    f"order will remain in DRAFT until approved externally. "
+                    f"Background status polling is running."
+                )
+                # Skip setting media buy to 'active' — the background poller handles that.
+                return True, None
             except Exception as approval_error:
                 # Approval exception - return failure
                 error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
@@ -2321,6 +2335,63 @@ def _package_from_config(db_package: Any) -> Package:
     return Package(**kwargs)
 
 
+def _buyer_safe_account(tenant_id: str, account_id: str | None) -> Account | None:
+    """Buyer-safe account projection for the create-media-buy success response.
+
+    Constructed with ONLY non-sensitive identity fields (account_id, name, status) —
+    seller financials (rate_card, credit_limit, payment_terms, billing, billing_proxy,
+    operator, governance_agents, setup, …) are never set, so they cannot leak via the
+    wire dump (redaction by construction, not by stripping). The status is projected
+    through ``wire_status`` so internal lifecycle states surface identically to the
+    get_accounts flow (e.g. ``pending_provision`` → ``pending_approval``, #332).
+
+    Returns None and never raises if the account can't be resolved/projected —
+    account context is response enrichment, never load-bearing for the buy.
+    """
+    if not account_id:
+        return None
+    try:
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.database.repositories.account import AccountRepository
+        from src.core.tools.account_status import wire_status
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.session is not None
+            row = AccountRepository(uow.session, tenant_id).get_by_id(account_id)
+            if row is None or not getattr(row, "name", None):
+                return None
+            # Construct inside the UoW: reading row.name/row.status after the
+            # session closes would raise DetachedInstanceError.
+            return Account(account_id=account_id, name=row.name, status=wire_status(row.status))
+    except ValidationError:
+        # Status (or other field) the AdCP Account model can't represent — skip
+        # the enrichment quietly; it is never load-bearing for the buy.
+        logger.debug("create_media_buy: account %r not buyer-projectable", account_id, exc_info=True)
+        return None
+    except Exception:
+        # DB/repository failure — surface it (warning) so a systemic regression
+        # is visible, but still never break the buy over response enrichment.
+        logger.warning("create_media_buy: account projection failed for %r", account_id, exc_info=True)
+        return None
+
+
+def _success_response_extras(*, req: Any, sandbox_mode: Any, tenant_id: str, account_id: str | None) -> dict[str, Any]:
+    """Fields echoed onto every CreateMediaBuySuccess in the create flow (adcp 6.3).
+
+    - ``context``: request context echoed unchanged (BR-RULE-043-01, all response paths)
+    - ``sandbox``: present only when the tenant is in sandbox mode (UC-002-UPG-09)
+    - ``account``: buyer-safe {account_id, name, status} projection (UC-002-UPG-07)
+
+    None values are dropped by ``exclude_none`` on serialization, so non-sandbox / no-
+    account buys are unaffected. Splatted via ``**`` into each success construction.
+    """
+    return {
+        "context": getattr(req, "context", None),
+        "sandbox": True if getattr(sandbox_mode, "active", False) else None,
+        "account": _buyer_safe_account(tenant_id, account_id),
+    }
+
+
 @traced
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
@@ -2380,8 +2451,9 @@ async def _create_media_buy_impl(
     # wire so buyer agents relax terms and retry with a fresh idempotency_key.
     _validate_measurement_terms(req)
 
-    # Validate setup completion (only in production, skip for testing)
-    if not testing_ctx.dry_run and not testing_ctx.test_session_id:
+    # Validate setup completion (only in production, skip for testing/dev)
+    _skip_setup_check = os.environ.get("ADCP_SKIP_SETUP_CHECK") == "true"
+    if not testing_ctx.dry_run and not testing_ctx.test_session_id and not _skip_setup_check:
         try:
             validate_setup_complete(tenant["tenant_id"])
         except SetupIncompleteError as e:
@@ -2408,6 +2480,15 @@ async def _create_media_buy_impl(
     sandbox_mode = sandbox_mode_for_request(identity=identity, account_ref=account_ref_from_request(req))
     if sandbox_mode.active:
         logger.info("[SANDBOX] create_media_buy will traffic with zero economics: %s", sandbox_mode.diagnostic)
+
+    # Fields echoed onto every CreateMediaBuySuccess in this flow — see
+    # _success_response_extras (context echo / sandbox flag / buyer-safe account).
+    _success_extras: dict[str, Any] = _success_response_extras(
+        req=req,
+        sandbox_mode=sandbox_mode,
+        tenant_id=tenant["tenant_id"],
+        account_id=identity.account_id if identity else None,
+    )
 
     # Account-scoped buyers route through Account.platform_mappings (or the
     # sandbox advertiser cache) by stamping the resolved advertiser on the
@@ -3415,6 +3496,7 @@ async def _create_media_buy_impl(
                 revision=1,
                 confirmed_at=datetime.now(UTC),
                 workflow_step_id=step.step_id,
+                **_success_extras,
             )
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -3637,6 +3719,7 @@ async def _create_media_buy_impl(
                 revision=1,
                 confirmed_at=datetime.now(UTC),
                 workflow_step_id=step.step_id,
+                **_success_extras,
             )
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -3937,6 +4020,7 @@ async def _create_media_buy_impl(
                 else MediaBuyStatus.pending_creatives,
                 revision=1,
                 confirmed_at=datetime.now(UTC),
+                **_success_extras,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -4581,6 +4665,7 @@ async def _create_media_buy_impl(
             creative_deadline=response.creative_deadline,
             revision=1,
             confirmed_at=confirmed_at,
+            **_success_extras,
         )
 
         # Log activity

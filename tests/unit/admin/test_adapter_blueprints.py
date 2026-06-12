@@ -150,6 +150,34 @@ class TestAdapterConfigValidation:
         assert incoming["api_token"] == "new-token"
         assert "password" not in incoming
 
+    def test_freewheel_client_credentials_mode_clears_password_and_token(self):
+        """Switching to API-Access client_credentials must not keep password or static bearer alive."""
+        from src.admin.blueprints.adapters import (
+            _freewheel_auth_mode,
+            _freewheel_secret_fields_to_clear,
+            _preserve_or_clear_secret_fields,
+        )
+
+        incoming = {"auth_mode": "client_credentials", "client_id": "cid-abc", "client_secret": "new-secret"}
+        auth_mode = _freewheel_auth_mode(incoming)
+        _preserve_or_clear_secret_fields(
+            incoming,
+            {"password": "encrypted-password", "api_token": "encrypted-token", "client_secret": "encrypted-secret"},
+            secret_fields=["password", "api_token", "client_secret"],
+            clear_secret_fields=_freewheel_secret_fields_to_clear(auth_mode),
+        )
+
+        assert auth_mode == "client_credentials"
+        assert incoming["client_secret"] == "new-secret"
+        assert "password" not in incoming
+        assert "api_token" not in incoming
+
+    def test_freewheel_auth_mode_infers_client_credentials_from_client_id(self):
+        """Without an explicit auth_mode, presence of client_id implies client_credentials."""
+        from src.admin.blueprints.adapters import _freewheel_auth_mode
+
+        assert _freewheel_auth_mode({"client_id": "cid", "client_secret": "sec"}) == "client_credentials"
+
 
 class TestCapabilitiesEndpointLogic:
     """Tests for capabilities endpoint business logic."""

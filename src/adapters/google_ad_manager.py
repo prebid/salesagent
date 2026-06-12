@@ -793,47 +793,62 @@ class GoogleAdManager(AdServerAdapter):
             # GAM requires line items to exist before an order can be APPROVED
             # Try once - if forecasting not ready, start background task
             self.log(f"[cyan]Attempting to approve GAM Order {order_id} (max_retries=1)[/cyan]")
+
+            # Resolve shared context used by both approval paths below.
+            webhook_url = None
+            push_config = getattr(request, "push_notification_config", None)
+            if push_config:
+                webhook_url = (
+                    push_config.get("url") if isinstance(push_config, dict) else getattr(push_config, "url", None)
+                )
+            principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
+
             try:
+                from src.adapters.gam.managers.orders import GAMOrderApprovalPermissionDenied
+
                 approval_success = self.orders_manager.approve_order(order_id, max_retries=1)
                 if approval_success:
                     self.log(f"✓ Approved GAM Order {order_id}")
                 else:
-                    # Approval failed (likely NO_FORECAST_YET) - start background polling
+                    # Approval failed (likely NO_FORECAST_YET) - start background approval polling
                     self.log(
                         f"[yellow]Order {order_id} forecasting not ready - starting background approval task[/yellow]"
                     )
-
-                    # Get webhook URL from push notification config
-                    # Note: push_notification_config is not part of AdCP library's CreateMediaBuyRequest
-                    # Use getattr for backward compatibility with internal extensions
-                    webhook_url = None
-                    push_config = getattr(request, "push_notification_config", None)
-                    if push_config:
-                        webhook_url = (
-                            push_config.get("url")
-                            if isinstance(push_config, dict)
-                            else getattr(push_config, "url", None)
-                        )
-
-                    # Get principal_id from adapter's principal object
-                    principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
-
-                    # Start background approval polling task
                     from src.services.order_approval_service import start_order_approval_background
 
                     try:
                         approval_id = start_order_approval_background(
                             order_id=order_id,
-                            media_buy_id=order_id,  # In automatic mode, media_buy_id = order_id
+                            media_buy_id=order_id,
                             tenant_id=self.tenant_id,
                             principal_id=principal_id,
                             webhook_url=webhook_url,
-                            max_attempts=12,  # 2 minutes with 10 second intervals
+                            max_attempts=12,
                             poll_interval_seconds=10,
                         )
                         self.log(f"✓ Started background approval polling (job: {approval_id})")
                     except ValueError as e:
                         self.log(f"[red]Failed to start background approval: {e}[/red]")
+            except GAMOrderApprovalPermissionDenied:
+                # Expected: service account has no approval permission.
+                # Start status polling so the media buy activates when a human approves in GAM.
+                self.log(
+                    f"[yellow]Service account cannot approve order {order_id} — "
+                    f"starting background status polling for external approval[/yellow]"
+                )
+                from src.services.order_approval_service import start_order_status_polling
+
+                try:
+                    approval_id = start_order_status_polling(
+                        order_id=order_id,
+                        media_buy_id=order_id,
+                        tenant_id=self.tenant_id,
+                        principal_id=principal_id,
+                        webhook_url=webhook_url,
+                    )
+                    self.log(f"✓ Started background status polling (job: {approval_id})")
+                except ValueError as e:
+                    self.log(f"[red]Failed to start status polling: {e}[/red]")
             except Exception as approval_error:
                 # Non-fatal error - order and line items were created successfully
                 self.log(f"[yellow]Warning: Could not approve order {order_id}: {approval_error}[/yellow]")

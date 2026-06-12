@@ -421,10 +421,14 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
     username = config.get("username")
     password = config.get("password")
     api_token = config.get("api_token")
-    if not ((username and password) or api_token):
+    client_id = config.get("client_id")
+    client_secret = config.get("client_secret")
+    token_url = config.get("token_url")
+    is_client_credentials = bool(client_id) and bool(client_secret)
+    if not (is_client_credentials or (username and password) or api_token):
         return ProbeResult.fail(
             INVALID_CONFIG,
-            "FreeWheel config requires either (username + password) or api_token",
+            "FreeWheel config requires one of: (client_id + client_secret), (username + password), or api_token",
         )
 
     try:
@@ -444,12 +448,17 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
     base_url = FREEWHEEL_HOSTS.get(environment, FREEWHEEL_HOSTS["production"])
 
     try:
-        client = FreeWheelClient(
-            api_token=api_token,
-            username=username,
-            password=password,
-            base_url=base_url,
-        )
+        client_kwargs: dict[str, Any] = {
+            "api_token": api_token,
+            "username": username,
+            "password": password,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "base_url": base_url,
+        }
+        if token_url:
+            client_kwargs["token_url"] = token_url
+        client = FreeWheelClient(**client_kwargs)
     except Exception as exc:  # pragma: no cover - construction-time auth failures are rare
         logger.warning("FreeWheel client construction failed: %s", exc)
         return ProbeResult.fail(
@@ -471,7 +480,59 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
         # No status_code means we never got a response — connection-level.
         return UPSTREAM_UNAVAILABLE if (exc.status_code or 0) >= 500 else CONNECTION_FAILED
 
-    # Step 1: bearer validity.
+    def _inventory_probe() -> ProbeResult:
+        """Publisher-binding probe: a 200 on list_sites proves the bearer is
+        valid AND scoped to a publisher with inventory. For client_credentials
+        this is the sole validity check (token_info 401s for API-Access tokens)."""
+        try:
+            client.inventory.list_sites(per_page=1)
+        except FreeWheelForbiddenError as exc:
+            # Bearer is valid but the publisher account it represents can't read
+            # inventory — wrong publisher or inventory scope not granted.
+            return ProbeResult.fail(
+                PERMISSION_DENIED,
+                (
+                    f"FreeWheel bearer cannot read inventory for the configured publisher "
+                    f"(403): {exc}. Verify the token is for the intended publisher account."
+                ),
+                remediation=CUSTOMER_REBINDS_ACCOUNT,
+                details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
+            )
+        except FreeWheelNotFoundError as exc:
+            # 404 here means authenticated but no accessible inventory route —
+            # the role/scope-gap signature. Only the vendor can enable it.
+            return ProbeResult.fail(
+                PERMISSION_DENIED,
+                (
+                    f"FreeWheel inventory endpoint returned 404 — bearer authenticated but "
+                    f"the configured publisher has no accessible inventory route: {exc}. "
+                    "Verify the token is provisioned for the intended publisher account."
+                ),
+                remediation=VENDOR_ENABLES_ROLE,
+                details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
+            )
+        except FreeWheelError as exc:
+            return ProbeResult.fail(
+                _fw_5xx_or_connection(exc),
+                f"FreeWheel API error on list_sites (status={exc.status_code}): {exc}",
+                details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
+            )
+        except Exception as exc:
+            logger.warning("FreeWheel list_sites() transport failure: %s", exc)
+            return ProbeResult.fail(
+                CONNECTION_FAILED,
+                f"FreeWheel transport failure: {type(exc).__name__}",
+                details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
+            )
+        return ProbeResult.ok()
+
+    # Step 1: bearer validity. Skipped for client_credentials — the legacy
+    # /auth/token/info introspection returns 401 for API-Access tokens, so it
+    # can't prove validity for that mode. The inventory probe proves both
+    # validity and publisher binding in one call for those tokens.
+    if is_client_credentials:
+        return _inventory_probe()
+
     try:
         client.token_info()
     except FreeWheelAuthError as exc:
@@ -509,51 +570,7 @@ def _test_freewheel(config: dict[str, Any]) -> ProbeResult:
         )
 
     # Step 2: publisher binding — does the bearer see inventory?
-    try:
-        client.inventory.list_sites(per_page=1)
-    except FreeWheelForbiddenError as exc:
-        # Bearer is valid (step 1 passed) but the publisher account it
-        # represents can't read inventory. Either the token is for the
-        # wrong publisher or the inventory scope wasn't granted — most
-        # commonly fixed by getting a token for the right publisher.
-        return ProbeResult.fail(
-            PERMISSION_DENIED,
-            (
-                f"FreeWheel bearer cannot read inventory for the configured publisher "
-                f"(403): {exc}. Verify the token is for the intended publisher account."
-            ),
-            remediation=CUSTOMER_REBINDS_ACCOUNT,
-            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
-        )
-    except FreeWheelNotFoundError as exc:
-        # 404 on inventory listing means the bearer authenticated but the
-        # configured publisher account has no accessible inventory route —
-        # the role/scope-gap signature. Only the vendor can enable it.
-        return ProbeResult.fail(
-            PERMISSION_DENIED,
-            (
-                f"FreeWheel inventory endpoint returned 404 — bearer authenticated but "
-                f"the configured publisher has no accessible inventory route: {exc}. "
-                "Verify the token is provisioned for the intended publisher account."
-            ),
-            remediation=VENDOR_ENABLES_ROLE,
-            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
-        )
-    except FreeWheelError as exc:
-        return ProbeResult.fail(
-            _fw_5xx_or_connection(exc),
-            f"FreeWheel API error on list_sites (status={exc.status_code}): {exc}",
-            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
-        )
-    except Exception as exc:
-        logger.warning("FreeWheel list_sites() transport failure: %s", exc)
-        return ProbeResult.fail(
-            CONNECTION_FAILED,
-            f"FreeWheel transport failure: {type(exc).__name__}",
-            details=_fw_details(_FW_PHASE_LIST_SITES, _FW_ENDPOINT_LIST_SITES, exc),
-        )
-
-    return ProbeResult.ok()
+    return _inventory_probe()
 
 
 def _test_broadstreet(config: dict[str, Any]) -> ProbeResult:

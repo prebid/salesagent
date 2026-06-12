@@ -304,6 +304,9 @@ Query parameters:
 | `limit` | Page size, default 50. |
 | `cursor` | Opaque pagination cursor. |
 
+The endpoint also accepts `selectorType` and `parentId` as compatibility aliases
+for storefront clients that use camelCase request names.
+
 Response:
 
 ```json

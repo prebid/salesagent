@@ -137,6 +137,19 @@ class TestPostalAreaOverlap:
         assert "10001" in violations[0]
         assert "geo_postal_areas" in violations[0]
 
+    def test_native_arm_inclusion_overlaps_legacy_exclusion(self):
+        """adcp 6.3 native inclusion arm carries country-stripped system ('zip') + a
+        country; the exclude arm is the legacy country-fused form ('us_zip'). The
+        normalizer must fuse the native arm so the overlap is still detected."""
+        targeting = Targeting(
+            geo_postal_areas=[{"country": "US", "system": "zip", "values": ["10001"]}],
+            geo_postal_areas_exclude=[{"system": "us_zip", "values": ["10001"]}],
+        )
+        violations = validate_geo_overlap(targeting)
+        assert len(violations) == 1
+        assert "10001" in violations[0]
+        assert "us_zip" in violations[0]
+
     def test_different_systems_no_conflict(self):
         targeting = Targeting(
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
