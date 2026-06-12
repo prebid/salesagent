@@ -4,14 +4,13 @@ Used by tests/unit/test_architecture_*.py. Centralizes:
 
 - AST parsing with mtime-keyed cache (safe under pytest-xdist worker forks)
 - Source-file iteration (src/, workflows, compose)
-- Action-uses regex parsing
 - Cross-file anchor-consistency assertions (D25)
 - Stale-allowlist detection helper (D23)
 - Standard failure-message formatter (D26)
 
-PR 2 commit 8 introduces the baseline (parse_module, iter_function_defs,
-src_python_files, repo_root). PR 4 commit 1 extends with workflow/compose
-iteration, the assertion helpers, and the failure-message formatter.
+PR 2 commit 8 introduces the baseline (parse_module, iter_call_expressions,
+src_python_files, repo_root). PR 4 commit 1 extends with workflow iteration,
+the assertion helpers, and the failure-message formatter.
 """
 
 from __future__ import annotations
@@ -101,12 +100,6 @@ def find_plain_json_column_violations(tree: ast.Module) -> list[int]:
     return lines
 
 
-def iter_function_defs(tree: ast.Module) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            yield node
-
-
 def iter_call_expressions(tree: ast.Module, name: str | None = None) -> Iterator[ast.Call]:
     """Yield Call nodes, optionally filtered by callable name."""
     for node in ast.walk(tree):
@@ -119,12 +112,6 @@ def iter_call_expressions(tree: ast.Module, name: str | None = None) -> Iterator
         if isinstance(f, ast.Name) and f.id == name:
             yield node
         elif isinstance(f, ast.Attribute) and f.attr == name:
-            yield node
-
-
-def iter_class_defs(tree: ast.Module) -> Iterator[ast.ClassDef]:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
             yield node
 
 
@@ -260,21 +247,6 @@ def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
         for pattern in _PG_IMAGE_PATTERNS:
             for m in re.finditer(pattern, text, flags=re.MULTILINE):
                 yield path, m.group(1)
-
-
-# ---------------------------------------------------------------------------
-# Action-uses regex (workflow + composite-action files)
-# ---------------------------------------------------------------------------
-
-_ACTION_USES_RE = re.compile(
-    r"uses:\s*([a-zA-Z0-9._/-]+)@([a-f0-9]+|v?[0-9.]+)(\s*#[^\n]*)?",
-)
-
-
-def iter_action_uses(text: str) -> Iterator[tuple[str, str, str]]:
-    """Yield (action-name, ref, trailing-comment) for every `uses: foo@ref`."""
-    for m in _ACTION_USES_RE.finditer(text):
-        yield m.group(1), m.group(2), (m.group(3) or "")
 
 
 # ---------------------------------------------------------------------------

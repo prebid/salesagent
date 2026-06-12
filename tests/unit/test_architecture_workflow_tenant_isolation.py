@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 ROOT = Path(__file__).resolve().parents[2]
 
 WORKFLOW_REPO_FILE = "src/core/database/repositories/workflow.py"
@@ -88,6 +90,14 @@ def _method_queries_without_context_join(method_name: str, body: str) -> bool:
     return not has_context_join
 
 
+def _workflow_isolation_violations() -> set[str]:
+    source_path = ROOT / WORKFLOW_REPO_FILE
+    if not source_path.exists():
+        return set()
+    methods = _extract_methods(source_path.read_text(encoding="utf-8"))
+    return {name for name, body in methods.items() if _method_queries_without_context_join(name, body)}
+
+
 class TestWorkflowRepositoryTenantIsolation:
     """WorkflowRepository must scope all queries to the current tenant.
 
@@ -102,61 +112,14 @@ class TestWorkflowRepositoryTenantIsolation:
     """
 
     @pytest.mark.arch_guard
-    def test_no_new_unscoped_workflow_queries(self):
-        """No new WorkflowRepository methods query WorkflowStep/ObjectWorkflowMapping
-        without a DBContext join."""
-        source_path = ROOT / WORKFLOW_REPO_FILE
-        if not source_path.exists():
-            return  # File not present — skip (shouldn't happen in normal operation)
-
-        source = source_path.read_text()
-        methods = _extract_methods(source)
-
-        new_violations = [
-            name
-            for name, body in methods.items()
-            if _method_queries_without_context_join(name, body) and name not in WORKFLOW_ISOLATION_ALLOWLIST
-        ]
-
-        if new_violations:
-            msg_lines = [
-                "WorkflowRepository methods query WorkflowStep/ObjectWorkflowMapping "
-                "without tenant isolation (missing DBContext join):",
-                "",
-            ]
-            for name in sorted(new_violations):
-                msg_lines.append(f"  WorkflowRepository.{name}()")
-            msg_lines.append("")
-            msg_lines.append(
+    def test_workflow_isolation_allowlist_matches_violations(self):
+        """Found violations must exactly match WORKFLOW_ISOLATION_ALLOWLIST (new + stale in one check)."""
+        assert_violations_match_allowlist(
+            _workflow_isolation_violations(),
+            WORKFLOW_ISOLATION_ALLOWLIST,
+            fix_hint=(
                 "Fix: Add .join(DBContext).where(DBContext.tenant_id == self._tenant_id) "
-                "to the query, following the pattern in get_by_step_id()."
-            )
-            raise AssertionError("\n".join(msg_lines))
-
-    @pytest.mark.arch_guard
-    def test_allowlist_entries_still_exist(self):
-        """Every allowlisted violation must still exist (stale entry detection).
-
-        When you fix an unscoped query, remove it from WORKFLOW_ISOLATION_ALLOWLIST.
-        """
-        source_path = ROOT / WORKFLOW_REPO_FILE
-        if not source_path.exists():
-            return
-
-        source = source_path.read_text()
-        methods = _extract_methods(source)
-
-        current_violations = {
-            name for name, body in methods.items() if _method_queries_without_context_join(name, body)
-        }
-
-        stale = WORKFLOW_ISOLATION_ALLOWLIST - current_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries in WORKFLOW_ISOLATION_ALLOWLIST "
-                "(violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for name in sorted(stale):
-                msg_lines.append(f"  {name!r},")
-            raise AssertionError("\n".join(msg_lines))
+                "to the query, following the pattern in get_by_step_id(). "
+                "When fixed, remove the method from WORKFLOW_ISOLATION_ALLOWLIST."
+            ),
+        )
