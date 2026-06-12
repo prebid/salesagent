@@ -9,7 +9,7 @@
 #   ./run_all_tests.sh ci tests/integration/test_file.py -k test_name
 #   ./run_all_tests.sh ci tests/integration/ -m creative     # scoped by entity
 
-set -eo pipefail
+set -euo pipefail
 
 cd "$( dirname "${BASH_SOURCE[0]}" )"
 [ -f .env ] && { set -a; source .env; set +a; }

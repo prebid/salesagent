@@ -34,7 +34,7 @@
 # Usage:
 #   scripts/test-in-network.sh                          # all six suites
 #   scripts/test-in-network.sh unit,integration         # explicit suite list
-set -uo pipefail
+set -euo pipefail
 
 COMPOSE_FILE="docker-compose.e2e.yml"
 # PID-suffixed project name -> isolated network per run. No host ports means
@@ -123,8 +123,10 @@ dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test"
 # trip the xdist loadscope rescheduler. Same suites, same outcomes — just not
 # wall-clock parallel inside the one container.
 echo "Running suites in-network (serial): $SUITES"
-dc run --rm --use-aliases tests tox -e "$SUITES"
-RC=$?
+# Capture the suite exit code without aborting under `set -e` — reports must
+# still be extracted and the security audit must still run on a suite failure.
+RC=0
+dc run --rm --use-aliases tests tox -e "$SUITES" || RC=$?
 
 # tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
 # (kept off the bind mount so venvs don't live on the slow host tree). The host
@@ -134,7 +136,7 @@ echo "Extracting JSON reports from the tox_data volume..."
 docker run --rm \
     -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
     -v "$(pwd)/${RESULTS_DIR}:/out" \
-    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true'
+    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true' || true
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 

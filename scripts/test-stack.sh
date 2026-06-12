@@ -9,7 +9,7 @@
 # After 'up', the script writes port assignments to .test-stack.env
 # which tox environments read via pass_env.
 
-set -eo pipefail
+set -euo pipefail
 
 cd "$( dirname "${BASH_SOURCE[0]}" )/.."
 [ -f .env ] && { set -a; source .env; set +a; }
