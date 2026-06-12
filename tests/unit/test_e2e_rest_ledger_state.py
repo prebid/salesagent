@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 35 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1-M3
-# graduated the 6 get_products tenant-duplicate entries, jdy1-M1 the 6 uc004
-# REST-422 wire-shape entries). Grouped by
+# The 31 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
+# graduated M3 6 get_products tenant-duplicate, M1 6 uc004 REST-422 wire-shape,
+# M4 4 uc004 webhook-observability entries [now tag-declared in conftest]). Grouped by
 # gap in the ledger file's section comments; flat here for exact-set comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -40,10 +40,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_does_not_retry_on_4xx_response[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_5xx_response[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_network_error[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_sequence_numbers_are_monotonically_increasing[e2e_rest]",
         'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_payment_required-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]',
         'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_setup_required-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]',
         'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]',

@@ -503,6 +503,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-webhook-circuit-open",
             "T-UC-004-webhook-circuit-recovery",
             "T-UC-004-webhook-retry-success",
+            # jdy1-M4: retry/sequence observability — assert on env.mock['post']
+            # call counts / args, not visible over the Docker HTTP path.
+            "T-UC-004-webhook-retry-5xx",
+            "T-UC-004-webhook-retry-network",
+            "T-UC-004-webhook-no-retry-4xx",
+            "T-UC-004-webhook-sequence",
         }
         if is_e2e_rest and (marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS):
             item.add_marker(

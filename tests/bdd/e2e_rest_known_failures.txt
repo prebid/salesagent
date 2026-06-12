@@ -73,16 +73,11 @@ tests/bdd/test_uc011_manage_accounts.py::test_sandbox_account_provisioned_via_sy
 # Fixed by idempotent get-or-create given_tenant (uc_get_products_inventory.py); the 6
 # entries now pass in-network (xpass confirmed innet_120626_1822).
 
-# --- uc004 webhook retry/backoff/sequence observability (4) ---
-# GENUINE GAP (impossible to observe over e2e as written): retry-on-5xx, retry-on-network,
-# sequence-monotonic, and no-retry-on-4xx assert on env.mock["post"] call counts and
-# CircuitBreakerEnv.captured_logs — neither is visible through the live Docker HTTP path.
-# To retire: declare as impl-only in WebhookEnv/CircuitBreakerEnv (harness, exec-n48i),
-# OR add an e2e webhook receiver. These are the design F-bucket residuals.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_does_not_retry_on_4xx_response[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_5xx_response[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_network_error[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_sequence_numbers_are_monotonically_increasing[e2e_rest]
+# --- uc004 webhook retry/backoff/sequence observability — GRADUATED (#1430 jdy1-M4) ---
+# retry-on-5xx/network, no-retry-on-4xx, sequence-monotonic assert on env.mock["post"]
+# counts not visible over HTTP. Now declared impl-only by tag in
+# _UC004_E2E_WEBHOOK_INTERNAL_TAGS (conftest) -> env-owned strict=False xfail, off the
+# nodeid ledger (same mechanism as the other webhook-internal e2e scenarios).
 
 # --- explicit inline-xfail production gaps (2) ---
 # GENUINE GAP (already inline-xfailed in the step body): seller attribution-default not
