@@ -399,14 +399,17 @@ class AdCPInvalidRequestError(AdCPValidationError):
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
-    Default error_code is AUTH_TOKEN_INVALID per AdCP spec; the wire passes
-    it through unchanged (AUTH_TOKEN_INVALID is a standard SDK code).
+    Default error_code is AUTH_TOKEN_INVALID per the AdCP 3.1 spec; the wire
+    passes it through unchanged. Note this code is project-specific relative to
+    the SDK we run (adcp 5.7): its ``STANDARD_ERROR_CODES`` table carries only
+    ``AUTH_REQUIRED``, not ``AUTH_TOKEN_INVALID``.
 
-    Recovery defaults to ``terminal`` to match
-    ``STANDARD_ERROR_CODES["AUTH_REQUIRED"]["recovery"]`` in adcp 4.3 (the SDK
-    we run). That SDK table diverges from the spec's ``error-code.json``, which
-    classifies AUTH_REQUIRED as ``correctable`` (re-auth recovers); we keep
-    ``terminal`` so wire output matches the installed SDK's validator.
+    Recovery defaults to ``terminal`` (inherited from ``AdCPError``; this is a
+    hardcoded ``_default_recovery`` ClassVar, not read from
+    ``STANDARD_ERROR_CODES``). We keep ``terminal`` deliberately: the AdCP 3.1
+    storyboards grade the wire *error code*, not the recovery class, so the
+    recovery hint is ours to set. This intentionally diverges from how adcp 5.7
+    classifies its nearest neighbour ``AUTH_REQUIRED`` (``correctable``).
     """
 
     _default_status_code: ClassVar[int] = 401
@@ -426,8 +429,10 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
 class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
-    Same ``terminal`` default as ``AdCPAuthenticationError`` for the same
-    SDK-vs-spec mismatch reason — see that class's docstring.
+    Same ``terminal`` default as ``AdCPAuthenticationError``, for the same
+    reason: recovery is intentionally terminal because the AdCP 3.1 storyboards
+    grade the wire error code, not the recovery class — see that class's
+    docstring.
     """
 
     _default_status_code: ClassVar[int] = 403

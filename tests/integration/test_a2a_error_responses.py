@@ -923,7 +923,9 @@ class TestA2AErrorResponseStructure:
 
             assert "tenant scope mismatch" in str(exc_info.value)
             assert exc_info.value.error_code == "AUTH_REQUIRED"
-            # AdCPAuthorizationError class default, preserved through the wrap (matches the docstring).
+            # AdCPAuthorizationError class default (hardcoded _default_recovery, not read from
+            # STANDARD_ERROR_CODES), preserved through the wrap. Terminal is intentional: the AdCP
+            # 3.1 storyboards grade the error code, not the recovery class — see the docstring.
             assert exc_info.value.recovery == "terminal"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 
