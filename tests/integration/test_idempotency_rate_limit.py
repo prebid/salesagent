@@ -14,6 +14,7 @@ import pytest
 
 from src.services.idempotency_policy import enforce_insert_ceiling
 from tests.harness.media_buy_create import MediaBuyCreateEnv
+from tests.helpers import seed_principal
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -36,16 +37,6 @@ def _seed_scope_rows(tenant_id, principal_id, count, *, ttl, now):
 class TestInsertCeilingRepository:
     """Counting, retry_after derivation, and TTL interaction at the repository."""
 
-    @staticmethod
-    def _seed_principal(tenant_id, principal_id):
-        from tests.factories import PrincipalFactory, TenantFactory
-        from tests.harness._base import BareIntegrationEnv
-
-        with BareIntegrationEnv() as env:
-            tenant = TenantFactory(tenant_id=tenant_id)
-            PrincipalFactory(tenant=tenant, principal_id=principal_id)
-            env._commit_factory_data()
-
     def test_full_scope_raises_rate_limited_with_retry_after(self, integration_db):
         """At the ceiling, the probe gate raises RATE_LIMITED; retry_after points at the oldest expiry."""
         from src.core.database.repositories import MediaBuyUoW
@@ -53,7 +44,7 @@ class TestInsertCeilingRepository:
 
         tenant_id = f"rl_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        self._seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
 
         now = datetime.now(UTC)
         _seed_scope_rows(tenant_id, principal_id, 2, ttl=timedelta(hours=1), now=now)
@@ -80,7 +71,7 @@ class TestInsertCeilingRepository:
 
         tenant_id = f"rl_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        self._seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
 
         now = datetime.now(UTC)
         _seed_scope_rows(tenant_id, principal_id, 2, ttl=timedelta(hours=1), now=now)
@@ -100,7 +91,7 @@ class TestInsertCeilingRepository:
 
         tenant_id = f"rl_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        self._seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
 
         seeded_at = datetime(2020, 1, 1, tzinfo=UTC)
         _seed_scope_rows(tenant_id, principal_id, 3, ttl=timedelta(minutes=1), now=seeded_at)
@@ -117,16 +108,6 @@ class TestInsertCeilingRepository:
 class TestInsertRateWindow:
     """The spec's MUST: bound the INSERT RATE per scope, not just stored rows."""
 
-    @staticmethod
-    def _seed_principal(tenant_id, principal_id):
-        from tests.factories import PrincipalFactory, TenantFactory
-        from tests.harness._base import BareIntegrationEnv
-
-        with BareIntegrationEnv() as env:
-            tenant = TenantFactory(tenant_id=tenant_id)
-            PrincipalFactory(tenant=tenant, principal_id=principal_id)
-            env._commit_factory_data()
-
     def test_burst_over_rate_ceiling_rejects_with_short_retry_after(self, integration_db):
         """Rows created inside the trailing window count against the rate ceiling.
 
@@ -138,7 +119,7 @@ class TestInsertRateWindow:
 
         tenant_id = f"rlw_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        self._seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
         # Seeded rows are created NOW — inside the trailing window by construction.
         _seed_scope_rows(tenant_id, principal_id, 2, ttl=timedelta(hours=1), now=datetime.now(UTC))
 
@@ -164,7 +145,7 @@ class TestInsertRateWindow:
 
         tenant_id = f"rlw_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        self._seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
         _seed_scope_rows(tenant_id, principal_id, 2, ttl=timedelta(hours=1), now=datetime.now(UTC))
 
         with MediaBuyUoW(tenant_id) as uow:
@@ -184,7 +165,7 @@ class TestInsertRateWindow:
 
         tenant_id = f"rlc_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
-        self._seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
         now = datetime.now(UTC)
         _seed_scope_rows(tenant_id, principal_id, 1, ttl=timedelta(hours=24), now=now)
 

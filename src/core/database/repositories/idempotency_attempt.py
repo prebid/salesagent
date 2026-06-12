@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import IdempotencyAttempt
@@ -50,6 +50,23 @@ class IdempotencyAttemptRepository:
     def tenant_id(self) -> str:
         return self._tenant_id
 
+    def _scope_filter(
+        self, principal_id: str, account_id: str | None, idempotency_key: str
+    ) -> tuple[ColumnElement[bool], ...]:
+        """The (tenant, principal, account, key) WHERE terms the keyed lookups share.
+
+        One home so the cache lookup and the degraded post-race path cannot
+        scope the same key differently. ``account_id is None`` renders ``IS
+        NULL`` — matches no-account rows, mirroring the NULLS NOT DISTINCT
+        unique index.
+        """
+        return (
+            IdempotencyAttempt.tenant_id == self._tenant_id,
+            IdempotencyAttempt.principal_id == principal_id,
+            IdempotencyAttempt.account_id == account_id,
+            IdempotencyAttempt.idempotency_key == idempotency_key,
+        )
+
     def find_by_key(
         self,
         *,
@@ -73,15 +90,31 @@ class IdempotencyAttemptRepository:
         stmt = (
             select(IdempotencyAttempt)
             .where(
-                IdempotencyAttempt.tenant_id == self._tenant_id,
-                IdempotencyAttempt.principal_id == principal_id,
-                # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
-                IdempotencyAttempt.account_id == account_id,
-                IdempotencyAttempt.idempotency_key == idempotency_key,
+                *self._scope_filter(principal_id, account_id, idempotency_key),
                 IdempotencyAttempt.expires_at > current,
             )
             .limit(1)
         )
+        return self._session.scalars(stmt).first()
+
+    def find_including_expired(
+        self,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        account_id: str | None = None,
+    ) -> IdempotencyAttempt | None:
+        """Return the cached row for this scope+key even if its replay window has expired.
+
+        The (tenant, principal, account, key) tuple is unique, so this is the
+        one row for the scope, expired or not. The degraded post-race path uses
+        it to anchor the expiry decision on the STORED ``expires_at`` — the same
+        replay-window authority ``find_by_key`` filters on — rather than
+        recomputing the boundary from a different row's ``created_at``. Returns
+        None only when no row was ever written for the scope (a true in-flight
+        race, or post-eviction reclamation).
+        """
+        stmt = select(IdempotencyAttempt).where(*self._scope_filter(principal_id, account_id, idempotency_key)).limit(1)
         return self._session.scalars(stmt).first()
 
     def record_success(

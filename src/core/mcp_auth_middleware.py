@@ -57,7 +57,7 @@ class MCPAuthMiddleware(Middleware):
             # payload equivalence over the request as the buyer sent it).
             if context.message.arguments is not None:
                 await context.fastmcp_context.set_state(
-                    "raw_arguments", dict(context.message.arguments), serializable=False
+                    "raw_wire_payload", dict(context.message.arguments), serializable=False
                 )
 
             # Extract x-context-id from HTTP headers for tools that need it

@@ -229,7 +229,7 @@ async def _raw_json_body(request: Request) -> dict[str, Any]:
     flip honest retries into conflicts mid-TTL. Starlette caches the body, so
     the fallback read does not consume it before model parsing.
     """
-    raw = getattr(request.state, "raw_wire_body", None)
+    raw = getattr(request.state, "raw_wire_payload", None)
     if raw is not None:
         return json.loads(raw)
     return await request.json()
@@ -243,7 +243,7 @@ raw_json_body = Depends(_raw_json_body)
 async def create_media_buy(
     body: CreateMediaBuyBody,
     identity: ResolvedIdentity = require_auth,
-    raw_request_payload: dict[str, Any] = raw_json_body,
+    raw_wire_payload: dict[str, Any] = raw_json_body,
 ):
     """Create a new media buy (auth required).
 
@@ -260,7 +260,7 @@ async def create_media_buy(
         account=account_ref,
         idempotency_key=body.idempotency_key,
         identity=identity,
-        raw_request_payload=raw_request_payload,
+        raw_wire_payload=raw_wire_payload,
     )
     return response.model_dump(mode="json")
 

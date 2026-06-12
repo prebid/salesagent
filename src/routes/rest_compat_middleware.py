@@ -56,7 +56,7 @@ class RestCompatMiddleware(BaseHTTPMiddleware):
             # Stashed before any rewrite (bytes are immutable, so downstream
             # mutation cannot corrupt the capture); read by api_v1's
             # _raw_json_body dependency.
-            request.state.raw_wire_body = raw_body
+            request.state.raw_wire_payload = raw_body
 
             body_dict: dict[str, Any] = json.loads(raw_body)
             result = normalize_request_params(tool_name, body_dict)

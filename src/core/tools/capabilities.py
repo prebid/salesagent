@@ -262,7 +262,7 @@ def _get_adcp_capabilities_impl(
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=3)],
-            idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
         ),
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],

@@ -73,3 +73,54 @@ def seed_cached_success(
             ttl=ttl if ttl is not None else DEFAULT_REPLAY_TTL,
             now=now,
         )
+
+
+def seed_principal(tenant_id: str, principal_id: str) -> None:
+    """Commit a tenant + principal so the idempotency ``_impl`` auth/FK checks pass.
+
+    One home for the ``BareIntegrationEnv`` + factory seed shared by the
+    rate-limit and replay integration tests.
+    """
+    from tests.factories import PrincipalFactory, TenantFactory
+    from tests.harness._base import BareIntegrationEnv
+
+    with BareIntegrationEnv() as env:
+        tenant = TenantFactory(tenant_id=tenant_id)
+        PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        env._commit_factory_data()
+
+
+def seed_media_buy(
+    tenant_id: str,
+    principal_id: str,
+    media_buy_id: str,
+    *,
+    idempotency_key: str | None = None,
+    account_id: str | None = None,
+    status: str = "active",
+) -> None:
+    """Commit a tenant + principal + MediaBuy (the dup-booking backstop) via factories.
+
+    The committed MediaBuy carries the ``idempotency_key`` backstop without a
+    verbatim cache row — the state the degraded post-race path and the
+    account-scoped key lookup are tested against. One home so the seed block
+    does not duplicate across the repository and race test modules.
+    """
+    from tests.factories import AccountFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
+    from tests.harness._base import BareIntegrationEnv
+
+    with BareIntegrationEnv() as env:
+        tenant = TenantFactory(tenant_id=tenant_id)
+        principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        if account_id is not None:
+            # media_buys.account_id is a FK into accounts — seed the account first.
+            AccountFactory(tenant=tenant, account_id=account_id)
+        MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id=media_buy_id,
+            idempotency_key=idempotency_key,
+            account_id=account_id,
+            status=status,
+        )
+        env.get_session()

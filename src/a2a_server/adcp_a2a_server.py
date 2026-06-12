@@ -1383,7 +1383,7 @@ class AdCPRequestHandler(RequestHandler):
         # injection, deprecated-field normalization, and any handler mutations —
         # the idempotency payload-hash input (AdCP defines equivalence over the
         # request as sent). Deep copy: downstream steps mutate nested dicts.
-        raw_wire_parameters = copy.deepcopy(parameters)
+        raw_wire_payload = copy.deepcopy(parameters)
 
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
@@ -1450,7 +1450,7 @@ class AdCPRequestHandler(RequestHandler):
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
-                result = await handler(parameters, identity, raw_wire_parameters=raw_wire_parameters)
+                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
             else:
                 result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
@@ -1526,7 +1526,7 @@ class AdCPRequestHandler(RequestHandler):
         self,
         parameters: dict,
         identity: ResolvedIdentity,
-        raw_wire_parameters: dict | None = None,
+        raw_wire_payload: dict | None = None,
     ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1609,7 +1609,7 @@ class AdCPRequestHandler(RequestHandler):
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are
             # the idempotency payload-hash input; the post-processed dict is the
             # fallback only for direct handler callers.
-            raw_request_payload=raw_wire_parameters if raw_wire_parameters is not None else params,
+            raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
         )
 
         return response

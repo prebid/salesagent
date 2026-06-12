@@ -101,11 +101,19 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_by_id_or_idempotency_key(self, identifier: str, principal_id: str) -> MediaBuy | None:
-        """Get a media buy by ID first, then fall back to idempotency_key."""
+    def get_by_id_or_idempotency_key(
+        self, identifier: str, principal_id: str, account_id: str | None = None
+    ) -> MediaBuy | None:
+        """Get a media buy by ID first, then fall back to idempotency_key.
+
+        ``account_id`` scopes the idempotency-key fallback to the spec's
+        (agent, account, key) tuple. It is threaded through to
+        ``find_by_idempotency_key`` rather than dropped — otherwise the
+        fallback would silently match only no-account (``IS NULL``) rows.
+        """
         result = self.get_by_id(identifier)
         if result is None:
-            result = self.find_by_idempotency_key(identifier, principal_id)
+            result = self.find_by_idempotency_key(identifier, principal_id, account_id=account_id)
         return result
 
     # ------------------------------------------------------------------

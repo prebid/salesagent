@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.harness.media_buy_create import MediaBuyCreateEnv
+from tests.helpers import seed_principal
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -36,17 +37,6 @@ def _seed_success(tenant_id, principal_id, idempotency_key, *, payload_hash, med
         response_model=make_active_cached_success(media_buy_id),
         payload_hash=payload_hash,
     )
-
-
-def _seed_principal(tenant_id, principal_id):
-    """Commit a tenant + principal so the _impl auth/FK checks pass."""
-    from tests.factories import PrincipalFactory, TenantFactory
-    from tests.harness._base import BareIntegrationEnv
-
-    with BareIntegrationEnv() as env:
-        tenant = TenantFactory(tenant_id=tenant_id)
-        PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        env._commit_factory_data()
 
 
 def _make_request(idempotency_key, *, po_number="REPLAY-1"):
@@ -85,7 +75,7 @@ class TestImplReplaysCachedSuccess:
         tenant_id = f"replay_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
-        _seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
         # Stored hash matches the retry's canonical hash → a true replay.
         _seed_success(
             tenant_id,
@@ -111,7 +101,7 @@ class TestImplReplaysCachedSuccess:
         tenant_id = f"conflict_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
-        _seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
         # Stored hash will NOT match the request's canonical hash → conflict.
         _seed_success(tenant_id, principal_id, idem_key, media_buy_id="mb_first", payload_hash="non-matching-hash")
 
@@ -144,7 +134,7 @@ class TestImplReplaysCachedSuccess:
         tenant_id = f"drift_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
 
-        _seed_principal(tenant_id, principal_id)
+        seed_principal(tenant_id, principal_id)
 
         class _LegacyShape(BaseModel):
             """A stored shape CreateMediaBuySuccess no longer validates (schema drift)."""

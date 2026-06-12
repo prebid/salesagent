@@ -26,7 +26,7 @@ ALLOWED_DICT_PARAMS = {
     # The request as sent on the wire — the idempotency payload-hash input.
     # MUST stay a raw dict: model coercion would normalize the payload and
     # defeat wire-level RFC 8785 hashing.
-    "raw_request_payload",
+    "raw_wire_payload",
 }
 
 # MCP wrapper functions to check (module_path, function_name)

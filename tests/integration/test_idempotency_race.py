@@ -515,3 +515,50 @@ class TestDegradedFallbackScopeRules:
         assert isinstance(second.response, CreateMediaBuySuccess)
         assert second.response.media_buy_id != first.response.media_buy_id
         assert second.replayed is False, "a different account is an independent request, never a replay"
+
+
+class TestDegradedExpiryAnchoring:
+    """The degraded expiry boundary is the cache row's STORED expires_at, not MediaBuy.created_at."""
+
+    def test_uses_stored_expires_at_not_media_buy_created_at(self, integration_db):
+        """A present-but-expired cache row drives IDEMPOTENCY_EXPIRED even when the backstop is fresh.
+
+        The cache row and the MediaBuy backstop carry independent timestamps.
+        Recomputing the window from MediaBuy.created_at (just created here) would
+        call the closed window OPEN; anchoring on the stored expires_at — the
+        same authority the probe filters on — rejects correctly.
+        """
+        from datetime import timedelta
+
+        from src.core.exceptions import AdCPError
+        from src.core.tools.media_buy_create import _replay_after_race
+        from tests.helpers import make_active_cached_success, seed_cached_success, seed_media_buy
+
+        idem_key = f"degstore-{uuid.uuid4().hex}"
+        tenant_id = f"degstore_t_{uuid.uuid4().hex[:6]}"
+        principal_id = f"p_{uuid.uuid4().hex[:8]}"
+
+        # Backstop buy created NOW — a MediaBuy.created_at recompute calls the window OPEN.
+        seed_media_buy(tenant_id, principal_id, "mb_degstore_backstop", idempotency_key=idem_key)
+
+        # ...but the cache row's stored expires_at is already in the past.
+        seed_cached_success(
+            tenant_id,
+            principal_id,
+            idem_key,
+            response_model=make_active_cached_success("mb_degstore"),
+            payload_hash="store-hash",
+            ttl=timedelta(hours=1),
+            now=datetime.now(UTC) - timedelta(hours=2),
+        )
+
+        with pytest.raises(AdCPError) as exc_info:
+            _replay_after_race(
+                tenant_id,
+                idempotency_key=idem_key,
+                principal_id=principal_id,
+                account_id=None,
+                request_hash="store-hash",
+            )
+
+        assert exc_info.value.error_code == "IDEMPOTENCY_EXPIRED"

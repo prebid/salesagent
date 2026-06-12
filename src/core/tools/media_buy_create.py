@@ -1521,6 +1521,7 @@ def _raise_degraded_replay_outcome(
 
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
+        assert uow.idempotency_attempts is not None
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
             raise AdCPValidationError(
@@ -1531,7 +1532,18 @@ def _raise_degraded_replay_outcome(
         # Rule 6 (security.mdx#idempotency): a key the seller has seen whose
         # replay window has expired rejects rather than silently re-deriving —
         # the buyer cannot tell a faithful replay from a reconstruction this old.
-        if datetime.now(UTC) - existing.created_at > DEFAULT_REPLAY_TTL:
+        # Anchor the boundary on the cache row's STORED expires_at — the single
+        # replay-window authority the probe path filters on. Fall back to the
+        # MediaBuy creation time only when no cache row survives (evicted after
+        # expiry, or the race winner's cache write still in flight).
+        cached = uow.idempotency_attempts.find_including_expired(
+            principal_id=principal_id, idempotency_key=idempotency_key, account_id=account_id
+        )
+        now = datetime.now(UTC)
+        window_expired = (
+            cached.expires_at <= now if cached is not None else now - existing.created_at > DEFAULT_REPLAY_TTL
+        )
+        if window_expired:
             raise AdCPIdempotencyExpiredError(
                 "idempotency_key was seen before, but its replay window "
                 f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired"
@@ -1755,7 +1767,7 @@ async def _create_media_buy_impl(
     push_notification_config: dict[str, Any] | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-    raw_request_payload: dict[str, Any] | None = None,
+    raw_wire_payload: dict[str, Any] | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -1763,7 +1775,7 @@ async def _create_media_buy_impl(
         req: Validated CreateMediaBuyRequest with all protocol fields
         push_notification_config: Push notification config dict (transport wrapper serializes models)
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
-        raw_request_payload: The request dict as sent on the wire, threaded by the
+        raw_wire_payload: The request dict as sent on the wire, threaded by the
             transport wrappers — the idempotency payload-hash input (AdCP defines
             payload equivalence over the request AS SENT, RFC 8785 over the wire
             JSON). ``None`` only for impl-direct callers (tests, internal), which
@@ -1823,9 +1835,7 @@ async def _create_media_buy_impl(
     request_hash = None
     if req.idempotency_key:
         request_hash = (
-            canonical_payload_hash(raw_request_payload)
-            if raw_request_payload is not None
-            else canonical_request_hash(req)
+            canonical_payload_hash(raw_wire_payload) if raw_wire_payload is not None else canonical_request_hash(req)
         )
     if req.idempotency_key:
         replay = _lookup_cached_replay(
@@ -4219,7 +4229,7 @@ async def create_media_buy(
     # idempotency payload-hash input — the request as the buyer sent it.
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
-    raw_request_payload = (await ctx.get_state("raw_arguments")) if isinstance(ctx, Context) else None
+    raw_wire_payload = (await ctx.get_state("raw_wire_payload")) if isinstance(ctx, Context) else None
 
     # Resolve account at transport boundary (before _impl)
     from src.core.transport_helpers import enrich_identity_with_account
@@ -4233,7 +4243,7 @@ async def create_media_buy(
         push_notification_config=pnc_dict,
         identity=identity,
         context_id=_ctx_id,
-        raw_request_payload=raw_request_payload,
+        raw_wire_payload=raw_wire_payload,
     )
     return ToolResult(content=str(result), structured_content=result)
 
@@ -4252,7 +4262,7 @@ async def create_media_buy_raw(
     idempotency_key: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
-    raw_request_payload: dict[str, Any] | None = None,
+    raw_wire_payload: dict[str, Any] | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
@@ -4273,7 +4283,7 @@ async def create_media_buy_raw(
         ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
-        raw_request_payload: The request dict as sent on the wire (A2A DataPart
+        raw_wire_payload: The request dict as sent on the wire (A2A DataPart
             params / REST JSON body) — the idempotency payload-hash input
 
     Returns:
@@ -4320,7 +4330,7 @@ async def create_media_buy_raw(
         push_notification_config=pnc_dict,
         identity=identity,
         context_id=_ctx_id,
-        raw_request_payload=raw_request_payload,
+        raw_wire_payload=raw_wire_payload,
     )
 
 

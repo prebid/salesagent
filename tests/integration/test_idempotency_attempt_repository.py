@@ -441,3 +441,42 @@ class TestExpireOld:
 
         assert deleted_t1 == 1
         assert len(t2_rows) == 1, "Tenant t2's row must survive tenant t1's expire_old"
+
+
+class TestFindIncludingExpired:
+    """find_including_expired returns the scope's row regardless of expiry (find_by_key does not)."""
+
+    def test_returns_expired_row_that_find_by_key_filters(self, integration_db):
+        from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
+
+        with BareIntegrationEnv() as env:
+            session = _setup(env)
+            repo = IdempotencyAttemptRepository(session, "idem_t1")
+            seeded_at = datetime(2026, 5, 1, tzinfo=UTC)
+            repo.record_success(
+                principal_id="idem_p1",
+                tool_name="create_media_buy",
+                idempotency_key="key-incl-exp",
+                response_model=_model(media_buy_id="mb_incl"),
+                protocol_status="completed",
+                payload_hash="hash-incl",
+                ttl=timedelta(hours=1),
+                now=seeded_at,
+            )
+            after_expiry = datetime(2026, 6, 1, tzinfo=UTC)
+
+            # find_by_key treats the closed window as absent...
+            assert repo.find_by_key(principal_id="idem_p1", idempotency_key="key-incl-exp", now=after_expiry) is None
+            # ...but find_including_expired returns the row, carrying its stored expires_at.
+            row = repo.find_including_expired(principal_id="idem_p1", idempotency_key="key-incl-exp")
+            assert row is not None
+            assert row.idempotency_key == "key-incl-exp"
+            assert row.expires_at == seeded_at + timedelta(hours=1)
+
+    def test_returns_none_when_no_row_for_scope(self, integration_db):
+        from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
+
+        with BareIntegrationEnv() as env:
+            session = _setup(env)
+            repo = IdempotencyAttemptRepository(session, "idem_t1")
+            assert repo.find_including_expired(principal_id="idem_p1", idempotency_key="never-written") is None
