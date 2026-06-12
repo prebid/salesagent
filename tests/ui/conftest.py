@@ -45,8 +45,23 @@ def _ensure_test_auth_enabled():
 
     from sqlalchemy import create_engine, text
 
+    # Own the precondition instead of assuming it: the 'default' tenant is
+    # boot-seeded by the server, but the bdd suite's e2e scenarios TRUNCATE the
+    # server DB, so by the time ui runs it may be gone (suite-order dependent).
+    # Re-run the idempotent production seed (single source of truth, race-safe)
+    # and fail loud if the tenant still doesn't exist. (#1418)
+    from src.core.database.database import init_db
+
+    init_db()
+
     engine = create_engine(db_url)
     with engine.connect() as conn:
+        missing = conn.execute(text("SELECT 1 FROM tenants WHERE tenant_id = 'default'")).first() is None
+        if missing:
+            raise RuntimeError(
+                "ui precondition failed: tenant 'default' absent after init_db() — "
+                f"seed targets DATABASE_URL while this fixture configures {db_url}; check the env split"
+            )
         conn.execute(text("UPDATE tenants SET auth_setup_mode = true WHERE tenant_id = 'default'"))
         # Configure as GAM tenant so inventory tree UI paths are exercised
         conn.execute(text("UPDATE tenants SET ad_server = 'google_ad_manager' WHERE tenant_id = 'default'"))
