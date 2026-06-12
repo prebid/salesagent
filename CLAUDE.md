@@ -109,7 +109,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
-- Every allowlisted violation has a `# FIXME(salesagent-xxxx)` comment at the source location
+- Every allowlisted violation has a `# FIXME(#<gh-issue>)` comment at the source location — reference a GitHub issue/PR number, never a local beads id (beads ids don't resolve for outside contributors)
 - When you fix a violation, remove it from the allowlist (the stale-entry test will remind you)
 
 ---
