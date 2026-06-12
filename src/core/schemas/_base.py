@@ -221,6 +221,10 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # SDK 5.7 removed these from parent — declare locally
     account: Any | None = None
     sandbox: bool | None = None
+    # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
+    # it (adapters/base.py _build_create_success). Declare it for parity/typing so
+    # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
+    creative_deadline: datetime | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
