@@ -1537,7 +1537,6 @@ class AdCPRequestHandler(RequestHandler):
             params.setdefault("targeting_overlay", params.pop("custom_targeting"))
         # Set A2A defaults for optional fields
         params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
-        # buyer_ref removed in adcp 3.12
 
         # push_notification_config is an A2A *transport-layer* parameter
         # (injected by _handle_explicit_skill from the SendMessageConfiguration).

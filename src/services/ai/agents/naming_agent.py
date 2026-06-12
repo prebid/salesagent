@@ -56,7 +56,6 @@ def build_naming_prompt(
     products: list[str],
     objectives: list[str] | None = None,
     max_length: int = 150,
-    buyer_ref: str = "",
 ) -> str:
     """Build the user prompt for name generation.
 
@@ -68,8 +67,6 @@ def build_naming_prompt(
         products: List of product IDs
         objectives: Optional campaign objectives
         max_length: Maximum name length
-        buyer_ref: Deprecated, kept for backward compat
-
     Returns:
         Formatted prompt string
     """
@@ -109,14 +106,11 @@ async def generate_name_async(
     products: list[str],
     objectives: list[str] | None = None,
     max_length: int = 150,
-    buyer_ref: str = "",
 ) -> str:
     """Generate an order name using the agent.
 
     Args:
-        agent: The naming agent
-        buyer_ref: Deprecated, kept for backward compat
-        campaign_name: Optional campaign name
+        agent: The naming agent        campaign_name: Optional campaign name
         brand_name: Brand name from manifest
         budget_info: Budget string
         date_range: Formatted date range
@@ -128,7 +122,6 @@ async def generate_name_async(
         Generated order name
     """
     prompt = build_naming_prompt(
-        buyer_ref=buyer_ref,
         campaign_name=campaign_name,
         brand_name=brand_name,
         budget_info=budget_info,

@@ -268,7 +268,6 @@ def build_order_name_context(
         "date_range": format_date_range(start_time, end_time),
         "month_year": format_month_year(start_time),
         "media_buy_id": media_buy_id or "",
-        "buyer_ref": media_buy_id or "",  # Backward compatibility alias for {buyer_ref} templates
         "package_count": len(packages),
         "start_date": start_time.strftime("%Y-%m-%d"),
         "end_date": end_time.strftime("%Y-%m-%d"),
