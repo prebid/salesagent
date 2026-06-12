@@ -12,6 +12,7 @@ from sqlalchemy import select
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -492,9 +493,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 context_id=step_data["context_id"],
                             )
                         else:
+                            # tool_name is untrusted (workflow_steps DB column).
+                            # Validate a COPY for the SDK payload; metadata keeps
+                            # the original label (salesagent-yi3s, salesagent-yk7o).
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
                                 task_id=step_data["step_id"],
-                                task_type=step_data.get("tool_name", "create_media_buy"),
+                                task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
                                 result=create_media_buy_approved_result,
                                 status=AdcpTaskStatus.completed,
                             )
@@ -583,9 +587,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             context_id=step_data["context_id"],
                         )
                     else:
+                        # tool_name is untrusted (workflow_steps DB column).
+                        # Validate a COPY for the SDK payload; metadata keeps the
+                        # original label (salesagent-yi3s, salesagent-yk7o).
                         create_media_buy_rejected_payload = create_mcp_webhook_payload(
                             task_id=step_data["step_id"],
-                            task_type=step_data.get("tool_name", "create_media_buy"),
+                            task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
                             result=create_media_buy_rejected_result,
                             status=AdcpTaskStatus.rejected,
                         )

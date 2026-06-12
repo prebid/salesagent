@@ -21,6 +21,7 @@ from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
+from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -838,7 +839,11 @@ class ContextManager(DatabaseManager):
                         f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
                     )
 
-                    # Build webhook payload based on protocol type
+                    # Build webhook payload based on protocol type.
+                    # task_type_str is the ORIGINAL action label — it keys the
+                    # delivery-webhook guards + audit log and must NOT be rewritten
+                    # by the SDK fallback (salesagent-yi3s). wire_task_type is the
+                    # validated COPY passed to the SDK payload builder.
                     task_type_str = step.tool_name or mapping.action or "unknown"
                     protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
                     try:
@@ -846,14 +851,9 @@ class ContextManager(DatabaseManager):
                     except ValueError:
                         status_enum = GeneratedTaskStatus.unknown
 
-                    # SDK 5.7 validates task_type against TaskType enum.
-                    # Fall back to update_media_buy for non-standard actions.
-                    from adcp.types import TaskType as _TaskType
-
-                    try:
-                        _TaskType(task_type_str)
-                    except ValueError:
-                        task_type_str = "update_media_buy"
+                    # SDK 5.7 validates task_type against TaskType enum; coerce a
+                    # COPY for the payload while leaving task_type_str untouched.
+                    wire_task_type = validate_webhook_task_type(task_type_str)
 
                     payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
                     if protocol == "a2a":
@@ -868,7 +868,7 @@ class ContextManager(DatabaseManager):
                         payload = create_mcp_webhook_payload(
                             task_id=step.step_id,
                             status=status_enum,
-                            task_type=task_type_str,
+                            task_type=wire_task_type,
                             result=step.response_data,
                         )
 
