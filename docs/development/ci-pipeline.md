@@ -128,6 +128,28 @@ commit without authentication.
 cleanly. Check the `community_points` / `users` table FK ordering — this was the
 failure that prompted pinning (April 2026).
 
+The pin lives only in [`scripts/creative-agent-stack.sh`](../../scripts/creative-agent-stack.sh)
+— both CI and `run_all_tests.sh` call that script so local and CI cannot diverge.
+
+### CI build cache and retries
+
+On ephemeral GitHub Actions runners, local `/tmp` tarball reuse and `docker image
+inspect` guards do not survive between runs. The creative shard therefore:
+
+1. Runs `docker/setup-buildx-action` (creative matrix leg only) before
+   `creative-agent-stack.sh up`.
+2. Uses `docker buildx build --cache-from/to type=gha` inside the script when
+   `ACTIONS_CACHE_URL` and `ACTIONS_RUNTIME_TOKEN` are present (CI). Cache scope
+   is `adcp-creative-agent-${ADCP_PIN}` so a pin bump invalidates stale layers.
+3. Falls back to plain `docker build` locally — no CI-only env required for
+   `run_all_tests.sh`.
+
+Tarball fetch (`curl -f`) and docker build each retry up to 3 times with
+exponential backoff to absorb transient `ECONNRESET` flakes.
+
+The `integration-tests` job grants `actions: write` so buildx can upload GHA
+cache entries (same pattern as [`release-please.yml`](../../.github/workflows/release-please.yml)).
+
 ### Creative agent infrastructure
 
 The agent runs in its own Docker network (`creative-net`) with a separate

@@ -29,6 +29,48 @@ CREATIVE_AGENT_URL="http://localhost:9999/api/creative-agent"
 
 _healthy() { curl -sf -m 3 "$HEALTH" >/dev/null 2>&1; }
 
+# Retry transient network failures (ECONNRESET during npm/tarball fetch in CI).
+_retry() {
+    local max="${1:-3}"
+    shift
+    local attempt=1 delay=2
+    while [ "$attempt" -le "$max" ]; do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -eq "$max" ]; then
+            break
+        fi
+        echo "[creative-agent] attempt ${attempt}/${max} failed, retrying in ${delay}s..." >&2
+        sleep "$delay"
+        delay=$((delay * 2))
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+_fetch_tarball() {
+    mkdir -p "$SRC"
+    curl -sLf "https://github.com/adcontextprotocol/adcp/archive/${ADCP_PIN}.tar.gz" \
+        | tar xz -C "$SRC" --strip-components=1
+}
+
+_build_image() {
+    local cache_scope="adcp-creative-agent-${ADCP_PIN}"
+    if [ -n "${ACTIONS_CACHE_URL:-}" ] && [ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]; then
+        echo "[creative-agent] buildx build $IMAGE (adcp@${ADCP_PIN}, gha cache scope=${cache_scope})"
+        docker buildx build \
+            --load \
+            -t "$IMAGE" \
+            --cache-from "type=gha,scope=${cache_scope}" \
+            --cache-to "type=gha,mode=max,scope=${cache_scope}" \
+            "$SRC"
+    else
+        echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
+        docker build -t "$IMAGE" "$SRC"
+    fi
+}
+
 cmd_url() { echo "$CREATIVE_AGENT_URL"; }
 
 cmd_up() {
@@ -40,14 +82,11 @@ cmd_up() {
     # Source tarball pinned to ADCP_PIN (cached by pin in the path)
     if [ ! -f "$SRC/Dockerfile" ]; then
         echo "[creative-agent] fetching adcp@${ADCP_PIN}"
-        mkdir -p "$SRC"
-        curl -sL "https://github.com/adcontextprotocol/adcp/archive/${ADCP_PIN}.tar.gz" \
-            | tar xz -C "$SRC" --strip-components=1
+        _retry 3 _fetch_tarball
     fi
 
     if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
-        docker build -t "$IMAGE" "$SRC"
+        _retry 3 _build_image
     fi
 
     docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
