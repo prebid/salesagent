@@ -72,6 +72,7 @@ class CreateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel
     start_time: str | None = None
     end_time: str | None = None
     po_number: str | None = None
+    account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
     adcp_version: str = "1.0.0"
 
 
@@ -229,12 +230,21 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
+    # Coerce the raw account dict into an AccountReference so create_media_buy_raw
+    # resolves it at the transport boundary (ACCOUNT_NOT_FOUND surfaces before _impl).
+    account_ref = None
+    if body.account is not None:
+        from adcp.types import AccountReference as LibraryAccountReference
+
+        account_ref = LibraryAccountReference.model_validate(body.account)
+
     response = await media_buy_create_module.create_media_buy_raw(
         brand=body.brand,
         packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
         start_time=body.start_time,
         end_time=body.end_time,
         po_number=body.po_number,
+        account=account_ref,
         identity=identity,
     )
     return response.model_dump(mode="json")

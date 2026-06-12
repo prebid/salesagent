@@ -21,6 +21,22 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _attach_account_to_full_request(ctx: dict) -> None:
+    """Build a complete, valid create request carrying the account reference.
+
+    Account-not-found scenarios dispatch through the full create flow
+    (dispatch_mode="create") so production account resolution runs at the
+    transport boundary. The request must be otherwise valid — reuse the shared
+    base-request defaults and inject the account so the only failure surfaced is
+    ACCOUNT_NOT_FOUND, not a missing-field ValidationError.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["account"] = ctx["account_ref"]
+    ctx["dispatch_mode"] = "create"
+
+
 @given(parsers.parse('a valid create_media_buy request with account_id "{account_id}"'))
 def given_request_with_account_id(ctx: dict, account_id: str) -> None:
     """Set up a create_media_buy request referencing an explicit account_id."""
@@ -28,6 +44,7 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 
     ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
     ctx["request_account_id"] = account_id
+    _attach_account_to_full_request(ctx)
 
 
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
@@ -40,6 +57,7 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
     )
     ctx["request_brand"] = brand
     ctx["request_operator"] = operator
+    _attach_account_to_full_request(ctx)
 
 
 @given("a create_media_buy request without account field")
@@ -72,30 +90,32 @@ def given_request_with_account(ctx: dict, account_id: str) -> None:
 
 @given("the account_id does not exist in the seller's account store")
 def given_account_id_not_found(ctx: dict) -> None:
-    """Verify the account_id from the request does not exist via production resolve_account."""
-    from src.core.exceptions import AdCPAccountNotFoundError
+    """Precondition: the referenced account is absent from the store.
 
-    env = ctx["env"]
-    try:
-        # TRANSPORT-BYPASS: Given step verifies precondition state, not request dispatch
-        env.call_impl(account_ref=ctx["account_ref"])
-        raise AssertionError("Expected account not found, but resolve_account succeeded")
-    except AdCPAccountNotFoundError:
-        pass  # Correct — account doesn't exist
+    No account row is seeded for this account_ref, so the full create dispatch
+    surfaces ACCOUNT_NOT_FOUND when production resolves the account at the
+    transport boundary. Assert the request carries the account reference so the
+    resolution path is actually exercised (a prior version built a partial
+    request via call_impl and crashed with a ValidationError — see salesagent-rkb9).
+    """
+    assert ctx.get("account_ref") is not None, "account_ref must be set by the request Given step"
+    assert ctx.get("request_kwargs", {}).get("account") is not None, (
+        "request_kwargs must carry the account reference for the create dispatch"
+    )
 
 
 @given("no account matches the brand + operator combination")
 def given_natural_key_not_found(ctx: dict) -> None:
-    """Verify no account matches the natural key via production resolve_account."""
-    from src.core.exceptions import AdCPAccountNotFoundError
+    """Precondition: no account matches the natural key (none seeded).
 
-    env = ctx["env"]
-    try:
-        # TRANSPORT-BYPASS: Given step verifies precondition state, not request dispatch
-        env.call_impl(account_ref=ctx["account_ref"])
-        raise AssertionError("Expected account not found, but resolve_account succeeded")
-    except AdCPAccountNotFoundError:
-        pass  # Correct — no matching account
+    The full create dispatch surfaces ACCOUNT_NOT_FOUND when production resolves
+    the brand+operator natural key. Assert the request carries the account
+    reference so the resolution path is exercised (see salesagent-rkb9).
+    """
+    assert ctx.get("account_ref") is not None, "account_ref must be set by the request Given step"
+    assert ctx.get("request_kwargs", {}).get("account") is not None, (
+        "request_kwargs must carry the account reference for the create dispatch"
+    )
 
 
 @given(parsers.parse('the account "{account_id}" exists but requires setup (billing not configured)'))
