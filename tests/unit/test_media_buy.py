@@ -132,7 +132,6 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
 
 def _mock_media_buy(
     media_buy_id: str = "mb_1",
-    buyer_ref: str = "test-buyer",
     start_date: date | None = None,
     end_date: date | None = None,
     budget: Decimal = Decimal("5000.00"),
@@ -141,7 +140,6 @@ def _mock_media_buy(
     """Create a mock MediaBuy ORM object."""
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
-    buy.buyer_ref = None
     buy.tenant_id = "test_tenant"
     buy.principal_id = "test_principal"
     buy.budget = budget
@@ -152,7 +150,7 @@ def _mock_media_buy(
     buy.end_time = None
     buy.created_at = datetime.now(UTC)
     buy.updated_at = datetime.now(UTC)
-    buy.raw_request = {"buyer_ref": buyer_ref, "packages": [{"product_id": "prod_1", "package_id": "pkg_1"}]}
+    buy.raw_request = {"packages": [{"product_id": "prod_1", "package_id": "pkg_1"}]}
     buy.status = "active"
     return buy
 
@@ -1753,7 +1751,7 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            mock_uow.media_buys.get_by_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_by_id.return_value = mock_buy
 
             result = _update_media_buy_impl(req=req, identity=identity)
@@ -2298,7 +2296,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative, product, assignment queries via session
@@ -2377,7 +2375,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
 
             # Creative query via session - no creatives found
             creative_result = MagicMock()
@@ -2463,7 +2461,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative and product queries via session
@@ -2550,7 +2548,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative and product queries via session
@@ -2653,7 +2651,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative, product, assignment queries via session
@@ -2741,7 +2739,7 @@ class TestUpdateMediaBuyIdentification:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = None
+            mock_uow.media_buys.get_by_id.return_value = None
             mock_uow.media_buys.get_by_id.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2808,7 +2806,7 @@ class TestUpdateMediaBuyOwnership:
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
