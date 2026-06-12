@@ -10,7 +10,12 @@ import re
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_python_version_anchors, iter_workflow_files, repo_root
+from tests.unit._architecture_helpers import (
+    assert_anchor_consistency,
+    iter_python_version_anchors,
+    iter_workflow_files,
+    repo_root,
+)
 
 
 def _read(path_suffix: str) -> str:
@@ -20,38 +25,26 @@ def _read(path_suffix: str) -> str:
 @pytest.mark.arch_guard
 def test_uv_version_consistent() -> None:
     """Dockerfile ARG UV_VERSION must match setup-env default and ci.yml env."""
-    dockerfile = _read("Dockerfile")
-    setup_env = _read(".github/actions/_setup-env/action.yml")
-    ci_yml = _read(".github/workflows/ci.yml")
+    repo = repo_root()
     security_yml = _read(".github/workflows/security.yml")
-
-    docker_match = re.search(r"ARG UV_VERSION=([\d.]+)", dockerfile)
-    assert docker_match, "Dockerfile missing ARG UV_VERSION"
-    docker_ver = docker_match.group(1)
-
-    setup_match = re.search(
-        r"uv-version:.*?default:\s*[\"']([\d.]+)[\"']",
-        setup_env,
-        flags=re.DOTALL,
-    )
-    assert setup_match, "_setup-env missing uv-version default"
-    setup_ver = setup_match.group(1)
-
-    ci_match = re.search(r'UV_VERSION:\s*["\']([\d.]+)["\']', ci_yml)
-    assert ci_match, "ci.yml missing UV_VERSION env anchor"
-    ci_ver = ci_match.group(1)
-
-    security_match = re.search(r'UV_VERSION:\s*["\']([\d.]+)["\']', security_yml)
-    assert security_match, "security.yml missing UV_VERSION env anchor"
-    security_ver = security_match.group(1)
-
     assert security_yml.count("version: ${{ env.UV_VERSION }}") >= 2, (
         "security.yml setup-uv steps must pin version via env.UV_VERSION"
     )
 
-    assert docker_ver == setup_ver == ci_ver == security_ver, (
-        f"uv version drift: Dockerfile={docker_ver}, setup-env={setup_ver}, "
-        f"ci.yml={ci_ver}, security.yml={security_ver}"
+    assert_anchor_consistency(
+        [
+            (repo / "Dockerfile", _read("Dockerfile")),
+            (repo / ".github/actions/_setup-env/action.yml", _read(".github/actions/_setup-env/action.yml")),
+            (repo / ".github/workflows/ci.yml", _read(".github/workflows/ci.yml")),
+            (repo / ".github/workflows/security.yml", security_yml),
+        ],
+        {
+            "Dockerfile": r"ARG UV_VERSION=([\d.]+)",
+            ".github/actions/_setup-env/action.yml": r'  default: "([\d.]+)"',
+            ".github/workflows/ci.yml": r'UV_VERSION:\s*["\']([\d.]+)["\']',
+            ".github/workflows/security.yml": r'UV_VERSION:\s*["\']([\d.]+)["\']',
+        },
+        label="uv version",
     )
 
 
