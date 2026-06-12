@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from adcp.types import AccountReference as LibraryAccountReference
 
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schema_helpers import to_account_reference
 
 _MOCK_IDENTITY = ResolvedIdentity(
     principal_id="principal_123",
@@ -17,6 +18,18 @@ _MOCK_IDENTITY = ResolvedIdentity(
     tenant={"tenant_id": "tenant_123"},
     protocol="a2a",
 )
+
+
+def test_to_account_reference_handles_supported_inputs():
+    """The shared helper validates dicts and preserves typed/empty values."""
+    account_dict = {"brand": {"domain": "example.com"}, "operator": "op-1", "sandbox": False}
+    result = to_account_reference(account_dict)
+    assert isinstance(result, LibraryAccountReference)
+    assert result.root.brand.domain == "example.com"
+    assert result.root.operator == "op-1"
+    assert result.root.sandbox is False
+    assert to_account_reference(result) is result
+    assert to_account_reference(None) is None
 
 
 class TestSyncCreativesAccountCoercion:
