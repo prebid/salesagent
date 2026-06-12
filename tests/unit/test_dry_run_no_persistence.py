@@ -34,8 +34,8 @@ class TestCreateMediaBuyDryRunResponseStructure:
         simulated_packages: list[dict[str, Any]] = []
         for idx, pkg_data in enumerate(
             [
-                {"buyer_ref": "pkg-1", "product_id": "prod_123", "budget": 1000.0},
-                {"buyer_ref": "pkg-2", "product_id": "prod_456", "bid_price": 5.0},
+                {"product_id": "prod_123", "budget": 1000.0},
+                {"product_id": "prod_456", "bid_price": 5.0},
             ],
             1,
         ):
@@ -43,7 +43,6 @@ class TestCreateMediaBuyDryRunResponseStructure:
             simulated_pkg: dict[str, Any] = {
                 "package_id": simulated_package_id,
                 "paused": False,
-                "buyer_ref": pkg_data["buyer_ref"],
                 "product_id": pkg_data["product_id"],
             }
             if pkg_data.get("budget") is not None:
@@ -54,14 +53,12 @@ class TestCreateMediaBuyDryRunResponseStructure:
 
         # Build response (matching impl's structure)
         response = CreateMediaBuySuccess(
-            buyer_ref="test-buyer-ref",
             media_buy_id=simulated_media_buy_id,
             packages=cast(list[Any], simulated_packages),
             context=None,
         )
 
         # Verify response structure
-        assert response.buyer_ref == "test-buyer-ref"
         assert response.media_buy_id.startswith("dry_run_mb_")
         assert len(response.packages) == 2
         # Access as Package objects (Pydantic validates/converts dict to Package)

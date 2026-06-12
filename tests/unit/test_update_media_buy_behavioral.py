@@ -8,7 +8,6 @@ BDD scenario cross-references:
 - T-UC-003-ext-a-not-found: test_principal_not_found_returns_error
 - T-UC-003-combined-update: test_combined_campaign_and_package_update
 - T-UC-003-multi-package: test_multi_package_update_processes_all_packages
-- T-UC-003-buyer-ref (positive): test_buyer_ref_positive_resolution
 - T-UC-003-alt-timing + T-UC-003-ext-e: test_flight_date_validation_and_persistence
 - T-UC-003-alt-budget + T-UC-003-ext-d + T-UC-003-rule-008: test_campaign_budget_validation_and_persistence
 - T-UC-003-alt-manual: test_manual_approval_path_through_impl
@@ -242,16 +241,6 @@ def test_multi_package_update_processes_all_packages():
 # HIGH_RISK Test 4: Buyer_ref positive resolution
 # BDD: T-UC-003-buyer-ref (positive path)
 # ---------------------------------------------------------------------------
-
-
-def test_buyer_ref_positive_resolution():
-    """buyer_ref removed from UpdateMediaBuyRequest in adcp 3.12.
-    Now media_buy_id is the sole identifier."""
-    from pydantic import ValidationError
-
-    # buyer_ref is no longer accepted on UpdateMediaBuyRequest
-    with pytest.raises(ValidationError, match="buyer_ref"):
-        UpdateMediaBuyRequest(buyer_ref="buyer_ref_abc")
 
 
 # ---------------------------------------------------------------------------
@@ -2296,8 +2285,8 @@ class TestUC003ExtH:
                 packages=[{"budget": 5000.0}],  # No package_id
             )
 
-    def test_buyer_ref_at_package_level_gap(self):
-        """Package-level buyer_ref removed in adcp 3.12.
+    def test_package_level_requires_package_id(self):
+        """Package-level updates require package_id.
 
         Covers: UC-003-EXT-H-02
         """
@@ -2306,7 +2295,7 @@ class TestUC003ExtH:
         # package_id is now required, cannot omit it
         with pytest.raises(ValidationError, match="package_id"):
             UpdateMediaBuyRequest(
-                media_buy_id="mb_buyer_ref_pkg",
+                media_buy_id="mb_no_pkg_ref",
                 packages=[{"budget": 5000.0}],  # No package_id
             )
 

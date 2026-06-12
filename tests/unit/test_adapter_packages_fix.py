@@ -336,5 +336,3 @@ class TestXandrAdapterPackages:
             returned_ids = {pkg.package_id for pkg in response.packages}
             expected_ids = {pkg.package_id for pkg in sample_packages}
             assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-
-            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12

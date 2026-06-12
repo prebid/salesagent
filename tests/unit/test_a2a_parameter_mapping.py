@@ -122,14 +122,14 @@ class TestA2AParameterMapping:
         """
         Test that update_media_buy validates required parameters per AdCP spec.
 
-        Per AdCP oneOf constraint: requires either 'media_buy_id' OR 'buyer_ref'
+        Per AdCP spec: requires 'media_buy_id'
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
-            # Request with neither media_buy_id nor buyer_ref
+            # Request with no media_buy_id
             invalid_parameters = {"active": True, "packages": []}
 
             import asyncio
@@ -146,7 +146,7 @@ class TestA2AParameterMapping:
             # Error message should mention required parameter
             error_message = str(exc_info.value).lower()
             msg = "Error message should mention required parameter"
-            assert "media_buy_id" in error_message or "buyer_ref" in error_message, msg
+            assert "media_buy_id" in error_message, msg
 
     def test_get_media_buy_delivery_uses_plural_media_buy_ids(self):
         """
@@ -235,7 +235,7 @@ class TestA2AParameterMapping:
         with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Request missing required AdCP parameters
             incomplete_parameters = {
-                "buyer_ref": "campaign_123",
+                "po_number": "campaign_123",
                 # Missing: brand, packages, start_time, end_time
             }
 
