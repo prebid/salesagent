@@ -11,11 +11,8 @@ All TODOs are left for you to fill in assertions and any spec-specific checks.
 """
 
 import json
-import os
-import socket
 import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
+from http.server import BaseHTTPRequestHandler
 from time import sleep
 from typing import Any
 
@@ -24,6 +21,7 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.e2e._webhook_capture import run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
     build_creative,
@@ -64,36 +62,8 @@ class DeliveryWebhookReceiver(BaseHTTPRequestHandler):
 @pytest.fixture
 def delivery_webhook_server():
     """Start a local HTTP server to receive delivery_report webhooks."""
-
-    # Find an available port
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("0.0.0.0", 0))
-    port = s.getsockname()[1]
-    s.close()
-
-    # Start server on all interfaces so it's reachable from Docker container
-    # (via host.docker.internal mapping)
-    server = HTTPServer(("0.0.0.0", port), DeliveryWebhookReceiver)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    # Host path: 'localhost' — the server's protocol_webhook_service rewrites it
-    # to 'host.docker.internal' to reach this receiver running on the host.
-    # In-network the receiver runs inside the runner container, so the server
-    # reaches it by the runner's network alias (ADCP_WEBHOOK_HOST=tests); that
-    # is NOT 'localhost', so it is left un-rewritten and resolved on the network.
-    webhook_host = os.getenv("ADCP_WEBHOOK_HOST", "localhost")
-    webhook_url = f"http://{webhook_host}:{port}/webhook"
-
-    yield {
-        "url": webhook_url,
-        "server": server,
-        "received": DeliveryWebhookReceiver.received_webhooks,
-    }
-
-    server.shutdown()
-    server.server_close()
-    DeliveryWebhookReceiver.received_webhooks.clear()
+    with run_webhook_capture_server(DeliveryWebhookReceiver, DeliveryWebhookReceiver.received_webhooks) as info:
+        yield info
 
 
 class TestDailyDeliveryWebhookFlow:
