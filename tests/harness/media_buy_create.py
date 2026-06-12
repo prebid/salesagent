@@ -294,6 +294,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
         mock_ctx = MM(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=identity)
 
+        # FIXME(salesagent-ensj): invoke through with_error_logging(create_media_buy)
+        # so the MCP error path surfaces the wire envelope (mirrors the ihwl update fix).
         tool_result = aio.run(create_media_buy(ctx=mock_ctx, **kwargs))
         # Parse the flattened structured_content back into CreateMediaBuyResult
         data = dict(tool_result.structured_content)

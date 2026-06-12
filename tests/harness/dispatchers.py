@@ -178,10 +178,20 @@ class McpDispatcher:
         try:
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
-            return TransportResult(
-                error=exc,
-                wire_error_envelope=_envelope_from_mcp_error(exc),
-            )
+            wire = _envelope_from_mcp_error(exc)
+            # When a wire envelope is present, exc is an AdCPToolError carrying
+            # the JSON envelope (an env that dispatched through the production
+            # with_error_logging boundary). Unwrap it so result.error is the
+            # typed AdCPError — error-code assertions resolve to the real wire
+            # code, not "AdCPToolError". Typed errors (wire is None, the path
+            # taken by every _run_mcp_client-based env, which unwraps internally)
+            # pass through unchanged, so this is a no-op for them.
+            error = exc
+            if wire is not None:
+                from tests.harness._base import _unwrap_mcp_tool_error
+
+                error = _unwrap_mcp_tool_error(exc)
+            return TransportResult(error=error, wire_error_envelope=wire)
         return TransportResult(payload=payload, envelope={"transport": "mcp"})
 
 

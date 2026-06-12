@@ -152,6 +152,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         from fastmcp.server.context import Context
 
+        from src.core.tool_error_logging import with_error_logging
         from src.core.tools.media_buy_update import update_media_buy
         from tests.harness.transport import Transport
 
@@ -178,7 +179,14 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         mock_ctx.get_state = _get_state
 
-        tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
+        # Invoke through the production boundary decorator that real MCP
+        # registration applies (src/core/main.py: mcp.tool()(with_error_logging(fn))).
+        # On error this translates the raised AdCPError into an AdCPToolError
+        # carrying the two-layer wire envelope, which McpDispatcher captures as
+        # wire_error_envelope — calling the raw wrapper would let the bare
+        # exception escape with no wire envelope (salesagent-ihwl).
+        wrapped_update_media_buy = with_error_logging(update_media_buy)
+        tool_result = asyncio.run(wrapped_update_media_buy(ctx=mock_ctx, **kwargs))
         data = dict(tool_result.structured_content)
         return self._parse_update_rest_response(data)
 
