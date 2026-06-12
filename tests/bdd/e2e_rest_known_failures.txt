@@ -19,18 +19,9 @@
 # entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
 # entries remain, grouped by gap below.
 
-# --- uc004 invalid-input validation — wire shape (6) ---
-# GENUINE GAP: live REST returns a FastAPI 422 envelope ({"detail":[...]}) for these
-# invalid requests; the Then step expects an AdCPError/ValidationError instance. The
-# input IS rejected, but the harness REST dispatcher surfaces the 422 as a plain
-# Exception, not a structured AdCPError. Fix is in the harness REST error translation
-# (tests/harness, exec-n48i lane) — not a production change.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-interval=0 (below minimum)-{"post_click": {"interval": 0, "unit": "days"}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-model=last_click (not in enum)-{"model": "last_click"}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-unit=weeks (not in enum)-{"post_click": {"interval": 1, "unit": "weeks"}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo without geo_level (required field missing)-{"geo": {"limit": 10}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit negative-{"device_type": {"limit": -1}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit=0 (below minimum)-{"geo": {"geo_level": "country", "limit": 0}}-invalid]
+# --- uc004 invalid-input validation — wire shape — GRADUATED (#1430 jdy1-M1) ---
+# Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
+# (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
 # --- uc004 invalid-input validation — accepted by live server (10) ---
 # GENUINE GAP: the live server accepts these inputs that the spec marks invalid
@@ -78,17 +69,9 @@ tests/bdd/test_uc011_manage_accounts.py::test_dry_run_false__normal_sync_applies
 tests/bdd/test_uc011_manage_accounts.py::test_dry_run_omitted__default_behavior_applies_changes_dry_run_omitted[e2e_rest]
 tests/bdd/test_uc011_manage_accounts.py::test_sandbox_account_provisioned_via_sync_accounts_with_sandbox_flag[e2e_rest]
 
-# --- get_products inventory-profile tenant duplicate (6) ---
-# GENUINE GAP: the Given seeds TenantFactory(tenant_id="test_tenant") directly into the
-# shared server DB on every scenario; the second e2e_rest scenario hits a tenants_pkey
-# UniqueViolation because the row from the prior scenario was never cleaned. Needs an
-# idempotent / get-or-create tenant seed over e2e (harness, exec-n48i).
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_preserves_them[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_invalid_property_ids_falls_back_to_selection_type_all[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_only_publisher_domain_infers_selection_type_all[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_ids_infers_selection_type_by_id[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_tags_infers_selection_type_by_tag[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_selection_type_already_present_passes_through[e2e_rest]
+# --- get_products inventory-profile tenant duplicate — GRADUATED (#1430 jdy1-M3) ---
+# Fixed by idempotent get-or-create given_tenant (uc_get_products_inventory.py); the 6
+# entries now pass in-network (xpass confirmed innet_120626_1822).
 
 # --- uc004 webhook retry/backoff/sequence observability (4) ---
 # GENUINE GAP (impossible to observe over e2e as written): retry-on-5xx, retry-on-network,

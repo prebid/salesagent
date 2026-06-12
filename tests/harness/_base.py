@@ -855,6 +855,12 @@ class BaseTestEnv:
         recoverable from the body.
         """
         message = data.get("message", data.get("error", str(data)))
+        # FastAPI request-validation failures use a {"detail": [...]} envelope
+        # with no error_code; surface a readable message from the first detail.
+        if "message" not in data and "error" not in data and isinstance(data.get("detail"), list) and data["detail"]:
+            first = data["detail"][0]
+            if isinstance(first, dict) and first.get("msg"):
+                message = first["msg"]
 
         reconstructed = _envelope_to_adcp_error(data, fallback_message=message)
         if reconstructed is not None:
@@ -875,6 +881,7 @@ class BaseTestEnv:
             401: AdCPAuthenticationError,
             403: AdCPAuthorizationError,
             404: AdCPNotFoundError,
+            422: AdCPValidationError,  # FastAPI request-validation envelope ({"detail": [...]})
             429: AdCPRateLimitError,
             502: AdCPAdapterError,
         }

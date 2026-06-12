@@ -22,21 +22,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 47 genuine-gap e2e_rest nodeids remaining after Wave 3 triage. Grouped by
+# The 35 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1-M3
+# graduated the 6 get_products tenant-duplicate entries, jdy1-M1 the 6 uc004
+# REST-422 wire-shape entries). Grouped by
 # gap in the ledger file's section comments; flat here for exact-set comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
-        "tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_preserves_them[e2e_rest]",
-        "tests/bdd/test_get_products_inventory_profile.py::test_profile_with_invalid_property_ids_falls_back_to_selection_type_all[e2e_rest]",
-        "tests/bdd/test_get_products_inventory_profile.py::test_profile_with_only_publisher_domain_infers_selection_type_all[e2e_rest]",
-        "tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_ids_infers_selection_type_by_id[e2e_rest]",
-        "tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_tags_infers_selection_type_by_tag[e2e_rest]",
-        "tests/bdd/test_get_products_inventory_profile.py::test_profile_with_selection_type_already_present_passes_through[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]",
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-interval=0 (below minimum)-{"post_click": {"interval": 0, "unit": "days"}}-invalid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-model=last_click (not in enum)-{"model": "last_click"}-invalid]',
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-unit=campaign with interval=2 (desc says must be 1)-{"post_click": {"interval": 2, "unit": "campaign"}}-invalid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-unit=weeks (not in enum)-{"post_click": {"interval": 1, "unit": "weeks"}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]",
@@ -45,9 +38,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo without geo_level (required field missing)-{"geo": {"limit": 10}}-invalid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit negative-{"device_type": {"limit": -1}}-invalid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit=0 (below minimum)-{"geo": {"geo_level": "country", "limit": 0}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_does_not_retry_on_4xx_response[e2e_rest]",

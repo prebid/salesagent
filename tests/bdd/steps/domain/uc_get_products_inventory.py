@@ -62,13 +62,32 @@ def _get_first_prop(ctx: dict) -> Any:
 
 @given("a tenant is configured for product discovery")
 def given_tenant(ctx: dict) -> None:
-    """Create a tenant with required config for get_products."""
-    tenant = TenantFactory(
+    """Get-or-create the discovery tenant (idempotent).
+
+    Over e2e the scenarios share one server DB and a prior scenario's
+    ``test_tenant`` row can survive into this one (the per-scenario
+    ``_reset_e2e_db`` and the env's factory session don't reliably target the
+    same connection), so a plain ``TenantFactory`` insert hits a ``tenants_pkey``
+    UniqueViolation on the second scenario. Reuse the existing row if present.
+    In-process transports use a per-test rolled-back DB, so the lookup misses
+    and this behaves exactly like the old create.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+
+    session = getattr(ctx.get("env"), "_session", None)
+    if session is not None:
+        existing = session.scalars(select(Tenant).filter_by(tenant_id="test_tenant")).first()
+        if existing is not None:
+            ctx["tenant"] = existing
+            return
+
+    ctx["tenant"] = TenantFactory(
         tenant_id="test_tenant",
         subdomain="test_tenant",
         ad_server="mock",
     )
-    ctx["tenant"] = tenant
 
 
 @given(parsers.parse('an inventory profile with property_ids "{ids}" for domain "{domain}"'))
