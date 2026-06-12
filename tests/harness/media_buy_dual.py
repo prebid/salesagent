@@ -98,11 +98,11 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         if _is_update_request(kwargs):
+            # Set flag before returning — reset in parse_rest_response after routing,
+            # not in a finally block here (the dispatcher calls parse_rest_response
+            # after this method returns, so a finally reset races with routing).
             self._active_update = True
-            try:
-                return self._run_update_rest_request(**kwargs)
-            finally:
-                self._active_update = False
+            return self._run_update_rest_request(**kwargs)
         return super()._run_rest_request(endpoint, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
@@ -112,6 +112,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
     def parse_rest_response(self, data: dict[str, Any]) -> Any:
         if self._active_update:
+            self._active_update = False
             return self._parse_update_rest_response(data)
         return super().parse_rest_response(data)
 
@@ -219,8 +220,11 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return client.put(endpoint, json=body, headers=headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
-        from src.core.schemas._base import UpdateMediaBuyError, UpdateMediaBuySuccess
+        from src.core.schemas._base import UpdateMediaBuyError, UpdateMediaBuyResult, UpdateMediaBuySuccess
 
+        status = data.pop("status", "completed")
         if "errors" in data and data["errors"]:
-            return UpdateMediaBuyError(**data)
-        return UpdateMediaBuySuccess(**data)
+            response = UpdateMediaBuyError(**data)
+        else:
+            response = UpdateMediaBuySuccess(**data)
+        return UpdateMediaBuyResult(response=response, status=status)

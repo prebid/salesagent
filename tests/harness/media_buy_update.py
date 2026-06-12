@@ -12,8 +12,8 @@ Usage::
             env.set_currency_limit(min_package_budget=Decimal("100"))
             result = env.call_impl(packages=[{"package_id": "pkg-1", "budget": 50.0}])
             env.mock["uow"].return_value.currency_limits.get_for_currency.assert_called_with("EUR")
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "BUDGET_TOO_LOW"
+        assert isinstance(result.response, UpdateMediaBuyError)
+        assert result.response.errors[0].code == "BUDGET_TOO_LOW"
 
 Available mocks via env.mock:
     "uow"       -- MediaBuyUoW class mock (env.mock["uow"].return_value is the UoW instance)

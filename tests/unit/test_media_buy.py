@@ -1758,8 +1758,8 @@ class TestUpdateMediaBuyMainFlow:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_resolved"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_resolved"
 
     def test_partial_update_omitted_fields_unchanged(self):
         """UC-003-MF03: only specified fields update, rest preserved.
@@ -1859,7 +1859,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY
@@ -1920,7 +1920,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY
         )
@@ -1981,7 +1981,7 @@ class TestUpdateMediaBuyPauseResume:
             # Should succeed without any CurrencyLimit lookups
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # The key assertion: session.scalars should NOT be called for currency limit
         # because pause doesn't change budget or dates
         # (adapter is called directly for pause action)
@@ -2313,9 +2313,9 @@ class TestUpdateMediaBuyCreativeIds:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.affected_packages is not None
-        assert len(result.affected_packages) >= 1
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.affected_packages is not None
+        assert len(result.response.affected_packages) >= 1
         # The old assignment should have been deleted (replacement semantics)
         uow_session.delete.assert_called_with(mock_existing_assignment)
 
@@ -2668,7 +2668,7 @@ class TestUpdateMediaBuyCreativeIds:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # c1 and c3 should be deleted (removed)
         deleted_ids = {call.args[0].creative_id for call in uow_session.delete.call_args_list}
         assert "c1" in deleted_ids
@@ -2874,12 +2874,12 @@ class TestUpdateMediaBuyManualApproval:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         # Should return success but workflow step should be marked as requires_approval
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
         # Affected packages should be empty (not yet applied)
-        assert result.affected_packages == []
+        assert result.response.affected_packages == []
 
     def test_implementation_date_null_when_pending(self):
         """UC-003-MA02: implementation_date is null until approved.
@@ -2934,8 +2934,8 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        dumped = result.model_dump()
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        dumped = result.response.model_dump()
         # implementation_date should be None when pending approval
         assert dumped.get("implementation_date") is None
 
@@ -2998,8 +2998,8 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) >= 1
+        assert isinstance(result.response, UpdateMediaBuyError)
+        assert len(result.response.errors) >= 1
 
     def test_no_db_changes_on_adapter_failure(self):
         """UC-003-AF02: adapter failure means no DB records updated.
@@ -3074,7 +3074,7 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
+        assert isinstance(result.response, UpdateMediaBuyError)
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             "step_1", ANY, status="failed", error_message="GAM API timeout"
         )

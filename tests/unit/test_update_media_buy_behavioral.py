@@ -167,13 +167,13 @@ def test_combined_campaign_and_package_update():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_combined"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_combined"
         # affected_packages should contain entries from both package-level and campaign-level updates
         # Package budget update -> 1 entry for pkg_A
         # Campaign budget update -> entries for pkg_A, pkg_B
-        assert len(result.affected_packages) >= 2
-        affected_pkg_ids = {ap.package_id for ap in result.affected_packages}
+        assert len(result.response.affected_packages) >= 2
+        affected_pkg_ids = {ap.package_id for ap in result.response.affected_packages}
         assert "pkg_A" in affected_pkg_ids
         assert "pkg_B" in affected_pkg_ids
         # The adapter should have been called for package budget update
@@ -228,10 +228,10 @@ def test_multi_package_update_processes_all_packages():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # All 3 packages should appear in affected_packages
-        assert len(result.affected_packages) == 3
-        affected_pkg_ids = {ap.package_id for ap in result.affected_packages}
+        assert len(result.response.affected_packages) == 3
+        affected_pkg_ids = {ap.package_id for ap in result.response.affected_packages}
         assert affected_pkg_ids == {"pkg_1", "pkg_2", "pkg_3"}
 
         # Adapter should have been called 3 times (once per package)
@@ -286,10 +286,10 @@ def test_main_flow_package_budget_update():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_main"
-        assert len(result.affected_packages) == 1
-        assert result.affected_packages[0].package_id == "pkg_main_1"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_main"
+        assert len(result.response.affected_packages) == 1
+        assert result.response.affected_packages[0].package_id == "pkg_main_1"
 
         # Verify adapter was called with correct action
         call_kwargs = env.mock["adapter"].return_value.update_media_buy.call_args[1]
@@ -344,8 +344,8 @@ class TestFlightDateValidationAndPersistence:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            assert result.media_buy_id == "mb_dates"
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert result.response.media_buy_id == "mb_dates"
             # Date update should have been persisted via repository
             env.mock["uow"].return_value.media_buys.update_fields.assert_called()
 
@@ -455,11 +455,11 @@ class TestCampaignBudgetValidationAndPersistence:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            assert result.media_buy_id == "mb_budget"
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert result.response.media_buy_id == "mb_budget"
             # All packages should be listed as affected
-            assert len(result.affected_packages) >= 1
-            assert result.affected_packages[0].package_id == "pkg_budget_1"
+            assert len(result.response.affected_packages) >= 1
+            assert result.response.affected_packages[0].package_id == "pkg_budget_1"
 
             # Budget should have been persisted via repository
             env.mock["uow"].return_value.media_buys.update_fields.assert_called()
@@ -498,10 +498,10 @@ def test_manual_approval_path_through_impl():
         result = _update_media_buy_impl(req=req, identity=identity)
 
         # Should return UpdateMediaBuySuccess (not error)
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_manual"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_manual"
         # affected_packages should be empty (update not applied yet)
-        assert result.affected_packages == []
+        assert result.response.affected_packages == []
 
         # Workflow step should be updated with requires_approval status
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
@@ -566,8 +566,8 @@ def test_pause_completes_workflow_step():
         result = _update_media_buy_impl(req=req, identity=identity)
 
         # Should succeed
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_pause"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_pause"
 
         # BUG: Workflow step must be marked 'completed' after successful pause
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
@@ -608,7 +608,7 @@ def test_manual_approval_creates_object_workflow_mapping():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
 
         # The DB session should have had an ObjectWorkflowMapping added via session.add()
         mock_session = env.mock["uow"].return_value.session
@@ -658,7 +658,7 @@ def test_manual_approval_stores_raw_request():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
 
         # The workflow step's response_data must contain enough information
         # to execute the update after approval. At minimum, the request data
@@ -731,7 +731,7 @@ class TestTimezoneHandlingRegression:
             result = _update_media_buy_impl(req=req, identity=identity)
 
             # Must succeed — no TypeError from naive/aware subtraction
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_update_only_start_time_succeeds(self):
         """Updating only start_time (end_time from DB) must not raise TypeError.
@@ -767,7 +767,7 @@ class TestTimezoneHandlingRegression:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_schema_rejects_naive_start_time(self):
         """UpdateMediaBuyRequest must reject naive (no tzinfo) start_time.
@@ -854,7 +854,7 @@ class TestUC003MainObligations:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_adapter_called_with_correct_action(self):
         """Adapter update_media_buy called with action=update_package_budget.
@@ -909,9 +909,9 @@ class TestUC003MainObligations:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            assert len(result.affected_packages) == 1
-            assert result.affected_packages[0].package_id == "pkg_y"
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert len(result.response.affected_packages) == 1
+            assert result.response.affected_packages[0].package_id == "pkg_y"
 
     def test_response_wrapped_with_status_completed(self):
         """Workflow step updated with status=completed on success.
@@ -923,7 +923,7 @@ class TestUC003MainObligations:
             req = UpdateMediaBuyRequest(media_buy_id="mb_status")
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert len(result_calls) >= 1
             assert result_calls[-1][1].get("status", "completed") == "completed"
@@ -950,7 +950,7 @@ class TestUC003PauseResume:
             req = UpdateMediaBuyRequest(media_buy_id="mb_pause_manual", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert len(result_calls) >= 1
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -994,7 +994,7 @@ class TestUC003UpdateTiming:
             req = UpdateMediaBuyRequest(media_buy_id="mb_both_dates", start_time=start, end_time=end)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # update_fields should have been called with both start_time and end_time
             env.mock["uow"].return_value.media_buys.update_fields.assert_called()
             call_kwargs = env.mock["uow"].return_value.media_buys.update_fields.call_args
@@ -1030,7 +1030,7 @@ class TestUC003UpdateTiming:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called for timing-only updates
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1109,7 +1109,7 @@ class TestUC003CampaignLevelBudget:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called for budget-only updates
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1339,7 +1339,7 @@ class TestUC003UpdateCreativeIds:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called for creative_ids updates
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1429,14 +1429,14 @@ class TestUC003UploadInlineCreatives:
                 )
                 result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             mock_sync.assert_called_once_with(
                 creatives=ANY,
                 identity=ANY,
                 assignments=ANY,
             )
             # affected_packages should track the creative upload
-            assert len(result.affected_packages) >= 1
+            assert len(result.response.affected_packages) >= 1
 
     def test_inline_creatives_additive_semantics(self):
         """Inline creatives are additive (don't replace existing).
@@ -1472,11 +1472,11 @@ class TestUC003UploadInlineCreatives:
                 )
                 result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # The sync call does NOT delete existing assignments -
             # it only creates new ones (additive semantics)
-            assert len(result.affected_packages) >= 1
-            changes = result.affected_packages[0].changes_applied
+            assert len(result.response.affected_packages) >= 1
+            changes = result.response.affected_packages[0].changes_applied
             assert "creatives_uploaded" in changes
 
     def test_sync_failure_returns_error(self):
@@ -1585,7 +1585,7 @@ class TestUC003UpdateCreativeAssignments:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_product_does_not_support_placement_targeting(self):
         """Placement targeting rejected when product has no placements.
@@ -1670,7 +1670,7 @@ class TestUC003UpdateCreativeAssignments:
             # The creative_assignments path creates assignments even for
             # non-existing creatives (existence check is in creative_ids path).
             # This test documents the current behavior.
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
 
 # ---------------------------------------------------------------------------
@@ -1698,7 +1698,7 @@ class TestUC003UpdateTargetingOverlay:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # targeting_overlay should have been replaced (stored as Pydantic model or dict)
             stored = mock_pkg.package_config["targeting_overlay"]
             assert stored is not None
@@ -1743,7 +1743,7 @@ class TestUC003UpdateTargetingOverlay:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
     def test_property_list_update_rejected_when_product_disallows(self):
@@ -1866,7 +1866,7 @@ class TestUC003UpdateTargetingOverlay:
             result = _update_media_buy_impl(req=req, identity=identity)
 
             # Targeting persisted; no property_list rejection
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             assert mock_pkg.package_config["targeting_overlay"] is not None
 
     def test_property_list_update_replaces_existing_not_merge(self):
@@ -1923,7 +1923,7 @@ class TestUC003UpdateTargetingOverlay:
             result = _update_media_buy_impl(req=req, identity=identity)
 
             # Update succeeded.
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
             # Persisted targeting_overlay reflects the swap, not a merge.
             # update_media_buy stores Targeting models in package_config; legacy
@@ -1963,7 +1963,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_deferred", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called (deferred until seller approves)
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1982,7 +1982,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_reject_setup", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Verify workflow step created with requires_approval (enables rejection)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -2003,7 +2003,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_poll")
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # The workflow step was created (step_id="step_001")
             # and the response allows the buyer to track the status
             env.mock["ctx_mgr"].return_value.create_workflow_step.assert_called_once_with(
@@ -2734,7 +2734,7 @@ class TestUC003ExtN:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuyError)
+            assert isinstance(result.response, UpdateMediaBuyError)
 
 
 # ---------------------------------------------------------------------------
@@ -2772,7 +2772,7 @@ class TestUC003ExtO:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuyError)
+            assert isinstance(result.response, UpdateMediaBuyError)
 
     def test_workflow_creation_failure(self):
         """Workflow step creation failure during manual approval.
@@ -2867,7 +2867,7 @@ class TestUC003StateMachine:
             req = UpdateMediaBuyRequest(media_buy_id="mb_active", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_paused_status_rejects_pause(self):
         """A paused buy rejects another pause — 'pause' is not in valid_actions for 'paused'."""
@@ -2903,7 +2903,7 @@ class TestUC003StateMachine:
             req = UpdateMediaBuyRequest(media_buy_id="mb_paused_resume", paused=False)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_post_action_status_derived_from_db(self):
         """After a successful pause, valid_actions reflects the DB status, not a hardcode.
@@ -2936,8 +2936,8 @@ class TestUC003StateMachine:
             req = UpdateMediaBuyRequest(media_buy_id="mb_post_action", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            action_values = {getattr(a, "value", a) for a in (result.valid_actions or [])}
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            action_values = {getattr(a, "value", a) for a in (result.response.valid_actions or [])}
             assert "sync_creatives" in action_values, (
                 "valid_actions must reflect the DB-derived post-action status "
                 f"('pending_creatives'), not the hardcoded ('paused'). Got: {action_values}"

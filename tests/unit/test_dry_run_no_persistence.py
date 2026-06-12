@@ -136,9 +136,9 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             response = _update_media_buy_impl(req=req, identity=mock_identity)
 
             # Verify response
-            assert response.media_buy_id == "mb_existing_123"
-            assert len(response.affected_packages) == 1
-            assert response.affected_packages[0].changes_applied.get("dry_run") is True
+            assert response.response.media_buy_id == "mb_existing_123"
+            assert len(response.response.affected_packages) == 1
+            assert response.response.affected_packages[0].changes_applied.get("dry_run") is True
 
             # Verify NO workflow step was created
             mock_ctx_manager.return_value.create_workflow_step.assert_not_called()

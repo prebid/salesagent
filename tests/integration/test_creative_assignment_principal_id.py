@@ -365,7 +365,7 @@ class TestCreativeAssignmentPrincipalIdUpdate:
         # Update should succeed (not return error)
         from src.core.schemas import UpdateMediaBuyError
 
-        assert not isinstance(update_result, UpdateMediaBuyError), f"Update failed: {update_result}"
+        assert not isinstance(update_result.response, UpdateMediaBuyError), f"Update failed: {update_result}"
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant["tenant_id"], media_buy_id)

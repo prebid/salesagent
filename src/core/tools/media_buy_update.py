@@ -16,6 +16,7 @@ from typing import Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from pydantic import Field
 
 # ---------------------------------------------------------------------------
@@ -76,6 +77,7 @@ from src.core.schemas import (
     Budget,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
+    UpdateMediaBuyResult,
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -164,7 +166,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
+) -> UpdateMediaBuyResult:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
     Callers construct the validated UpdateMediaBuyRequest at their boundary
@@ -364,7 +366,7 @@ def _update_media_buy_impl(
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
 
-                return dry_run_response
+                return UpdateMediaBuyResult(response=dry_run_response, status=AdcpTaskStatus.completed.value)
 
             # Type narrowing: after dry_run early return, step and persistent_ctx are guaranteed to exist
             assert step is not None, "step should be created when not in dry_run mode"
@@ -408,7 +410,7 @@ def _update_media_buy_impl(
                 )
                 session.add(mapping)
 
-                return approval_response
+                return UpdateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.submitted.value)
 
             # Validate currency limits if flight dates or budget changes
             # This prevents workarounds where buyers extend flight to bypass daily max
@@ -512,7 +514,7 @@ def _update_media_buy_impl(
                         status="failed",
                         error_message=result.errors[0].message if result.errors else "Pause/resume failed",
                     )
-                    return error_response
+                    return UpdateMediaBuyResult(response=error_response, status=AdcpTaskStatus.failed.value)
                 else:
                     # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
                     # Use getattr to safely access discriminated union fields
@@ -550,7 +552,7 @@ def _update_media_buy_impl(
                         },
                     )
                     ctx_manager.audit_workflow_step_result(step.step_id, success_response)
-                    return success_response
+                    return UpdateMediaBuyResult(response=success_response, status=AdcpTaskStatus.completed.value)
 
             # Handle package-level updates
             if req.packages:
@@ -580,7 +582,7 @@ def _update_media_buy_impl(
                                 status="failed",
                                 error_message=error_message,
                             )
-                            return response_data
+                            return UpdateMediaBuyResult(response=response_data, status=AdcpTaskStatus.failed.value)
 
                     # Handle budget updates
                     if pkg_update.budget is not None:
@@ -640,7 +642,7 @@ def _update_media_buy_impl(
                                 status="failed",
                                 error_message=error_message,
                             )
-                            return response_data
+                            return UpdateMediaBuyResult(response=response_data, status=AdcpTaskStatus.failed.value)
 
                         # Track budget update in affected_packages
                         # At this point, pkg_update.package_id is guaranteed to be str (checked above)
@@ -1255,7 +1257,7 @@ def _update_media_buy_impl(
             # Use mode="json" to ensure enums are serialized as strings for JSONB storage
             ctx_manager.audit_workflow_step_result(step.step_id, final_response)
 
-        return final_response
+        return UpdateMediaBuyResult(response=final_response, status=AdcpTaskStatus.completed.value)
 
 
 def _build_update_request(

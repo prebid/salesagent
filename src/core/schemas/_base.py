@@ -297,7 +297,24 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
-class CreateMediaBuyResult(SalesAgentBaseModel):
+class TaskResultEnvelope(SalesAgentBaseModel):
+    """DRY base for protocol-status-wrapping result types.
+
+    Serializes to {"status": <TaskStatus>, ...response_fields} by flattening
+    the domain response at the root and overwriting 'status' with the
+    protocol TaskStatus. Subclasses declare the typed 'response' field.
+    """
+
+    status: str
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        result = self.response.model_dump(mode=info.mode, context=info.context)
+        result["status"] = self.status
+        return result
+
+
+class CreateMediaBuyResult(TaskResultEnvelope):
     """Wrapper combining create_media_buy domain response with protocol status.
 
     Serializes to {"status": "...", ...response_fields}, allowing callers to
@@ -307,14 +324,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     with existing callers and tests.
     """
 
-    status: str
     response: CreateMediaBuySuccess | CreateMediaBuyError
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, serializer, info):
-        result = self.response.model_dump(mode=info.mode, context=info.context)
-        result["status"] = self.status
-        return result
 
     def __iter__(self):
         """Support tuple unpacking: response, status = result."""
@@ -442,6 +452,19 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
 
 # Union type for update_media_buy operation
 UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError
+
+
+class UpdateMediaBuyResult(TaskResultEnvelope):
+    """Wrapper combining update_media_buy domain response with protocol status.
+
+    Serializes to {"status": "...", ...response_fields}, mirroring
+    CreateMediaBuyResult so wire transports surface ProtocolEnvelope.status.
+    """
+
+    response: UpdateMediaBuySuccess | UpdateMediaBuyError
+
+    def __str__(self) -> str:
+        return str(self.response)
 
 
 class TaskStatus(StrEnum):
