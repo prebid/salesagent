@@ -103,9 +103,8 @@ dev = [
     # Security patches for transitive dev dependencies
     "black>=26.3.1",  # GHSA-3936-cmfr-pm3m
     "types-python-dateutil>=2.9.0.20260408",
-    # Added in PR 2 of issue #1234: xdist for parallel test execution in CI,
-    # randomly for test order randomisation to surface order-dependent failures.
-    "pytest-xdist>=3.0.0",
+    # Added in PR 2 of issue #1234: randomly for test order randomisation to
+    # surface order-dependent failures. (pytest-xdist is declared once above.)
     "pytest-randomly>=3.15.0",
 ]
 
