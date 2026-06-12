@@ -129,9 +129,7 @@ class TestAccountNotFoundViaTransports:
         assert wire is not None, "No wire error envelope captured"
         errors = wire.get("errors", [])
         assert errors, "Error envelope has no errors"
-        assert errors[0].get("code") == "ACCOUNT_NOT_FOUND", (
-            f"Expected ACCOUNT_NOT_FOUND, got: {errors[0].get('code')}"
-        )
+        assert errors[0].get("code") == "ACCOUNT_NOT_FOUND", f"Expected ACCOUNT_NOT_FOUND, got: {errors[0].get('code')}"
 
     def test_account_not_found_via_mcp(self, env_with_data):
         """ACCOUNT_NOT_FOUND surfaces through MCP transport (not stripped by harness).

@@ -32,8 +32,7 @@ class TestCreateWrapperAccountParam:
         return {
             node.name: node
             for node in ast.walk(tree)
-            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
-            and node.name in WRAPPER_NAMES
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name in WRAPPER_NAMES
         }
 
     def test_create_media_buy_has_account_param(self):

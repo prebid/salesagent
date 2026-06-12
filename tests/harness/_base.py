@@ -218,12 +218,16 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
     message = fallback_message
     recovery: str | None = None
     details: dict | None = None
+    suggestion: str | None = None
+    field: str | None = None
     adcp_err = envelope.get("adcp_error")
     if isinstance(adcp_err, dict):
         error_code = adcp_err.get("code")
         message = adcp_err.get("message", message) or message
         recovery = adcp_err.get("recovery")
         details = adcp_err.get("details")
+        suggestion = adcp_err.get("suggestion")
+        field = adcp_err.get("field")
     errors = envelope.get("errors")
     if isinstance(errors, list) and errors and isinstance(errors[0], dict):
         first = errors[0]
@@ -231,9 +235,11 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
         message = first.get("message", message) or message
         recovery = recovery or first.get("recovery")
         details = details or first.get("details")
+        suggestion = suggestion or first.get("suggestion")
+        field = field or first.get("field")
     if not error_code:
         return None
-    reconstructed = _adcp_error_from_code(error_code, message, recovery, details)
+    reconstructed = _adcp_error_from_code(error_code, message, recovery, details, suggestion, field)
     if reconstructed is not None:
         # Stash the REAL wire envelope on the reconstructed exception so the
         # A2A/REST dispatchers can capture the actual wire bytes (artifact
