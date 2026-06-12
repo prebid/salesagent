@@ -17,6 +17,10 @@ import pytest
 
 from scripts.ci.workflow_helpers import load_ci_workflow
 
+# Suite jobs that must appear in summary.needs — a suite that runs but is absent
+# from summary.needs leaves CI green on its failure (PR #1299 silent-breakage class).
+REQUIRED_SUMMARY_GATES = frozenset({"unit-tests", "integration-tests", "e2e-tests", "bdd-tests", "admin-ui-tests"})
+
 
 class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
@@ -161,13 +165,18 @@ class TestCISuiteCoverage:
 
     @pytest.mark.arch_guard
     def test_summary_gates_every_required_job(self):
-        """summary must depend on AND fail for every job in summary.needs."""
+        """summary must include every suite gate AND fail for every job in summary.needs."""
         workflow = load_ci_workflow()
         summary = workflow["jobs"]["summary"]
         needs = summary["needs"]
         check_text = " ".join(str(step.get("run", "")) for step in summary.get("steps", []))
 
         assert isinstance(needs, list) and needs, "summary.needs must list every upstream gate job."
+        missing = REQUIRED_SUMMARY_GATES - set(needs)
+        assert not missing, (
+            f"summary.needs dropped required suite gate(s) {sorted(missing)}. A suite that runs but is "
+            "absent from summary.needs leaves CI green on its failure."
+        )
         for required in needs:
             assert required in workflow["jobs"], (
                 f"summary.needs lists unknown job '{required}'. Update summary.needs or add the missing job definition."
