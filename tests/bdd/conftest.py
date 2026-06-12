@@ -100,6 +100,21 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
 
 def pytest_configure(config: pytest.Config) -> None:
     """Register BDD tag markers dynamically."""
+    # Guard: BDD_E2E_ENABLED is incompatible with xdist. Under -n>0 the e2e_rest
+    # transport is silently dropped at collection (the worker's
+    # pytest_generate_tests never appends it), so the suite goes green WITHOUT
+    # ever running the 5th transport. The ctx fixture's hard-error can't catch
+    # this — collection never happens. Turn the silent drop into a hard error.
+    # In-network bdd already pins BDD_XDIST_N=0 (docker-compose.e2e.yml). (#1420)
+    if os.environ.get("BDD_E2E_ENABLED") == "true":
+        numprocesses = getattr(config.option, "numprocesses", None)
+        if numprocesses not in (None, 0, "0"):
+            raise pytest.UsageError(
+                f"BDD_E2E_ENABLED=true is incompatible with xdist (-n {numprocesses!r}): "
+                "the e2e_rest transport is silently dropped at collection and the suite "
+                "passes without ever running it. Run serially — set BDD_XDIST_N=0."
+            )
+
     import pathlib
 
     features_dir = pathlib.Path(__file__).parent / "features"

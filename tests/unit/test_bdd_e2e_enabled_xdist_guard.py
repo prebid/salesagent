@@ -1,0 +1,44 @@
+"""Regression test for the BDD_E2E_ENABLED + xdist collection guard.
+
+Guards PR #1420 review finding #5: when BDD_E2E_ENABLED=true is run under
+pytest-xdist (-n auto / >0), the e2e_rest transport is silently dropped at
+collection (the worker's pytest_generate_tests never appends it) and the bdd
+suite goes green having never exercised the 5th transport. The ctx fixture's
+hard-error can't catch this — collection never happens. pytest_configure must
+turn the silent drop into a hard error.
+
+Drives the REAL pytest_configure via a minimal stub config (it reads only
+config.option.numprocesses and calls config.addinivalue_line).
+"""
+
+from types import SimpleNamespace
+
+import pytest
+
+from tests.bdd.conftest import pytest_configure
+
+
+def _config(numprocesses):
+    return SimpleNamespace(
+        option=SimpleNamespace(numprocesses=numprocesses),
+        addinivalue_line=lambda *a, **k: None,
+    )
+
+
+@pytest.mark.parametrize("numprocesses", ["auto", "logical", 4])
+def test_e2e_enabled_under_xdist_raises(monkeypatch, numprocesses):
+    monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    with pytest.raises(pytest.UsageError, match="BDD_XDIST_N=0"):
+        pytest_configure(_config(numprocesses))
+
+
+@pytest.mark.parametrize("numprocesses", [0, None])
+def test_e2e_enabled_serial_is_allowed(monkeypatch, numprocesses):
+    monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    pytest_configure(_config(numprocesses))  # must not raise
+
+
+@pytest.mark.parametrize("numprocesses", ["auto", 4])
+def test_xdist_without_e2e_enabled_is_allowed(monkeypatch, numprocesses):
+    monkeypatch.delenv("BDD_E2E_ENABLED", raising=False)
+    pytest_configure(_config(numprocesses))  # must not raise
