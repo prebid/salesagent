@@ -46,13 +46,6 @@ def test_registry_serves_the_fixture(fixture_data: dict) -> None:
         assert served_fmt == Format.model_validate(raw)
 
 
-def test_mock_alias_is_reference_formats() -> None:
-    """The legacy _get_mock_formats alias still resolves to _get_reference_formats."""
-    from src.core.creative_agent_registry import _get_mock_formats, _get_reference_formats
-
-    assert _get_mock_formats is _get_reference_formats
-
-
 def test_fixture_is_non_empty(fixture_data: dict) -> None:
     """The captured catalog must contain formats (never an empty catalog)."""
     assert fixture_data["formats"], "reference fixture must contain captured formats"

@@ -185,12 +185,6 @@ def _get_reference_formats() -> list[Format]:
     return list(load_reference_formats())
 
 
-# Backward-compat alias for the transport harness, which imports _get_mock_formats
-# (tests/harness/creative_formats.py). The harness switches to _get_reference_formats
-# in the transport-aware wave; until then this keeps its import working.
-_get_mock_formats = _get_reference_formats
-
-
 @dataclass
 class CreativeAgent:
     """Represents a creative agent that provides format definitions and creative services."""
