@@ -85,7 +85,7 @@ class TargetingCapabilities:
         Checks both include and exclude fields for geo_metros and geo_postal_areas.
         Returns list of errors naming the unsupported system and supported alternatives.
         """
-        from src.core.validation_helpers import resolve_enum_value
+        from src.core.helpers import enum_value
 
         errors: list[str] = []
 
@@ -99,7 +99,7 @@ class TargetingCapabilities:
         if metros:
             supported = [f for f in self._METRO_FIELDS if getattr(self, f)]
             for metro in metros:
-                system = resolve_enum_value(metro.system)
+                system = enum_value(metro.system)
                 if not getattr(self, system, False):
                     alt = ", ".join(supported) if supported else "none"
                     errors.append(f"Unsupported metro system '{system}'. This adapter supports: {alt}")
@@ -114,7 +114,7 @@ class TargetingCapabilities:
         if postals:
             supported = [f for f in self._POSTAL_FIELDS if getattr(self, f)]
             for area in postals:
-                system = resolve_enum_value(area.system)
+                system = enum_value(area.system)
                 if not getattr(self, system, False):
                     alt = ", ".join(supported) if supported else "none"
                     errors.append(f"Unsupported postal system '{system}'. This adapter supports: {alt}")

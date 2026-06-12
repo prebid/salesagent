@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then
 
+from src.core.helpers import enum_value
+
 # ── Response status ──────────────────────────────────────────────────
 
 
@@ -40,9 +42,8 @@ def then_response_status(ctx: dict, status: str) -> None:
     # Uses getattr on the class (not instance) to handle non-Pydantic test doubles.
     resp_fields = getattr(type(resp), "model_fields", {})
     if "status" in resp_fields:
-        actual = resp.status
-        # SDK 5.7: status may be a non-StrEnum; extract .value for comparison
-        actual_str = actual.value if hasattr(actual, "value") else str(actual)
+        # SDK 5.7: status may be a non-StrEnum; enum_value normalizes to str.
+        actual_str = enum_value(resp.status)
         assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
         return
 
