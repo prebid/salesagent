@@ -23,7 +23,7 @@ and context objects that are not on the AdCP wire boundary and have no
 Pattern-#7 obligation. Widening to those is a separate concern.
 
 Allowlist: Violations that predate this guard are tracked here. The list
-can only shrink. Every entry must have a matching ``# FIXME(salesagent-zyq0)``
+can only shrink. Every entry must have a matching ``# FIXME(#1442)``
 comment at the source location.
 """
 
@@ -39,7 +39,7 @@ from pathlib import Path
 # to SalesAgentBaseModel changes extra-field handling on the REST boundary
 # (forbid in dev/CI, ignore in prod), a behavioral change that needs REST
 # integration coverage -- tracked as a follow-up. Allowlisted, not silently
-# narrowed away. See FIXME(salesagent-zyq0) at each source class.
+# narrowed away. See FIXME(#1442) at each source class.
 ALLOWLIST: set[tuple[str, str]] = {
     ("api_v1.py", "GetProductsBody"),
     ("api_v1.py", "CreateMediaBuyBody"),
