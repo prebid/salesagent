@@ -739,6 +739,91 @@ class TestAssignmentProcessing:
             ).all()
             assert len(assignments) == 1, "Idempotent: should not duplicate assignment"
 
+    def test_failed_creative_assignment_skipped_no_fk_violation(self, integration_db):
+        """Regression #1418 — lenient sync: invalid creative + its assignment.
+
+        A creative that fails validation is never persisted, so processing its
+        assignment must NOT attempt an INSERT (it would violate the creative FK
+        and surface as a 500). Expected: a clean success envelope reporting the
+        per-creative failure, an assignment_errors entry for the skipped package,
+        and ZERO assignment rows for the failed creative.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CreativeAssignment as DBAssignment
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            # Empty name → validation failure → creative is skipped from persistence.
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_bad", name="")],
+                assignments={"c_bad": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        # No 500 — a real SyncCreativesResponse is returned.
+        assert len(response.creatives) == 1
+        result = response.creatives[0]
+        assert result.action == CreativeAction.failed
+        assert result.assignment_errors is not None
+        assert pkg_id in result.assignment_errors
+
+        with get_db_session() as session:
+            assignments = session.scalars(
+                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_bad")
+            ).all()
+            assert assignments == [], "No assignment row may be written for a creative that was not persisted"
+
+    def test_batch_valid_and_invalid_creative_assignments(self, integration_db):
+        """Regression #1418 — batch: valid+assigned creative A, invalid+assigned creative B.
+
+        A's assignment persists; B's does not. B's per-creative failure and its
+        skipped assignment are reported. No FK violation, no 500.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CreativeAssignment as DBAssignment
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(creative_id="c_ok", name="Valid Creative"),
+                    _make_creative_asset(creative_id="c_bad", name=""),  # invalid
+                ],
+                assignments={"c_ok": [pkg_id], "c_bad": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+        result_by_id = {r.creative_id: r for r in response.creatives}
+        assert result_by_id["c_ok"].action != CreativeAction.failed
+        assert result_by_id["c_ok"].assigned_to == [pkg_id]
+        assert result_by_id["c_bad"].action == CreativeAction.failed
+        assert result_by_id["c_bad"].assignment_errors is not None
+        assert pkg_id in result_by_id["c_bad"].assignment_errors
+
+        with get_db_session() as session:
+            ok_assignments = session.scalars(
+                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_ok", package_id=pkg_id)
+            ).all()
+            bad_assignments = session.scalars(
+                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_bad")
+            ).all()
+            assert len(ok_assignments) == 1, "Valid creative's assignment must persist"
+            assert bad_assignments == [], "Invalid creative's assignment must not persist"
+
 
 class TestSchemaCompleteness:
     """Response schema fields verified against real results."""
