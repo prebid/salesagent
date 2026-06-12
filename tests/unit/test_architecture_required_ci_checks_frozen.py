@@ -23,6 +23,8 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / Integration (other)",
     "CI / E2E Tests",
     "CI / Admin UI Tests",
+    "CI / BDD Tests (Shard 1/2)",
+    "CI / BDD Tests (Shard 2/2)",
     "CI / BDD Tests",
     "CI / Migration Roundtrip",
     "CI / Coverage",

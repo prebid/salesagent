@@ -21,15 +21,28 @@ def get_migration_files() -> list[Path]:
     return sorted(f for f in MIGRATIONS_DIR.glob("*.py") if f.name != "__init__.py" and not f.name.startswith("__"))
 
 
-def parse_function(tree: ast.Module, name: str) -> ast.FunctionDef | None:
+def parse_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Find a top-level function by name in the AST."""
     for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
             return node
     return None
 
 
-def is_empty_body(node: ast.FunctionDef) -> bool:
+def iter_migration_trees() -> list[tuple[Path, ast.Module]]:
+    """Parse every migration file into (path, ast.Module) pairs."""
+    trees: list[tuple[Path, ast.Module]] = []
+    for path in get_migration_files():
+        source = path.read_text()
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        trees.append((path, tree))
+    return trees
+
+
+def is_empty_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if a function body contains only pass/docstring."""
     for stmt in node.body:
         if isinstance(stmt, ast.Pass):
@@ -136,6 +149,34 @@ def resolve_roundtrip_downgrade_target(head_revision: str | None = None) -> str:
         # At a merge head, Alembic downgrade to any parent revision undoes the
         # merge and restores all branch tips (see alembic branches docs).
         return down_revisions[0]
+
+    msg = f"Migration file not found for head revision {head_revision}"
+    raise ValueError(msg)
+
+
+def expected_heads_after_roundtrip_downgrade(head_revision: str | None = None) -> set[str]:
+    """Return alembic_version heads expected after CI roundtrip downgrade from head.
+
+    Non-merge heads land on a single parent revision. Merge heads restore every
+    branch tip listed in ``down_revision`` (Alembic branches docs).
+    """
+    if head_revision is None:
+        heads = get_migration_heads()
+        if len(heads) != 1:
+            msg = f"Expected exactly 1 migration head, found {sorted(heads)}"
+            raise ValueError(msg)
+        head_revision = next(iter(heads))
+
+    for path in get_migration_files():
+        revision, down_revisions = extract_revision_info(path)
+        if revision != head_revision:
+            continue
+        if not down_revisions:
+            msg = f"Cannot downgrade from base revision {head_revision}"
+            raise ValueError(msg)
+        if len(down_revisions) == 1:
+            return {down_revisions[0]}
+        return set(down_revisions)
 
     msg = f"Migration file not found for head revision {head_revision}"
     raise ValueError(msg)

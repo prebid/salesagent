@@ -14,6 +14,28 @@ def load_ci_workflow() -> dict:
     return yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
 
 
+def _matrix_job_total(matrix: dict) -> int:
+    """Mirror GitHub Actions ``strategy.job-total`` for a job matrix."""
+    include = matrix.get("include")
+    if include:
+        return len(include)
+    lists = [values for values in matrix.values() if isinstance(values, list)]
+    if not lists:
+        return 1
+    total = 1
+    for values in lists:
+        total *= len(values)
+    return total
+
+
+def _render_job_name(name: str, matrix: dict, substitutions: dict[str, str]) -> str:
+    rendered = name
+    for key, value in substitutions.items():
+        rendered = rendered.replace("${{ matrix." + key + " }}", value)
+    rendered = rendered.replace("${{ strategy.job-total }}", str(_matrix_job_total(matrix)))
+    return rendered
+
+
 def rendered_ci_check_names(workflow: dict | None = None) -> set[str]:
     """Return rendered ``CI / …`` check names, expanding strategy.matrix jobs."""
     jobs = (workflow or load_ci_workflow())["jobs"]
@@ -29,10 +51,8 @@ def rendered_ci_check_names(workflow: dict | None = None) -> set[str]:
         include = matrix.get("include")
         if include:
             for row in include:
-                rendered = name
-                for key, value in row.items():
-                    rendered = rendered.replace("${{ matrix." + key + " }}", str(value))
-                names.add(f"CI / {rendered}")
+                subs = {key: str(value) for key, value in row.items()}
+                names.add(f"CI / {_render_job_name(name, matrix, subs)}")
             continue
 
         expanded = False
@@ -42,7 +62,7 @@ def rendered_ci_check_names(workflow: dict | None = None) -> set[str]:
             token = "${{ matrix." + key + " }}"
             if token in name:
                 for value in values:
-                    names.add(f"CI / {name.replace(token, str(value))}")
+                    names.add(f"CI / {_render_job_name(name, matrix, {key: str(value)})}")
                 expanded = True
                 break
         if not expanded:

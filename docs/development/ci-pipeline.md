@@ -18,11 +18,14 @@ git rebase upstream/main
 git diff upstream/main --stat   # target: ~20-30 files, no alembic/versions/ changes
 ```
 
-## Required checks (18 rendered names)
+## Required checks (20 rendered names after PR #1379)
 
 Run `./scripts/capture-rendered-names.sh` after any job rename. The frozen guard
 [`tests/unit/test_architecture_required_ci_checks_frozen.py`](../../tests/unit/test_architecture_required_ci_checks_frozen.py)
 must stay in sync.
+
+PR #1372 (PR3) establishes **18** checks. PR #1379 adds **2 BDD shard** checks
+plus the aggregate `CI / BDD Tests` status proxy (replacing PR3's single BDD job).
 
 | Rendered check name | Job |
 |---------------------|-----|
@@ -40,10 +43,37 @@ must stay in sync.
 | `CI / Integration (other)` | integration shard |
 | `CI / E2E Tests` | full stack |
 | `CI / Admin UI Tests` | admin suite |
-| `CI / BDD Tests` | BDD suite (single job in PR3; sharding is PR #1379) |
+| `CI / BDD Tests (Shard 1/2)` | BDD greedy scenario shard |
+| `CI / BDD Tests (Shard 2/2)` | BDD greedy scenario shard |
+| `CI / BDD Tests` | aggregate status proxy (shard pass/fail) |
 | `CI / Migration Roundtrip` | alembic upgrade |
 | `CI / Coverage` | `--fail-under` from `.coverage-baseline` using unit + BDD artifacts |
 | `CI / Summary` | aggregation gate |
+
+## BDD Test Shards
+
+BDD tests (`tests/bdd/test_*.py`, 13 files) run in **2 parallel shards** via
+greedy min-load assignment by Gherkin scenario count (`scripts/ci/shard_split.py`).
+Each shard uploads coverage; the **Coverage** job combines unit + BDD shard
+artifacts and enforces `.coverage-baseline`. The aggregate `BDD Tests` job is
+status-only. Shard jobs route pytest through the shared `_pytest` composite.
+
+| Shard | Files | Scenarios (approx.) |
+|-------|------:|--------------------:|
+| 1/2 | 5 | 479 |
+| 2/2 | 8 | 441 |
+
+Reproduce a CI shard locally:
+
+```bash
+uv run pytest $(uv run python scripts/ci/shard_paths.py bdd 1)
+```
+
+`make test-bdd` (full `tests/bdd/`) runs the same scenarios as both shards combined.
+
+**Load metric note:** greedy assignment balances Gherkin `Scenario` line counts (~920 total). Collected pytest items are much higher (~9×) because each scenario expands by `Examples:` rows and transport parametrization. Wall-clock is dominated by slow DB-heavy scenarios, not test volume — the reason 2 shards was chosen over 3–4.
+
+Structural guard: `tests/unit/test_architecture_ci_bdd_shard_manifest.py`.
 
 ## Integration Test Shards
 
@@ -139,7 +169,7 @@ required (or stay blocked on stale `Test Suite / …` names).
    - Add all 18 checks prefixed with `CI /` from the script output.
 4. Keep non-CI required checks unchanged (`check-pr-title`, CodeQL, `security.yml` jobs, etc.).
 5. Merge PR #1372 only after a test PR shows all 18 `CI / …` checks as required and green.
-6. For BDD parallel sharding (PR #1379): update branch protection again when shard check names are added — do **not** combine with PR3.
+6. After PR #1379 (BDD sharding): add the 2 `CI / BDD Tests (Shard …/2)` required checks and keep `CI / BDD Tests` as the aggregate proxy — **separate** branch-protection update from PR3.
 
 ### Local vs CI quality targets
 
