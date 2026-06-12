@@ -1350,7 +1350,7 @@ def then_creative_approval_state(ctx: dict) -> None:
 
 
 @then("each media buy should include buyer_campaign_ref for correlation")
-def then_buyer_refs_for_correlation(ctx: dict) -> None:
+def then_buyer_campaign_ref_for_correlation(ctx: dict) -> None:
     """Assert buyer_campaign_ref on each response media buy matches the seeded value.
 
     buyer_campaign_ref is the surviving correlation identifier (top-level buyer_ref
