@@ -69,6 +69,10 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     end_time: str | None = None
     po_number: str | None = None
     account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
+    reporting_webhook: dict[str, Any] | None = None
+    push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -105,6 +109,7 @@ class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
     attribution_window: AttributionWindow | None = None
     include_package_daily_breakdown: bool | None = None
     account: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -115,6 +120,9 @@ class SyncCreativesBody(SalesAgentBaseModel):
     delete_missing: bool = False
     dry_run: bool = False
     validation_mode: str = "strict"
+    push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
     adcp_version: str = "1.0.0"
 
 
@@ -123,12 +131,27 @@ class ListCreativesBody(SalesAgentBaseModel):
     media_buy_ids: list[str] | None = None
     status: str | None = None
     format: str | None = None
+    tags: list[str] | None = None
+    created_after: str | None = None
+    created_before: str | None = None
+    search: str | None = None
+    filters: dict[str, Any] | None = None
+    fields: list[str] | None = None
+    include_performance: bool = False
+    include_assignments: bool = False
+    include_sub_assets: bool = False
+    page: int = 1
+    limit: int = 50
+    sort_by: str = "created_date"
+    sort_order: str = "desc"
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
 class UpdatePerformanceIndexBody(SalesAgentBaseModel):
     media_buy_id: str
     performance_data: list[dict[str, Any]] = []
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -254,6 +277,10 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
         end_time=body.end_time,
         po_number=body.po_number,
         account=account_ref,
+        reporting_webhook=body.reporting_webhook,  # type: ignore[arg-type]  # raw dict; coerced by CreateMediaBuyRequest
+        push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        ext=body.ext,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -305,6 +332,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
         reporting_dimensions=body.reporting_dimensions,
         attribution_window=body.attribution_window,
         include_package_daily_breakdown=body.include_package_daily_breakdown,
+        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -313,6 +341,14 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
 @router.post("/creatives/sync")
 async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
+    # Coerce the raw account dict into an AccountReference so sync_creatives_raw
+    # resolves it at the transport boundary (mirror create_media_buy).
+    account_ref = None
+    if body.account is not None:
+        from adcp.types import AccountReference as LibraryAccountReference
+
+        account_ref = LibraryAccountReference.model_validate(body.account)
+
     response = creatives_sync_module.sync_creatives_raw(
         creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
         assignments=body.assignments,
@@ -320,6 +356,9 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
         delete_missing=body.delete_missing,
         dry_run=body.dry_run,
         validation_mode=body.validation_mode,
+        push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        account=account_ref,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -333,6 +372,20 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
         media_buy_ids=body.media_buy_ids,
         status=body.status,
         format=body.format,
+        tags=body.tags,
+        created_after=body.created_after,
+        created_before=body.created_before,
+        search=body.search,
+        filters=body.filters,  # type: ignore[arg-type]  # raw dict; coerced into CreativeFilters
+        fields=body.fields,
+        include_performance=body.include_performance,
+        include_assignments=body.include_assignments,
+        include_sub_assets=body.include_sub_assets,
+        page=body.page,
+        limit=body.limit,
+        sort_by=body.sort_by,
+        sort_order=body.sort_order,
+        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -344,6 +397,7 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
     response = performance_module.update_performance_index_raw(
         media_buy_id=body.media_buy_id,
         performance_data=body.performance_data,
+        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
         identity=identity,
     )
     return response.model_dump(mode="json")

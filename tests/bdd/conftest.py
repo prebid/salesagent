@@ -400,32 +400,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Graduated: T-UC-011-ext-d-push — push notification test now passes
         # (approval workflow implemented or assertion adjusted)
 
-        # Graduated (salesagent-9d5): UC-006 REST account resolution — REST route
-        # now forwards account param correctly (our branch fixed this).
-        # NOTE: success-path works but error-path still fails — REST endpoint
-        # returns 200 OK when account resolution should raise an error.
-        # FIXME: sync_creatives REST endpoint does not propagate account
-        # resolution errors (ACCOUNT_NOT_FOUND, ACCOUNT_AMBIGUOUS, etc.).
-        if is_rest and marker_names & {"T-UC-006-partition-account", "T-UC-006-boundary-account"}:
-            _acct_error_substrings = {
-                "not_found",
-                "not found",
-                "no match",
-                "key_ambiguous",
-                "multiple matches",
-                "setup_required",
-                "setup incomplete",
-                "payment_required",
-                "payment due",
-                "suspended",
-            }
-            if any(s in nodeid for s in _acct_error_substrings):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="REST: sync_creatives endpoint returns 200 instead of account resolution error",
-                        strict=False,
-                    )
-                )
+        # Graduated: UC-006 REST account resolution (success AND error paths).
+        # SyncCreativesBody now forwards `account`, so the sync_creatives REST route
+        # resolves accounts and raises ACCOUNT_* errors instead of returning 200.
+        # The former xfail block for T-UC-006-partition-account/boundary-account error
+        # rows on rest is removed — those scenarios pass.
 
         # RESOLVED: MCP transport suggestion field now correctly unpacked by
         # _unwrap_mcp_tool_error (was double-nesting the extra JSON blob).
