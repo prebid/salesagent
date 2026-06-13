@@ -15,7 +15,7 @@ from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine
 
 from alembic import command
-from tests.unit._migration_helpers import (
+from scripts.ci.migration_helpers import (
     expected_heads_after_roundtrip_downgrade,
     get_migration_heads,
     resolve_roundtrip_downgrade_target,

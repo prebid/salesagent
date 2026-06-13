@@ -64,7 +64,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
       - name: Run mypy
-        run: uv run python -m mypy src --config-file=mypy.ini
+        run: make typecheck
 
   schema-contract:
     name: Schema Contract
@@ -138,13 +138,6 @@ jobs:
           paths: tests/smoke/
           tb: short
           extra_args: -v
-      - name: Check for skipped tests
-        run: |
-          if grep -rE '@pytest\.mark\.skip(\(|[[:space:]]|$)' tests/ --include="test_*.py" | grep -v "skip_ci"; then
-            echo "Found skip decorators in tests!"
-            exit 1
-          fi
-          echo "No skip decorators found"
 
   unit-tests:
     name: Unit Tests

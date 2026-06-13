@@ -13,7 +13,7 @@ No allowlist — zero tolerance. Multiple heads must be resolved before merge.
 
 import pytest
 
-from tests.unit._migration_helpers import (
+from scripts.ci.migration_helpers import (
     expected_heads_after_roundtrip_downgrade,
     extract_revision_info,
     get_migration_files,
@@ -52,7 +52,7 @@ class TestRoundtripDowngradeTarget:
             if revision and len(downs) > 1:
                 assert resolve_roundtrip_downgrade_target(revision) == downs[0]
                 return
-        pytest.skip("No merge migration in graph.")
+        pytest.fail("No merge migration in graph — merge-head roundtrip logic is unexercised.")
 
     def test_non_merge_revision_downgrade_target_is_single_parent(self):
         """Single-parent revisions downgrade to their explicit down_revision."""
@@ -70,4 +70,4 @@ class TestRoundtripDowngradeTarget:
             if revision and len(downs) > 1:
                 assert expected_heads_after_roundtrip_downgrade(revision) == set(downs)
                 return
-        pytest.skip("No merge migration in graph.")
+        pytest.fail("No merge migration in graph — merge-head roundtrip logic is unexercised.")
