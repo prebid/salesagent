@@ -95,6 +95,7 @@ def to_account_reference(account: dict[str, Any] | AccountReference | None) -> A
     if isinstance(account, AccountReference):
         return account
     if isinstance(account, dict):
+        # AccountReference is a RootModel, so validate the whole value instead of field-unpacking.
         return AccountReference.model_validate(account)
     return None  # Fallback for unexpected types
 

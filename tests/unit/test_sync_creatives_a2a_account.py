@@ -7,7 +7,9 @@ Verifies the A2A handler wraps the dict in AccountReference before forwarding.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from adcp.types import AccountReference as LibraryAccountReference
+from pydantic import ValidationError
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_account_reference
@@ -30,6 +32,12 @@ def test_to_account_reference_handles_supported_inputs():
     assert result.root.sandbox is False
     assert to_account_reference(result) is result
     assert to_account_reference(None) is None
+
+
+def test_to_account_reference_rejects_invalid_account_payload():
+    """Malformed oneOf account payloads fail validation at the shared helper."""
+    with pytest.raises(ValidationError):
+        to_account_reference({})
 
 
 class TestSyncCreativesAccountCoercion:
