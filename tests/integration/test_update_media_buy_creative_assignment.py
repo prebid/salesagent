@@ -9,7 +9,7 @@ from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.exceptions import AdCPCreativeRejectedError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
+from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 
@@ -137,9 +137,11 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, identity=identity)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response
+    assert isinstance(result, UpdateMediaBuyResult)
+    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == "test_buy_123"
     assert response.affected_packages is not None
@@ -315,9 +317,11 @@ def test_update_media_buy_replaces_creatives(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, identity=identity)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response
+    assert isinstance(result, UpdateMediaBuyResult)
+    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.affected_packages is not None
     assert len(response.affected_packages) == 1
@@ -576,9 +580,11 @@ def test_creative_assignments_with_weights(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, identity=identity)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response is successful (not an error)
+    assert isinstance(result, UpdateMediaBuyResult)
+    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert not hasattr(response, "errors") or not response.errors
 
@@ -734,9 +740,11 @@ def test_creative_assignments_replaces_all(integration_db):
                 }
             ],
         )
-        response = _update_media_buy_impl(req=req, identity=identity)
+        result = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response is successful
+    assert isinstance(result, UpdateMediaBuyResult)
+    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert not hasattr(response, "errors") or not response.errors
 

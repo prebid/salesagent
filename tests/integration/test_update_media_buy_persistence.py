@@ -22,7 +22,7 @@ from src.core.database.models import (
 )
 from src.core.exceptions import AdCPAuthenticationError, AdCPMediaBuyNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
+from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
@@ -149,9 +149,11 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
     req = UpdateMediaBuyRequest(
         media_buy_id=media_buy_id,
     )
-    response = _update_media_buy_impl(req=req, identity=identity)
+    result = _update_media_buy_impl(req=req, identity=identity)
 
     # Verify response
+    assert isinstance(result, UpdateMediaBuyResult)
+    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == media_buy_id
 
