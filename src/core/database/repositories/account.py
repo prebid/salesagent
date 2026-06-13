@@ -108,9 +108,12 @@ class AccountRepository:
         brand_id: str | None = None,
         sandbox: bool | None = None,
     ) -> int:
-        """Count accounts matching a natural key (for ambiguity detection).
+        """Count accounts matching a natural key.
 
-        Deprecated: prefer list_by_natural_key(limit=2) to avoid double query.
+        For ambiguity *detection* prefer list_by_natural_key(limit=2) (single query).
+        This exact count is for ambiguity *disclosure* on the error path only — once
+        detection has confirmed >1 match, callers use it to tell the buyer how many
+        accounts collide (see account_helpers._resolve_by_natural_key).
         """
         from sqlalchemy import func
 

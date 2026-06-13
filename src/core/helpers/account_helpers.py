@@ -127,8 +127,17 @@ def _resolve_by_natural_key(
         limit=2,
     )
     if len(matches) > 1:
+        # Ambiguity is already established by the limit=2 fast path. Only now —
+        # on the rare error path — pay for an exact COUNT so the buyer learns how
+        # many accounts collide (the happy path never runs this query).
+        total = repo.count_by_natural_key(
+            operator=ref.operator,
+            brand_domain=brand_domain,
+            brand_id=brand_id,
+            sandbox=ref.sandbox,
+        )
         raise AdCPAccountAmbiguousError(
-            f"Natural key matches multiple accounts for brand '{brand_domain}', operator '{ref.operator}'.",
+            f"Natural key matches {total} accounts for brand '{brand_domain}', operator '{ref.operator}'.",
             details={"suggestion": "Use explicit account_id instead of brand+operator to avoid ambiguity."},
         )
 
