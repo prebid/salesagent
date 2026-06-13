@@ -142,8 +142,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == "test_buy_123"
-    # buyer_ref is empty because the request uses media_buy_id (oneOf constraint)
-    # and the response reflects req.buyer_ref which is None
     assert response.affected_packages is not None
     assert len(response.affected_packages) == 1
 

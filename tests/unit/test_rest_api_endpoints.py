@@ -94,7 +94,6 @@ class TestCreateMediaBuyEndpoint:
         response = client.post(
             "/api/v1/media-buys",
             json={
-                "buyer_ref": "buyer1",
                 "brand": {"domain": "testbrand.com"},
                 "packages": [{"product_id": "p1", "budget": {"amount": 100, "currency": "USD"}}],
                 "start_time": "2026-04-01T00:00:00Z",
@@ -108,7 +107,7 @@ class TestCreateMediaBuyEndpoint:
         """create_media_buy requires authentication."""
         response = client.post(
             "/api/v1/media-buys",
-            json={"buyer_ref": "buyer1", "packages": []},
+            json={"packages": []},
         )
         assert response.status_code == 401
 

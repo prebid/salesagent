@@ -389,14 +389,14 @@ class TestUC004EXTA02AuthenticationFailure:
 # ---------------------------------------------------------------------------
 
 
-class TestBuyerRefResolution:
-    """Verify that buyer_refs resolve media buys when media_buy_ids is absent.
+class TestMediaBuyIdResolution:
+    """Verify that media_buy_ids resolve media buys.
 
     Covers: UC-004-MAIN-02
     """
 
     def test_media_buy_ids_resolve_media_buys(self):
-        """media_buy_ids resolve media buys (buyer_refs removed in adcp 3.12).
+        """media_buy_ids resolve media buys.
 
         Covers: UC-004-MAIN-02
         """

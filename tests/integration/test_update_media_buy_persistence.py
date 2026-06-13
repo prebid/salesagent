@@ -154,15 +154,12 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
     # Verify response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == media_buy_id
-    # Note: buyer_ref update may not be reflected in response immediately
-    # due to async workflow, but the key test is that it doesn't raise
 
 
 @pytest.mark.requires_db
 def test_update_media_buy_requires_context():
     """Test update_media_buy raises error when context is None."""
-    # Note: This will first hit Pydantic validation if buyer_ref is also provided
-    # So we only provide media_buy_id to avoid the oneOf constraint
+    # Provide only media_buy_id (the sole identifier).
     with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
         req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
         _update_media_buy_impl(req=req)

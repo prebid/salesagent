@@ -3,7 +3,7 @@
 Covers:
 - Status computation from date fields (pending_activation, active, completed)
 - Status filtering (default: active only; explicit filters; multiple statuses)
-- Filtering by media_buy_ids and buyer_refs
+- Filtering by media_buy_ids
 - Creative approval mapping (approved, rejected, pending_review)
 - include_snapshot=True/False path
 - Auth / missing principal handling
@@ -81,7 +81,6 @@ def make_media_buy(
     buy.media_buy_id = media_buy_id
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
-    buy.buyer_ref = None
     buy.start_date = start_date
     buy.end_date = end_date
     buy.start_time = start_time

@@ -349,7 +349,6 @@ class TestCreativeAssignmentPrincipalIdUpdate:
             package_id = packages[0].package_id
 
         # Step 2: Update the media buy to add creative_ids
-        # Note: AdCP oneOf constraint — provide media_buy_id OR buyer_ref, not both
         update_req = UpdateMediaBuyRequest(
             media_buy_id=media_buy_id,
             packages=[

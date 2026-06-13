@@ -210,13 +210,11 @@ class TestAdCPReferenceImplementation:
             media_buy_data = parse_tool_result(media_buy_result)
 
             # When webhook is provided, response may have task_id instead of media_buy_id
-            # For this test, we'll use buyer_ref if media_buy_id is not available
             media_buy_id = media_buy_data.get("media_buy_id")
-            buyer_ref = media_buy_data.get("buyer_ref")
 
             if not media_buy_id:
                 # If async operation, skip delivery check since we don't have the ID yet
-                print(f"   ✓ Media buy submitted (async): {buyer_ref}")
+                print("   ✓ Media buy submitted (async)")
                 print(f"   ✓ Status: {media_buy_data.get('status', 'unknown')}")
                 print(f"   ✓ Webhook configured: {webhook_server['url']}")
                 print("   ⚠️  Skipping delivery check (async operation, no media_buy_id yet)")
