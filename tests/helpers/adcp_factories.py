@@ -177,6 +177,21 @@ def create_test_property_list_create_params(product_id: str) -> dict[str, Any]:
     }
 
 
+def create_test_property_list_create_wire_params(product_id: str) -> dict[str, Any]:
+    """``create_test_property_list_create_params`` plus the now-required idempotency_key.
+
+    create_media_buy requires idempotency_key (``CreateMediaBuyRequest`` inherits the
+    library's REQUIRED field — a missing key rejects at the boundary as
+    VALIDATION_ERROR), so the MCP/A2A/REST wire dicts that drive the create boundary
+    must carry one; the wrappers accept the parameter. Per-call-unique (a reused key
+    replays the cached response); spec shape min 16, charset ``[A-Za-z0-9_.:-]``.
+    """
+    return {
+        **create_test_property_list_create_params(product_id),
+        "idempotency_key": f"prop-list-wire-{uuid.uuid4().hex}",
+    }
+
+
 def create_test_identifier(value: str, type_: str = "domain") -> Identifier:
     """Create a typed AdCP property ``Identifier``.
 

@@ -159,6 +159,7 @@ class TestA2AMessageFieldValidation:
             params = {
                 "brand": {"domain": "testbrand.com"},
                 "brief": "Looking for display ads",
+                "buying_mode": "brief",
                 "adcp_version": "3.0",
             }
 

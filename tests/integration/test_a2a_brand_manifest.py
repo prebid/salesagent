@@ -125,13 +125,14 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
 
 
 @pytest.mark.asyncio
-async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, sample_principal, sample_products):
-    """Test that requests with neither brief nor brand are rejected.
+async def test_get_products_neither_brief_nor_brand_browses_wholesale(sample_tenant, sample_principal, sample_products):
+    """Empty params (pre-v3, no brief) default to wholesale and browse all inventory.
 
-    The handler raises AdCPValidationError; the explicit-skill dispatcher
-    catches it and surfaces a failed Task with the two-layer envelope as
-    the artifact DataPart — AdCP-domain errors are async-task failures, not
-    JSON-RPC transport errors.
+    PART 1 ``resolve_pre_v3_buying_mode`` deliberately defaults a pre-v3 client that
+    also sent no brief to 'wholesale' (not 'brief'), so v2 clients that legitimately
+    discover raw inventory with no brief are not broken. The skill completes with the
+    products catalog rather than failing — the old mode-agnostic "neither brief nor
+    brand" rejection is gone.
     """
     from a2a.types import TaskState
 
@@ -155,12 +156,12 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     context = ServerCallContext()
     result = await handler.on_message_send(params, context)
 
-    # Empty params → AdCPValidationError → failed Task with envelope DataPart
+    # Empty params (pre-v3, no brief) → defaults to 'wholesale' and browses all
+    # inventory, completing with the products catalog (no mode-agnostic rejection).
     assert isinstance(result, Task)
-    assert result.status.state == TaskState.TASK_STATE_FAILED, f"Expected failed task, got {result.status.state}"
-    assert result.artifacts, "Failed task must carry an envelope artifact"
-    envelope = extract_data_from_artifact(result.artifacts[0])
-    # Two-layer envelope: adcp_error mirror + errors[] payload
-    from tests.helpers import assert_envelope_shape
-
-    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+    assert result.status.state == TaskState.TASK_STATE_COMPLETED, (
+        f"Expected a completed wholesale browse, got {result.status.state}"
+    )
+    assert result.artifacts, "Completed browse must carry a products artifact"
+    payload = extract_data_from_artifact(result.artifacts[0])
+    assert "products" in payload, "wholesale browse returns the products catalog"
