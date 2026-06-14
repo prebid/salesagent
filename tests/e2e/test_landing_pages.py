@@ -19,6 +19,8 @@ import requests
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.e2e.conftest import e2e_host
+
 
 class TestLandingPages:
     """Test landing page routing for different domain types."""
@@ -31,7 +33,7 @@ class TestLandingPages:
         is the runner itself, not the server, which made these tests skip with
         "Server not running" instead of executing.
         """
-        host = os.getenv("ADCP_TEST_HOST", "localhost")
+        host = e2e_host()
         port = os.getenv("ADCP_SALES_PORT", "8080")
         return os.getenv("TEST_BASE_URL", f"http://{host}:{port}")
 

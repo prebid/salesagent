@@ -19,11 +19,13 @@ from adcp import get_adcp_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from tests.e2e.conftest import e2e_host
+
 
 def _a2a_base_url() -> str:
     """Get A2A server base URL from environment (supports dynamic ports)."""
     port = os.getenv("ADCP_SALES_PORT", "8080")
-    return f"http://{os.getenv('ADCP_TEST_HOST', 'localhost')}:{port}"
+    return f"http://{e2e_host()}:{port}"
 
 
 class TestA2AEndpointsActual:

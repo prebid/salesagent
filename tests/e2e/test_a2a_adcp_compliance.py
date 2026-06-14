@@ -26,6 +26,7 @@ import httpx
 import pytest
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
+from .conftest import e2e_host
 
 DEFAULT_AUTH_TOKEN = os.getenv("ADCP_TEST_TOKEN", "ci-test-token")
 
@@ -259,7 +260,7 @@ def a2a_url(request, docker_services_e2e):
     if custom_url := getattr(request.config.option, "server_url", None):
         return custom_url
     port = docker_services_e2e["a2a_port"]
-    return f"http://{os.getenv('ADCP_TEST_HOST', 'localhost')}:{port}/a2a"
+    return f"http://{e2e_host()}:{port}/a2a"
 
 
 @pytest.fixture

@@ -20,6 +20,8 @@ import os
 import pytest
 import requests
 
+from tests.e2e.conftest import e2e_host
+
 
 @pytest.fixture()
 def admin_e2e_env(docker_services_e2e):
@@ -72,7 +74,7 @@ class TestAdminAccountsE2E:
     def test_health_check(self, docker_services_e2e):
         """Verify the Docker stack is healthy before running admin tests."""
         port = docker_services_e2e["admin_port"]
-        resp = requests.get(f"http://{os.getenv('ADCP_TEST_HOST', 'localhost')}:{port}/health", timeout=5)
+        resp = requests.get(f"http://{e2e_host()}:{port}/health", timeout=5)
         assert resp.status_code == 200
 
     def test_list_accounts_page(self, admin_e2e_env):

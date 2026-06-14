@@ -9,6 +9,8 @@ import os
 
 import pytest
 
+from tests.e2e.conftest import e2e_host
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "ui: UI smoke tests (require running Docker stack + Playwright)")
@@ -21,7 +23,7 @@ def base_url():
     Host path: localhost:<published-port>. In-network the server is reached by
     service name (ADCP_TEST_HOST=proxy) with no published host port.
     """
-    host = os.environ.get("ADCP_TEST_HOST", "localhost")
+    host = e2e_host()
     port = os.environ.get("ADCP_SALES_PORT", "8000")
     return f"http://{host}:{port}"
 
