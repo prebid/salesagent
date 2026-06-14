@@ -8,10 +8,88 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+from enum import Enum
 
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_enum_value(value: str | Enum) -> str:
+    """Return the string value of an enum member, or the string itself."""
+    if isinstance(value, Enum):
+        return str(value.value)
+    return str(value)
+
+
+# Cross-mode buying_mode validator messages -> actionable buyer suggestions.
+# The substring keys mirror the ValueError messages raised by
+# GetProductsRequest._validate_buying_mode_invariants. A coupling test
+# (test_get_products_buying_mode) pins every validator message to a non-None
+# suggestion so a reworded message can't silently drop the wire `suggestion`.
+_BUYING_MODE_SUGGESTIONS: tuple[tuple[str, str], ...] = (
+    (
+        "got None",
+        "Provide buying_mode='brief' with a brief, 'wholesale' for raw inventory, or 'refine' with a refine array.",
+    ),
+    (
+        "buying_mode must be one of",
+        "Use buying_mode='brief', 'wholesale', or 'refine'.",
+    ),
+    (
+        "brief is required when buying_mode is 'brief'",
+        "Provide a brief describing your campaign requirements, or use buying_mode='wholesale' for raw inventory.",
+    ),
+    (
+        "refine must not be provided when buying_mode is 'brief'",
+        "Remove refine, or use buying_mode='refine' to iterate on a previous response.",
+    ),
+    (
+        "brief must not be provided when buying_mode is 'wholesale'",
+        "Remove brief, or use buying_mode='brief' to discover via a brief.",
+    ),
+    (
+        "refine must not be provided when buying_mode is 'wholesale'",
+        "Remove refine, or use buying_mode='refine' to iterate on a previous response.",
+    ),
+    (
+        "brief must not be provided when buying_mode is 'refine'",
+        "Remove brief, or use buying_mode='brief' to discover via a brief.",
+    ),
+    (
+        "refine array is required when buying_mode is 'refine'",
+        "Provide a refine array with at least one entry, or use a different buying_mode.",
+    ),
+)
+
+
+def extract_buying_mode_suggestion(error: ValidationError) -> str | None:
+    """Map a cross-mode buying_mode validator violation to an actionable suggestion.
+
+    Pydantic v2 wraps ``raise ValueError("...")`` from a model_validator as
+    ``"Value error, ..."`` — substring matching tolerates the prefix.
+
+    Also handles the library-level rejection of an absent/None ``buying_mode`` (type
+    "enum"/"literal_error" with input None, or "missing" when omitted) — those fire
+    BEFORE the model_validator, so the custom "got None" message is unreachable; detect
+    them structurally and return the same suggestion.
+
+    Returns None when no known pattern matches so callers fall back to a generic
+    suggestion or omit the field.
+    """
+    for err in error.errors():
+        etype = err.get("type")
+        loc_has_buying_mode = any("buying_mode" in str(part) for part in err.get("loc", ()))
+        if loc_has_buying_mode and (
+            etype == "missing" or (etype in ("enum", "literal_error") and err.get("input") is None)
+        ):
+            return _BUYING_MODE_SUGGESTIONS[0][1]
+
+        msg = str(err.get("msg", ""))
+        for pattern, suggestion in _BUYING_MODE_SUGGESTIONS:
+            if pattern in msg:
+                return suggestion
+    return None
 
 
 def run_async_in_sync_context(coroutine):

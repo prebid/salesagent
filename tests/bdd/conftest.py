@@ -60,6 +60,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
+    "tests.bdd.steps.domain.uc_get_products_buying_mode",
     "tests.bdd.steps.domain.compat_normalization",
 ]
 
@@ -2742,6 +2743,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names:
+        return "UC-GET-PRODUCTS"
+    if "buying_mode" in marker_names:
         return "UC-GET-PRODUCTS"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"

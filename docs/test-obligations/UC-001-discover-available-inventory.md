@@ -1545,6 +1545,56 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 ---
 
+## Buying Mode Contract (Three-Mode: brief / wholesale / refine)
+
+AdCP 3.0.1: "Declares buyer intent. 'brief': publisher curates product
+recommendations from the provided brief. 'wholesale': buyer requests raw inventory
+to apply their own audiences -- brief must not be provided, and proposals are
+omitted. 'refine': iterate on products and proposals from a previous response using
+the refine array. v3 clients MUST include buying_mode. Sellers receiving requests
+from pre-v3 clients without buying_mode SHOULD default to 'brief'." Cross-mode rules
+mirror tests/bdd/features/BR-UC-001-discover-available-inventory.feature.
+
+#### Scenario: Brief mode -- publisher curates ranked products from the brief
+**Obligation ID** UC-001-MODE-BRIEF-01
+**Layer** behavioral
+**Given** a Buyer Agent sends a `get_products` request with `buying_mode: brief` and a `brief`
+**When** the system processes the request
+**Then** the system ranks the catalog by brief relevance and returns curated products
+**And** `refinement_applied` is absent
+**Priority:** P0
+
+#### Scenario: Wholesale mode -- raw inventory without brief relevance
+**Obligation ID** UC-001-MODE-WHOLESALE-01
+**Layer** behavioral
+**Given** a Buyer Agent sends a `get_products` request with `buying_mode: wholesale` and no `brief`
+**When** the system processes the request
+**Then** the system returns raw inventory without running the brief ranker
+**And** no product carries a `brief_relevance` score
+**And** `refinement_applied` is absent
+**Priority:** P0
+
+#### Scenario: Refine mode -- iterate on a prior response via the refine array
+**Obligation ID** UC-001-MODE-REFINE-01
+**Layer** behavioral
+**Given** a Buyer Agent sends a `get_products` request with `buying_mode: refine` and a `refine` array
+**When** the system processes the request
+**Then** the response carries `refinement_applied` with one entry per refine entry, in order
+**And** each entry echoes the request entry's `scope` (and `product_id`/`proposal_id` where applicable)
+**Priority:** P1
+
+#### Scenario: Mode validation -- cross-mode violations and v3 omission rejected
+**Obligation ID** UC-001-MODE-VALIDATION-01
+**Layer** behavioral
+**Given** a v3 Buyer Agent sends a `get_products` request that violates the buying_mode contract
+  (a forbidden field for the declared mode, or no buying_mode at all)
+**When** the system validates the request
+**Then** the request is rejected with a two-layer `INVALID_REQUEST` envelope
+**And** the envelope carries an actionable `suggestion` for correcting the mode/fields
+**Priority:** P0
+
+---
+
 ## Cross-Cutting Concerns
 
 ### NFR-001: Security Hardening

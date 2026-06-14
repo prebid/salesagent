@@ -1524,21 +1524,26 @@ class AdCPRequestHandler(RequestHandler):
         brief = parameters.get("brief", "")
         brand = parameters.get("brand")
         filters = parameters.get("filters")
+        adcp_version = parameters.get("adcp_version")
 
-        # Call core function with identity — _impl validates search criteria
+        # Call core function with identity — _impl validates search criteria. buying_mode
+        # /refine and the pre-v3 default shim (driven by adcp_version) are owned by the
+        # shared create_get_products_request helper, so A2A matches MCP and REST behavior.
         response = await core_get_products_tool(
             brief=brief,
             brand=brand,
             filters=filters,
             property_list=parameters.get("property_list"),
             context=parameters.get("context"),
+            buying_mode=parameters.get("buying_mode"),
+            refine=parameters.get("refine"),
+            adcp_version=adcp_version,
             identity=identity,
         )
 
         # Apply v2 compat for pre-3.0 clients at the boundary
         from src.core.version_compat import apply_version_compat
 
-        adcp_version = parameters.get("adcp_version")
         if isinstance(response, dict):
             response_data = response
         else:

@@ -26,14 +26,14 @@ class TestCreateGetProductsRequestWithPropertyList:
         req = create_get_products_request(
             brief="test",
             property_list=ref,
-        )
+        ).request
         assert req.property_list is not None
         assert req.property_list.list_id == "list_1"
 
     def test_property_list_none_by_default(self):
         from src.core.schema_helpers import create_get_products_request
 
-        req = create_get_products_request(brief="test")
+        req = create_get_products_request(brief="test").request
         assert req.property_list is None
 
 

@@ -19,6 +19,7 @@ _STATUSLESS_SUCCESS_ATTRS: tuple[str, ...] = (
     "formats",  # ListCreativeFormatsResponse
     "media_buy_deliveries",  # GetMediaBuyDeliveryResponse
     "aggregated_totals",  # GetMediaBuyDeliveryResponse
+    "products",  # GetProductsResponse
 )
 
 
@@ -68,7 +69,7 @@ def then_response_status(ctx: dict, status: str) -> None:
         assert value is not None, (
             f"Status 'completed' claimed but response.{attr} is None — the schema-required success payload is missing"
         )
-        if attr in ("formats", "media_buy_deliveries"):
+        if attr in ("formats", "media_buy_deliveries", "products"):
             assert isinstance(value, list), (
                 f"Status 'completed' claimed but response.{attr} is {type(value).__name__}, expected a list"
             )

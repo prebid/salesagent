@@ -263,6 +263,55 @@ class GetProductsRequest(LibraryGetProductsRequest):
         exclude=True,
     )
 
+    @model_validator(mode="after")
+    def _validate_buying_mode_invariants(self) -> "GetProductsRequest":
+        """Enforce the version-agnostic cross-mode rules the library union does not check.
+
+        Rule sources: AdCP 3.0.1 ``get_products`` buying-mode prose and
+        tests/bdd/features/BR-UC-001-discover-available-inventory.feature.
+
+        Scope boundary: this model is version-agnostic and only enforces the
+        cross-mode invariants that hold once a mode is declared (brief requires a
+        brief and forbids refine; wholesale/refine forbid a brief; refine requires
+        the refine array). Whether a *missing* buying_mode is allowed is version-keyed
+        per spec ("v3 clients MUST include buying_mode; pre-v3 clients without it
+        SHOULD default to 'brief'") and needs the client's ``adcp_version``, which
+        this model does not carry. So required-ness lives in the version-aware
+        wrapper (``create_get_products_request``): it defaults pre-v3 clients and
+        rejects v3 omissions before construction. A ``None`` mode is accepted here
+        so direct/forward-compat construction keeps working.
+        """
+        # Lazy import keeps the schemas -> validation_helpers edge off module
+        # import time (validation_helpers pulls in schema types).
+        from src.core.validation_helpers import resolve_enum_value
+
+        if self.buying_mode is None:
+            return self
+        mode = resolve_enum_value(self.buying_mode)
+        if mode not in {"brief", "wholesale", "refine"}:
+            raise ValueError(f"buying_mode must be one of 'brief', 'wholesale', 'refine'; got {mode!r}")
+
+        has_brief = bool(self.brief and self.brief.strip())
+        refine_present = self.refine is not None
+
+        if mode == "brief":
+            if not has_brief:
+                raise ValueError("brief is required when buying_mode is 'brief'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'brief'")
+        elif mode == "wholesale":
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'wholesale'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'wholesale'")
+        else:  # mode == "refine"
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'refine'")
+            if not refine_present:
+                raise ValueError("refine array is required when buying_mode is 'refine'")
+
+        return self
+
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):
     """Extends library GetProductsResponse - all fields inherited from AdCP spec.
