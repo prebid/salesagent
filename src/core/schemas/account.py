@@ -23,10 +23,10 @@ from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field, model_serializer
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel
+from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel, reserialize_nested_models
 
 # ---------------------------------------------------------------------------
 # Core domain Account (used in ListAccountsResponse.accounts)
@@ -162,6 +162,20 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
     dry_run: bool | None = None
     context: LibraryContextObject | dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
+
+    # Spec idempotency replay marker (AdCP 3.0.1): a top-level ``replayed: true`` is
+    # emitted ONLY on a verbatim replay of a cached success, and excluded from the body
+    # otherwise so fresh responses stay byte-identical. Set by the shared idempotency
+    # replay engine; never persisted in the cached envelope.
+    replayed: bool = Field(default=False, exclude=True)
+
+    @model_serializer(mode="wrap")
+    def _serialize_with_replay_marker(self, serializer, info):
+        """Compose nested-model serialization with the top-level ``replayed`` marker."""
+        data = reserialize_nested_models(self, serializer(self), info.mode)
+        if self.replayed:
+            data["replayed"] = True
+        return data
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

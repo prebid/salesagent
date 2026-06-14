@@ -165,6 +165,7 @@ class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (
     accounts: list[dict[str, Any]] = []
     delete_missing: bool = False
     dry_run: bool = False
+    idempotency_key: str | None = None
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
@@ -373,10 +374,14 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
 
 
 @router.post("/accounts/sync")
-async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
+async def sync_accounts(
+    body: SyncAccountsBody,
+    identity: ResolvedIdentity = require_auth,
+    raw_wire_payload: dict[str, Any] = raw_json_body,
+):
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
-    response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
+    response = await accounts_module.sync_accounts_raw(req=req, identity=identity, raw_wire_payload=raw_wire_payload)
     return response.model_dump(mode="json")

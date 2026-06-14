@@ -1478,7 +1478,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            if skill_name == "create_media_buy":
+            if skill_name in ("create_media_buy", "sync_accounts"):
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
             else:
                 result = await handler(parameters, identity)
@@ -1861,7 +1861,9 @@ class AdCPRequestHandler(RequestHandler):
         )
         return core_list_accounts_tool(req=request, identity=identity)
 
-    async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
+    async def _handle_sync_accounts_skill(
+        self, parameters: dict, identity: ResolvedIdentity | None, raw_wire_payload: dict | None = None
+    ) -> Any:
         """Handle explicit sync_accounts skill invocation.
 
         Authentication is REQUIRED per BR-RULE-055.
@@ -1872,9 +1874,10 @@ class AdCPRequestHandler(RequestHandler):
             accounts=parameters.get("accounts", []),
             delete_missing=parameters.get("delete_missing", False),
             dry_run=parameters.get("dry_run", False),
+            idempotency_key=parameters.get("idempotency_key"),
             context=parameters.get("context"),
         )
-        return await core_sync_accounts_tool(req=request, identity=identity)
+        return await core_sync_accounts_tool(req=request, identity=identity, raw_wire_payload=raw_wire_payload)
 
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None
