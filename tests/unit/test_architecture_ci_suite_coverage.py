@@ -13,60 +13,53 @@ No allowlist — zero tolerance. Every locally-run suite must have a gating
 CI job, or a broken suite can silently land on main again.
 """
 
-from tests.unit.workflow_helpers import load_ci_workflow
+import pytest
+
+from scripts.ci.workflow_helpers import load_ci_workflow
+
+# Suite jobs that must appear in summary.needs — a suite that runs but is absent
+# from summary.needs leaves CI green on its failure (PR #1299 silent-breakage class).
+REQUIRED_SUMMARY_GATES = frozenset({"unit-tests", "integration-tests", "e2e-tests", "bdd-tests", "admin-ui-tests"})
 
 
 class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
 
     def test_bdd_job_exists(self):
-        """A dedicated BDD job must exist in the CI workflow.
-
-        Before this guard, ``tests/bdd/`` was never executed in CI, so any
-        PR could break every BDD scenario and still show green.
-        """
+        """BDD aggregate + parallel shard jobs must exist in CI."""
         jobs = load_ci_workflow()["jobs"]
 
-        assert "bdd-tests" in jobs, (
-            "No 'bdd-tests' job in .github/workflows/ci.yml. The BDD suite "
-            "(tests/bdd/) is run by ./run_all_tests.sh but has zero CI "
-            "coverage — a broken BDD suite can silently land on main. Add a "
-            "'bdd-tests' job mirroring 'integration-tests' (Postgres service "
-            "+ migrations + pytest tests/bdd/)."
+        assert "bdd-tests" in jobs, "No 'bdd-tests' aggregate job in .github/workflows/ci.yml."
+        assert "bdd-tests-shard" in jobs, "No 'bdd-tests-shard' matrix job in .github/workflows/ci.yml."
+
+    def test_bdd_shards_run_the_bdd_suite(self):
+        """Each BDD shard must resolve paths via shard_paths and run pytest."""
+        shard_job = load_ci_workflow()["jobs"]["bdd-tests-shard"]
+        steps_text = " ".join(
+            str(step.get("run", "")) + " " + str(step.get("uses", "")) + " " + str(step.get("with", {}))
+            for step in shard_job.get("steps", [])
         )
 
-    def test_bdd_job_runs_the_bdd_suite(self):
-        """The BDD job must actually invoke ``pytest tests/bdd/``.
-
-        A job that exists but doesn't run the suite is worse than no job —
-        it gives false confidence.
-        """
-        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
-        run_steps = " ".join(str(step.get("run", "")) for step in bdd_job.get("steps", []))
-        pytest_inputs = " ".join(
-            str(step.get("with", {}).get("paths", ""))
-            for step in bdd_job.get("steps", [])
-            if str(step.get("uses", "")).endswith("/_pytest")
+        assert "shard_paths.py bdd" in steps_text, (
+            "bdd-tests-shard must resolve test files via scripts/ci/shard_paths.py bdd."
+        )
+        assert "./.github/actions/_pytest" in steps_text or "pytest" in steps_text, (
+            "bdd-tests-shard must invoke pytest (via _pytest composite or explicit run)."
         )
 
-        assert "tests/bdd/" in run_steps or "tests/bdd/" in pytest_inputs, (
-            "The 'bdd-tests' job does not run 'pytest tests/bdd/'. The job "
-            "must execute the BDD suite, not merely exist."
-        )
+    def test_bdd_shards_have_postgres_service(self):
+        """BDD harnesses use the integration_db fixture (real PostgreSQL)."""
+        services = load_ci_workflow()["jobs"]["bdd-tests-shard"].get("services", {})
 
-    def test_bdd_job_has_postgres_service(self):
-        """BDD harnesses use the integration_db fixture (real PostgreSQL).
+        assert "postgres" in services, "bdd-tests-shard has no postgres service."
 
-        Without a Postgres service the BDD job cannot run, so the gate would
-        be hollow.
-        """
-        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
-        services = bdd_job.get("services", {})
-
-        assert "postgres" in services, (
-            "The 'bdd-tests' job has no 'postgres' service. BDD scenarios use "
-            "the integration_db fixture and require a real PostgreSQL "
-            "instance (mirror the integration-tests job)."
+    def test_bdd_aggregate_is_status_proxy_only(self):
+        """Aggregate BDD job must gate shard status, not merge coverage."""
+        aggregate = load_ci_workflow()["jobs"]["bdd-tests"]
+        steps_text = " ".join(str(step.get("run", "")) for step in aggregate.get("steps", []))
+        assert "needs.bdd-tests-shard.result" in steps_text, "bdd-tests aggregate must fail when bdd-tests-shard fails."
+        assert "coverage combine" not in steps_text, (
+            "bdd-tests aggregate must not merge coverage; that belongs in the Coverage job."
         )
 
     def test_admin_job_has_postgres_service(self):
@@ -129,38 +122,100 @@ class TestCISuiteCoverage:
         )
 
         assert "unit-tests" in needs, "coverage job must depend on unit-tests."
-        assert "bdd-tests" in needs, "coverage job must depend on bdd-tests."
-        assert steps_text.count("download-artifact") >= 2, "coverage job must download unit and BDD coverage artifacts."
+        assert "bdd-tests-shard" in needs, "coverage job must depend on bdd-tests-shard."
+        assert steps_text.count("download-artifact") >= 2, (
+            "coverage job must download unit and BDD shard coverage artifacts."
+        )
         run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
         assert "pytest" not in run_steps, "coverage job must not re-run tests."
         assert "coverage combine" in run_steps, "coverage job must combine unit and BDD coverage data."
 
-    def test_summary_gates_bdd_and_e2e(self):
-        """summary must depend on AND fail for bdd + e2e.
+    @pytest.mark.arch_guard
+    def test_coverage_gate_requires_all_bdd_shard_artifacts(self):
+        """Coverage must fail on partial BDD shard artifact sets, not combine survivors."""
+        coverage_job = load_ci_workflow()["jobs"]["coverage"]
+        run_steps = " ".join(str(step.get("run", "")) for step in coverage_job.get("steps", []))
 
-        A job that runs but isn't in ``needs`` (or whose failure isn't
-        checked in the aggregation step) leaves the gate soft — exactly the
-        leak that let PR #1299 land red.
-        """
+        assert "SHARD_COUNTS" in run_steps, "coverage gate must read SHARD_COUNTS from shard_split."
+        assert "expected_bdd_shards" in run_steps, "coverage gate must bind BDD shard count to a variable."
+        assert "Missing BDD coverage artifact for shard" in run_steps, (
+            "coverage gate must fail when any shard's .coverage.bdd-N file is missing."
+        )
+        bdd_downloads = [
+            step.get("with", {})
+            for step in coverage_job.get("steps", [])
+            if step.get("with", {}).get("pattern") == "bdd-shard-*-coverage"
+        ]
+        assert bdd_downloads, "coverage job must download BDD shard artifacts via bdd-shard-*-coverage pattern."
+        assert bdd_downloads[0].get("path") == "bdd-coverage-shards", (
+            "BDD shard coverage artifacts must land under bdd-coverage-shards/."
+        )
+
+    @pytest.mark.arch_guard
+    def test_ci_jobs_declare_permissions_and_timeout(self):
+        """Every CI job must declare permissions and timeout (workflow hygiene)."""
+        jobs = load_ci_workflow()["jobs"]
+        missing: list[str] = []
+        for job_name, job in jobs.items():
+            if "permissions" not in job:
+                missing.append(f"{job_name}: permissions")
+            if "timeout-minutes" not in job:
+                missing.append(f"{job_name}: timeout-minutes")
+        assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
+
+    @pytest.mark.arch_guard
+    def test_summary_gates_every_required_job(self):
+        """summary must include every suite gate AND fail for every job in summary.needs."""
         workflow = load_ci_workflow()
         summary = workflow["jobs"]["summary"]
         needs = summary["needs"]
-
-        for required in ("bdd-tests", "e2e-tests"):
-            assert required in needs, (
-                f"summary.needs is missing '{required}'. CI will report green even when the {required} suite fails."
-            )
-
-        # The aggregation step must actually check the result of each suite.
         check_text = " ".join(str(step.get("run", "")) for step in summary.get("steps", []))
-        for required in ("bdd-tests", "e2e-tests"):
+
+        assert isinstance(needs, list) and needs, "summary.needs must list every upstream gate job."
+        missing = REQUIRED_SUMMARY_GATES - set(needs)
+        assert not missing, (
+            f"summary.needs dropped required suite gate(s) {sorted(missing)}. A suite that runs but is "
+            "absent from summary.needs leaves CI green on its failure."
+        )
+        for required in needs:
+            assert required in workflow["jobs"], (
+                f"summary.needs lists unknown job '{required}'. Update summary.needs or add the missing job definition."
+            )
             token = f"needs.{required}.result"
             assert token in check_text, (
-                f"summary's result-check step does not inspect "
-                f"'{token}'. A failing {required} suite would not fail CI "
-                f"even though it is listed in needs[]."
+                f"summary's result-check step does not inspect '{token}'. "
+                f"A failing {required} job would not fail CI even though it is listed in needs[]."
             )
 
+    @pytest.mark.arch_guard
+    def test_type_check_uses_make_target(self):
+        """Type Check job must invoke the same entrypoint as local make typecheck."""
+        type_check = load_ci_workflow()["jobs"]["type-check"]
+        run_steps = " ".join(str(step.get("run", "")) for step in type_check.get("steps", []))
+        assert "make typecheck" in run_steps, "type-check job must run make typecheck for CI/local parity."
+
+    @pytest.mark.arch_guard
+    @pytest.mark.arch_guard
+    def test_smoke_tests_do_not_duplicate_skip_guard(self):
+        """Skip-decorator enforcement belongs in the smoke suite, not a workflow grep step."""
+        smoke_job = load_ci_workflow()["jobs"]["smoke-tests"]
+        step_text = " ".join(f"{step.get('name', '')} {step.get('run', '')}" for step in smoke_job.get("steps", []))
+        skip_marker = "@" + "pytest" + ".mark.skip"
+        assert skip_marker not in step_text, (
+            "smoke-tests must not grep for skip decorators in a workflow step; "
+            "TestNoSkippedTests is the single source of truth."
+        )
+
+    @pytest.mark.arch_guard
+    def test_skip_guard_single_source_of_truth_exists(self):
+        """The SSoT the workflow delegates to must exist, or enforcement is unguarded."""
+        from tests.smoke.test_smoke_basic import TestNoSkippedTests
+
+        assert hasattr(TestNoSkippedTests, "test_no_skip_decorators"), (
+            "TestNoSkippedTests.test_no_skip_decorators is the declared single source of truth for skip enforcement."
+        )
+
+    @pytest.mark.arch_guard
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 

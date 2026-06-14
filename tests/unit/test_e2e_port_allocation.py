@@ -75,10 +75,10 @@ class TestPortScanStartScattersByProcess:
         above = sum(1 for p in range(1, 500) if port_scan_start(50000, 60000, pid=p) > 50000)
         assert above > 400, "scan start barely moves off the low bound"
 
-    def test_pid_like_objects_are_normalized(self):
-        """Allocator should stay stable even if pid-like value is mocked."""
-        start = port_scan_start(50000, 60000, pid=MagicMock())
-        assert 50000 <= start < 60000
+    def test_non_int_pid_raises(self):
+        """Production contract: pid must be a real int, not a mock or sentinel."""
+        with pytest.raises(TypeError, match="pid must be int"):
+            port_scan_start(50000, 60000, pid=MagicMock())
 
 
 class TestFindFreePortDetectsDockerStyleBind:

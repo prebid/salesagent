@@ -18,6 +18,10 @@ import httpx
 import pytest
 import requests
 
+# Bind real os.getpid at import so a later patch("os.getpid") in-process cannot
+# leak a non-int into the pid-is-None default path.
+_GETPID = os.getpid
+
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 
@@ -50,16 +54,16 @@ def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> i
     this exact algorithm in their Python heredocs -- keep them in sync.
     """
     if pid is None:
-        pid = os.getpid()
+        pid = _GETPID()
     span = end_port - start_port
     if span <= 1:
         return start_port
-    # Test suites may temporarily monkeypatch process metadata. Keep allocator
-    # robust by normalizing PID-like values while preserving scan scatter.
-    try:
-        normalized_pid = int(pid)
-    except (TypeError, ValueError):
-        normalized_pid = id(pid)
+    # Test suites may temporarily monkeypatch process metadata; production callers
+    # must pass a real PID (os.getpid() is always int).
+    if not isinstance(pid, int):
+        msg = f"port_scan_start pid must be int, got {type(pid).__name__}"
+        raise TypeError(msg)
+    normalized_pid = pid
     # Spread the origin across the whole span. PID modulo span gives a
     # stable, well-distributed offset; distinct PIDs land on distinct
     # origins so parallel agents start scanning different sub-ranges.

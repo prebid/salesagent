@@ -9,10 +9,6 @@ inputs:
     description: uv version to install.
     required: false
     default: "0.11.15"
-  dependency-group:
-    description: Dependency group passed to uv sync.
-    required: false
-    default: "dev"
 runs:
   using: composite
   steps:
@@ -32,8 +28,8 @@ runs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-v4-py${{ inputs.python-version }}-${{ hashFiles('uv.lock') }}
+        key: ${{ runner.os }}-uv-v4-py${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock') }}
 
     - name: Install dependencies
       shell: bash
-      run: uv sync --group "${{ inputs.dependency-group }}"
+      run: uv sync --group dev

@@ -6,7 +6,7 @@ accidental renames that would silently break protection coverage.
 
 from __future__ import annotations
 
-from tests.unit.workflow_helpers import load_ci_workflow, rendered_ci_check_names
+from scripts.ci.workflow_helpers import load_ci_workflow, rendered_ci_check_names
 
 REQUIRED_RENDERED_CHECKS = {
     "CI / Quality Gate",
@@ -23,6 +23,8 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / Integration (other)",
     "CI / E2E Tests",
     "CI / Admin UI Tests",
+    "CI / BDD Tests (Shard 1/2)",
+    "CI / BDD Tests (Shard 2/2)",
     "CI / BDD Tests",
     "CI / Migration Roundtrip",
     "CI / Coverage",

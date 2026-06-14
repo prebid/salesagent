@@ -1,6 +1,6 @@
 """Shared AST helpers used by multiple structural guards.
 
-Lives next to ``_per_file_cap_guard.py`` and ``_migration_helpers.py``.
+Lives next to ``_per_file_cap_guard.py`` and ``scripts/ci/migration_helpers.py``.
 Guards that need to do the same AST scan import from here rather than
 reach into each other's modules, so a structural-rule refactor doesn't
 quietly break a sibling guard.
