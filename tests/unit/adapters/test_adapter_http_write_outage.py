@@ -43,28 +43,30 @@ def _kevel() -> Kevel:
     )
 
 
+def _raise_in_wrap(exc: BaseException) -> None:
+    """Raise ``exc`` inside ``wrap_request_errors()`` (callable form keeps the raise
+    out of a nested ``with`` so the mapping is asserted without CodeQL reading the
+    follow-up asserts as unreachable)."""
+    with wrap_request_errors():
+        raise exc
+
+
 class TestWrapRequestErrorsMapping:
     """The shared SSOT mapping every adapter write routes through."""
 
     def test_request_exception_maps_to_transient_adapter_error(self):
-        with pytest.raises(AdCPAdapterError) as exc_info:
-            with wrap_request_errors():
-                raise requests.exceptions.ConnectionError("kevel unreachable")
+        exc_info = pytest.raises(AdCPAdapterError, _raise_in_wrap, requests.exceptions.ConnectionError("unreachable"))
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
         assert exc_info.value.recovery == "transient"
 
     def test_timeout_maps_to_transient_adapter_error(self):
-        with pytest.raises(AdCPAdapterError) as exc_info:
-            with wrap_request_errors():
-                raise requests.exceptions.Timeout("read timed out")
+        exc_info = pytest.raises(AdCPAdapterError, _raise_in_wrap, requests.exceptions.Timeout("read timed out"))
         assert exc_info.value.recovery == "transient"
 
     def test_non_request_exception_passes_through_unchanged(self):
         # Only transport failures are remapped; a programmer error must not be
         # disguised as a transient outage.
-        with pytest.raises(KeyError):
-            with wrap_request_errors():
-                raise KeyError("Id")
+        pytest.raises(KeyError, _raise_in_wrap, KeyError("Id"))
 
 
 class TestKevelUpdateTargetingOutage:
