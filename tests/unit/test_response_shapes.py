@@ -53,6 +53,12 @@ def assert_fields_present(data: dict, required_fields: list[str]) -> None:
 # ===========================================================================
 
 
+# GetProductsResponse serializes Product via a RootModel-union (Product1/Product2)
+# nested-serializer override; the cosmetic "Expected Product2" serializer warning is
+# expected here only. Scoped to this class (and the get_products serialization-
+# consistency case below) so a real serializer regression in any other model still
+# surfaces suite-wide. See PR #1388 review F3.
+@pytest.mark.filterwarnings("ignore:Pydantic serializer warnings:UserWarning:pydantic.main")
 class TestGetProductsResponseShape:
     """Verify the serialized shape of GetProductsResponse."""
 
@@ -820,6 +826,9 @@ class TestSerializationConsistency:
             ),
         ],
     )
+    # Only the get_products param exercises the Product RootModel-union serializer
+    # (cosmetic warning); harmless for the other params. See PR #1388 review F3.
+    @pytest.mark.filterwarnings("ignore:Pydantic serializer warnings:UserWarning:pydantic.main")
     def test_json_mode_produces_serializable_types(self, response_factory):
         """model_dump(mode='json') should produce only JSON-native types."""
         import json
