@@ -34,8 +34,7 @@ def test_dispatchers_cover_every_transport():
     runtime deep in a scenario.
     """
     assert set(DISPATCHERS) == set(Transport), (
-        f"DISPATCHERS missing {set(Transport) - set(DISPATCHERS)} / "
-        f"extra {set(DISPATCHERS) - set(Transport)}"
+        f"DISPATCHERS missing {set(Transport) - set(DISPATCHERS)} / extra {set(DISPATCHERS) - set(Transport)}"
     )
 
 
