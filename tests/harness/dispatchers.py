@@ -239,10 +239,13 @@ class RestE2EDispatcher:
 
         if response.status_code >= 400:
             try:
-                error = env.parse_rest_error(response.status_code, response.json())
+                body = response.json()
             except Exception:
                 # Non-JSON error (e.g. 500 with empty body) — wrap as AdCPError so
                 # Then steps detect the error type and xfail spec-production gaps.
+                # No wire_error_envelope: there is no structured body to expose, and
+                # the INTERNAL_ERROR/5xx shape lets the "invalid" Then-step tell a
+                # server crash apart from a real validation rejection (#1420).
                 from src.core.exceptions import AdCPError
 
                 body_text = response.text or "(empty body)"
@@ -251,7 +254,18 @@ class RestE2EDispatcher:
                     details={"status_code": response.status_code, "raw_body": body_text},
                 )
                 error.status_code = response.status_code
-            return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+                return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+            # Structured JSON error: mirror the in-process RestDispatcher and expose
+            # the wire envelope so the mandated assert_envelope_shape() authority
+            # works on the e2e_rest transport too (#1420).
+            error = env.parse_rest_error(response.status_code, body)
+            return TransportResult(
+                payload=None,
+                envelope=envelope,
+                error=error,
+                wire_error_envelope=body,
+                raw_response=response,
+            )
 
         try:
             payload = env.parse_rest_response(response.json())

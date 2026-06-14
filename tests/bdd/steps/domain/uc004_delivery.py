@@ -2613,6 +2613,17 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         assert isinstance(error, (AdCPError, ValidationError)), (
             f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
         )
+        # A server crash (5xx) is NOT a correct rejection of invalid input. The
+        # e2e_rest dispatcher wraps a non-JSON 5xx as a bare AdCPError whose code
+        # defaults to INTERNAL_ERROR (status 500); a genuine validation rejection
+        # carries a specific 4xx code. Require the latter so a crash can't pass as
+        # "correctly rejected" once these scenarios graduate off the ledger (#1420).
+        if isinstance(error, AdCPError):
+            status = getattr(error, "status_code", None)
+            assert error.error_code and error.error_code != "INTERNAL_ERROR" and (status is None or status < 500), (
+                f"Invalid {field}: expected a client-side validation rejection, got "
+                f"{error.error_code} (status {status}): {error} — a server crash is not a rejection"
+            )
     else:
         m = re.match(r'error "(.+?)" with suggestion', expected)
         if m:
