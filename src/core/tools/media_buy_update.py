@@ -256,6 +256,14 @@ def _update_media_buy_impl(
             # reference or the package reference. Runs before the dry_run
             # early return so dry_run requests are also rejected (parity with
             # the property_targeting validation below).
+            #
+            # Precedence is intentional: package existence is a structural
+            # precondition, so PACKAGE_NOT_FOUND preempts the budget /
+            # state-machine / targeting validators below. A package's budget or
+            # state is meaningless if the package does not exist, and the buyer
+            # must fix the reference before any field-level error is actionable.
+            # Pinned by test_a2a_error_responses
+            # ::test_update_media_buy_absent_package_preempts_budget_wire_envelope.
             if req.packages:
                 for _pkg_update in req.packages:
                     if _pkg_update.package_id:
