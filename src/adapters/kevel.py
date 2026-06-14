@@ -14,7 +14,11 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
 )
-from src.core.property_list_resolver import package_property_list_ref, resolve_property_list_typed_sync
+from src.core.property_list_resolver import (
+    iter_package_property_list_refs,
+    property_list_cache_key,
+    resolve_property_list_typed_sync,
+)
 from src.core.schemas import *
 from src.core.validation_helpers import package_field_path
 from src.services.kevel_site_resolver import (
@@ -111,7 +115,7 @@ class Kevel(AdServerAdapter):
         still runs in dry-run so ``ios_bundle``-only lists surface as
         ``UNSUPPORTED_FEATURE`` instead of being silently accepted.
         """
-        cache_key = (str(ref.agent_url), str(ref.list_id))
+        cache_key = property_list_cache_key(ref)
         if cache_key in self._property_list_cache:
             return self._property_list_cache[cache_key]
 
@@ -156,10 +160,7 @@ class Kevel(AdServerAdapter):
             AdCPCapabilityNotSupportedError: when a package's property_list
                 contains identifier types Kevel cannot translate.
         """
-        for index, package in enumerate(packages):
-            ref = package_property_list_ref(package)
-            if ref is None:
-                continue
+        for index, _package, ref, _key in iter_package_property_list_refs(packages):
             resolved = self._resolve_property_list(ref)
             if resolved.unsupported_types:
                 raise AdCPCapabilityNotSupportedError(

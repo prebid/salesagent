@@ -715,3 +715,56 @@ class TestFetchErrorTaxonomy:
             with pytest.raises(AdCPAdapterError) as excinfo:
                 await resolve_property_list_typed(ref)
         assert excinfo.value.recovery == "transient"
+
+
+def _package_with(ref: PropertyListReference | None):
+    """A package-shaped object exposing ``targeting_overlay.property_list``."""
+    pkg = MagicMock()
+    pkg.targeting_overlay = MagicMock() if ref is not None else None
+    if ref is not None:
+        pkg.targeting_overlay.property_list = ref
+    return pkg
+
+
+class TestPropertyListCacheKey:
+    """The canonical (agent_url, list_id) key — one source for every consumer."""
+
+    def test_stringifies_agent_url_and_keeps_list_id(self):
+        from src.core.property_list_resolver import property_list_cache_key
+
+        ref = _make_ref(agent_url="https://lists.example.com", list_id="cb_v1")
+        key = property_list_cache_key(ref)
+        assert key == ("https://lists.example.com/", "cb_v1")
+        # AnyUrl str() must be used so the key is hashable/comparable across sites.
+        assert all(isinstance(part, str) for part in key)
+
+    def test_same_ref_yields_equal_keys(self):
+        from src.core.property_list_resolver import property_list_cache_key
+
+        assert property_list_cache_key(_make_ref()) == property_list_cache_key(_make_ref())
+
+
+class TestIterPackagePropertyListRefs:
+    """The shared walk/pluck/key skeleton consumed by prefetch, advisory, and the Kevel gate."""
+
+    def test_yields_index_package_ref_key_and_skips_refless_packages(self):
+        from src.core.property_list_resolver import iter_package_property_list_refs, property_list_cache_key
+
+        ref0 = _make_ref(list_id="a")
+        ref2 = _make_ref(list_id="c")
+        pkg0, pkg1, pkg2 = _package_with(ref0), _package_with(None), _package_with(ref2)
+
+        rows = list(iter_package_property_list_refs([pkg0, pkg1, pkg2]))
+
+        # The ref-less middle package is skipped, but indices reflect the ORIGINAL
+        # position so ``packages[i]`` error field paths stay correct.
+        assert [(index, ref, key) for index, _pkg, ref, key in rows] == [
+            (0, ref0, property_list_cache_key(ref0)),
+            (2, ref2, property_list_cache_key(ref2)),
+        ]
+        assert [pkg for _i, pkg, _r, _k in rows] == [pkg0, pkg2]
+
+    def test_empty_iterable_yields_nothing(self):
+        from src.core.property_list_resolver import iter_package_property_list_refs
+
+        assert list(iter_package_property_list_refs([])) == []

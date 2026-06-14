@@ -16,6 +16,7 @@ for the other mode's subsequent lookups.
 
 import json
 import logging
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn
 
@@ -59,6 +60,35 @@ def package_property_list_ref(package: Any) -> PropertyListReference | None:
     """
     overlay = getattr(package, "targeting_overlay", None)
     return getattr(overlay, "property_list", None) if overlay else None
+
+
+def property_list_cache_key(ref: PropertyListReference) -> tuple[str, str]:
+    """The canonical ``(agent_url, list_id)`` dedup/cache key for a property-list ref.
+
+    Single source of the key so the create-side prefetch, the zero-overlap
+    advisory builder, and the Kevel compile cache index identically. ``agent_url``
+    is an ``AnyUrl`` so it is stringified; ``list_id`` is already ``str``.
+    """
+    return (str(ref.agent_url), ref.list_id)
+
+
+def iter_package_property_list_refs(
+    packages: Iterable[Any],
+) -> Iterator[tuple[int, Any, PropertyListReference, tuple[str, str]]]:
+    """Yield ``(index, package, ref, key)`` for each package carrying a property_list ref.
+
+    Single home for the "walk packages → pluck ref → key it" skeleton shared by
+    the create-side prefetch, the advisory builder, and the Kevel compile gate.
+    Packages without a property_list ref are skipped; the index is the position in
+    the original sequence (used for ``packages[i]`` error field paths). Consumers
+    keep their own bodies (resolve / look up / raise) and dedup on ``key`` if they
+    need to — the generator never dedups.
+    """
+    for index, package in enumerate(packages):
+        ref = package_property_list_ref(package)
+        if ref is None:
+            continue
+        yield index, package, ref, property_list_cache_key(ref)
 
 
 def _validate_agent_url(agent_url: str) -> None:

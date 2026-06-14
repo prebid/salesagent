@@ -1491,17 +1491,13 @@ async def _resolve_property_list_identifiers(packages: list | None) -> dict[tupl
     # at its source module, so it must resolve at call time (a module-top import
     # would bind a ref the patch can't reach).
     from src.core.property_list_resolver import (
+        iter_package_property_list_refs,
         loggable_list_id,
-        package_property_list_ref,
         resolve_property_list_typed,
     )
 
     resolved: dict[tuple[str, str], list[Identifier]] = {}
-    for package in packages or []:
-        ref = package_property_list_ref(package)
-        if ref is None:
-            continue
-        key = (str(ref.agent_url), ref.list_id)
+    for _index, _package, ref, key in iter_package_property_list_refs(packages or []):
         if key in resolved:
             continue
         try:
@@ -1560,19 +1556,16 @@ def _build_property_list_advisories(
     # module by the advisory unit/integration tests, so it must resolve at call
     # time (a module-top import would bind a ref the patch can't reach).
     from src.core.product_conversion import convert_product_model_to_schema
-    from src.core.property_list_resolver import loggable_list_id, package_property_list_ref
+    from src.core.property_list_resolver import iter_package_property_list_refs, loggable_list_id
 
     intersection = PropertyIntersection(authorized_property_repo)
     advisories: list[Error] = []
 
-    for index, package in enumerate(packages):
-        ref = package_property_list_ref(package)
-        if ref is None:
-            continue
+    for index, package, ref, key in iter_package_property_list_refs(packages):
         product = product_map.get(package.product_id)
         if product is None:
             continue
-        buyer_identifiers = resolved_identifiers.get((str(ref.agent_url), ref.list_id))
+        buyer_identifiers = resolved_identifiers.get(key)
         if buyer_identifiers is None:
             continue
         try:
