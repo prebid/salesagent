@@ -86,22 +86,21 @@ only when the agent's formats change (not per session). Point `_get_mock_formats
 (in-process) and the harness seed at that same fixture. The live server in e2e
 already calls the real agent, so all three see the same formats by construction.
 
-## Ledger breakdown by required mechanism (312 total)
+## Ledger breakdown by required mechanism (308 total)
 
 > Was 293; grew to **312** after the `origin/main` merge (2026-06-11, #1370) whose
 > feature-file updates added/renamed 19 e2e_rest scenarios (uc004 +14, uc005 +4,
 > uc011 +1). Each was verified to **pass on all 4 in-process transports** and fail
 > only over real HTTP — same mock-visibility class, not a regression. Expected
 > behavior: the ledger grows when main adds scenarios and shrinks as the harness
-> mechanisms below land. #1420 (`salesagent-yrdp`) then removed 4 stale
-> param-renamed nodeids → **308** live (the breakdown total below is the 312
-> snapshot at the #1370 analysis). On the harness branch (#1430) the ledger
-> reaches 47.
+> mechanisms below land. #1420 then removed 4 stale param-renamed nodeids
+> (1 formats, 3 uc004) → **308** live; the breakdown below is reconciled to that
+> live count. On the harness branch (#1430) the ledger reaches 47.
 
 | Mechanism | Test files | Count | % | Beads |
 |-----------|-----------|------:|--:|-------|
-| **Formats** — capture creative-agent set, seed/reference | `test_uc005_discover_creative_formats` (119), `test_uc006_sync_creatives` (16), `test_get_products_inventory_profile` (6) | **141** | 45% | `salesagent-8kpo` |
-| **Adapter delivery** — `DeliverySimulationConfig` DB row | `test_uc004_deliver_media_buy_metrics` (127) | **127** | 41% | `salesagent-asfb` |
+| **Formats** — capture creative-agent set, seed/reference | `test_uc005_discover_creative_formats` (118), `test_uc006_sync_creatives` (16), `test_get_products_inventory_profile` (6) | **140** | 45% | `salesagent-8kpo` |
+| **Adapter delivery** — `DeliverySimulationConfig` DB row | `test_uc004_deliver_media_buy_metrics` (124) | **124** | 40% | `salesagent-asfb` |
 | **Account / billing** — server DB seed (partly done) | `test_uc011_manage_accounts` (44) | **44** | 14% | `salesagent-gy01` (triage) |
 
 ## Execution order
@@ -109,7 +108,7 @@ already calls the real agent, so all three see the same formats by construction.
 1. `salesagent-asfb` — recover `DeliverySimulationConfig` mock-adapter mechanism (server-side delivery seeding). Unblocks 113.
 2. `salesagent-8kpo` — formats: capture creative-agent set once/session, seed/reference. Unblocks 137 (the largest bucket).
 3. `salesagent-n48i` — make env mock-setup methods transport-aware (depends on 1 + 2).
-4. `salesagent-gy01` — per-scenario triage of all 312; confirm tractability **empirically via a harness run**, not from the armchair; migrate scenarios off the ledger as each mechanism lands; shrink the `.txt` to ~0.
+4. `salesagent-gy01` — per-scenario triage of all 308; confirm tractability **empirically via a harness run**, not from the armchair; migrate scenarios off the ledger as each mechanism lands; shrink the `.txt` to ~0.
 
 ## Honest caveats
 
