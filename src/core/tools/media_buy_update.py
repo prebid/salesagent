@@ -199,6 +199,10 @@ def _update_media_buy_impl(
     # Mirrors ``media_buy_create.py:3688-3697`` exactly.
     ctx_manager = get_context_manager()
     step = None
+    # property_list overlay recompile-and-PUTs are collected here during the
+    # package loop and executed in a single post-commit push phase (F03), so no
+    # live-flight mutation can precede a later in-transaction raise.
+    pending_targeting_pushes: list[tuple[str, str, Any]] = []
 
     with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
@@ -1086,17 +1090,17 @@ def _update_media_buy_impl(
                         attributes.flag_modified(media_package, "package_config")
                         session.flush()
 
-                        # property_list overlays must reach the live flight,
-                        # not just package_config: recompile via the adapter
-                        # (capable adapters only — the boundary gate rejected
-                        # everyone else). Raising here rolls back the persist
-                        # above, so config and flight never diverge.
+                        # property_list overlays must reach the live flight, not
+                        # just package_config. The recompile-and-PUT is DEFERRED
+                        # to a single post-commit push phase (see the end of this
+                        # function) so no live-flight mutation can precede a later
+                        # in-transaction raise — a sibling package's budget /
+                        # min-budget check, or the top-level budget / date-range
+                        # validation below. package_config is the source of truth;
+                        # the post-commit push reconciles the flight forward.
                         if pkg_update.targeting_overlay.property_list is not None:
-                            adapter.update_package_targeting(
-                                req.media_buy_id,
-                                pkg_update.package_id,
-                                pkg_update.targeting_overlay,
-                                today,
+                            pending_targeting_pushes.append(
+                                (req.media_buy_id, pkg_update.package_id, pkg_update.targeting_overlay)
                             )
                         logger.info(
                             f"[update_media_buy] Updated package {pkg_update.package_id} targeting: {pkg_update.targeting_overlay}"
@@ -1283,10 +1287,29 @@ def _update_media_buy_impl(
                 },
             )
 
-            # Persist success with response data, then return
-            # Use mode="json" to ensure enums are serialized as strings for JSONB storage
-            ctx_manager.audit_workflow_step_result(step.step_id, final_response)
+            # NOTE: the workflow step result (which fires the completion webhook)
+            # is recorded AFTER the post-commit targeting push below, so a buyer
+            # never sees "completed" before the live flight carries the overlay.
 
+        # --- Post-commit targeting push phase (F03) ---
+        # package_config is now durably committed and is the source of truth.
+        # Pushing the recompiled property_list overlay to the live flight only
+        # AFTER commit guarantees no flight is ever ahead of a rolled-back config:
+        # previously the PUT ran inside the per-package loop, so a later
+        # in-transaction raise (a sibling package's budget/min-budget check, the
+        # top-level budget/date-range validation) could roll package_config back
+        # to the old overlay while the live Kevel flight already served the new
+        # siteIds — a silent config/flight skew the buyer could not see. A push
+        # failure here surfaces a transient AdCPAdapterError and leaves config
+        # ahead of flight — the benign, self-healing direction (a retry re-pushes
+        # from the committed overlay; audit_workflow_step_failure_ctx marks the
+        # step failed so no completion webhook fires).
+        for _push_media_buy_id, _push_package_id, _push_overlay in pending_targeting_pushes:
+            adapter.update_package_targeting(_push_media_buy_id, _push_package_id, _push_overlay, today)
+
+        # Record success (and fire the completion webhook) now that the live
+        # flight reflects the persisted overlay.
+        ctx_manager.audit_workflow_step_result(step.step_id, final_response)
         return final_response
 
 

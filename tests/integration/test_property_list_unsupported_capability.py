@@ -33,7 +33,7 @@ import pytest
 
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.database.database_session import get_db_session
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, UpdateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -388,3 +388,88 @@ def test_update_accepts_and_recompiles_property_list_on_capable_adapter(capabili
         request.packages[0].targeting_overlay,
         date.today(),
     )
+
+
+def _read_committed_overlay(media_buy_id: str, package_id: str = "pkg_test_plcap"):
+    """Read the package's committed ``targeting_overlay`` from a fresh session."""
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    with MediaBuyUoW(TENANT_ID) as uow:
+        pkg = uow.media_buys.get_package(media_buy_id, package_id)
+        return (pkg.package_config or {}).get("targeting_overlay") if pkg else None
+
+
+@pytest.mark.requires_db
+def test_update_push_failure_keeps_committed_overlay_and_surfaces_transient(capability_media_buy):
+    """F03 post-commit push: a flight-push outage surfaces a transient
+    ``AdCPAdapterError`` AND leaves the overlay committed.
+
+    ``package_config`` is the source of truth: pushing the recompiled overlay
+    AFTER commit means a push failure leaves config ahead of flight — the benign,
+    self-healing direction (a retry re-pushes from the committed overlay) — never
+    flight ahead of a rolled-back config (the silent skew this fix eliminates).
+    """
+    from unittest.mock import patch as mock_patch
+
+    media_buy_id = capability_media_buy
+    before = _read_committed_overlay(media_buy_id)
+    request = UpdateMediaBuyRequest(
+        media_buy_id=media_buy_id,
+        packages=[
+            {"package_id": "pkg_test_plcap", "targeting_overlay": TEST_PROPERTY_LIST_TARGETING_OVERLAY},
+        ],
+    )
+
+    with (
+        mock_patch.object(MockAdServer, "validate_targeting_update", autospec=True),
+        mock_patch.object(
+            MockAdServer,
+            "update_package_targeting",
+            autospec=True,
+            side_effect=AdCPAdapterError("kevel flight PUT failed"),
+        ),
+    ):
+        with pytest.raises(AdCPAdapterError):
+            _update_media_buy_impl(req=request, identity=_make_identity(dry_run=False))
+
+    after = _read_committed_overlay(media_buy_id)
+    assert after is not None and after != before, (
+        "the overlay must be committed despite the post-commit push failure "
+        "(config is source of truth; a retry re-pushes from it)"
+    )
+
+
+@pytest.mark.requires_db
+def test_update_later_validation_raise_never_touches_flight(capability_media_buy):
+    """F03: a later in-transaction raise rolls back the overlay AND never pushes
+    the flight — the pre-fix skew (the PUT fired inside the package loop, so a
+    later raise rolled config back while the live flight already served the new
+    siteIds) is structurally impossible now.
+
+    The request persists a property_list overlay, then fails the post-loop budget
+    gate (budget <= 0). The push is deferred to the post-commit phase, which the
+    raise pre-empts, so ``update_package_targeting`` is never called and the
+    flushed overlay rolls back with the transaction.
+    """
+    from unittest.mock import patch as mock_patch
+
+    media_buy_id = capability_media_buy
+    before = _read_committed_overlay(media_buy_id)
+    request = UpdateMediaBuyRequest(
+        media_buy_id=media_buy_id,
+        packages=[
+            {"package_id": "pkg_test_plcap", "targeting_overlay": TEST_PROPERTY_LIST_TARGETING_OVERLAY},
+        ],
+        budget=-100.0,  # invalid: raises at the post-loop budget gate, after the overlay flush
+    )
+
+    with (
+        mock_patch.object(MockAdServer, "validate_targeting_update", autospec=True),
+        mock_patch.object(MockAdServer, "update_package_targeting", autospec=True) as spy_push,
+    ):
+        with pytest.raises(AdCPValidationError):
+            _update_media_buy_impl(req=request, identity=_make_identity(dry_run=False))
+
+    spy_push.assert_not_called()  # the live flight is never mutated
+    after = _read_committed_overlay(media_buy_id)
+    assert after == before, "the flushed overlay must roll back when a later in-transaction validation raises"

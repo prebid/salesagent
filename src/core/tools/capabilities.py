@@ -178,7 +178,9 @@ def _get_adcp_capabilities_impl(
         # NOT the internal admin CRUD over the products table. Declaring True
         # without the tool would let buyers reach the boundary and get
         # UNSUPPORTED_FEATURE there instead of being warned at capability
-        # discovery. Mirrors the property_list_filtering=False rationale above.
+        # discovery — the same honest-declaration principle property_list_filtering
+        # (True, because the filter exists) and ext.prebid.property_list_targeting
+        # follow above: declare a capability only when it can be honored.
         catalog_management=False,
     )
 

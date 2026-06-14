@@ -11,16 +11,46 @@ from typing import Any
 import requests
 from requests.exceptions import RequestException
 
+from src.core.exceptions import AdCPAdapterError
+
 logger = logging.getLogger(__name__)
 
 
-class BroadstreetAPIError(Exception):
-    """Exception raised for Broadstreet API errors."""
+class BroadstreetAPIError(AdCPAdapterError):
+    """Broadstreet API failure, typed into the AdCP recovery taxonomy.
+
+    Subclasses ``AdCPAdapterError`` so a Broadstreet write failure surfaces a
+    spec recovery hint at the transport boundary instead of normalizing to
+    ``INTERNAL_ERROR``/``terminal`` — which would tell a buyer agent to escalate
+    to a human on a transient ad-server outage, the exact recovery-taxonomy
+    contradiction the sibling adapters (Kevel/Triton/Xandr) were just fixed to
+    avoid. Recovery is refined from the HTTP status:
+
+    - transport outage (no status) / 5xx -> ``SERVICE_UNAVAILABLE``, transient
+    - 403 (operator ``access_token`` denied) -> ``CONFIGURATION_ERROR``, terminal
+    - other 4xx -> ``VALIDATION_ERROR``, correctable (fix the request/reference)
+
+    Callers that ``except BroadstreetAPIError`` or read ``status_code`` are
+    unaffected; the upstream HTTP status, when present, stays on ``status_code``
+    (a transport outage keeps the ``AdCPAdapterError`` 502 default).
+    """
 
     def __init__(self, message: str, status_code: int | None = None, response_body: Any = None):
         super().__init__(message)
-        self.status_code = status_code
         self.response_body = response_body
+        # Refine the inherited transient default per upstream HTTP status. When
+        # status_code is None (a transport outage) the AdCPAdapterError defaults
+        # stand: status_code=502, SERVICE_UNAVAILABLE / transient. error_code and
+        # recovery are set as instance attributes (not error_code=/recovery=
+        # kwargs, which the src/adapters error-construction guard forbids).
+        if status_code is not None:
+            self.status_code = status_code  # upstream HTTP status (callers/tests read it)
+            if status_code == 403:
+                self.error_code = "CONFIGURATION_ERROR"
+                self.recovery = "terminal"
+            elif 400 <= status_code < 500:
+                self.error_code = "VALIDATION_ERROR"
+                self.recovery = "correctable"
 
 
 class BroadstreetClient:

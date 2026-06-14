@@ -92,6 +92,10 @@ def host_from_url_or_host(value: str) -> str:
         return ""
     # Parse both forms the same way so the port is stripped identically: a bare
     # host[:port] has no scheme, so give it the ``//`` netloc prefix. ``.hostname``
-    # drops the port and lowercases, and handles bracketed IPv6.
+    # drops the port and lowercases, and handles bracketed IPv6. A trailing FQDN
+    # dot (``espn.com.``) is stripped so the subdomain exact-equality path
+    # normalizes the same way the SDK ``domain_matches`` path already does —
+    # otherwise ``sports.espn.com.`` would resolve to nothing while the domain
+    # form ``espn.com.`` still matches.
     parsed = urllib.parse.urlparse(value if "://" in value else f"//{value}")
-    return (parsed.hostname or "").strip().lower()
+    return (parsed.hostname or "").strip().rstrip(".").lower()

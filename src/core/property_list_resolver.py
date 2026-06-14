@@ -35,6 +35,11 @@ _DEFAULT_TIMEOUT = 10.0
 # Default cache TTL when cache_valid_until is not provided (seconds)
 _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 
+# Upper clamp on a buyer/list-service-supplied cache_valid_until: a buyer cannot
+# pin an entry in the process-global cache indefinitely (cardinality is separately
+# bounded by ThreadSafeTTLCache's maxsize; this bounds per-entry lifetime).
+_MAX_CACHE_TTL_SECONDS = 3600  # 1 hour
+
 # Cache: (agent_url, list_id) -> typed Identifier objects, so both .value (for
 # products discovery) and .type (for adapter compilation) are available without
 # re-fetching. The async and sync resolver paths plus the create-media-buy
@@ -129,7 +134,14 @@ def _store_in_cache(agent_url: str, list_id: str, response_data: dict) -> list[I
     """Parse the fetched payload, cache it with the right TTL, return the typed identifiers."""
     parsed = GetPropertyListResponse.model_validate(response_data)
     identifiers = parsed.identifiers or []
-    expires_at = parsed.cache_valid_until or (datetime.now(UTC) + timedelta(seconds=_DEFAULT_CACHE_TTL_SECONDS))
+    now = datetime.now(UTC)
+    # Clamp a buyer/list-service-supplied cache_valid_until to a max lifetime so it
+    # cannot pin an entry in the process-global cache; fall back to the default TTL
+    # when the service omits it.
+    expires_at = min(
+        parsed.cache_valid_until or (now + timedelta(seconds=_DEFAULT_CACHE_TTL_SECONDS)),
+        now + timedelta(seconds=_MAX_CACHE_TTL_SECONDS),
+    )
     _cache.store((agent_url, list_id), identifiers, expires_at)
     logger.debug(
         "Resolved property list %s/%s: %d identifiers (cached until %s)",

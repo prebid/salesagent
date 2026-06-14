@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Generic, TypeVar
 
 K = TypeVar("K")
 V = TypeVar("V")
+
+_DEFAULT_MAXSIZE = 10_000
 
 
 class ThreadSafeTTLCache(Generic[K, V]):
@@ -24,14 +27,20 @@ class ThreadSafeTTLCache(Generic[K, V]):
       fetch, then ``store``) — a cold-cache double-fetch is acceptable (both
       fetches produce the same data) and the store is last-write-wins, which
       avoids the complexity of a fetch-in-progress sentinel.
+    - cardinality is bounded by ``maxsize`` (FIFO eviction on ``store``): expiry
+      is lazy (an entry is dropped only when its own key is read after expiry),
+      so a cache with caller/buyer-controlled keys would otherwise grow without
+      bound on a long-lived process; the cap makes growth independent of caller
+      behavior.
 
     TTL policy stays caller-side: callers compute ``expires_at`` (fixed TTL,
     service-supplied ``cache_valid_until``, …) and the cache only enforces it.
     """
 
-    def __init__(self) -> None:
-        self._entries: dict[K, tuple[V, datetime]] = {}
+    def __init__(self, maxsize: int | None = _DEFAULT_MAXSIZE) -> None:
+        self._entries: OrderedDict[K, tuple[V, datetime]] = OrderedDict()
         self._lock = threading.Lock()
+        self._maxsize = maxsize
 
     def get(self, key: K) -> V | None:
         """Return the cached value, dropping and missing on expiry.
@@ -54,6 +63,14 @@ class ThreadSafeTTLCache(Generic[K, V]):
         """Store ``value`` under ``key`` until ``expires_at`` (last-write-wins)."""
         with self._lock:
             self._entries[key] = (value, expires_at)
+            self._entries.move_to_end(key)  # freshest entry last
+            # Bound cardinality: expiry is lazy (pop-on-read only), so a cache
+            # whose keys are caller/buyer-controlled — e.g. the property-list
+            # cache keyed by (agent_url, list_id), both buyer-supplied — would
+            # otherwise grow without bound. Evict the oldest entries (FIFO).
+            if self._maxsize is not None:
+                while len(self._entries) > self._maxsize:
+                    self._entries.popitem(last=False)
 
     def clear(self) -> None:
         with self._lock:

@@ -13,6 +13,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
+    AdCPValidationError,
 )
 from src.core.property_list_resolver import (
     iter_package_property_list_refs,
@@ -185,7 +186,15 @@ class Kevel(AdServerAdapter):
                 contains identifier types Kevel cannot translate.
         """
         for index, _package, ref, _key in iter_package_property_list_refs(packages):
-            resolved = self._resolve_property_list(ref)
+            try:
+                resolved = self._resolve_property_list(ref)
+            except AdCPValidationError as exc:
+                # Re-field the shared resolver's bare 'property_list' buyer-4xx (a
+                # list_id the buyer's list service rejected) with this package's
+                # indexed overlay path, matching the identifier-type gate below, so
+                # the buyer can tell which package's reference the list rejected.
+                exc.field = package_field_path("targeting_overlay.property_list", index)
+                raise
             if resolved.unsupported_types:
                 raise AdCPCapabilityNotSupportedError(
                     message=(

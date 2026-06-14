@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.adapters.broadstreet.client import BroadstreetAPIError, BroadstreetClient
+from src.core.exceptions import AdCPAdapterError
 
 
 class TestBroadstreetClient:
@@ -178,3 +179,42 @@ class TestBroadstreetClient:
 
         assert exc_info.value.status_code == 500
         assert "server error" in str(exc_info.value)
+
+
+class TestBroadstreetAPIErrorRecoveryTaxonomy:
+    """BroadstreetAPIError must carry the AdCP recovery taxonomy (F01).
+
+    Broadstreet uses manual ``response.status_code`` checks rather than
+    ``raise_for_status()``, so it is invisible to the
+    ``test_architecture_adapter_http_writes_wrapped`` AST guard. These tests are
+    the regression net in its place: a Broadstreet write outage must surface a
+    transient ``AdCPAdapterError`` (``SERVICE_UNAVAILABLE``) rather than
+    normalizing to ``INTERNAL_ERROR``/``terminal`` (which tells a buyer agent to
+    escalate to a human on a transient ad-server outage), and the per-status
+    refinement must hold.
+    """
+
+    def test_is_adcp_adapter_error_subclass(self):
+        # If this ever reverts to a plain Exception, every Broadstreet write
+        # outage silently becomes INTERNAL_ERROR/terminal again.
+        assert issubclass(BroadstreetAPIError, AdCPAdapterError)
+
+    @pytest.mark.parametrize(
+        ("status_code", "expected_code", "expected_recovery"),
+        [
+            (None, "SERVICE_UNAVAILABLE", "transient"),  # transport outage (RequestException)
+            (500, "SERVICE_UNAVAILABLE", "transient"),
+            (503, "SERVICE_UNAVAILABLE", "transient"),
+            (403, "CONFIGURATION_ERROR", "terminal"),  # operator access_token denied
+            (404, "VALIDATION_ERROR", "correctable"),
+            (400, "VALIDATION_ERROR", "correctable"),
+        ],
+    )
+    def test_status_maps_to_recovery(self, status_code, expected_code, expected_recovery):
+        err = BroadstreetAPIError("boom", status_code=status_code)
+        assert err.error_code == expected_code
+        assert err.recovery == expected_recovery
+        # A transport outage (status_code=None) keeps the AdCPAdapterError 502
+        # default; an upstream HTTP status is preserved verbatim.
+        if status_code is not None:
+            assert err.status_code == status_code

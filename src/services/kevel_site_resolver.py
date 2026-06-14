@@ -63,6 +63,13 @@ SUPPORTED_IDENTIFIER_TYPES: frozenset[str] = frozenset({"domain", "subdomain"})
 _KEVEL_SITE_PAGE_SIZE = 200
 _DEFAULT_HTTP_TIMEOUT = 10.0
 _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
+# Overall wall-clock budget for a full (multi-page) site-index fetch, independent
+# of the per-page HTTP timeout: bounds how long a cold-cache prewarm can hold a
+# worker thread when Kevel is degraded. The page cap is a second backstop so a
+# bogus ``totalPages`` cannot spin the pagination loop unboundedly (200 * 1000 =
+# 200k sites, far beyond any real network).
+_KEVEL_SITE_FETCH_DEADLINE_SECONDS = 60.0
+_KEVEL_SITE_MAX_PAGES = 1000
 
 
 @dataclass(frozen=True)
@@ -230,7 +237,18 @@ class KevelSiteResolver:
             timeout=self.timeout_seconds,
             headers={"X-Adzerk-ApiKey": self.api_key},
         ) as client:
+            deadline = datetime.now(UTC) + timedelta(seconds=_KEVEL_SITE_FETCH_DEADLINE_SECONDS)
             while True:
+                if datetime.now(UTC) > deadline:
+                    raise AdCPAdapterError(
+                        f"Kevel site list fetch exceeded the {_KEVEL_SITE_FETCH_DEADLINE_SECONDS:.0f}s overall "
+                        f"deadline (network {self.network_id}, page {page})"
+                    )
+                if page > _KEVEL_SITE_MAX_PAGES:
+                    raise AdCPAdapterError(
+                        f"Kevel site list exceeded the {_KEVEL_SITE_MAX_PAGES}-page cap "
+                        f"(network {self.network_id}); refusing to page unboundedly"
+                    )
                 url = f"{self.base_url}/site?page={page}&pageSize={_KEVEL_SITE_PAGE_SIZE}"
                 try:
                     response = client.get(url)
@@ -262,6 +280,18 @@ class KevelSiteResolver:
                     raise AdCPAdapterError(
                         f"Malformed Kevel site list response (network {self.network_id}, page {page}): "
                         f"expected 'items' and 'totalPages', got keys {sorted(payload.keys())}"
+                    )
+                if not isinstance(items, list) or not isinstance(total_pages, int | float):
+                    # Guard the TYPE, not just presence: a string ``totalPages``
+                    # ("5") makes ``page >= total_pages`` raise TypeError and a
+                    # non-list ``items`` makes ``sites.extend`` add garbage — both
+                    # escaping as an untyped INTERNAL_ERROR/terminal instead of this
+                    # typed transient. (bool is an int subclass, but Kevel never
+                    # serializes these keys as bool, so no special-casing.)
+                    raise AdCPAdapterError(
+                        f"Malformed Kevel site list response (network {self.network_id}, page {page}): "
+                        f"expected list 'items' and numeric 'totalPages', got "
+                        f"items={type(items).__name__}, totalPages={type(total_pages).__name__}"
                     )
                 sites.extend(items)
                 if page >= total_pages:

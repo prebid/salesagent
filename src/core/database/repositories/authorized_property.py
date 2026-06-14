@@ -26,18 +26,34 @@ class AuthorizedPropertyRepository:
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
         self._tenant_id = tenant_id
+        # Per-request memo keyed by publisher_domain. The repository is constructed
+        # fresh per ProductUoW per request, so this is request-scoped (no staleness
+        # window). Collapses the get_products N+1: ``list_by_tags`` fetches the whole
+        # domain then filters tags client-side, so many products / by_tag selectors
+        # sharing a publisher_domain would otherwise each re-issue the full scan.
+        self._domain_cache: dict[str, list[AuthorizedProperty]] = {}
 
     @property
     def tenant_id(self) -> str:
         return self._tenant_id
 
     def list_by_domain(self, publisher_domain: str) -> list[AuthorizedProperty]:
-        """Return every authorized property registered under ``publisher_domain``."""
+        """Return every authorized property registered under ``publisher_domain`` (memoized per request).
+
+        The returned list is the shared per-request cache entry — callers treat it
+        as read-only (``list_by_tags`` builds a new filtered list; the intersection
+        only reads ``row.identifiers``).
+        """
+        cached = self._domain_cache.get(publisher_domain)
+        if cached is not None:
+            return cached
         stmt = select(AuthorizedProperty).where(
             AuthorizedProperty.tenant_id == self._tenant_id,
             AuthorizedProperty.publisher_domain == publisher_domain,
         )
-        return list(self._session.scalars(stmt).all())
+        rows = list(self._session.scalars(stmt).all())
+        self._domain_cache[publisher_domain] = rows
+        return rows
 
     def list_by_ids(self, publisher_domain: str, property_ids: list[str]) -> list[AuthorizedProperty]:
         """Return ``publisher_domain``'s properties whose ``property_id`` is in ``property_ids``.
