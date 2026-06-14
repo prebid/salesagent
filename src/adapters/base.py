@@ -543,6 +543,19 @@ class AdServerAdapter(ABC):
             suggestion="Remove targeting_overlay changes from the update, or contact the seller.",
         )
 
+    def prewarm_targeting(self, packages: list[Any]) -> None:
+        """Warm any external targeting indexes off the event loop before compilation.
+
+        Default no-op. ``create_media_buy`` runs synchronously inside the async
+        ``_create_media_buy_impl``; an adapter whose targeting compilation makes a
+        multi-second synchronous network call (e.g. Kevel's ``/v1/site`` index)
+        would block the event loop for the duration. Such an adapter overrides
+        this to perform the fetch here, and the async caller invokes it via
+        ``asyncio.to_thread`` so the work happens on a worker thread and the later
+        synchronous compile path hits a warm cache. Best-effort: errors are the
+        compile path's to surface, so an override must not raise.
+        """
+
     def get_config_ui_endpoint(self) -> str | None:
         """
         Returns the endpoint path for this adapter's configuration UI.

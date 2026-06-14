@@ -8,6 +8,7 @@ Handles media buy creation including:
 - Budget validation
 """
 
+import asyncio
 import logging
 import secrets
 import time
@@ -2412,6 +2413,13 @@ async def _create_media_buy_impl(
         # correctable) carrying ``field`` + ``suggestion`` so the buyer
         # agent can drop the field and retry or pick a capable seller.
         raise_if_property_list_unsupported(req.packages, adapter)
+
+        # Warm any adapter targeting index (e.g. Kevel's multi-second /v1/site
+        # fetch) on a worker thread so the synchronous adapter compile below does
+        # not block the event loop. The buyer property *lists* are already
+        # prefetched off-loop above; this does the same for the adapter-side index.
+        # No-op for adapters without an external index (base default).
+        await asyncio.to_thread(adapter.prewarm_targeting, req.packages or [])
 
         # Check if manual approval is required
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback

@@ -130,6 +130,30 @@ class Kevel(AdServerAdapter):
         self._property_list_cache[cache_key] = resolved
         return resolved
 
+    def prewarm_targeting(self, packages: list[Any]) -> None:
+        """Resolve each package's property_list once so the ``/v1/site`` index is cached.
+
+        ``_build_targeting`` (run synchronously inside ``create_media_buy``, itself
+        called from the async ``_create_media_buy_impl``) compiles property_list to
+        siteIds via the resolver, whose ``/v1/site`` index fetch takes seconds.
+        Resolving here — the async caller invokes this through ``asyncio.to_thread``
+        — populates the shared ClassVar site cache and the per-request
+        ``_property_list_cache`` so the later synchronous compile hits a warm cache
+        instead of blocking the event loop. Dry-run (no site resolver) has no index
+        fetch to warm. Best-effort: a fetch failure is left for the compile path to
+        surface as ``AdCPAdapterError``.
+        """
+        if self._site_resolver is None:
+            return
+        for _index, _package, ref, _key in iter_package_property_list_refs(packages):
+            try:
+                self._resolve_property_list(ref)
+            except Exception as exc:
+                self.log(
+                    f"prewarm_targeting: deferring property_list resolution to compile path: {exc}",
+                    dry_run_prefix=False,
+                )
+
     def _raise_if_property_list_uncompilable(self, packages: list[MediaPackage]) -> None:
         """Reject property_list identifier types Kevel cannot compile to siteIds.
 

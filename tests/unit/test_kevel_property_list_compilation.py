@@ -25,8 +25,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import PropertyListReference
 
+from src.adapters.base import AdServerAdapter
 from src.adapters.kevel import Kevel
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest, MediaPackage, Principal, Targeting
 from src.services.kevel_site_resolver import ResolvedSiteIds
 from tests.helpers.adcp_factories import create_test_identifier
@@ -468,3 +469,38 @@ class TestBaseAdapterUpdateTargetingContract:
         from src.adapters.base import AdServerAdapter
 
         assert AdServerAdapter.validate_targeting_update(MagicMock(), [MagicMock()]) is None
+
+
+class TestPrewarmTargeting:
+    """The off-loop site-index prewarm (PAT-03): warm the cache before the sync compile."""
+
+    def test_base_default_is_noop(self):
+        # Adapters without an external targeting index rely on the base no-op; it
+        # must neither raise nor require an override.
+        assert AdServerAdapter.prewarm_targeting(MagicMock(), [MagicMock()]) is None
+
+    def test_kevel_warms_resolver_cache_for_each_ref(self):
+        adapter = _kevel()
+        with patch.object(adapter, "_site_resolver") as mock_resolver:
+            mock_resolver.resolve.return_value = ResolvedSiteIds(
+                site_ids={42}, unsupported_types=set(), unresolvable_values=[]
+            )
+            adapter.prewarm_targeting([_package_with_ref(_ref())])
+            mock_resolver.resolve.assert_called_once()
+        # The per-request cache is now warm, so the later synchronous compile
+        # does not re-hit the multi-second /v1/site fetch on the event loop.
+        assert adapter._property_list_cache
+
+    def test_kevel_dry_run_is_noop(self):
+        # No site resolver in dry-run -> nothing expensive to warm.
+        adapter = _kevel(dry_run=True)
+        adapter.prewarm_targeting([_package_with_ref(_ref())])
+        assert adapter._property_list_cache == {}
+
+    def test_kevel_swallows_resolution_error(self):
+        # Best-effort: a prewarm fetch failure must not raise — the real compile
+        # path re-resolves and surfaces the error in its normal place.
+        adapter = _kevel()
+        with patch.object(adapter, "_site_resolver") as mock_resolver:
+            mock_resolver.resolve.side_effect = AdCPAdapterError("site index unreachable")
+            adapter.prewarm_targeting([_package_with_ref(_ref())])  # must not raise
