@@ -1,6 +1,8 @@
 # e2e_rest ledger retirement — transport-aware harness setup
 
-**Status:** TODO / tracked design. Beads epic `salesagent-x0nl`.
+**Status:** TODO / tracked design. Tracked publicly as **#1423**; the harness
+work lands on **#1430**. (Internal epic `salesagent-x0nl`; the per-mechanism
+sub-task ids below roll up to #1423.)
 **Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (308 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`).
 
 ## Problem
@@ -104,6 +106,9 @@ already calls the real agent, so all three see the same formats by construction.
 | **Account / billing** — server DB seed (partly done) | `test_uc011_manage_accounts` (44) | **44** | 14% | `salesagent-gy01` (triage) |
 
 ## Execution order
+
+> Sub-task ids are internal beads tracked under #1423 (above); the public issue
+> is the resolvable anchor for outside readers.
 
 1. `salesagent-asfb` — recover `DeliverySimulationConfig` mock-adapter mechanism (server-side delivery seeding). Unblocks 113.
 2. `salesagent-8kpo` — formats: capture creative-agent set once/session, seed/reference. Unblocks 137 (the largest bucket).

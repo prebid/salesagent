@@ -1,6 +1,6 @@
 """Fitness function for the e2e_rest known-failures ledger.
 
-PR #1420 review finding (salesagent-yrdp): unlike the duplication baseline and
+PR #1420 review finding: unlike the duplication baseline and
 the structural-guard allowlists, the e2e_rest ledger
 (``tests/bdd/e2e_rest_known_failures.txt``) had no ratchet and no stale-entry
 test, so it could silently grow or accumulate dead nodeids after a feature/param
