@@ -9,11 +9,45 @@ instead of copy-pasted per test (PR #1420 / #1423).
 """
 
 import contextlib
+import json
 import os
 import socket
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
+
+
+class WebhookCaptureHandler(BaseHTTPRequestHandler):
+    """Default capture handler: append each POSTed JSON body to ``received_webhooks``.
+
+    Subclass it and give the subclass its own ``received_webhooks`` list so
+    captures don't bleed across suites (``do_POST`` reads ``self.received_webhooks``,
+    which resolves to the subclass attribute). The a2a status-notification handler
+    genuinely differs and is intentionally not folded in here.
+    """
+
+    received_webhooks: list = []
+
+    def do_POST(self):
+        """Handle POST requests (webhook notifications)."""
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+
+        try:
+            self.received_webhooks.append(json.loads(body.decode("utf-8")))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "received"}')
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+    def log_message(self, format, *args):
+        """Suppress HTTP server logs during tests."""
+        pass
 
 
 @contextlib.contextmanager
@@ -36,6 +70,10 @@ def run_webhook_capture_server(
     """
     received.clear()
 
+    # Bind 0.0.0.0 (all interfaces), not 127.0.0.1: the in-network runner reaches
+    # this receiver by its compose network alias, so a loopback-only bind would be
+    # unreachable from the server container. The callback host (below) is what
+    # narrows reachability for loopback-only callers, not the listen address.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("0.0.0.0", 0))
     port = sock.getsockname()[1]

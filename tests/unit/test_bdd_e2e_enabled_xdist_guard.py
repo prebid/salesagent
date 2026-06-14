@@ -25,7 +25,10 @@ def _config(numprocesses):
     )
 
 
-@pytest.mark.parametrize("numprocesses", ["auto", "logical", 4])
+# xdist resolves "auto"/"logical" to a concrete int (or None) before
+# pytest_configure runs, so the real shapes reaching the guard are int>=0 and
+# None. 1 (a single distributed worker) and 4 cover the positive-int failure mode.
+@pytest.mark.parametrize("numprocesses", [1, 4])
 def test_e2e_enabled_under_xdist_raises(monkeypatch, numprocesses):
     monkeypatch.setenv("BDD_E2E_ENABLED", "true")
     with pytest.raises(pytest.UsageError, match="BDD_XDIST_N=0"):
@@ -38,7 +41,7 @@ def test_e2e_enabled_serial_is_allowed(monkeypatch, numprocesses):
     pytest_configure(_config(numprocesses))  # must not raise
 
 
-@pytest.mark.parametrize("numprocesses", ["auto", 4])
+@pytest.mark.parametrize("numprocesses", [1, 4])
 def test_xdist_without_e2e_enabled_is_allowed(monkeypatch, numprocesses):
     monkeypatch.delenv("BDD_E2E_ENABLED", raising=False)
     pytest_configure(_config(numprocesses))  # must not raise
