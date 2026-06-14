@@ -11,6 +11,7 @@ Docker stack is needed.
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,8 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER = _REPO_ROOT / "run_all_tests.sh"
+_HOST_RUNNER = _REPO_ROOT / "run_all_tests_host.sh"
+_TOX_INI = _REPO_ROOT / "tox.ini"
 _ALL_SUITES = "unit,integration,bdd,admin,e2e,ui"
 
 
@@ -49,3 +52,37 @@ def _resolve(*args: str) -> str:
 )
 def test_run_all_tests_arg_contract(args, expected):
     assert _resolve(*args) == expected
+
+
+def _tox_env_list() -> set[str]:
+    """Canonical parallel suite set from tox.ini (coverage runs separately)."""
+    m = re.search(r"^env_list\s*=\s*(.+)$", _TOX_INI.read_text(), re.MULTILINE)
+    assert m, "tox.ini has no env_list"
+    return {s.strip() for s in m.group(1).split(",") if s.strip()}
+
+
+def _runner_all_suites() -> set[str]:
+    m = re.search(r'ALL_SUITES="([^"]+)"', _RUNNER.read_text())
+    assert m, "run_all_tests.sh has no ALL_SUITES"
+    return {s.strip() for s in m.group(1).split(",") if s.strip()}
+
+
+def _host_runner_collect_suites() -> set[str]:
+    m = re.search(r"for name in ([a-z][a-z0-9 ]+?); do", _HOST_RUNNER.read_text())
+    assert m, "run_all_tests_host.sh collect_reports loop not found"
+    return set(m.group(1).split())
+
+
+def test_six_suite_list_is_single_sourced():
+    """All four materializations of the suite list must match tox.ini env_list.
+
+    PR #1420 review nit: the six-suite list is duplicated in run_all_tests.sh,
+    run_all_tests_host.sh, tox.ini, and this test's _ALL_SUITES, with nothing
+    tying them — a 7th tox env added without updating the runners would silently
+    not run in-network. Compare as sets (parallel-run order vs report-collection
+    order legitimately differ); tox.ini env_list is the single source.
+    """
+    canonical = _tox_env_list()
+    assert _runner_all_suites() == canonical, "run_all_tests.sh ALL_SUITES drifted from tox env_list"
+    assert _host_runner_collect_suites() == canonical, "run_all_tests_host.sh collect_reports drifted from tox env_list"
+    assert {s.strip() for s in _ALL_SUITES.split(",")} == canonical, "_ALL_SUITES constant drifted from tox env_list"
