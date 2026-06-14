@@ -17,7 +17,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -30,25 +29,28 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 
-# Base URL for downloading AdCP schemas
-_ADCP_SCHEMA_BASE_URL = "https://adcontextprotocol.org"
+# Pinned AdCP schema fixtures. Source of truth is adcontextprotocol/adcp at the
+# immutable commit 04f59d2d5 (tag v3.1-04f59d2d5, 2026-05-13) — an INTENTIONAL frozen
+# reference point for AdCP 3.1. Upstream ships constantly and `/schemas/latest` drifts,
+# so we deliberately do NOT track it: the schemas are vendored (committed) and read
+# offline. To advance the pin, run tests/fixtures/adcp_schemas_pinned/_refresh.py.
+_PINNED_SHA = "04f59d2d56d3d77033162c310e99a1188e4eb419"
+_PINNED_SCHEMA_DIR = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned"
 
-# Cache directory for downloaded schemas (same as AdCPSchemaValidator)
-_SCHEMA_CACHE_DIR = Path(__file__).parent.parent.parent / "schemas" / "v1"
-
-# Map AdCP schema refs to Pydantic model classes.
-# Schema refs match $ref values from the AdCP schema index.
+# Map AdCP schema refs to Pydantic model classes. Keys are the pinned schema `$id`
+# namespace (`/schemas/<category>/<file>.json`). At 04f59d2d5, sync/list-creatives
+# live under `creative/` (relocated from `media-buy/` earlier in 3.x).
 #
 # NOTE: CreateMediaBuyRequest is temporarily excluded due to AdCP spec evolution.
 # The spec now requires brand_card, but we maintain backward compatibility
 # via brand_manifest. Full brand_card implementation will be added in a separate PR.
 SCHEMA_TO_MODEL_MAP = {
-    "/schemas/latest/media-buy/get-products-request.json": GetProductsRequest,
-    # "/schemas/latest/media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
-    "/schemas/latest/media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
-    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
-    "/schemas/latest/media-buy/sync-creatives-request.json": SyncCreativesRequest,
-    "/schemas/latest/media-buy/list-creatives-request.json": ListCreativesRequest,
+    "/schemas/media-buy/get-products-request.json": GetProductsRequest,
+    # "/schemas/media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
+    "/schemas/media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
+    "/schemas/media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
+    "/schemas/creative/sync-creatives-request.json": SyncCreativesRequest,
+    "/schemas/creative/list-creatives-request.json": ListCreativesRequest,
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
@@ -66,65 +68,40 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
-# Fields that exist in the online AdCP JSON schema but are NOT yet in the adcp 5.7.0
-# Python library. These are spec-vs-library mismatches, not bugs in our code.
-# See test_schema_account_field_mismatch.py for detailed documentation.
-# FIXME(salesagent-amkf): Remove entries as adcp library adds these fields.
+# Fields the pinned AdCP schema (04f59d2d5) defines but the adcp 5.7.0 Python library
+# / our local model does not yet model. These are spec-vs-library mismatches, not bugs
+# in our code. Re-derived against the pinned schemas — entries describing fields the
+# pin no longer defines were dropped. #1388 tracks the adcp 5.7 alignment.
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
-    "/schemas/latest/media-buy/get-products-request.json": {
-        "if_catalog_version",  # Schema defines catalog-version pre-flight, SDK 5.7 still lacks it (models if_pricing_version/if_wholesale_feed_version instead)
-        "push_notification_config",  # #1393: schema defines buyer webhook config, SDK 5.7 doesn't model it on get_products yet
-    },
-    # update-media-buy-request: SDK 5.7 provides account, idempotency_key,
-    # invoice_recipient — no gaps.
-    "/schemas/latest/media-buy/update-media-buy-request.json": set(),
-    # get-media-buy-delivery-request: SDK 5.7 provides all fields (account,
-    # reporting_dimensions, time_granularity, include_window_breakdown) — no gaps.
-    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": set(),
-    "/schemas/latest/media-buy/sync-creatives-request.json": {
-        "account_id",  # Schema defines 'account_id' (string); library/local model uses 'account' (AccountReference object). Tracked under #1247.
-    },
-    "/schemas/latest/media-buy/list-creatives-request.json": {
-        "include_performance",  # Schema defines performance metrics flag, library doesn't have it yet
-        "include_sub_assets",  # Schema defines sub-asset inclusion flag, library doesn't have it yet
-    },
+    "/schemas/media-buy/get-products-request.json": set(),
+    "/schemas/media-buy/update-media-buy-request.json": set(),
+    "/schemas/media-buy/get-media-buy-delivery-request.json": set(),
+    "/schemas/creative/sync-creatives-request.json": set(),
+    "/schemas/creative/list-creatives-request.json": set(),
 }
 
 
-def _schema_ref_to_cache_path(schema_ref: str) -> Path:
-    """Convert a schema ref to a local cache file path.
-
-    Uses the same naming convention as AdCPSchemaValidator._get_cache_path().
-    """
-    safe_name = schema_ref.replace("/", "_").replace(".", "_") + ".json"
-    return _SCHEMA_CACHE_DIR / safe_name
-
-
 def load_json_schema(schema_ref: str) -> dict[str, Any]:
-    """Load a JSON schema, downloading from AdCP website if not cached locally."""
-    cache_path = _schema_ref_to_cache_path(schema_ref)
+    """Load a vendored AdCP schema pinned at adcontextprotocol/adcp@04f59d2d5.
 
-    # Use cached version if available
-    if cache_path.exists():
-        with open(cache_path) as f:
-            return json.load(f)
-
-    # Download from AdCP website
-    url = f"{_ADCP_SCHEMA_BASE_URL}{schema_ref}"
-    try:
-        response = httpx.get(url, timeout=30.0)
-        response.raise_for_status()
-        schema_data = response.json()
-    except (httpx.HTTPError, json.JSONDecodeError) as e:
-        pytest.skip(f"Could not download schema {schema_ref}: {e}")
-
-    # Cache for future runs
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(cache_path, "w") as f:
-        json.dump(schema_data, f, indent=2)
-        f.write("\n")
-
-    return schema_data
+    ``schema_ref`` is in the schema ``$id``/``$ref`` namespace (``/schemas/<rest>``),
+    used both for the top-level request schemas and for nested ``$ref`` resolution.
+    Reads the committed fixture offline — never fetches ``/schemas/latest`` (which
+    drifts). A missing file is a HARD FAILURE (the pin moved, or a ``$ref`` is outside
+    the vendored closure), never a silent skip.
+    """
+    rel = schema_ref.split("#")[0]
+    if not rel.startswith("/schemas/"):
+        raise AssertionError(f"Unexpected schema ref (expected '/schemas/...'): {schema_ref!r}")
+    path = _PINNED_SCHEMA_DIR / rel[len("/schemas/") :]
+    if not path.exists():
+        raise AssertionError(
+            f"Pinned schema not vendored: {schema_ref} -> {path}\n"
+            f"Source: adcontextprotocol/adcp@{_PINNED_SHA[:9]}. "
+            f"Re-run tests/fixtures/adcp_schemas_pinned/_refresh.py to vendor it."
+        )
+    with open(path) as f:
+        return json.load(f)
 
 
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
