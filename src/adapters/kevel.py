@@ -148,7 +148,7 @@ class Kevel(AdServerAdapter):
         for _index, _package, ref, _key in iter_package_property_list_refs(packages):
             try:
                 self._resolve_property_list(ref)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — best-effort warm; the compile path re-resolves and surfaces any error
                 self.log(
                     f"prewarm_targeting: deferring property_list resolution to compile path: {exc}",
                     dry_run_prefix=False,
