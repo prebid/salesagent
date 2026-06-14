@@ -2388,9 +2388,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # ── E2E_REST ledger + non-strict policy ──────────────────────
         # The e2e_rest transport dispatches over real HTTP to a separate server,
         # so scenarios relying on in-process mock injection can't pass. xfail the
-        # known ones (ledger), and make EVERY e2e_rest xfail non-strict: e2e is
-        # environment-dependent, so an xpass must not fail CI (this also clears
-        # the strict-xfail scenarios that now pass over the live in-network stack).
+        # known ones (ledger) as non-strict — e2e is environment-dependent, so a
+        # ledger xpass must not fail CI. Authored strict=True markers (the #1270
+        # validation tripwires at ~1475/~1502) are PRESERVED by the collapse
+        # below, so a real production fix still surfaces as a strict xpass.
         if is_e2e_rest:
             if nodeid in _E2E_REST_KNOWN_FAILURES:
                 item.add_marker(
