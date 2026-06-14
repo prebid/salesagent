@@ -311,6 +311,8 @@ repos:
         language: system
         types: [python]
         require_serial: true
+        # Ruff ignores pyproject exclude when paths are passed explicitly (pre-commit does).
+        exclude: ^alembic/versions/
       # Per ADR-001: lint runs via `uv run ruff check` from uv.lock — same
       # command as `make quality`. Replaces astral-sh/ruff-pre-commit (PR 2 #1234).
       - id: ruff-check
@@ -319,6 +321,7 @@ repos:
         language: system
         types: [python]
         args: [--fix, --exit-non-zero-on-fix]
+        exclude: ^alembic/versions/
 
   # Per ADR-001: mypy runs via `uv run` so it resolves from uv.lock.
   # This replaced mirrors-mypy + additional_dependencies in PR 2 of issue #1234,

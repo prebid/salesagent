@@ -142,7 +142,7 @@ fi
 
 # --- Security audit ---
 # Ignored-vulnerabilities list + uv-secure invocation are single-sourced in
-# scripts/security-audit.sh (same script is called by .github/workflows/test.yml,
+# scripts/security-audit.sh (same script is called by .github/workflows/ci.yml,
 # so CI and local cannot drift).
 echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
 if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then

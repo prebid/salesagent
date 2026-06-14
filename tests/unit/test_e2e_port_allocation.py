@@ -26,6 +26,7 @@ scanning.
 """
 
 import socket
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -73,6 +74,11 @@ class TestPortScanStartScattersByProcess:
         """A non-trivial fraction of PIDs must start above the low bound."""
         above = sum(1 for p in range(1, 500) if port_scan_start(50000, 60000, pid=p) > 50000)
         assert above > 400, "scan start barely moves off the low bound"
+
+    def test_non_int_pid_raises(self):
+        """Production contract: pid must be a real int, not a mock or sentinel."""
+        with pytest.raises(TypeError, match="pid must be int"):
+            port_scan_start(50000, 60000, pid=MagicMock())
 
 
 class TestFindFreePortDetectsDockerStyleBind:

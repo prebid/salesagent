@@ -15,11 +15,11 @@ beads: salesagent-t735
 
 import ast
 
-from tests.unit._migration_helpers import (
+from scripts.ci.migration_helpers import (
     MIGRATIONS_DIR,
-    get_migration_files,
     is_empty_body,
     is_merge_migration,
+    iter_migration_trees,
     parse_function,
 )
 
@@ -58,7 +58,7 @@ KNOWN_DOWNGRADE_COVERAGE_GAPS = {
 }
 
 
-def _extract_table_names(node: ast.FunctionDef) -> set[str]:
+def _extract_table_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """Extract table names referenced in op.XXX() calls."""
     tables = set()
     for child in ast.walk(node):
@@ -83,13 +83,7 @@ class TestMigrationCompleteness:
         missing = []
         empty = []
 
-        for path in get_migration_files():
-            source = path.read_text()
-            try:
-                tree = ast.parse(source, filename=str(path))
-            except SyntaxError:
-                continue
-
+        for path, tree in iter_migration_trees():
             if is_merge_migration(tree):
                 continue
 
@@ -112,14 +106,8 @@ class TestMigrationCompleteness:
         missing = []
         empty = []
 
-        for path in get_migration_files():
+        for path, tree in iter_migration_trees():
             if path.name in KNOWN_EMPTY_DOWNGRADE:
-                continue
-
-            source = path.read_text()
-            try:
-                tree = ast.parse(source, filename=str(path))
-            except SyntaxError:
                 continue
 
             if is_merge_migration(tree):
@@ -147,14 +135,8 @@ class TestMigrationCompleteness:
         """
         gaps = []
 
-        for path in get_migration_files():
+        for path, tree in iter_migration_trees():
             if path.name in KNOWN_DOWNGRADE_COVERAGE_GAPS:
-                continue
-
-            source = path.read_text()
-            try:
-                tree = ast.parse(source, filename=str(path))
-            except SyntaxError:
                 continue
 
             if is_merge_migration(tree):
