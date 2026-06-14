@@ -8,6 +8,7 @@ from adcp.types import PropertyListReference
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -208,8 +209,9 @@ class Kevel(AdServerAdapter):
             if targeting:
                 self.log(f"  Payload: {json.dumps(targeting, default=list)}")
             return
-        response = requests.put(f"{self.base_url}/flight/{package_id}", headers=self.headers, json=targeting)
-        response.raise_for_status()
+        with wrap_request_errors():
+            response = requests.put(f"{self.base_url}/flight/{package_id}", headers=self.headers, json=targeting)
+            response.raise_for_status()
         self.audit_logger.log_success(f"Updated Kevel flight {package_id} targeting for {media_buy_id}")
 
     def _validate_targeting(self, targeting_overlay):
@@ -487,8 +489,9 @@ class Kevel(AdServerAdapter):
                 "IsActive": True,
             }
 
-            response = requests.post(f"{self.base_url}/campaign", headers=self.headers, json=campaign_payload)
-            response.raise_for_status()
+            with wrap_request_errors():
+                response = requests.post(f"{self.base_url}/campaign", headers=self.headers, json=campaign_payload)
+                response.raise_for_status()
             campaign_data = response.json()
             campaign_id = campaign_data["Id"]
             self.audit_logger.log_success(f"Created Kevel Campaign ID: {campaign_id}")
@@ -534,8 +537,11 @@ class Kevel(AdServerAdapter):
                             )  # Convert to hours, minimum 1 (int for Kevel API)
                             flight_payload["FreqCapType"] = 1  # 1 = per user (cookie-based)
 
-                flight_response = requests.post(f"{self.base_url}/flight", headers=self.headers, json=flight_payload)
-                flight_response.raise_for_status()
+                with wrap_request_errors():
+                    flight_response = requests.post(
+                        f"{self.base_url}/flight", headers=self.headers, json=flight_payload
+                    )
+                    flight_response.raise_for_status()
 
             # Use the actual campaign ID from Kevel
             media_buy_id = f"kevel_{campaign_id}"
@@ -719,8 +725,9 @@ class Kevel(AdServerAdapter):
                 "Filter": {"CampaignId": media_buy_id},
             }
 
-            response = requests.post(f"{self.base_url}/report/queue", headers=self.headers, json=report_request)
-            response.raise_for_status()
+            with wrap_request_errors():
+                response = requests.post(f"{self.base_url}/report/queue", headers=self.headers, json=report_request)
+                response.raise_for_status()
             report_id = response.json()["Id"]
 
             # Poll for report completion (simplified - in production would need proper polling)
@@ -729,8 +736,9 @@ class Kevel(AdServerAdapter):
             time.sleep(1)
 
             # Get report results
-            results_response = requests.get(f"{self.base_url}/report/{report_id}/results", headers=self.headers)
-            results_response.raise_for_status()
+            with wrap_request_errors():
+                results_response = requests.get(f"{self.base_url}/report/{report_id}/results", headers=self.headers)
+                results_response.raise_for_status()
 
             # Parse results and aggregate
             results = results_response.json()

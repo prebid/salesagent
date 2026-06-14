@@ -6,6 +6,7 @@ import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -243,8 +244,9 @@ class TritonDigital(AdServerAdapter):
                 "active": True,
             }
 
-            response = requests.post(f"{self.base_url}/campaigns", headers=self.headers, json=campaign_payload)
-            response.raise_for_status()
+            with wrap_request_errors():
+                response = requests.post(f"{self.base_url}/campaigns", headers=self.headers, json=campaign_payload)
+                response.raise_for_status()
             campaign_data = response.json()
             campaign_id = campaign_data["id"]
 
@@ -278,8 +280,11 @@ class TritonDigital(AdServerAdapter):
                     if targeting and "stationIds" in targeting:
                         flight_payload["stationIds"] = targeting["stationIds"]
 
-                flight_response = requests.post(f"{self.base_url}/flights", headers=self.headers, json=flight_payload)
-                flight_response.raise_for_status()
+                with wrap_request_errors():
+                    flight_response = requests.post(
+                        f"{self.base_url}/flights", headers=self.headers, json=flight_payload
+                    )
+                    flight_response.raise_for_status()
 
             # Use the actual campaign ID from Triton
             media_buy_id = f"triton_{campaign_id}"
@@ -523,7 +528,7 @@ class TritonDigital(AdServerAdapter):
 
             except requests.exceptions.RequestException as e:
                 self.log(f"Error getting delivery report from Triton: {e}")
-                raise
+                raise AdCPAdapterError(str(e)) from e
 
     def update_media_buy_performance_index(
         self, media_buy_id: str, package_performance: list[PackagePerformance]

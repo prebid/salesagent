@@ -20,6 +20,8 @@ from urllib.parse import urlparse
 import pytz
 import requests
 
+from src.core.exceptions import AdCPAdapterError
+
 logger = logging.getLogger(__name__)
 
 
@@ -368,9 +370,9 @@ class GAMReportingService:
                 )
                 response.raise_for_status()
             except requests.exceptions.Timeout as e:
-                raise Exception(f"GAM report download timed out: {str(e)}") from e
+                raise AdCPAdapterError(f"GAM report download timed out: {str(e)}") from e
             except requests.exceptions.RequestException as e:
-                raise Exception(f"Failed to download GAM report: {str(e)}") from e
+                raise AdCPAdapterError(f"Failed to download GAM report: {str(e)}") from e
 
             # Parse the CSV data directly from the response with memory limits
             try:
