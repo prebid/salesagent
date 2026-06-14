@@ -129,3 +129,14 @@ class TestHostFromUrlOrHost:
 
     def test_empty_input_returns_empty(self):
         assert host_from_url_or_host("") == ""
+
+    def test_port_stripped_in_url_branch(self):
+        assert host_from_url_or_host("https://www.espn.com:8443/x") == "www.espn.com"
+
+    def test_port_stripped_in_bare_host_branch(self):
+        # Both branches must normalize identically: a subdomain identifier value
+        # carrying a port must still match the same host.
+        assert host_from_url_or_host("www.espn.com:8443") == "www.espn.com"
+
+    def test_bare_host_with_port_and_path(self):
+        assert host_from_url_or_host("edition.cnn.com:80/world") == "edition.cnn.com"

@@ -54,6 +54,7 @@ from adcp.types.generated_poc.media_buy.create_media_buy_response import (  # TO
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPNotFoundError
+from src.core.ext_namespace import prebid_vendor
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -204,10 +205,8 @@ def _ext_property_list_advisories(ext: Any) -> list | None:
     and would silently drop the advisory from the protocol ``message`` — the
     storyboard's named not-acceptable outcome.
     """
-    if ext is None:
-        return None
-    vendor = ext.get("prebid") if isinstance(ext, dict) else getattr(ext, "prebid", None)
-    if not isinstance(vendor, dict):
+    vendor = prebid_vendor(ext)
+    if vendor is None:
         return None
     entries = vendor.get("property_list_advisories")
     return entries if isinstance(entries, list) else None

@@ -90,8 +90,8 @@ def host_from_url_or_host(value: str) -> str:
     """
     if not value:
         return ""
-    if "://" in value:
-        host = urllib.parse.urlparse(value).hostname or ""
-    else:
-        host = value.split("/", 1)[0]
-    return host.strip().lower()
+    # Parse both forms the same way so the port is stripped identically: a bare
+    # host[:port] has no scheme, so give it the ``//`` netloc prefix. ``.hostname``
+    # drops the port and lowercases, and handles bracketed IPv6.
+    parsed = urllib.parse.urlparse(value if "://" in value else f"//{value}")
+    return (parsed.hostname or "").strip().lower()

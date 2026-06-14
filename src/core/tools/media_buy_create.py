@@ -110,6 +110,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+from src.core.ext_namespace import prebid_ext
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -1657,12 +1658,10 @@ def _advisory_ext(advisories: list[Error]) -> dict | None:
     if not advisories:
         return None
     # Vendor-namespaced per the spec's ExtensionObject description ("must be
-    # namespaced under a vendor/platform key").
-    return {
-        "prebid": {
-            "property_list_advisories": [advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories]
-        }
-    }
+    # namespaced under a vendor/platform key"); the namespace lives in prebid_ext.
+    return prebid_ext(
+        property_list_advisories=[advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories]
+    )
 
 
 def _build_idempotency_hit_result(

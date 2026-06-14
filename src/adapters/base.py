@@ -536,10 +536,11 @@ class AdServerAdapter(ABC):
         override with a documented no-op.
         """
         from src.core.exceptions import AdCPCapabilityNotSupportedError
+        from src.core.validation_helpers import package_field_path
 
         raise AdCPCapabilityNotSupportedError(
             f"{type(self).__name__} declares property_list support but cannot recompile targeting on update_media_buy.",
-            field="targeting_overlay.property_list",
+            field=package_field_path("targeting_overlay.property_list"),
             suggestion="Remove targeting_overlay changes from the update, or contact the seller.",
         )
 

@@ -34,7 +34,12 @@ class ThreadSafeTTLCache(Generic[K, V]):
         self._lock = threading.Lock()
 
     def get(self, key: K) -> V | None:
-        """Return the cached value, dropping and missing on expiry."""
+        """Return the cached value, dropping and missing on expiry.
+
+        The returned value is the SHARED stored reference, not a copy: treat it as
+        immutable. Mutating it corrupts the entry for every other reader (the cache
+        is shared across threads/event loops). All current callers read-only.
+        """
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:

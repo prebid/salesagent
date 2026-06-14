@@ -31,6 +31,7 @@ from fastmcp.tools.tool import ToolResult
 
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.ext_namespace import prebid_ext
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -273,7 +274,7 @@ def _get_adcp_capabilities_impl(
         # (Kevel → siteIds; mock → simulation). No standard flag exists at
         # 3.0.1 for the targeting side, so it rides the response's ext,
         # vendor-namespaced per the spec's ExtensionObject guidance.
-        ext={"prebid": {"property_list_targeting": supports_property_list_targeting(adapter)}},
+        ext=prebid_ext(property_list_targeting=supports_property_list_targeting(adapter)),
         last_updated=datetime.now(UTC),
     )
 
