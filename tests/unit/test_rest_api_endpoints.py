@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 
 from src.app import app
 from src.core.resolved_identity import ResolvedIdentity
+from tests.helpers import assert_envelope_shape
 
 client = TestClient(app)
 
@@ -161,11 +162,10 @@ class TestGetMediaBuyDeliveryEndpoint:
         )
 
         assert response.status_code == 200
-        mock_enrich.assert_called_once()
-        called_identity, called_account = mock_enrich.call_args.args
-        assert called_identity is _MOCK_IDENTITY
-        assert isinstance(called_account, LibraryAccountReference)
-        assert called_account.root.brand.domain == "example.com"
+        expected_account = LibraryAccountReference.model_validate(
+            {"brand": {"domain": "example.com"}, "operator": "op-1", "sandbox": False}
+        )
+        mock_enrich.assert_called_once_with(_MOCK_IDENTITY, expected_account)
         assert mock_impl.call_args.kwargs["identity"] is enriched_identity
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
@@ -179,9 +179,7 @@ class TestGetMediaBuyDeliveryEndpoint:
         )
 
         assert response.status_code == 400
-        body = response.json()
-        assert body["adcp_error"]["code"] == "VALIDATION_ERROR"
-        assert body["errors"][0]["code"] == "VALIDATION_ERROR"
+        assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
         mock_enrich.assert_not_called()
         mock_impl.assert_not_called()
 
