@@ -12,10 +12,10 @@ Philosophy:
 
 from typing import Any
 
-# FIXME(#1360): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
+# FIXME(#1388): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
 from adcp import GetProductsResponse, Product
 
-# FIXME(#1360): ProductFilters has a local subclass; import from src.core.schemas.
+# FIXME(#1388): ProductFilters has a local subclass; import from src.core.schemas.
 from adcp.types import BrandReference, ContextObject, ProductFilters, PropertyListReference, ReportingWebhook
 
 from src.core.schemas.product import GetProductsRequest

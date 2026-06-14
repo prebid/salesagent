@@ -24,7 +24,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Portfolio,
     PublisherDomain,
     SupportedProtocol,
-    # FIXME(#1360): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
+    # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
     Targeting,
 )
 from fastmcp.server.context import Context

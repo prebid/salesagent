@@ -46,22 +46,22 @@ def _get_local_schema_names() -> set[str]:
 # Format: (relative_path_from_src, imported_name)
 # Pre-existing violations that predate this guard. The list can only shrink.
 ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(#1360): xandr adapter imports SDK types directly
+    # FIXME(#1388): xandr adapter imports SDK types directly
     ("src/adapters/xandr.py", "DeliveryMeasurement"),
     ("src/adapters/xandr.py", "DeliveryType"),
-    # FIXME(#1360): admin blueprints import SDK types directly
+    # FIXME(#1388): admin blueprints import SDK types directly
     ("src/admin/blueprints/operations.py", "Package"),
-    # FIXME(#1360): core modules import SDK types directly
+    # FIXME(#1388): core modules import SDK types directly
     ("src/core/creative_agent_registry.py", "ListCreativeFormatsRequest"),
     ("src/core/schema_helpers.py", "GetProductsResponse"),
     ("src/core/schema_helpers.py", "Product"),
     ("src/core/schema_helpers.py", "ProductFilters"),
-    # FIXME(#1360): tools import SDK types directly
+    # FIXME(#1388): tools import SDK types directly
     ("src/core/tools/capabilities.py", "Targeting"),
     ("src/core/tools/creative_formats.py", "FormatId"),
     ("src/core/tools/products.py", "FormatId"),
     ("src/core/tools/products.py", "ProductFilters"),
-    # FIXME(#1360): services import SDK types directly
+    # FIXME(#1388): services import SDK types directly
     ("src/services/dynamic_pricing_service.py", "FormatId"),
 }
 
