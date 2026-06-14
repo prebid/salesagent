@@ -1763,54 +1763,6 @@ class TestAdCPContract:
             f"CreateMediaBuySuccess should have at least 3 required fields, got {len(adcp_response)}"
         )
 
-    def test_create_media_buy_success_carries_valid_actions_and_context(self):
-        """CreateMediaBuySuccess must emit valid_actions + context, per the pinned schema.
-
-        AUTHORITY: adcontextprotocol/adcp@04f59d2d5 (tag v3.1-04f59d2d5) —
-        static/schemas/source/media-buy/create-media-buy-response.json. Its success
-        variant (the oneOf branch with media_buy_id) defines both `valid_actions` and
-        `context`. We assert that against the vendored pinned schema, not against the
-        SDK types or live /schemas/latest (which drift). Production emits both
-        (media_buy_create.py), so the wire must carry them with the schema's names.
-
-        Mechanism note: they were undeclared on the model, surviving only via the
-        library parent's inherited extra='allow'; we declare them so the contract is
-        deliberate and typed (consistent with account/sandbox/creative_deadline) and
-        can't silently regress if the parent's extra-mode changes.
-        """
-        import json
-        from pathlib import Path
-
-        from src.core.schemas import CreateMediaBuySuccess
-
-        # --- Authority: the pinned AdCP create-media-buy-response success variant ---
-        pinned = json.loads(
-            (
-                Path(__file__).parent.parent / "fixtures/adcp_schemas_pinned/media-buy/create-media-buy-response.json"
-            ).read_text()
-        )
-        success_variant = next(v for v in pinned["oneOf"] if "media_buy_id" in v.get("properties", {}))
-        success_props = set(success_variant["properties"])
-        assert {"valid_actions", "context"} <= success_props, (
-            f"pinned 04f59d2d5 create-media-buy-response success variant must define "
-            f"valid_actions + context; got {sorted(success_props)}"
-        )
-
-        # --- Behavior: our success model emits both on the wire, per the schema ---
-        resp = CreateMediaBuySuccess(
-            media_buy_id="mb_1",
-            packages=[{"package_id": "pkg_1", "paused": False}],
-            valid_actions=["pause", "resume"],
-            context={"session_id": "s1"},
-        )
-        dumped = resp.model_dump(mode="json")
-        assert dumped["valid_actions"] == ["pause", "resume"]  # enum serializes to schema strings
-        assert dumped["context"] == {"session_id": "s1"}
-
-        # --- Mechanism guard: declared (deliberate/typed), not incidental extra='allow' ---
-        assert "valid_actions" in CreateMediaBuySuccess.model_fields
-        assert "context" in CreateMediaBuySuccess.model_fields
-
     def test_get_products_response_adcp_compliance(self):
         """Test that GetProductsResponse complies with AdCP get-products-response schema."""
         # Create Product using the actual Product model (not ProductSchema)

@@ -14,6 +14,8 @@ all spec-compliant requests.
 """
 
 import json
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +24,12 @@ from pydantic import ValidationError
 
 from src.core.schemas import (
     CreateMediaBuyRequest,
+    CreateMediaBuySuccess,
     GetMediaBuyDeliveryRequest,
     GetProductsRequest,
     ListCreativesRequest,
     SyncCreativesRequest,
+    SyncResponseAccount,
     UpdateMediaBuyRequest,
 )
 
@@ -666,6 +670,102 @@ class TestFieldNameConsistency:
                     f"   These fields are defined in AdCP spec but not in Pydantic model.\n"
                     f"   Schema: {schema_ref}\n"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Response-model alignment (pinned).
+#
+# Response schemas are oneOf unions, so a local success model maps to one variant
+# (and, for list responses, a nested item). These checks reuse the SAME pinned
+# load_json_schema() as the request checks above — no per-test hand-rolled schema
+# IO — so "model conforms to the pinned schema" lives in one place.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResponseAlignment:
+    """Maps a local success model to its pinned response (sub-)schema."""
+
+    schema_ref: str
+    selector: str  # a property that identifies the success oneOf variant
+    item_key: str | None  # if set, the per-element schema is variant.properties[item_key].items
+    model: type
+    declared_fields: frozenset[str] = frozenset()  # fields that MUST be declared on the model
+    sample: dict[str, Any] = dataclass_field(default_factory=dict)  # valid kwargs for required-enforcement
+
+
+RESPONSE_ALIGNMENTS = [
+    # create-media-buy-response success carries valid_actions + context (PR #1388 F4).
+    ResponseAlignment(
+        schema_ref="/schemas/media-buy/create-media-buy-response.json",
+        selector="media_buy_id",
+        item_key=None,
+        model=CreateMediaBuySuccess,
+        declared_fields=frozenset({"valid_actions", "context"}),
+        sample={"media_buy_id": "mb_1", "packages": [{"package_id": "pkg_1", "paused": False}]},
+    ),
+    # sync-accounts-response per-account item requires brand/operator/action/status (PR #1388 F5).
+    ResponseAlignment(
+        schema_ref="/schemas/account/sync-accounts-response.json",
+        selector="accounts",
+        item_key="accounts",
+        model=SyncResponseAccount,
+        sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
+    ),
+]
+
+
+def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any]:
+    """Resolve the pinned (sub-)schema a response model maps to."""
+    schema = load_json_schema(alignment.schema_ref)
+    variant = next(v for v in schema["oneOf"] if alignment.selector in v.get("properties", {}))
+    if alignment.item_key:
+        return variant["properties"][alignment.item_key]["items"]
+    return variant
+
+
+class TestResponseModelAlignment:
+    """Local success models conform to the pinned AdCP response schemas."""
+
+    @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
+    def test_declared_fields_present_in_schema_and_model(self, alignment: ResponseAlignment):
+        """Each declared_field is defined by the pinned schema AND declared on the model.
+
+        Catches fields that production emits but the model only carries via inherited
+        extra='allow' (would silently vanish if the parent's extra-mode changed).
+        """
+        if not alignment.declared_fields:
+            pytest.skip(f"{alignment.model.__name__}: no declared-field requirement")
+        item = _resolve_response_item_schema(alignment)
+        schema_props = set(item.get("properties", {}))
+        model_fields = set(alignment.model.model_fields)
+        for fname in alignment.declared_fields:
+            assert fname in schema_props, f"{fname!r} not defined by pinned schema {alignment.schema_ref}"
+            assert fname in model_fields, (
+                f"{fname!r} is defined by the pinned schema but NOT declared on "
+                f"{alignment.model.__name__} (only surviving via extra='allow')"
+            )
+
+    @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
+    def test_required_fields_enforced(self, alignment: ResponseAlignment):
+        """The model enforces every field the pinned schema marks required."""
+        item = _resolve_response_item_schema(alignment)
+        required = set(item.get("required", [])) - _VERSION_FIELDS
+        if not required:
+            pytest.skip(f"{alignment.model.__name__}: pinned schema marks no required fields")
+        assert alignment.sample, (
+            f"{alignment.model.__name__}: schema requires {sorted(required)} but no sample provided"
+        )
+        assert required <= set(alignment.sample), (
+            f"sample for {alignment.model.__name__} missing required keys: {sorted(required - set(alignment.sample))}"
+        )
+        # The complete required set constructs cleanly.
+        assert alignment.model(**alignment.sample) is not None
+        # Omitting any required field must raise (the model enforces it, not the call sites).
+        for fname in required:
+            partial = {k: v for k, v in alignment.sample.items() if k != fname}
+            with pytest.raises(ValidationError):
+                alignment.model(**partial)
 
 
 if __name__ == "__main__":

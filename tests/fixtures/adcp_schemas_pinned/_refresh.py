@@ -44,6 +44,7 @@ ROOTS = [
     "/schemas/creative/list-creatives-request.json",
     # Response schemas grounding specific contract tests:
     "/schemas/media-buy/create-media-buy-response.json",  # test_adcp_contract F4 (valid_actions/context)
+    "/schemas/account/sync-accounts-response.json",  # test_sync_response_account_contract F5 (required fields)
 ]
 
 
