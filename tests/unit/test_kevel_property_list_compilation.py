@@ -481,12 +481,13 @@ class TestPrewarmTargeting:
 
     def test_kevel_warms_resolver_cache_for_each_ref(self):
         adapter = _kevel()
+        ref = _ref()
         with patch.object(adapter, "_site_resolver") as mock_resolver:
             mock_resolver.resolve.return_value = ResolvedSiteIds(
                 site_ids={42}, unsupported_types=set(), unresolvable_values=[]
             )
-            adapter.prewarm_targeting([_package_with_ref(_ref())])
-            mock_resolver.resolve.assert_called_once()
+            adapter.prewarm_targeting([_package_with_ref(ref)])
+            mock_resolver.resolve.assert_called_once_with(ref)
         # The per-request cache is now warm, so the later synchronous compile
         # does not re-hit the multi-second /v1/site fetch on the event loop.
         assert adapter._property_list_cache
