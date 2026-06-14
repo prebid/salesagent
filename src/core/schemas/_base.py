@@ -225,6 +225,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # it (adapters/base.py _build_create_success). Declare it for parity/typing so
     # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
     creative_deadline: datetime | None = None
+    # SDK 5.7 also dropped valid_actions and context from the parent, but production
+    # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
+    # and survives a parent extra-mode change, not riding inherited extra='allow'.
+    # valid_actions_for_status() yields strings that are all valid MediaBuyValidAction
+    # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
+    valid_actions: list[MediaBuyValidAction] | None = None
+    context: ContextObject | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None

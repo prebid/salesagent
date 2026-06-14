@@ -34,13 +34,16 @@ SRC_PREFIX = "static/schemas/source"  # repo path that backs the `/schemas/...` 
 LOCAL_CLONE = Path.home() / "projects" / "adcp"
 FIXTURE_DIR = Path(__file__).parent
 
-# Request schemas the alignment test maps to Pydantic models (the BFS roots).
+# Request schemas the alignment test maps to Pydantic models, plus response schemas
+# whose contract individual tests assert against (the BFS roots).
 ROOTS = [
     "/schemas/media-buy/get-products-request.json",
     "/schemas/media-buy/update-media-buy-request.json",
     "/schemas/media-buy/get-media-buy-delivery-request.json",
     "/schemas/creative/sync-creatives-request.json",
     "/schemas/creative/list-creatives-request.json",
+    # Response schemas grounding specific contract tests:
+    "/schemas/media-buy/create-media-buy-response.json",  # test_adcp_contract F4 (valid_actions/context)
 ]
 
 
