@@ -8,7 +8,7 @@
 # The runner joins the compose network and reaches Postgres/the server by
 # SERVICE NAME (postgres:5432, proxy:8000) — so it needs no published host ports,
 # which is what eliminates the cross-stack host-port collisions (see
-# docker-compose.e2e.yml `tests` service + scripts/test-in-network.sh).
+# docker-compose.e2e.yml `tests` service + run_all_tests.sh).
 # Pin to bookworm (Debian 12), NOT the bare `python:3.12-slim` tag which has
 # rolled to trixie (Debian 13). Playwright 1.60's `install --with-deps` apt-installs
 # bookworm-era font packages (ttf-unifont, ttf-ubuntu-font-family) that trixie

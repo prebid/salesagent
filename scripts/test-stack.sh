@@ -80,7 +80,7 @@ reap_abandoned_stacks() {
 
 # Host stack: pytest runs on the host and reaches the stack over localhost, so
 # overlay the ports file (the base compose publishes no host ports — reserved for
-# the in-network runner, scripts/test-in-network.sh).
+# the in-network runner, run_all_tests.sh).
 dc() { docker-compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml -p "${COMPOSE_PROJECT_NAME:-adcp-test-$$}" "$@"; }
 
 cmd_up() {

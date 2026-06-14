@@ -91,7 +91,7 @@ services:
   #
   # Gated behind a profile so a normal `up` does not start it; the runner is
   # launched explicitly via `docker compose run --rm tests ...`
-  # (see scripts/test-in-network.sh).
+  # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
     build:
@@ -185,7 +185,7 @@ services:
   # :9999); in-network we reuse the SAME pre-built image (`adcp-creative-agent`,
   # adcp@ca70dd1e2a6c) so CI/host/in-network cannot diverge on the pin. The
   # image is built by `scripts/creative-agent-stack.sh build` (called from
-  # scripts/test-in-network.sh) before `up`. Gated behind the runner profile so a
+  # run_all_tests.sh) before `up`. Gated behind the runner profile so a
   # normal e2e `up` never pulls it.
   creative-pg:
     profiles: ["runner"]
