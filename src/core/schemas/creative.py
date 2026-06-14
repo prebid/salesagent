@@ -373,8 +373,13 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     @field_validator("action", mode="before")
     @classmethod
-    def _normalize_action_to_str(cls, v: Any) -> str:
-        """Normalize CreativeAction enum to its string value."""
+    def _normalize_action_to_str(cls, v: Any) -> str | None:
+        """Normalize CreativeAction enum to its string value.
+
+        Returns ``None`` only when ``v`` is ``None`` (delegated to ``enum_value``);
+        the required ``action: str`` field type then rejects it. Annotated
+        ``str | None`` to match ``enum_value``'s real return.
+        """
         return enum_value(v)
 
     # --- Fields removed from SDK 5.7 that we own locally ---

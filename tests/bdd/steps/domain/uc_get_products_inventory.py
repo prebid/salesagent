@@ -132,7 +132,6 @@ def given_profile_legacy(ctx: dict, ids: str, domain: str) -> None:
             }
         ],
     )
-    ctx["expected_legacy_fields"] = legacy_fields
 
 
 @given("a product linked to that inventory profile with pricing")

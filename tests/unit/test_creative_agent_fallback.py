@@ -318,8 +318,8 @@ class TestTolerantPerFormatIngestion:
     One unknown AdCP-additive asset_type must NOT nuke the whole
     list_creative_formats response. Fully-understood formats are returned;
     formats whose ONLY problem is an unrecognized additive asset_type are
-    dropped (never mis-represented) with ONE aggregated WARNING; genuinely
-    malformed formats still fail LOUD.
+    passed through (the unknown additive asset_type is tolerated) with ONE
+    aggregated WARNING; genuinely malformed formats still fail LOUD.
     """
 
     def test_unknown_additive_asset_type_passes_through(self, registry, caplog):
