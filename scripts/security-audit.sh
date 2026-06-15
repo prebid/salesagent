@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Security audit — SINGLE SOURCE OF TRUTH for the ignored-vulnerabilities list.
-# Both ./run_all_tests.sh and .github/workflows/test.yml call this script, so
+# Both ./run_all_tests.sh and .github/workflows/ci.yml call this script, so
 # the list cannot drift between local and CI.
 #
 # Ignored advisories (each documented with rationale):
