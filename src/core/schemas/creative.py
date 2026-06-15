@@ -212,7 +212,7 @@ class Creative(LibraryCreative):
         if self.principal_id is not None:
             data["principal_id"] = self.principal_id
         # Ensure status is always present as string value for DB storage
-        data["status"] = self.status.value if isinstance(self.status, CreativeStatus) else self.status
+        data["status"] = enum_value(self.status)
         return data
 
 

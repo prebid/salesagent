@@ -3046,7 +3046,7 @@ async def _create_media_buy_impl(
                         else:
                             package_budget_value = None
 
-            delivery_type_str = str(pkg_product.delivery_type.value)
+            delivery_type_str = enum_value(pkg_product.delivery_type)
 
             delivery_type_value: Literal["guaranteed", "non_guaranteed"] = cast(
                 Literal["guaranteed", "non_guaranteed"], delivery_type_str

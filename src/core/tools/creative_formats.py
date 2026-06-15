@@ -133,9 +133,7 @@ def build_list_creative_formats_request(
     context: ContextObject | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
-    asset_types_strs = (
-        [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
-    )
+    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
     return ListCreativeFormatsRequest(
         format_ids=format_ids,
         output_format_ids=output_format_ids,
