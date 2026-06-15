@@ -255,6 +255,31 @@ class TestA2AParameterMapping:
                 context=ANY,
                 identity=ANY,
             )
+            
+    def test_get_media_buy_delivery_rejects_malformed_account(self):
+        """Malformed account should fail validation and not call the core tool."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPValidationError
+
+        handler = AdCPRequestHandler()
+
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
+            patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery,
+        ):
+            parameters = {"account": {}}
+
+            import asyncio
+
+            with pytest.raises(AdCPValidationError):
+                asyncio.run(
+                    handler._handle_get_media_buy_delivery_skill(
+                        parameters=parameters,
+                        identity=_MOCK_IDENTITY,
+                    )
+                )
+
+            mock_delivery.assert_not_called()
 
     def test_create_media_buy_validates_required_adcp_parameters(self):
         """
