@@ -13,7 +13,14 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsResponse, Product
-from adcp.types import BrandReference, ContextObject, ProductFilters, PropertyListReference, ReportingWebhook
+from adcp.types import (
+    AccountReference,
+    BrandReference,
+    ContextObject,
+    ProductFilters,
+    PropertyListReference,
+    ReportingWebhook,
+)
 
 from src.core.schemas.product import GetProductsRequest
 
@@ -71,6 +78,25 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
         return BrandReference(domain=brand)
     if isinstance(brand, dict):
         return BrandReference(**brand)
+    return None  # Fallback for unexpected types
+
+
+def to_account_reference(account: dict[str, Any] | AccountReference | None) -> AccountReference | None:
+    """Convert dict to AccountReference for adcp compatibility.
+
+    Args:
+        account: Account reference as dict, AccountReference, or None
+
+    Returns:
+        AccountReference or None
+    """
+    if account is None:
+        return None
+    if isinstance(account, AccountReference):
+        return account
+    if isinstance(account, dict):
+        # AccountReference is a RootModel, so validate the whole value instead of field-unpacking.
+        return AccountReference.model_validate(account)
     return None  # Fallback for unexpected types
 
 
@@ -139,6 +165,7 @@ def create_get_products_request(
 
 # Re-export commonly used generated types for convenience
 __all__ = [
+    "to_account_reference",
     "to_brand_reference",
     "to_context_object",
     "to_reporting_webhook",
