@@ -1935,7 +1935,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with idempotency_key "buy-2026-q1-expired-001"
     And the (seller, account, idempotency_key) pair was recorded but its cached response expired past replay_ttl_seconds
     When the Buyer Agent sends the create_media_buy request
-    Then the response should indicate a terminal failure
+    Then the response should indicate a correctable failure
     And the error code should be "IDEMPOTENCY_EXPIRED"
     And the error should include "suggestion" field
     And no new media buy should have been created
@@ -2288,7 +2288,7 @@ Feature: BR-UC-002 Create Media Buy
     And a prior media buy "mb-789" exists for the same (seller, idempotency_key) pair with revision 1
     And the new request payload diverges from the prior request payload
     When the Buyer Agent sends the create_media_buy request
-    Then the response should indicate a terminal failure
+    Then the response should indicate a correctable failure
     And the error code should be "IDEMPOTENCY_CONFLICT"
     And the error details should include resource_id "mb-789"
     And the error details should include current_version 1

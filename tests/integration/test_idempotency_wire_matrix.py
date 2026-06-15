@@ -140,6 +140,62 @@ class TestIdempotencyWireMatrix:
         assert second.payload.replayed is False, "a fresh key must never replay"
         assert second.payload.response.media_buy_id != first.payload.response.media_buy_id
 
+    def test_expired_replay_window_rejects(self, integration_db, transport):
+        """A retry after the replay window has expired rejects with
+        IDEMPOTENCY_EXPIRED (correctable) on the real wire.
+
+        Drives the degraded fail-closed path: create for real (cache row +
+        MediaBuy backstop), age the cached row past its TTL while the backstop
+        stays fresh, then retry. The probe misses the expired row, the create
+        hits the backstop, and the degraded path anchors expiry on the stored
+        expires_at. Pins the EXPIRED wire shape — the only idempotency error code
+        previously asserted solely through the reconstructed exception, and the
+        recovery class corrected from terminal to correctable.
+        """
+        from src.core.database.repositories import MediaBuyUoW
+
+        key = f"wire-expired-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            kwargs = _create_kwargs(product, idempotency_key=key)
+
+            first = env.call_via(transport, **dict(kwargs))
+            assert first.is_success, f"fresh create failed on {transport.value}: {first.error}"
+
+            # Age the cached row past its replay TTL; the backstop MediaBuy stays
+            # fresh, so a correct degraded path must read the row's stored expires_at.
+            with MediaBuyUoW(env._tenant_id) as uow:
+                assert uow.idempotency_attempts is not None
+                row = uow.idempotency_attempts.find_including_expired(
+                    principal_id=env._principal_id, idempotency_key=key
+                )
+                assert row is not None, "the fresh create must have written a cache row"
+                row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+            second = env.call_via(transport, **dict(kwargs))
+
+        assert second.is_error, f"an expired replay window must reject on {transport.value}"
+        if transport is Transport.IMPL:
+            # IMPL has no wire — grade the synthesized envelope (what production
+            # WOULD emit), exactly as the conflict leg does.
+            envelope = second.synthesized_error_envelope
+        else:
+            envelope = second.wire_error_envelope
+        assert envelope is not None, f"EXPIRED must carry the two-layer envelope on {transport.value}"
+        assert_envelope_shape(envelope, "IDEMPOTENCY_EXPIRED", recovery="correctable")
+        # The spec's buyer-recovery guidance (the natural-key check that MAKES
+        # EXPIRED correctable) must ride the WIRE on both envelope layers — not
+        # just live at the raise site — on every transport.
+        for layer_name, layer in (("adcp_error", envelope["adcp_error"]), ("errors[0]", envelope["errors"][0])):
+            assert layer.get("suggestion"), (
+                f"EXPIRED must carry a suggestion in {layer_name} on {transport.value}: {layer}"
+            )
+        assert "natural-key" in envelope["adcp_error"]["suggestion"], (
+            f"EXPIRED suggestion must point the buyer at a natural-key check on {transport.value}: "
+            f"{envelope['adcp_error']['suggestion']}"
+        )
+
 
 class TestA2ADefaultsDoNotBreakReplay:
     """A2A must not fold server-minted defaults into the canonical payload.

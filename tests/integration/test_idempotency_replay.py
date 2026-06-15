@@ -352,6 +352,59 @@ class TestErrorsAreNeverCached:
             )
             assert cached is None, "Errors must never be cached — a retry must re-execute"
 
+    def test_retry_after_error_re_executes_to_fresh_success(self, integration_db):
+        """Storyboard rule 5 (security.mdx#idempotency): an error caches nothing,
+        so a retry with the same key re-executes to a FRESH success (replayed is
+        False) — not a replay, not IDEMPOTENCY_CONFLICT.
+
+        What this pins (mutation-verified): the error path returns ``failed`` and
+        the same-key retry books a fresh buy; it reddens if an error result is
+        ever routed through ``_cache_and_return`` (the fail-loud precondition
+        fires). The complementary "no cache row is written on error" invariant is
+        pinned directly by ``test_adapter_rejection_not_cached`` — that is the
+        oracle for a cache-the-error regression; this is the fresh-re-execution half.
+        """
+        from datetime import timedelta
+
+        from src.core.schemas import CreateMediaBuyError, Error
+        from src.core.schemas._base import CreateMediaBuySuccess
+
+        idem_key = f"err-retry-{uuid.uuid4().hex}"
+        now = datetime.now(UTC)
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            kwargs = {
+                "brand": {"domain": "err-retry.example.com"},
+                "packages": [
+                    {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
+                ],
+                "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "po_number": "ERR-RETRY",
+                "idempotency_key": idem_key,
+            }
+            adapter = env.mock["adapter"].return_value
+
+            # First attempt: adapter rejects -> failed result, nothing cached, no
+            # MediaBuy backstop (the rejection returns before the persist).
+            adapter.create_media_buy.side_effect = None
+            adapter.create_media_buy.return_value = CreateMediaBuyError(
+                errors=[Error(code="ADAPTER_ERROR", message="adapter failure", recovery="terminal")],
+                context=None,
+            )
+            first = env.call_impl(**dict(kwargs))
+            assert first.status == "failed"
+
+            # Restore the happy-path adapter and retry the SAME key + same payload.
+            adapter.create_media_buy.return_value = None
+            adapter.create_media_buy.side_effect = adapter._original_create_side_effect
+            second = env.call_impl(**dict(kwargs))
+
+        assert isinstance(second.response, CreateMediaBuySuccess), f"retry must re-execute, got {second}"
+        assert second.status != "failed"
+        assert second.replayed is False, "an error caches nothing — the retry is a fresh execution, not a replay"
+
 
 @pytest.mark.requires_db
 def test_suppressed_eviction_never_touches_the_create(integration_db, monkeypatch):

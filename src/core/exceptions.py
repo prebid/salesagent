@@ -749,15 +749,21 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     key the seller has seen SHOULD be rejected with ``IDEMPOTENCY_EXPIRED``
     rather than silently treated as new or answered with another buy's data.
 
-    Recovery=terminal: no resend of THIS key can ever succeed — the buyer must
-    reconcile state via a read and mint a fresh key, which is a different
-    request, not a correction of this one. The 3.0.1 prose assigns no recovery
-    class to this code; ``terminal`` matches the SDK's default classification
-    and the blind-retry-never-succeeds semantics.
+    Recovery=correctable, matching the sibling ``IDEMPOTENCY_CONFLICT``: the
+    buyer agent recovers autonomously — a natural-key existence check (e.g.
+    ``get_media_buys`` by ``context.internal_campaign_id``) to learn whether the
+    original request succeeded, then either accept that result or mint a fresh
+    idempotency_key for a new attempt. The 3.0.1 ``error-code.json`` enum
+    description classifies the code ``correctable`` (that buyer-recovery path),
+    and the recovery taxonomy reserves ``terminal`` for conditions requiring
+    HUMAN action (account suspended, payment required) — not an agent-resolvable
+    retry. The SDK's ``STANDARD_ERROR_CODES`` default table lists it ``terminal``,
+    but that default applies only when no recovery is supplied; an explicit
+    recovery wins, exactly as for ``IDEMPOTENCY_CONFLICT``.
     """
 
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPCreativeRejectedError(AdCPError):

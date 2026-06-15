@@ -1546,7 +1546,13 @@ def _raise_degraded_replay_outcome(
         if window_expired:
             raise AdCPIdempotencyExpiredError(
                 "idempotency_key was seen before, but its replay window "
-                f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired"
+                f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired",
+                suggestion=(
+                    "Perform a natural-key existence check (e.g. get_media_buys by "
+                    "context.internal_campaign_id) to determine whether the original "
+                    "request succeeded, then accept that result or mint a fresh "
+                    "idempotency_key for a new attempt."
+                ),
             )
 
         # Rule 5: same key + different canonical payload conflicts even on the
@@ -1682,14 +1688,18 @@ def _cache_and_return(
     the winner). ``MediaBuy.idempotency_key`` remains the dup-booking backstop; this
     cache only holds the response to replay verbatim.
     """
-    if (
-        request_hash is None
-        or not req.idempotency_key
-        or identity.tenant_id is None
-        or identity.principal_id is None
-        or not isinstance(result.response, CreateMediaBuySuccess)
-    ):
+    if request_hash is None or not req.idempotency_key or identity.tenant_id is None or identity.principal_id is None:
         return result
+
+    # Errors are never cached (AdCP 3.0.1 security.mdx#idempotency rule 3). The
+    # real enforcement of that invariant is the error paths' early returns —
+    # they return before reaching this helper, so every caller hands us a
+    # success. The TestErrorsAreNeverCached suite pins it. This precondition is a
+    # fail-loud contract guard: if a future refactor ever routes a non-success
+    # here it raises, instead of silently skipping the cache write.
+    assert isinstance(result.response, CreateMediaBuySuccess), (
+        "_cache_and_return must be called only with a successful result"
+    )
 
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
     from src.core.database.repositories import MediaBuyUoW
@@ -1757,6 +1767,66 @@ def _replay_after_race(
         tenant_id,
         idempotency_key,
         principal_id,
+        account_id=account_id,
+        request_hash=request_hash,
+    )
+
+
+# The media_buys dup-booking backstop: a unique index over the idempotency scope
+# (tenant, principal, account, key). A concurrent same-key create that loses the
+# commit race violates THIS index — the signal we resolve to the winner's reply.
+_IDEMPOTENCY_BACKSTOP_INDEX = "idx_media_buys_idempotency_key"
+
+
+def _is_idempotency_backstop_violation(exc: IntegrityError) -> bool:
+    """True iff ``exc`` is the media_buys idempotency-key unique-index collision.
+
+    The single home for the "is this the idempotency race?" decision. Prefers the
+    driver's structured constraint name (``exc.orig.diag.constraint_name``), matched
+    by PREFIX against the backstop index — so a build-time rename suffix (the
+    CONCURRENTLY swap variants ``…_acct`` / ``…_noacct``) still matches, while an
+    unrelated constraint that merely contains the column token does not. Falls back
+    to a message substring scan only when the structured diagnostic is unavailable.
+    """
+    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint:
+        return constraint.startswith(_IDEMPOTENCY_BACKSTOP_INDEX)
+    return "idempotency_key" in str(getattr(exc, "orig", exc))
+
+
+def _resolve_idempotency_race_or_raise(
+    exc: IntegrityError,
+    tenant_id: str,
+    *,
+    idempotency_key: str | None,
+    principal_id: str,
+    account_id: str | None,
+    request_hash: str | None,
+    media_buy_id: str | None = None,
+) -> CreateMediaBuyResult:
+    """Shared handler for the unique-index ``IntegrityError`` on both booking paths.
+
+    Decides ONCE (via :func:`_is_idempotency_backstop_violation`) whether the
+    failure is the idempotency-backstop collision; an unrelated integrity error
+    re-raises unchanged. A backstop collision means another request won the commit
+    for this key — resolve the loser to the winner's verbatim cached success
+    (fail-closed transient if the cache write is not yet visible, see
+    :func:`_replay_after_race`). An orphan adapter-side order may exist.
+    """
+    if not _is_idempotency_backstop_violation(exc):
+        raise exc
+    logger.warning(
+        "Idempotency race: another request won the commit for key %s%s. "
+        "Resolving via the winner's cached response (fail-closed transient if not "
+        "yet visible). An orphan adapter-side order may exist.",
+        idempotency_key,
+        f" ({media_buy_id})" if media_buy_id else "",
+    )
+    return _replay_after_race(
+        tenant_id,
+        # Non-null whenever the backstop index fired; `or ""` only narrows the type.
+        idempotency_key=idempotency_key or "",
+        principal_id=principal_id,
         account_id=account_id,
         request_hash=request_hash,
     )
@@ -2614,21 +2684,14 @@ async def _create_media_buy_impl(
                     )
                     logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
             except IntegrityError as exc:
-                if "idempotency_key" not in str(exc.orig):
-                    raise
-                logger.warning(
-                    "Idempotency race (pending_approval): another request won the commit for key %s. "
-                    "Resolving via the winner's cached response (fail-closed transient if not yet "
-                    "visible). An orphan adapter-side order may exist.",
-                    req.idempotency_key,
-                )
-                return _replay_after_race(
+                return _resolve_idempotency_race_or_raise(
+                    exc,
                     tenant["tenant_id"],
-                    # Non-null whenever the backstop index fired; `or ""` only narrows the type.
-                    idempotency_key=req.idempotency_key or "",
+                    idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     account_id=identity.account_id,
                     request_hash=request_hash,
+                    media_buy_id=media_buy_id,
                 )
 
             # Log to activity feed for manual approval case
@@ -3472,22 +3535,14 @@ async def _create_media_buy_impl(
                 )
                 # UoW auto-commits on clean exit
         except IntegrityError as exc:
-            if "idempotency_key" not in str(exc.orig):
-                raise
-            logger.warning(
-                "Idempotency race (auto-approved): another request won the commit for key %s. "
-                "Resolving via the winner's cached response (fail-closed transient if not yet "
-                "visible). An orphan adapter-side order may exist for %s.",
-                req.idempotency_key,
-                response.media_buy_id,
-            )
-            return _replay_after_race(
+            return _resolve_idempotency_race_or_raise(
+                exc,
                 tenant["tenant_id"],
-                # Non-null whenever the backstop index fired; `or ""` only narrows the type.
-                idempotency_key=req.idempotency_key or "",
+                idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 account_id=identity.account_id,
                 request_hash=request_hash,
+                media_buy_id=response.media_buy_id,
             )
 
         # Populate media_packages table for structured querying

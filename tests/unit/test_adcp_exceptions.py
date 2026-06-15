@@ -134,12 +134,18 @@ class TestExceptionHierarchy:
         assert exc.error_code == "IDEMPOTENCY_EXPIRED"
 
     def test_idempotency_expired_wire_envelope(self):
-        """The two-layer envelope carries IDEMPOTENCY_EXPIRED + terminal in both layers."""
+        """The two-layer envelope carries IDEMPOTENCY_EXPIRED + correctable in both layers.
+
+        Correctable, matching the sibling IDEMPOTENCY_CONFLICT and the 3.0.1
+        error-code.json enum description: the buyer agent recovers autonomously
+        (a natural-key existence check, then accept the prior result or mint a
+        fresh key). ``terminal`` is reserved for conditions needing human action.
+        """
         from src.core.exceptions import AdCPIdempotencyExpiredError, build_two_layer_error_envelope
 
         env = build_two_layer_error_envelope(AdCPIdempotencyExpiredError("stale key"))
         assert env["adcp_error"]["code"] == "IDEMPOTENCY_EXPIRED"
-        assert env["adcp_error"]["recovery"] == "terminal"
+        assert env["adcp_error"]["recovery"] == "correctable"
         assert env["errors"][0]["code"] == "IDEMPOTENCY_EXPIRED"
 
     def test_rate_limit_retry_after_rides_both_envelope_layers(self):
