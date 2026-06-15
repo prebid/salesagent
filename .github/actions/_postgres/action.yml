@@ -1,0 +1,32 @@
+name: Wait for postgres and run migrations
+description: Wait for postgres readiness and optionally apply migrations.
+inputs:
+  database-url:
+    description: DATABASE_URL for migration command.
+    required: true
+  run-migrations:
+    description: When true, run scripts/ops/migrate.py after postgres is ready.
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Wait for postgres
+      shell: bash
+      run: |
+        set -euo pipefail
+        for _ in $(seq 1 30); do
+          if pg_isready -d "${{ inputs.database-url }}" >/dev/null 2>&1; then
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "PostgreSQL did not become ready in time"
+        exit 1
+
+    - name: Run migrations
+      if: inputs.run-migrations == 'true'
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database-url }}
+      run: uv run python scripts/ops/migrate.py

@@ -21,6 +21,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
 from fastapi import APIRouter
 
 from src.core.auth_context import require_auth, resolve_auth
+from src.core.schema_helpers import to_account_reference
 from src.core.schemas import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
@@ -315,11 +316,9 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
     if body.account is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = LibraryAccountReference(**body.account)
+        account_ref = to_account_reference(body.account)
         enriched = enrich_identity_with_account(identity, account_ref)
         assert enriched is not None  # identity is non-None (from require_auth)
         identity = enriched

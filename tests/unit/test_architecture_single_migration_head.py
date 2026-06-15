@@ -11,7 +11,15 @@ a merge migration that joins the branches.
 No allowlist — zero tolerance. Multiple heads must be resolved before merge.
 """
 
-from tests.unit._migration_helpers import get_migration_heads
+import pytest
+
+from scripts.ci.migration_helpers import (
+    expected_heads_after_roundtrip_downgrade,
+    extract_revision_info,
+    get_migration_files,
+    get_migration_heads,
+    resolve_roundtrip_downgrade_target,
+)
 
 
 class TestSingleMigrationHead:
@@ -32,3 +40,34 @@ class TestSingleMigrationHead:
             f'  uv run alembic merge -m "Merge migration heads" heads\n\n'
             f"Then commit the generated merge migration file."
         )
+
+
+class TestRoundtripDowngradeTarget:
+    """CI migration roundtrip must resolve explicit downgrade targets."""
+
+    def test_merge_head_downgrade_target_uses_first_parent(self):
+        """Merge revision downgrade uses first parent (Alembic restores all branch tips)."""
+        for path in get_migration_files():
+            revision, downs = extract_revision_info(path)
+            if revision and len(downs) > 1:
+                assert resolve_roundtrip_downgrade_target(revision) == downs[0]
+                return
+        pytest.fail("No merge migration in graph — merge-head roundtrip logic is unexercised.")
+
+    def test_non_merge_revision_downgrade_target_is_single_parent(self):
+        """Single-parent revisions downgrade to their explicit down_revision."""
+        for path in get_migration_files():
+            revision, downs = extract_revision_info(path)
+            if revision and len(downs) == 1:
+                assert resolve_roundtrip_downgrade_target(revision) == downs[0]
+                return
+        pytest.fail("No single-parent migration found in graph.")
+
+    def test_merge_head_downgrade_restores_all_branch_tips(self):
+        """After downgrading a merge head, alembic_version should list every parent."""
+        for path in get_migration_files():
+            revision, downs = extract_revision_info(path)
+            if revision and len(downs) > 1:
+                assert expected_heads_after_roundtrip_downgrade(revision) == set(downs)
+                return
+        pytest.fail("No merge migration in graph — merge-head roundtrip logic is unexercised.")
