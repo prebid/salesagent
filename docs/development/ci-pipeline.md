@@ -136,11 +136,14 @@ The pin lives only in [`scripts/creative-agent-stack.sh`](../../scripts/creative
 On ephemeral GitHub Actions runners, local `/tmp` tarball reuse and `docker image
 inspect` guards do not survive between runs. The creative shard therefore:
 
-1. Runs `docker/setup-buildx-action` (creative matrix leg only) before
-   `creative-agent-stack.sh up`.
+1. Runs `docker/setup-buildx-action` and `ghaction-github-runtime` (creative
+   matrix leg only) before `creative-agent-stack.sh up`. The runtime action
+   exposes `ACTIONS_RUNTIME_TOKEN` to shell steps — without it, `type=gha` cache
+   backends cannot authenticate (unlike `docker/build-push-action`, which injects
+   the token internally).
 2. Uses `docker buildx build --cache-from/to type=gha` inside the script when
-   `ACTIONS_CACHE_URL` and `ACTIONS_RUNTIME_TOKEN` are present (CI). Cache scope
-   is `adcp-creative-agent-${ADCP_PIN}` so a pin bump invalidates stale layers.
+   `ACTIONS_RUNTIME_TOKEN` is present. Cache scope is
+   `adcp-creative-agent-${ADCP_PIN}` so a pin bump invalidates stale layers.
 3. Falls back to plain `docker build` locally — no CI-only env required for
    `run_all_tests.sh`.
 

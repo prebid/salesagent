@@ -175,7 +175,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: write # GHA cache for buildx (creative shard only)
+      actions: write # GHA cache upload for buildx (used by creative shard step only)
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -219,6 +219,9 @@ jobs:
       - name: Set up Docker Buildx
         if: matrix.group == 'creative'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Expose GHA cache runtime to buildx
+        if: matrix.group == 'creative'
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
       - name: Start pinned creative agent
         if: matrix.group == 'creative'
         run: ./scripts/creative-agent-stack.sh up

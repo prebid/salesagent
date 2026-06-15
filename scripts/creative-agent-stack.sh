@@ -57,7 +57,9 @@ _fetch_tarball() {
 
 _build_image() {
     local cache_scope="adcp-creative-agent-${ADCP_PIN}"
-    if [ -n "${ACTIONS_CACHE_URL:-}" ] && [ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]; then
+    # ACTIONS_RUNTIME_TOKEN is exposed to run: steps via ghaction-github-runtime in CI
+    # (v1 ACTIONS_CACHE_URL is not available in shell steps; v2 uses ACTIONS_RESULTS_URL).
+    if [ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]; then
         echo "[creative-agent] buildx build $IMAGE (adcp@${ADCP_PIN}, gha cache scope=${cache_scope})"
         docker buildx build \
             --load \
