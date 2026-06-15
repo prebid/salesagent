@@ -13,14 +13,17 @@ The test dynamically loads JSON schemas and validates Pydantic models can handle
 all spec-compliant requests.
 """
 
+import importlib
+import inspect
 import json
+import pkgutil
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from src.core.schemas import (
     CreateMediaBuyRequest,
@@ -951,6 +954,47 @@ class TestResponseModelAlignment:
                 alignment.model(**partial)
 
 
+def _enumerate_grounded_response_models() -> set[type]:
+    """Enumerate every local response model the registry MUST cover.
+
+    This makes the registry's own inclusion rule executable instead of
+    hand-listed: a model belongs iff it is (1) defined in ``src.core.schemas``
+    (so imported ``Library*`` aliases, whose ``__module__`` is ``adcp.types.*``,
+    are excluded), (2) extends an ``adcp`` library type directly (``__bases__``
+    contains an ``adcp.types`` class), and (3) carries a response role — its name
+    ends in ``Response`` or ``Success`` (the oneOf success arm). Error arms end in
+    ``Error`` and requests in ``Request``, so both are excluded; reusable
+    sub-components (``Account``, ``Package``, ``Pagination``) lack the response
+    suffix and are excluded too.
+
+    A future library-grounded response model that nobody registers is therefore
+    discovered here and fails the coverage gate, rather than slipping through a
+    stale literal.
+    """
+    import adcp.types as adcp_types
+
+    adcp_bases = {obj for obj in vars(adcp_types).values() if inspect.isclass(obj)}
+
+    import src.core.schemas as schemas_pkg
+
+    modules = [schemas_pkg]
+    for info in pkgutil.walk_packages(schemas_pkg.__path__, schemas_pkg.__name__ + "."):
+        modules.append(importlib.import_module(info.name))
+
+    grounded: set[type] = set()
+    for module in modules:
+        for name, obj in inspect.getmembers(module, inspect.isclass):
+            if not issubclass(obj, BaseModel):
+                continue
+            if not (obj.__module__ or "").startswith("src.core.schemas"):
+                continue  # skip imported Library* aliases re-exported into the namespace
+            if not (name.endswith("Response") or name.endswith("Success")):
+                continue  # response role only; error arms end in 'Error', requests in 'Request'
+            if any(base in adcp_bases for base in obj.__bases__):
+                grounded.add(obj)
+    return grounded
+
+
 class TestResponseAlignmentCoverage:
     """RESPONSE_ALIGNMENTS is machine-complete over implemented response models.
 
@@ -962,32 +1006,15 @@ class TestResponseAlignmentCoverage:
     """
 
     def test_all_implemented_response_models_are_covered(self):
-        from src.core.schemas import (
-            GetProductsResponse,
-            GetSignalsResponse,
-            ListAccountsResponse,
-            ListCreativesResponse,
-            SyncAccountsResponse,
-            SyncCreativesResponse,
-            UpdateMediaBuySuccess,
-        )
-        from src.core.schemas.creative import ListCreativeFormatsResponse
-        from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
-
-        expected = {
-            CreateMediaBuySuccess,
-            GetCreativeDeliveryResponse,
-            GetMediaBuyDeliveryResponse,
-            GetProductsResponse,
-            GetSignalsResponse,
-            ListAccountsResponse,
-            ListCreativeFormatsResponse,
-            ListCreativesResponse,
-            SyncAccountsResponse,
-            SyncCreativesResponse,
-            UpdateMediaBuySuccess,
-        }
+        # The set of models that MUST be registered is enumerated from the schema
+        # package (the registry's own inclusion rule, executable) — never a literal
+        # list, so a newly-added library-grounded response model that nobody
+        # registered fails this gate instead of silently slipping through.
+        expected = _enumerate_grounded_response_models()
         covered = {a.model for a in RESPONSE_ALIGNMENTS}
+        # One-directional: every grounded model must be covered. ``covered`` may
+        # carry extra alignments (e.g. nested sub-arms) that are not themselves
+        # top-level response models, so strict equality would false-fail.
         missing = expected - covered
         assert not missing, (
             f"AdCP-grounded response models not covered by RESPONSE_ALIGNMENTS: {sorted(m.__name__ for m in missing)}"
