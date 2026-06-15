@@ -11,6 +11,7 @@ before they reach production.
 """
 
 from unittest.mock import ANY, patch
+from adcp.types import AccountReference as LibraryAccountReference
 
 import pytest
 
@@ -240,6 +241,8 @@ class TestA2AParameterMapping:
 
             asyncio.run(handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY))
 
+            expected = LibraryAccountReference.model_validate({"account_id": "acct-1"})
+
             mock_delivery.assert_called_once_with(
                 media_buy_ids=ANY,
                 status_filter=ANY,
@@ -248,14 +251,10 @@ class TestA2AParameterMapping:
                 reporting_dimensions=ANY,
                 attribution_window=ANY,
                 include_package_daily_breakdown=ANY,
-                account=ANY,
+                account=expected,
                 context=ANY,
                 identity=ANY,
             )
-            account = mock_delivery.call_args.kwargs["account"]
-
-            assert account is not parameters["account"], "Should not forward the raw A2A account dict"
-            assert hasattr(account, "root"), "Should forward a validated AccountReference"
 
     def test_create_media_buy_validates_required_adcp_parameters(self):
         """
