@@ -399,10 +399,13 @@ class AdCPInvalidRequestError(AdCPValidationError):
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
-    Default error_code is AUTH_TOKEN_INVALID per the AdCP 3.1 spec; the wire
-    passes it through unchanged. Note this code is project-specific relative to
-    the SDK we run (adcp 5.7): its ``STANDARD_ERROR_CODES`` table carries only
-    ``AUTH_REQUIRED``, not ``AUTH_TOKEN_INVALID``.
+    Default error_code is ``AUTH_TOKEN_INVALID``. This code is project-specific:
+    it is in neither the AdCP 3.1 error-code enum nor adcp 5.7
+    ``STANDARD_ERROR_CODES`` (both define only ``AUTH_REQUIRED``). It reaches the
+    wire by passthrough — it is deliberately absent from ``ERROR_CODE_MAPPING``,
+    so ``wire_error_code`` returns it unchanged on the sync transports
+    (REST/MCP/A2A). The async webhook path additionally enforces
+    ``STANDARD_ERROR_CODES`` and would downgrade it to ``SERVICE_UNAVAILABLE``.
 
     Recovery defaults to ``terminal`` (inherited from ``AdCPError``; this is a
     hardcoded ``_default_recovery`` ClassVar, not read from
@@ -420,7 +423,8 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     """No authentication context present (401, AUTH_TOKEN_INVALID).
 
     Raised when the request contains no auth token at all.
-    Uses same error_code as parent (AUTH_TOKEN_INVALID) per spec.
+    Uses same error_code as parent (AUTH_TOKEN_INVALID) — a project-specific
+    code; see parent docstring.
     """
 
     _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
