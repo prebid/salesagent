@@ -2418,3 +2418,88 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
     raise AssertionError(
         f"snapshot_unavailable_reason='{reason}' not found on any package across {len(buys)} media buy(s)"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Storyboard v3.1: post-create status poll
+# (T-UC-019-storyboard-post-create-status-poll)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# The buyer captures media_buy_id from a successful create_media_buy, then
+# immediately calls get_media_buys to confirm the buy is queryable on the same
+# account and observe its status. This anchors the synchronous post-create poll
+# contract: the buy MUST resolve by media_buy_id immediately — no eventual-
+# consistency gap.
+#
+# Decision: the freshly-created buy is seeded via MediaBuyFactory (the UC-019
+# convention for "owns a media buy") rather than driven through create_media_buy
+# in-scenario. The UC-019 list harness is read-only, and the contract under test
+# is _get_media_buys_impl's synchronous by-id resolution, which reads the same
+# committed row regardless of how the buy was created.
+
+
+@given("the buyer captured a media_buy_id from a successful create_media_buy response")
+def given_buyer_captured_media_buy_id(ctx: dict) -> None:
+    """Seed a freshly-created buy (committed) and capture its media_buy_id.
+
+    Represents the buyer holding the id returned by a successful
+    create_media_buy, owned by the Background principal.
+    """
+    _register_principal(ctx, "buyer-001")
+    env = ctx["env"]
+    real_id = _generate_unique_id("mb-created")
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status="active",
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, "mb-created", mb)
+    ctx["captured_media_buy_id"] = real_id
+
+
+@when("the Buyer Agent calls get_media_buys with that media_buy_id under the same account")
+def when_query_captured_media_buy_id(ctx: dict) -> None:
+    """Query get_media_buys filtered by the captured media_buy_id."""
+    captured = ctx.get("captured_media_buy_id")
+    assert captured, "No captured media_buy_id in ctx — the Given step did not seed/capture a buy"
+    _dispatch_query(ctx, media_buy_ids=[captured])
+
+
+@then("the response should be schema-valid against get-media-buys-response.json")
+def then_response_schema_valid_get_media_buys(ctx: dict) -> None:
+    """Assert the response conforms to the pinned GetMediaBuysResponse schema.
+
+    The repo ships no standalone JSON schema; the pinned Pydantic model is the
+    schema for spec 3.0.1. Round-tripping the serialized response through
+    model_validate fails if the wire payload is not schema-conformant.
+    """
+    from src.core.schemas import GetMediaBuysResponse
+
+    response = ctx.get("response")
+    assert response is not None, f"No response captured — ctx error: {ctx.get('error')!r}"
+    GetMediaBuysResponse.model_validate(response.model_dump(mode="json"))
+
+
+@then("the media_buys array should include the freshly-created buy")
+def then_media_buys_includes_captured(ctx: dict) -> None:
+    """Assert the captured buy resolves synchronously in the response."""
+    captured = ctx["captured_media_buy_id"]
+    buys = _get_media_buys(ctx)
+    ids = [getattr(b, "media_buy_id", None) for b in buys]
+    assert captured in ids, (
+        f"Freshly-created buy '{captured}' not found in get_media_buys response "
+        f"(synchronous post-create poll failed) — got IDs: {ids}"
+    )
+
+
+@then("the included entry should expose the same media_buy_id and current status")
+def then_included_entry_same_id_and_status(ctx: dict) -> None:
+    """Assert the resolved entry echoes the captured id and exposes a status."""
+    captured = ctx["captured_media_buy_id"]
+    buys = _get_media_buys(ctx)
+    matching = [b for b in buys if getattr(b, "media_buy_id", None) == captured]
+    assert len(matching) == 1, f"Expected exactly one entry for '{captured}', got {len(matching)}"
+    status = getattr(matching[0], "status", None)
+    assert status is not None and str(status), f"Entry for '{captured}' has no status: {status!r}"
