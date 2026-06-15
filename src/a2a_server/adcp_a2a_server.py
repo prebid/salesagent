@@ -111,6 +111,12 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
+# FIXME(upstream-adcp-extension-url): Pinned to 2.5.0 because upstream stopped
+# republishing /protocols/adcp-extension.json per-version after that release.
+# Restore dynamic interpolation when upstream publishes a per-version path
+# again or a stable /latest/ alias that resolves.
+ADCP_EXTENSION_SCHEMA_URI = "https://adcontextprotocol.org/schemas/2.5.0/protocols/adcp-extension.json"
+
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
     """Convert a Python dict to a protobuf Value for use in Part.data."""
@@ -2082,7 +2088,7 @@ def create_agent_card() -> AgentCard:
     # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream
     protocol_version = get_adcp_spec_version()
     adcp_extension = AgentExtension(
-        uri=f"https://adcontextprotocol.org/schemas/{protocol_version}/protocols/adcp-extension.json",
+        uri=ADCP_EXTENSION_SCHEMA_URI,
         description="AdCP protocol version and supported domains",
         params=_dict_to_struct(
             {
@@ -2212,7 +2218,7 @@ def create_agent_card() -> AgentCard:
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         ],
-        documentation_url="https://github.com/your-org/adcp-sales-agent",
+        documentation_url="https://github.com/prebid/salesagent",
     )
 
     return agent_card
