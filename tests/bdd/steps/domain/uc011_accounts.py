@@ -19,6 +19,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.helpers import assert_envelope_shape
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -2758,3 +2759,60 @@ def then_no_result_for_domain(ctx: dict, domain: str) -> None:
             f"Expected no result for domain '{domain}' but found account "
             f"{acct.account_id} with action={getattr(acct, 'action', '?')}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Brandless-entry validation (salesagent-fbdb / PR1399 R3-F1)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@when("the Buyer Agent sends a sync_accounts request with a brandless account entry")
+def when_sync_brandless_entry(ctx: dict) -> None:
+    """Send a sync_accounts request whose single entry omits 'brand'.
+
+    SDK 5.7's SyncAccountsRequest.accounts is list[Accounts | Accounts3]; the
+    Accounts3 (account-reference / settings-update) arm makes 'brand' optional,
+    so this entry parses with brand=None. The pinned 3.1 spec
+    (sync-accounts-request.json) marks every entry required:[brand,operator,billing].
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(accounts=[{"account": {"account_id": "ref-001"}, "operator": "example.com"}])
+    dispatch_request(ctx, req=req)
+
+
+@then("the brandless entry is rejected with a correctable VALIDATION_ERROR")
+def then_brandless_rejected_validation_error(ctx: dict) -> None:
+    """The seller refuses a brandless entry as a correctable validation error.
+
+    Two boundaries, one buyer contract (never accepted, never a 500):
+    - IMPL/A2A/REST: the request reaches _sync_accounts_impl (Accounts3 arm,
+      brand=None); _extract_natural_key raises AdCPValidationError, so the
+      two-layer wire (A2A/REST) or synthesized (IMPL) envelope carries
+      code VALIDATION_ERROR with recovery=correctable.
+    - MCP: the tool surface types accounts as list[Accounts] (brand required),
+      so the FastMCP TypeAdapter rejects the brandless entry at the schema
+      boundary before _impl, naming the missing 'brand' field.
+    """
+    assert ctx.get("response") is None, (
+        f"brandless entry must be rejected, but a response was returned: {ctx.get('response')!r}"
+    )
+    error = ctx.get("error")
+    assert error is not None, "expected the brandless entry to be rejected with an error"
+
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    if envelope is not None:
+        # Seller's own validation (IMPL/A2A/REST) → assert the two-layer AdCP envelope.
+        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+    else:
+        # MCP: the tool surface types accounts as list[Accounts] (brand required),
+        # so FastMCP's TypeAdapter rejects the brandless dict at the schema
+        # boundary and raises a ToolError whose message carries the pydantic
+        # "brand Field required" detail (it is not our JSON envelope, hence no
+        # wire_error_envelope). Assert the rejection names the missing field.
+        from fastmcp.exceptions import ToolError
+
+        assert isinstance(error, ToolError), (
+            f"expected a FastMCP ToolError at the MCP schema boundary, got {type(error).__name__}: {error}"
+        )
+        assert "brand" in str(error), f"MCP rejection must name the missing 'brand' field; got: {error}"
