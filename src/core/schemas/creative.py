@@ -479,7 +479,7 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
     # Required (no default): pinned 3.1 SyncCreativesSuccess.required=['creatives'] — a
     # synchronously-processed sync always carries a creatives array, even all-failed
-    # (salesagent-j49n).
+    # (#1399 R3-F2).
     creatives: list[SyncCreativeResult]  # type: ignore[assignment]
 
     def model_dump(self, **kwargs):

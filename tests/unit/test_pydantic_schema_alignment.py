@@ -705,7 +705,7 @@ class ResponseAlignment:
 
 @dataclass(frozen=True)
 class _RegistryRow:
-    """One implemented response model bound to its pinned schema (salesagent-nkrn).
+    """One implemented response model bound to its pinned schema (#1399 Plan-B).
 
     The success arm is derived from the schema, not hand-listed: the generator
     reads its required[]/properties so a required field added to the spec is
@@ -847,7 +847,7 @@ def _synthesize_sample(arm: dict[str, Any]) -> dict[str, Any]:
 def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[ResponseAlignment]:
     """Derive an envelope-level ResponseAlignment per registered model from the
     pinned success arm — machine-complete, so a new spec-required field on any
-    registered model is enforced without hand-editing this list (salesagent-nkrn)."""
+    registered model is enforced without hand-editing this list (#1399 Plan-B)."""
     alignments: list[ResponseAlignment] = []
     for row in registry:
         arm = _success_arm(load_json_schema(row.schema_ref))
@@ -954,7 +954,7 @@ class TestResponseModelAlignment:
 class TestResponseAlignmentCoverage:
     """RESPONSE_ALIGNMENTS is machine-complete over implemented response models.
 
-    salesagent-nkrn: every AdCP-grounded local response model (one that extends a
+    #1399 Plan-B: every AdCP-grounded local response model (one that extends a
     Library* base and maps to a pinned *-response.json) must be covered by an
     alignment, so a required field the pinned spec adds cannot silently slip an
     unenforced model. This is the coverage gate; the per-field enforcement is in

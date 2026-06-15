@@ -1,6 +1,6 @@
 """Guard: the sync_accounts natural-key extractor rejects a brandless entry.
 
-salesagent-fbdb (PR1399 R3-F1). SDK 5.7's ``SyncAccountsRequest.accounts`` is
+PR1399 R3-F1. SDK 5.7's ``SyncAccountsRequest.accounts`` is
 ``list[Accounts | Accounts3]``; the ``Accounts3`` (account-reference /
 settings-update) arm makes ``brand`` optional, so a brandless entry parses with
 ``brand=None``. The pinned 3.1 spec (sync-accounts-request.json @ v3.1-04f59d2d5)

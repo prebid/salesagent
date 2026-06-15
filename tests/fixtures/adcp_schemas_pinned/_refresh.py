@@ -45,8 +45,8 @@ ROOTS = [
     # Response schemas grounding specific contract tests:
     "/schemas/media-buy/create-media-buy-response.json",  # test_adcp_contract F4 (valid_actions/context)
     "/schemas/account/sync-accounts-response.json",  # test_sync_response_account_contract F5 (required fields)
-    "/schemas/creative/sync-creatives-response.json",  # salesagent-j49n R3-F2 (creatives required)
-    # salesagent-nkrn: machine-complete RESPONSE_ALIGNMENTS over every implemented response model.
+    "/schemas/creative/sync-creatives-response.json",  # PR1399 R3-F2 (creatives required)
+    # PR1399 Plan-B: machine-complete RESPONSE_ALIGNMENTS over every implemented response model.
     "/schemas/media-buy/get-products-response.json",
     "/schemas/media-buy/update-media-buy-response.json",
     "/schemas/media-buy/get-media-buy-delivery-response.json",

@@ -2561,7 +2561,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         if "account" in marker_names or "creative-invariant" in marker_names:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
-            # @creative-invariant scenarios (salesagent-j49n) drive the success-variant
+            # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
             # response invariants (e.g. all-failed still returns the success variant).
             request.getfixturevalue("integration_db")
             from tests.harness.creative_sync import CreativeSyncEnv

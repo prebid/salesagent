@@ -2762,7 +2762,7 @@ def then_no_result_for_domain(ctx: dict, domain: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Brandless-entry validation (salesagent-fbdb / PR1399 R3-F1)
+# Brandless-entry validation (PR1399 R3-F1)
 # ═══════════════════════════════════════════════════════════════════════
 
 

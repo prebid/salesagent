@@ -102,7 +102,7 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
 
     # Required (no default): pinned 3.1 list-accounts-response marks 'accounts'
     # required. Redeclared for Pattern #4 (nested serialization with local subclass)
-    # and to enforce the spec-required field (salesagent-nkrn).
+    # and to enforce the spec-required field (#1399 Plan-B).
     accounts: list[Account]  # type: ignore[assignment]
 
     def __str__(self) -> str:

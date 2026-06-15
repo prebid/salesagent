@@ -10,7 +10,7 @@
 # Companion files in this directory survive `python scripts/compile_bdd.py --merge`
 # (filename-scoped prune preserves non-adcp-req files); see
 # BR-UC-002-manual-overrides.feature / BR-UC-002-nfr-enforcement.feature.
-# salesagent-fbdb (PR1399 R3-F1).
+# PR1399 R3-F1.
 
 Feature: BR-UC-011 Account Validation (hand-authored companion)
   As a Buyer

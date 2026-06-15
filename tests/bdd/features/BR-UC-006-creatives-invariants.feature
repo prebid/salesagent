@@ -11,7 +11,7 @@
 #
 # Companion files in this directory survive `python scripts/compile_bdd.py --merge`
 # (filename-scoped prune preserves non-adcp-req files); see
-# BR-UC-002-manual-overrides.feature. salesagent-j49n (PR1399 R3-F2).
+# BR-UC-002-manual-overrides.feature. PR1399 R3-F2.
 
 Feature: BR-UC-006 Creatives Invariants (hand-authored companion)
   As a Buyer

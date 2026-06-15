@@ -6931,7 +6931,7 @@ def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# All-failed success-variant invariant (salesagent-j49n / PR1399 R3-F2)
+# All-failed success-variant invariant (PR1399 R3-F2)
 # ═══════════════════════════════════════════════════════════════════════
 
 

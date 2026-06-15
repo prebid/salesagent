@@ -227,7 +227,7 @@ class TestSyncCreativesResponseShape:
     """Verify the serialized shape of SyncCreativesResponse."""
 
     def test_creatives_is_required(self):
-        """SyncCreativesResponse() with no creatives must raise (salesagent-j49n).
+        """SyncCreativesResponse() with no creatives must raise (#1399 R3-F2).
 
         Pinned 3.1 SyncCreativesSuccess.required=['creatives'] (the only required
         field). The success-variant model must not permit an under-specified shape

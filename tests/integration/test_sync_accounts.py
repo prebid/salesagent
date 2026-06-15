@@ -586,7 +586,7 @@ class TestSyncAccountsApprovalTransport:
 
 
 class TestSyncAccountsBrandlessEntryRejected:
-    """Regression (salesagent-fbdb / PR1399 R3-F1): a brandless account entry
+    """Regression (PR1399 R3-F1): a brandless account entry
     must be rejected with a clean VALIDATION_ERROR (400, correctable), NOT a 500.
 
     SDK 5.7's ``SyncAccountsRequest.accounts`` is ``list[Accounts | Accounts3]``;
