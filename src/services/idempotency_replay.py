@@ -14,12 +14,28 @@ The repository (:class:`IdempotencyAttemptRepository`) is already tool-agnostic 
 ORCHESTRATION that ``media_buy_create.py`` originally owned, so the second
 consumer is a policy, not a copy.
 
+Cross-tool isolation — a key reused by two DIFFERENT tools at one scope lands on a
+single cache row, since ``tool_name`` is not part of the lookup — does NOT rest on
+the payload-hash check alone. It rests on two invariants every consumer must keep:
+
+1. The two tools' request schemas differ in at least one non-excluded REQUIRED
+   field, so their canonical payload hashes cannot collide for valid requests — a
+   cross-tool reuse conflicts (different hash) rather than replaying the wrong tool.
+2. Each tool's ``replay_from_envelope`` rejects a foreign tool's stored envelope
+   (response schema ``extra="forbid"`` + disjoint required fields), so even an
+   (infeasible) hash collision returns ``None`` — a miss, re-executed under the
+   caller's own tool — never a wrong-typed body. A future tool that breaks either
+   invariant loses cross-tool isolation; the hash check is the first gate, not the
+   only one.
+
 Each tool supplies an :class:`IdempotencyReplayPolicy` with the four
 tool-specific seams:
 
 - ``make_uow`` — a Unit of Work exposing ``.idempotency_attempts`` (and, for the
   degraded path's backstop, whatever resource repo ``find_backstop_anchor``
-  reads). Imported lazily inside the callable so tests can patch it.
+  reads). A consumer whose UoW class is source-patched in unit tests must import
+  it at call time so the patch binds (create's ``MediaBuyUoW``); a consumer tested
+  against a real DB may close over a module-scope import (sync's ``AccountUoW``).
 - ``replay_from_envelope`` — reconstruct the tool's return value from a stored
   ``{"status", "response"}`` envelope, marked ``replayed=True``; ``None`` when the
   stored shape no longer validates (treated as a cache miss).
@@ -51,6 +67,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
+from src.core.log_safety import loggable
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +92,11 @@ class BackstopAnchor:
 class IdempotencyReplayPolicy(Generic[TResult]):
     """The tool-specific seams the shared replay engine binds against.
 
-    See the module docstring for the role of each field. ``make_uow`` must do its
-    repository import at call time (not capture at construction) so test patches
-    of the UoW class take effect.
+    See the module docstring for the role of each field. ``make_uow``'s import
+    timing depends on the consumer's test strategy: import the UoW at call time
+    when unit tests source-patch it (create's ``MediaBuyUoW``); a module-scope
+    import is fine when the consumer is exercised against a real DB (sync's
+    ``AccountUoW``).
     """
 
     tool_name: str
@@ -159,7 +178,9 @@ def _maybe_evict_expired(policy: IdempotencyReplayPolicy[Any], tenant_id: str) -
             assert uow.idempotency_attempts is not None
             uow.idempotency_attempts.expire_old()
     except Exception:
-        logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
+        logger.warning(
+            "Best-effort idempotency cache eviction failed for tenant %s", loggable(tenant_id), exc_info=True
+        )
 
 
 def cache_and_return(
@@ -212,16 +233,16 @@ def cache_and_return(
             return on_race()
         logger.info(
             "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",
-            idempotency_key,
-            tenant_id,
-            principal_id,
+            loggable(idempotency_key),
+            loggable(tenant_id),
+            loggable(principal_id),
         )
     except Exception:
         logger.warning(
             "Best-effort idempotency cache write failed for key %s (tenant %s, principal %s)",
-            idempotency_key,
-            tenant_id,
-            principal_id,
+            loggable(idempotency_key),
+            loggable(tenant_id),
+            loggable(principal_id),
             exc_info=True,
         )
     # Eviction runs AFTER the cache write commits, in its own transaction —

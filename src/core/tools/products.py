@@ -776,7 +776,7 @@ async def _get_products_impl(
                     for option in product.pricing_options:
                         inner = option.root
                         # Get pricing model as string (handle both enum and literal)
-                        pricing_model = getattr(inner.pricing_model, "value", inner.pricing_model)
+                        pricing_model = resolve_enum_value(inner.pricing_model)
                         # Add supported annotation (will be included in response)
                         # Dynamic attributes on discriminated union types
                         is_supported = pricing_model in supported_models

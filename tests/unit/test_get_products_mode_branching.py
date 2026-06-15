@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from adcp.types.generated_poc.media_buy.get_products_request import Refine
+
 from src.core.schemas import GetProductsResponse
 from src.core.tools.products import _build_refinement_applied_unable
 from tests.harness.product_unit import ProductEnv
@@ -267,22 +269,23 @@ class TestAuditLogExtension:
 # ---------------------------------------------------------------------------
 
 
-def _fake_entry(scope: str, entry_id: str | None = None) -> Any:
-    """Build a minimal stand-in for a Refine RootModel.
+def _fake_entry(scope: str, entry_id: str | None = None) -> Refine:
+    """Build a REAL Refine RootModel (not a mock) so the builder reads real fields.
 
     Adcp library Refine is a discriminated-union root over Refine1 (request), Refine2
-    (product, product_id), Refine3 (proposal, proposal_id). The builder reads .root then
-    .scope and the scope-specific id field.
+    (product, product_id), Refine3 (proposal, proposal_id). A MagicMock satisfies a read
+    of ANY attribute — including a field the variant does not carry — so a wrong-field
+    regression in _build_refinement_applied_unable would pass silently. A real model
+    fails that read, which is the point of exercising the builder here.
     """
-    inner = MagicMock()
-    inner.scope = scope
-    if scope == "product":
-        inner.product_id = entry_id
+    payload: dict[str, Any] = {"scope": scope}
+    if scope == "request":
+        payload["ask"] = "narrow the results"
+    elif scope == "product":
+        payload["product_id"] = entry_id
     elif scope == "proposal":
-        inner.proposal_id = entry_id
-    e = MagicMock()
-    e.root = inner
-    return e
+        payload["proposal_id"] = entry_id
+    return Refine.model_validate(payload)
 
 
 def _ranking_result_for(product_ids: list[str], reason: str = "matched") -> Any:

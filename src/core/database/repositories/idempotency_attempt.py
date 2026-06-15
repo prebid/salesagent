@@ -6,9 +6,12 @@ idempotency_key must return the ORIGINAL success response byte-for-byte (marked
 re-executes. This repository stores and replays those cached successes, keyed by
 ``(tenant_id, principal_id, account_id, idempotency_key)`` — the spec's
 idempotency tuple exactly. ``tool_name`` is recorded for observability only,
-never as a scope dimension: a key reused by a different tool hits the same row
-and conflicts on its differing payload hash. ``MediaBuy.idempotency_key`` remains the
-dup-booking backstop; this table holds the verbatim response to replay.
+never as a scope dimension: a key reused by a different tool hits the same row.
+Cross-tool isolation does NOT rest on the payload-hash check alone — see
+``src.services.idempotency_replay`` for the two invariants (request-schema
+required-field disjointness AND each tool's response cross-validation) that keep a
+foreign tool's envelope from ever being replayed. ``MediaBuy.idempotency_key``
+remains the dup-booking backstop; this table holds the verbatim response to replay.
 
 The default TTL is 24h (matches the value announced via
 get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds = 86400).

@@ -55,9 +55,22 @@ class TestSyncAccountsReplay:
         assert _action(first.payload.accounts[0].action) == "created"
         assert _action(second.payload.accounts[0].action) == "created"
         assert second.payload.model_dump(mode="json")["accounts"] == first.payload.model_dump(mode="json")["accounts"]
+        if transport is Transport.REST:
+            # Byte-level: the replay is the ORIGINAL success body verbatim plus the
+            # replayed marker — proves no field diverged on the wire, not just .accounts.
+            assert second.raw_response.json() == {**first.raw_response.json(), "replayed": True}
 
     @pytest.mark.asyncio
     async def test_no_idempotency_key_re_executes(self, integration_db):
+        """A missing key runs non-idempotent — a DELIBERATE deviation from spec 3.0.1.
+
+        Spec 3.0.1 requires REJECTING a mutating request that omits idempotency_key
+        (INVALID_REQUEST). salesagent deliberately keeps the key OPTIONAL for the sync
+        tools (a pre-existing repo-wide override), so this pins the intentional
+        "omit => re-execute" behavior, NOT spec conformance. The missing-key rejection
+        is tracked for a coordinated fix across the sync tools; create_media_buy already
+        conforms (its key stays required).
+        """
         with AccountSyncEnv(tenant_id="sync_idem_nokey", principal_id="agent_idem") as env:
             env.setup_default_data()
             r1 = await env.call_impl_async(req=SyncAccountsRequest(accounts=[_ACME]))
@@ -95,8 +108,9 @@ class TestSyncAccountsConflict:
         with AccountSyncEnv(tenant_id="sync_idem_conf", principal_id="agent_idem") as env:
             env.setup_default_data()
             await env.call_impl_async(req=SyncAccountsRequest(accounts=[_ACME], idempotency_key="k-conf"))
-            with pytest.raises(AdCPIdempotencyConflictError):
+            with pytest.raises(AdCPIdempotencyConflictError) as exc_info:
                 await env.call_impl_async(req=SyncAccountsRequest(accounts=[_BETA], idempotency_key="k-conf"))
+            assert exc_info.value.error_code == "IDEMPOTENCY_CONFLICT"
 
     @pytest.mark.parametrize("transport", WIRE_TRANSPORTS, ids=lambda t: t.value)
     def test_same_key_different_payload_conflicts_on_wire(self, integration_db, transport):

@@ -36,7 +36,7 @@ from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
-from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.idempotency_canonical import request_hash_for
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -548,9 +548,7 @@ async def _sync_accounts_impl(
     # unique index — not a separate resource index — is its race backstop.
     request_hash: str | None = None
     if req.idempotency_key:
-        request_hash = (
-            canonical_payload_hash(raw_wire_payload) if raw_wire_payload is not None else canonical_request_hash(req)
-        )
+        request_hash = request_hash_for(req, raw_wire_payload)
         replay = idempotency_replay.lookup_cached_replay(
             _SYNC_REPLAY_POLICY,
             tenant_id,

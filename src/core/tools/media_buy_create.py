@@ -52,7 +52,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
-from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.idempotency_canonical import request_hash_for
 
 
 class PackageAssignmentDict(TypedDict):
@@ -1993,9 +1993,7 @@ async def _create_media_buy_impl(
     # equivalence input); the model-dump fallback exists only for impl-direct callers.
     request_hash = None
     if req.idempotency_key:
-        request_hash = (
-            canonical_payload_hash(raw_wire_payload) if raw_wire_payload is not None else canonical_request_hash(req)
-        )
+        request_hash = request_hash_for(req, raw_wire_payload)
     if req.idempotency_key:
         replay = _lookup_cached_replay(
             tenant["tenant_id"],

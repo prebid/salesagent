@@ -142,6 +142,7 @@ class TestWrapperOwnsBuyingModeRequiredness:
 
         with pytest.raises(AdCPInvalidRequestError, match="buying_mode is required") as exc_info:
             create_get_products_request(brief="video ads", adcp_version="3.0.6")
+        assert exc_info.value.error_code == "INVALID_REQUEST"
         assert exc_info.value.suggestion == _BUYING_MODE_SUGGESTIONS[0][1]
 
     def test_pre_v3_missing_buying_mode_defaults_to_brief(self):
