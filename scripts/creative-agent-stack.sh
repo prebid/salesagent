@@ -7,7 +7,7 @@
 # tests/integration/test_creative_agent_live.py red non-deterministically.
 # CI isolates these via a containerized adcp monolith pinned to a known-good
 # commit; this script mirrors that EXACTLY so CI and local cannot diverge.
-# .github/workflows/test.yml calls this same script (single source of the pin).
+# .github/workflows/ci.yml calls this same script (single source of the pin).
 #
 # Usage:
 #   scripts/creative-agent-stack.sh up     # idempotent: build+run if needed, wait healthy

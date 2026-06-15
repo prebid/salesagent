@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
@@ -24,6 +23,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
+from src.core.schema_helpers import to_account_reference
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -250,7 +250,7 @@ async def create_media_buy(
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    account_ref = LibraryAccountReference.model_validate(body.account) if body.account is not None else None
+    account_ref = to_account_reference(body.account)
     response = await media_buy_create_module.create_media_buy_raw(
         brand=body.brand,
         packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
@@ -288,7 +288,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
     if body.account is not None:
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = LibraryAccountReference.model_validate(body.account)
+        account_ref = to_account_reference(body.account)
         enriched = enrich_identity_with_account(identity, account_ref)
         assert enriched is not None  # identity is non-None (from require_auth)
         identity = enriched
