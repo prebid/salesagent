@@ -226,6 +226,21 @@ class TestCreateMediaBuyResponseShape:
 class TestSyncCreativesResponseShape:
     """Verify the serialized shape of SyncCreativesResponse."""
 
+    def test_creatives_is_required(self):
+        """SyncCreativesResponse() with no creatives must raise (salesagent-j49n).
+
+        Pinned 3.1 SyncCreativesSuccess.required=['creatives'] (the only required
+        field). The success-variant model must not permit an under-specified shape
+        — a synchronously-processed sync always carries a creatives array, even
+        when every item failed.
+        """
+        from pydantic import ValidationError
+
+        from src.core.schemas import SyncCreativesResponse
+
+        with pytest.raises(ValidationError):
+            SyncCreativesResponse()  # type: ignore[call-arg]
+
     def test_empty_sync_response(self):
         """Empty sync response has creatives list."""
         from src.core.schemas import SyncCreativesResponse

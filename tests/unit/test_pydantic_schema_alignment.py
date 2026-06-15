@@ -29,6 +29,7 @@ from src.core.schemas import (
     GetProductsRequest,
     ListCreativesRequest,
     SyncCreativesRequest,
+    SyncCreativesResponse,
     SyncResponseAccount,
     UpdateMediaBuyRequest,
 )
@@ -711,6 +712,14 @@ RESPONSE_ALIGNMENTS = [
         item_key="accounts",
         model=SyncResponseAccount,
         sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
+    ),
+    # sync-creatives-response success variant requires 'creatives' (PR #1399 R3-F2, salesagent-j49n).
+    ResponseAlignment(
+        schema_ref="/schemas/creative/sync-creatives-response.json",
+        selector="creatives",
+        item_key=None,
+        model=SyncCreativesResponse,
+        sample={"creatives": []},
     ),
 ]
 

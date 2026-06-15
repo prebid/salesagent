@@ -6928,3 +6928,76 @@ def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
             f"but DB has creative-A.weight={assignment_a.weight}, creative-B.weight={assignment_b.weight}. "
             f"Production hard-codes weight=100 on all assignments."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# All-failed success-variant invariant (salesagent-j49n / PR1399 R3-F2)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the Buyer has {count:d} creatives that all fail validation"))
+def given_creatives_all_fail(ctx: dict, count: int) -> None:
+    """Set up `count` creatives that each fail per-creative validation.
+
+    Empty name fails validation; under validation_mode='lenient' each failure
+    is reported as a per-creative result (action='failed') INSIDE the success
+    variant rather than collapsing the whole operation to the error variant.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id, agent_url, assets = _format_payload(ctx, env)
+    creatives = ctx.setdefault("creatives", [])
+    for i in range(count):
+        creatives.append(
+            {
+                "creative_id": f"creative-fail-{i:03d}",
+                "name": "",  # empty name → per-creative validation failure
+                "format_id": {"id": format_id, "agent_url": agent_url},
+                "assets": assets,
+            }
+        )
+    ctx["validation_mode"] = "lenient"
+
+
+@then("the response is the success variant carrying a creatives array")
+def then_success_variant_with_creatives(ctx: dict) -> None:
+    """Success variant (not error variant): a creatives array is present.
+
+    The all-failed sync must NOT collapse to the error variant — per the pinned
+    3.1 oneOf, per-item failures live inside SyncCreativesSuccess (required:
+    ['creatives']). So there is no operation-level error and the response
+    carries a creatives list.
+    """
+    assert ctx.get("error") is None, (
+        f"expected the success variant, but got an operation-level error: {ctx.get('error')!r}"
+    )
+    response = ctx.get("response")
+    assert response is not None, "expected a sync_creatives response payload"
+    assert isinstance(response.creatives, list), f"creatives must be a list, got {type(response.creatives).__name__}"
+
+
+@then(parsers.parse('every creative result has action "{action}"'))
+def then_every_creative_action(ctx: dict, action: str) -> None:
+    """Every per-creative result carries the given action (e.g. 'failed')."""
+    response = ctx.get("response")
+    assert response is not None, "expected a sync_creatives response payload"
+    assert response.creatives, "expected at least one per-creative result"
+    actions = [_action_str(c.action) for c in response.creatives]
+    assert actions == [action] * len(actions), f"expected every action == {action!r}, got {actions}"
+
+
+@then("the response does not carry an operation-level errors array")
+def then_no_operation_level_errors(ctx: dict) -> None:
+    """Confirm the success variant, not the error variant.
+
+    The success variant has no operation-level `errors` field (that field is
+    unique to the SyncCreativesError variant). Per-creative errors live on each
+    result's own `errors`, which is distinct.
+    """
+    response = ctx.get("response")
+    assert response is not None, "expected a sync_creatives response payload"
+    operation_errors = getattr(response, "errors", None)
+    assert operation_errors is None, (
+        f"success variant must not carry operation-level errors[]; got {operation_errors!r}"
+    )

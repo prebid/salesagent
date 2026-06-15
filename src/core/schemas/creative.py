@@ -477,7 +477,10 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
-    creatives: list[SyncCreativeResult] = []  # type: ignore[assignment]
+    # Required (no default): pinned 3.1 SyncCreativesSuccess.required=['creatives'] — a
+    # synchronously-processed sync always carries a creatives array, even all-failed
+    # (salesagent-j49n).
+    creatives: list[SyncCreativeResult]  # type: ignore[assignment]
 
     def model_dump(self, **kwargs):
         """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
