@@ -2682,10 +2682,12 @@ async def _create_media_buy_impl(
                         f"Product '{schema_product.name}' ({schema_product.product_id}) is missing GAM configuration. "
                         f"Auto-generating defaults based on product type."
                     )
-                    # Generate defaults based on product delivery type and formats
-                    delivery_type_str = (
-                        str(schema_product.delivery_type) if schema_product.delivery_type else "non_guaranteed"
-                    )
+                    # Generate defaults based on product delivery type and formats.
+                    # delivery_type is a plain DeliveryType enum; normalize to its
+                    # value ('guaranteed'/'non_guaranteed') so generate_default_config's
+                    # equality check selects the right config arm (str(enum) would
+                    # yield 'DeliveryType.guaranteed' and silently mis-route — PR1399).
+                    delivery_type_str = enum_value(schema_product.delivery_type) or "non_guaranteed"
                     # Extract format IDs as strings for config generation
                     formats_list: list[str] | None = None
                     if schema_product.format_ids:
