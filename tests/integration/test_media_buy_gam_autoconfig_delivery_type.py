@@ -1,4 +1,4 @@
-"""Regression for u6r6: GAM auto-config must normalize a guaranteed product's
+"""Regression (PR1399 R3): GAM auto-config must normalize a guaranteed product's
 delivery_type to its enum *value*, not str(Enum).
 
 src/core/tools/media_buy_create.py auto-generates a default GAM

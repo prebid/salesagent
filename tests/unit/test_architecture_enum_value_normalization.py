@@ -38,7 +38,7 @@ _EXEMPT = {"enum_helpers.py"}
 def test_no_handrolled_enum_to_str_normalization():
     """No src/core site may hand-roll enum->str normalization; use enum_value().
 
-    RED before the jkfl refactor (the hand-rolled sites still exist), GREEN after.
+    RED before the enum_value refactor (PR1399 R3; hand-rolled sites still exist), GREEN after.
     """
     violations: list[str] = []
     for py in _SRC_CORE.rglob("*.py"):
