@@ -46,6 +46,16 @@ ROOTS = [
     "/schemas/media-buy/create-media-buy-response.json",  # test_adcp_contract F4 (valid_actions/context)
     "/schemas/account/sync-accounts-response.json",  # test_sync_response_account_contract F5 (required fields)
     "/schemas/creative/sync-creatives-response.json",  # salesagent-j49n R3-F2 (creatives required)
+    # salesagent-nkrn: machine-complete RESPONSE_ALIGNMENTS over every implemented response model.
+    "/schemas/media-buy/get-products-response.json",
+    "/schemas/media-buy/update-media-buy-response.json",
+    "/schemas/media-buy/get-media-buy-delivery-response.json",
+    "/schemas/creative/get-creative-delivery-response.json",
+    "/schemas/creative/list-creatives-response.json",
+    "/schemas/creative/list-creative-formats-response.json",
+    "/schemas/account/list-accounts-response.json",
+    "/schemas/signals/get-signals-response.json",
+    "/schemas/signals/activate-signal-response.json",
 ]
 
 

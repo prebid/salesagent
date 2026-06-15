@@ -232,6 +232,10 @@ class TestSchemaInheritance:
             ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (generated at boundary)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
+            # Required-field tightening (salesagent-nkrn): pinned 3.1 marks these
+            # success-arm fields required; the SDK base declares them optional, so
+            # we redeclare required to match the spec.
+            ("GetProductsResponse", "products"),
         }
 
         violations = []

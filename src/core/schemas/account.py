@@ -100,7 +100,10 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    accounts: list[Account] = []  # type: ignore[assignment]  # Pattern #4: use local Account subclass
+    # Required (no default): pinned 3.1 list-accounts-response marks 'accounts'
+    # required. Redeclared for Pattern #4 (nested serialization with local subclass)
+    # and to enforce the spec-required field (salesagent-nkrn).
+    accounts: list[Account]  # type: ignore[assignment]
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

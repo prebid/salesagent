@@ -27,12 +27,20 @@ from src.core.schemas import (
     CreateMediaBuySuccess,
     GetMediaBuyDeliveryRequest,
     GetProductsRequest,
+    GetProductsResponse,
+    GetSignalsResponse,
+    ListAccountsResponse,
     ListCreativesRequest,
+    ListCreativesResponse,
+    SyncAccountsResponse,
     SyncCreativesRequest,
     SyncCreativesResponse,
     SyncResponseAccount,
     UpdateMediaBuyRequest,
+    UpdateMediaBuySuccess,
 )
+from src.core.schemas.creative import ListCreativeFormatsResponse
+from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 
 # Pinned AdCP schema fixtures. Source of truth is adcontextprotocol/adcp at the
 # immutable commit 04f59d2d5 (tag v3.1-04f59d2d5, 2026-05-13) — an INTENTIONAL frozen
@@ -695,17 +703,181 @@ class ResponseAlignment:
     sample: dict[str, Any] = dataclass_field(default_factory=dict)  # valid kwargs for required-enforcement
 
 
-RESPONSE_ALIGNMENTS = [
-    # create-media-buy-response success carries valid_actions + context (PR #1388 F4).
-    ResponseAlignment(
+@dataclass(frozen=True)
+class _RegistryRow:
+    """One implemented response model bound to its pinned schema (salesagent-nkrn).
+
+    The success arm is derived from the schema, not hand-listed: the generator
+    reads its required[]/properties so a required field added to the spec is
+    enforced automatically. ``sample_override`` supplies valid kwargs only where
+    a complex required field (e.g. packages, reporting_period, pagination) cannot
+    be synthesized generically — it never weakens or skips a required field.
+    ``declared_fields_override`` narrows the F4 declared-field check when the full
+    property set would be noise (e.g. forward-compat optional fields).
+    """
+
+    schema_ref: str
+    selector: str  # property unique to the success arm (picks the oneOf member)
+    model: type
+    sample_override: dict[str, Any] | None = None
+    declared_fields_override: frozenset[str] | None = None
+
+
+# Every AdCP-grounded response model the seller implements (extends a Library*
+# base, maps to a pinned *-response.json). Operations the seller does NOT
+# implement (brand-rights, collections, content-standards, governance-plans,
+# sponsored-intelligence, comply-test-controller, tmp/*) have no local model and
+# are deliberately absent. SalesAgentBaseModel-only response models (internal /
+# human_tasks-deprecated: CheckCreativeStatusResponse, CreateCreativeResponse,
+# AddCreativeAssetsResponse, GetCreativesResponse, GetPendingCreativesResponse,
+# ApproveCreativeResponse, AssignCreativeResponse, UpdatePerformanceIndexResponse,
+# CheckMediaBuyStatusResponse, *HumanTask*, *Task*, GetTargetingCapabilities,
+# CheckAXERequirements, SimulationControl, ListAuthorizedProperties,
+# GetMediaBuysResponse, GetAllMediaBuyDelivery, Adapter*) are not spec-grounded
+# success arms and are excluded.
+_RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
+    _RegistryRow(
+        schema_ref="/schemas/media-buy/get-products-response.json",
+        selector="products",
+        model=GetProductsResponse,
+    ),
+    _RegistryRow(
         schema_ref="/schemas/media-buy/create-media-buy-response.json",
         selector="media_buy_id",
-        item_key=None,
         model=CreateMediaBuySuccess,
-        declared_fields=frozenset({"valid_actions", "context"}),
-        sample={"media_buy_id": "mb_1", "packages": [{"package_id": "pkg_1", "paused": False}]},
+        # packages requires the local package shape; synthesize is not reliable.
+        sample_override={"media_buy_id": "mb_1", "packages": [{"package_id": "pkg_1", "paused": False}]},
+        # Forward-compat fields production emits that must be explicitly declared (F4, PR #1388).
+        declared_fields_override=frozenset({"valid_actions", "context"}),
     ),
-    # sync-accounts-response per-account item requires brand/operator/action/status (PR #1388 F5).
+    _RegistryRow(
+        schema_ref="/schemas/media-buy/update-media-buy-response.json",
+        selector="media_buy_id",
+        model=UpdateMediaBuySuccess,
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/media-buy/get-media-buy-delivery-response.json",
+        selector="media_buy_deliveries",
+        model=GetMediaBuyDeliveryResponse,
+        sample_override={
+            "reporting_period": {"start": "2025-02-01T00:00:00Z", "end": "2025-02-02T00:00:00Z"},
+            "currency": "USD",
+            "aggregated_totals": {"impressions": 0.0, "spend": 0.0, "media_buy_count": 0},
+            "media_buy_deliveries": [],
+        },
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/creative/get-creative-delivery-response.json",
+        selector="creatives",
+        model=GetCreativeDeliveryResponse,
+        sample_override={
+            "reporting_period": {"start": "2025-02-01T00:00:00Z", "end": "2025-02-02T00:00:00Z"},
+            "currency": "USD",
+            "creatives": [],
+        },
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/account/list-accounts-response.json",
+        selector="accounts",
+        model=ListAccountsResponse,
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/account/sync-accounts-response.json",
+        selector="accounts",
+        model=SyncAccountsResponse,
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/creative/sync-creatives-response.json",
+        selector="creatives",
+        model=SyncCreativesResponse,
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/creative/list-creatives-response.json",
+        selector="creatives",
+        model=ListCreativesResponse,
+        sample_override={
+            "query_summary": {"total_matching": 0, "returned": 0},
+            "pagination": {"has_more": False},
+            "creatives": [],
+        },
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/creative/list-creative-formats-response.json",
+        selector="formats",
+        model=ListCreativeFormatsResponse,
+    ),
+    _RegistryRow(
+        schema_ref="/schemas/signals/get-signals-response.json",
+        selector="signals",
+        model=GetSignalsResponse,
+    ),
+]
+
+
+def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return the success (sub-)schema: the oneOf arm whose required[] names
+    neither ``errors`` nor ``task_id`` (error / submitted arms), or the schema
+    itself when it is a flat single-shape response (no oneOf)."""
+    if "oneOf" not in schema:
+        return schema
+    for arm in schema["oneOf"]:
+        required = set(arm.get("required", []))
+        if "errors" not in required and "task_id" not in required:
+            return arm
+    raise AssertionError(f"No success arm found in oneOf (all arms look like error/submitted): {schema.get('$id')}")
+
+
+def _synthesize_sample(arm: dict[str, Any]) -> dict[str, Any]:
+    """Build valid kwargs covering every required field from the pinned arm.
+
+    Array required fields → empty list (valid + minimal). Other types →
+    generate_example_value. Complex shapes use a registry sample_override instead.
+    """
+    sample: dict[str, Any] = {}
+    props = arm.get("properties", {})
+    for fname in set(arm.get("required", [])) - _VERSION_FIELDS:
+        spec = props.get(fname, {})
+        if spec.get("type") == "array":
+            sample[fname] = []
+        else:
+            sample[fname] = generate_example_value(spec.get("type", "string"), fname, spec)
+    return sample
+
+
+def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[ResponseAlignment]:
+    """Derive an envelope-level ResponseAlignment per registered model from the
+    pinned success arm — machine-complete, so a new spec-required field on any
+    registered model is enforced without hand-editing this list (salesagent-nkrn)."""
+    alignments: list[ResponseAlignment] = []
+    for row in registry:
+        arm = _success_arm(load_json_schema(row.schema_ref))
+        declared = row.declared_fields_override
+        if declared is None:
+            # Default to the REQUIRED fields (not all properties): the bug class is a
+            # spec-REQUIRED field silently dropped (F4/F5/Chris-#2). Demanding every
+            # OPTIONAL forward-compat property be explicitly declared would over-reach
+            # (response models intentionally carry optional fields via extra='allow').
+            # A row may set declared_fields_override to also pin specific optional
+            # fields production emits (e.g. CreateMediaBuySuccess valid_actions/context).
+            declared = frozenset(arm.get("required", [])) - _VERSION_FIELDS
+        sample = row.sample_override if row.sample_override is not None else _synthesize_sample(arm)
+        alignments.append(
+            ResponseAlignment(
+                schema_ref=row.schema_ref,
+                selector=row.selector,
+                item_key=None,
+                model=row.model,
+                declared_fields=declared,
+                sample=sample,
+            )
+        )
+    return alignments
+
+
+# Per-ITEM alignments (item_key set) that the envelope-level generator does not
+# cover. Kept hand-curated and supplemental so per-item required enforcement
+# (F5, PR #1388) is not lost when the envelope list is machine-generated.
+_SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
     ResponseAlignment(
         schema_ref="/schemas/account/sync-accounts-response.json",
         selector="accounts",
@@ -713,21 +885,23 @@ RESPONSE_ALIGNMENTS = [
         model=SyncResponseAccount,
         sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
     ),
-    # sync-creatives-response success variant requires 'creatives' (PR #1399 R3-F2, salesagent-j49n).
-    ResponseAlignment(
-        schema_ref="/schemas/creative/sync-creatives-response.json",
-        selector="creatives",
-        item_key=None,
-        model=SyncCreativesResponse,
-        sample={"creatives": []},
-    ),
 ]
 
 
+RESPONSE_ALIGNMENTS = _build_alignments_from_pinned(_RESPONSE_MODEL_REGISTRY) + _SUPPLEMENTAL_ALIGNMENTS
+
+
 def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any]:
-    """Resolve the pinned (sub-)schema a response model maps to."""
+    """Resolve the pinned (sub-)schema a response model maps to.
+
+    Handles flat single-shape responses (no oneOf → the schema is the success
+    shape) and oneOf responses (pick the arm exposing ``selector``).
+    """
     schema = load_json_schema(alignment.schema_ref)
-    variant = next(v for v in schema["oneOf"] if alignment.selector in v.get("properties", {}))
+    if "oneOf" in schema:
+        variant = next(v for v in schema["oneOf"] if alignment.selector in v.get("properties", {}))
+    else:
+        variant = schema
     if alignment.item_key:
         return variant["properties"][alignment.item_key]["items"]
     return variant
@@ -775,6 +949,49 @@ class TestResponseModelAlignment:
             partial = {k: v for k, v in alignment.sample.items() if k != fname}
             with pytest.raises(ValidationError):
                 alignment.model(**partial)
+
+
+class TestResponseAlignmentCoverage:
+    """RESPONSE_ALIGNMENTS is machine-complete over implemented response models.
+
+    salesagent-nkrn: every AdCP-grounded local response model (one that extends a
+    Library* base and maps to a pinned *-response.json) must be covered by an
+    alignment, so a required field the pinned spec adds cannot silently slip an
+    unenforced model. This is the coverage gate; the per-field enforcement is in
+    TestResponseModelAlignment.
+    """
+
+    def test_all_implemented_response_models_are_covered(self):
+        from src.core.schemas import (
+            GetProductsResponse,
+            GetSignalsResponse,
+            ListAccountsResponse,
+            ListCreativesResponse,
+            SyncAccountsResponse,
+            SyncCreativesResponse,
+            UpdateMediaBuySuccess,
+        )
+        from src.core.schemas.creative import ListCreativeFormatsResponse
+        from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
+
+        expected = {
+            CreateMediaBuySuccess,
+            GetCreativeDeliveryResponse,
+            GetMediaBuyDeliveryResponse,
+            GetProductsResponse,
+            GetSignalsResponse,
+            ListAccountsResponse,
+            ListCreativeFormatsResponse,
+            ListCreativesResponse,
+            SyncAccountsResponse,
+            SyncCreativesResponse,
+            UpdateMediaBuySuccess,
+        }
+        covered = {a.model for a in RESPONSE_ALIGNMENTS}
+        missing = expected - covered
+        assert not missing, (
+            f"AdCP-grounded response models not covered by RESPONSE_ALIGNMENTS: {sorted(m.__name__ for m in missing)}"
+        )
 
 
 if __name__ == "__main__":
