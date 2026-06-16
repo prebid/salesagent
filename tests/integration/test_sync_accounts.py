@@ -13,6 +13,7 @@ import pytest
 from src.core.schemas.account import SyncAccountsRequest
 from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
+from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -582,3 +583,47 @@ class TestSyncAccountsApprovalTransport:
         acct = result.payload.accounts[0]
         assert _status_value(acct.status) == "active"
         assert acct.setup is None
+
+
+class TestSyncAccountsBrandlessEntryRejected:
+    """Regression (PR1399 R3-F1): a brandless account entry
+    must be rejected with a clean VALIDATION_ERROR (400, correctable), NOT a 500.
+
+    SDK 5.7's ``SyncAccountsRequest.accounts`` is ``list[Accounts | Accounts3]``;
+    the ``Accounts3`` arm makes ``brand`` optional, so a payload like
+    ``{"account": {...}, "operator": "..."}`` validates with ``brand=None``.
+    Before the fix, ``_extract_natural_key`` did ``brand.domain`` unguarded →
+    ``AttributeError`` → INTERNAL_ERROR/500. The pinned 3.1 spec (tag
+    v3.1-04f59d2d5, sync-accounts-request.json) marks each accounts[] item
+    ``required: ["brand","operator","billing"]`` — a brandless entry MUST be a
+    clean buyer-correctable 400.
+    """
+
+    # A2A and REST parse the request into SyncAccountsRequest (Accounts3 arm,
+    # brand=None) and reach _impl — the transports that exercise the unguarded
+    # _extract_natural_key path. MCP rejects earlier at the FastMCP TypeAdapter
+    # (brand required on the tool signature), a distinct boundary not touched by
+    # this _impl guard; the all-transports obligation is encoded in the
+    # hand-authored BR-UC-011-account-validation.feature companion.
+    IMPL_REACHING_TRANSPORTS = [Transport.A2A, Transport.REST]
+
+    @pytest.mark.parametrize("transport", IMPL_REACHING_TRANSPORTS, ids=lambda t: t.value)
+    def test_brandless_entry_yields_validation_error_not_500(self, integration_db, transport):
+        with AccountSyncEnv(
+            tenant_id=f"brandless_{transport.value}",
+            principal_id=f"agent_brandless_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+
+            # Accounts3 arm: omits brand entirely → parses with brand=None.
+            req = SyncAccountsRequest(
+                accounts=[{"account": {"account_id": "x"}, "operator": "example.com"}],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_error, f"brandless entry must error on {transport.value}, got {result.payload!r}"
+        assert_envelope_shape(
+            result.wire_error_envelope,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+        )

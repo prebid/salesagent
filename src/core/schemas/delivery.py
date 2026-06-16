@@ -18,7 +18,6 @@ from adcp.types import (
 from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
-from adcp.types import ReportingFrequency as LibraryReportingFrequency
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     ByGeoItem as LibraryByGeoItem,
@@ -77,37 +76,9 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # account, reporting_dimensions, attribution_window: now provided by adcp 3.10 library
-    # with proper types (AccountReference, ReportingDimensions, AttributionWindow).
-
-    # --- Salesagent extensions (NOT in adcp spec/library) ---
-    include_package_daily_breakdown: bool | None = Field(
-        None,
-        description="Include daily_breakdown arrays within each package (salesagent extension, not in adcp spec)",
-    )
-
-    # --- AdCP spec fields the adcp Python library lags on (gh-#1299) ---
-    # Defined in /schemas/latest/media-buy/get-media-buy-delivery-request.json but
-    # not yet in the adcp library's GetMediaBuyDeliveryRequest. Declared here so
-    # spec-compliant clients are accepted (Pattern #1: extend library type).
-    time_granularity: LibraryReportingFrequency | None = Field(
-        None,
-        description=(
-            "Per-window slice granularity for the pull, using the same vocabulary "
-            "as reporting_webhook.reporting_frequency. When set, the seller returns "
-            "per-window delivery slices over the date range. Capability-scoped: the "
-            "value MUST be one of the seller's declared "
-            "reporting_capabilities.windowed_pull_granularities."
-        ),
-    )
-    include_window_breakdown: bool = Field(
-        default=False,
-        description=(
-            "When true, the response includes media_buy_deliveries[].windows[] — "
-            "per-window delivery slices over the date range at the requested "
-            "time_granularity. Ignored when time_granularity is omitted."
-        ),
-    )
+    # account, reporting_dimensions, attribution_window, time_granularity,
+    # include_window_breakdown, include_package_daily_breakdown: all now provided
+    # by adcp SDK 5.7 (spec 3.1.0-beta.3). No local redeclarations needed.
 
 
 # ---------------------------------------------------------------------------

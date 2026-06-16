@@ -1998,7 +1998,7 @@ class AdCPRequestHandler(RequestHandler):
         # Convert to A2A response format with v2.x backward compatibility
         from src.core.version_compat import apply_version_compat
 
-        products = [product.model_dump(mode="json") for product in response.products]
+        products = [product.model_dump(mode="json") for product in (response.products or [])]
         response_data = {
             "products": products,
             "message": str(response),  # Use __str__ method for human-readable message

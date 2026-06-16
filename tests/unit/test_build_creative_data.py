@@ -7,18 +7,9 @@ snippet, snippet_type, template_variables), and context.
 Beads: salesagent-55b
 """
 
-from adcp.types import CreativeAsset, FormatId
-
 from src.core.tools.creatives import _build_creative_data
-
-_FMT = FormatId(id="banner", agent_url="http://agent.test")
-
-
-def _make_creative(**extra: object) -> CreativeAsset:
-    """Build a minimal CreativeAsset with optional extra fields."""
-    defaults: dict = {"creative_id": "test", "name": "test", "format_id": _FMT, "assets": {}}
-    defaults.update(extra)
-    return CreativeAsset(**defaults)
+from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import make_creative_asset_minimal as _make_creative
 
 
 class TestStandardFields:
@@ -51,7 +42,7 @@ class TestOptionalFields:
     """Optional fields only included when present in creative model."""
 
     def test_assets_included(self):
-        creative = _make_creative(assets={"main": {"url": "https://example.com/main.png"}})
+        creative = _make_creative(assets=build_assets(image_spec("main", url="https://example.com/main.png")))
         data = _build_creative_data(creative, None)
         # Assets are stored as typed Asset models (not dicts)
         assert "assets" in data
@@ -113,7 +104,7 @@ class TestCombined:
             width=728,
             height=90,
             duration=15,
-            assets={"main": {"url": "https://cdn.example.com/banner.png"}},
+            assets=build_assets(image_spec("main", url="https://cdn.example.com/banner.png", width=728, height=90)),
             snippet="<script>tag</script>",
             snippet_type="js",
             template_variables={"cta": "Learn More"},

@@ -22,7 +22,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPValidationError
-from src.core.helpers import log_tool_activity
+from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
@@ -437,16 +437,16 @@ async def list_creatives(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Pass typed Pydantic models directly (no model_dump conversion needed)
-    fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
+    fields_list = [enum_value(f) for f in fields] if fields else None
 
     # Structured sort and pagination are AdCP spec params; _impl is built around flat
     # equivalents (sort_by/sort_order, page/limit). Coerce structured forms to flat
     # at the boundary so spec-compliant payloads are honored instead of silently dropped.
     if sort is not None:
         if sort.field is not None:
-            sort_by = sort.field.value if hasattr(sort.field, "value") else str(sort.field)
+            sort_by = enum_value(sort.field)
         if sort.direction is not None:
-            sort_order = sort.direction.value if hasattr(sort.direction, "value") else str(sort.direction)
+            sort_order = enum_value(sort.direction)
     if pagination is not None and pagination.max_results is not None:
         limit = pagination.max_results
 

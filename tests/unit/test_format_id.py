@@ -5,6 +5,7 @@ from datetime import datetime
 import pytest
 
 from src.core.schemas import Creative, FormatId
+from tests.factories.creative_asset import build_assets, image_spec
 
 
 def test_format_id_object_structure():
@@ -33,14 +34,7 @@ def test_creative_upgrades_string_format():
         variants=[],
         name="Test Creative",
         format_id="display_300x250",  # Legacy string - auto-upgraded
-        assets={
-            "banner_image": {
-                "url": "https://example.com/creative.jpg",
-                "width": 300,
-                "height": 250,
-                "asset_type": "image",
-            }
-        },
+        assets=build_assets(image_spec("banner_image", url="https://example.com/creative.jpg", width=300, height=250)),
         principal_id="p1",
         created_date=datetime.now(),
         updated_date=datetime.now(),
@@ -62,14 +56,7 @@ def test_creative_accepts_format_id_object():
         variants=[],
         name="Test Creative",
         format_id=format_id,
-        assets={
-            "banner_image": {
-                "url": "https://example.com/creative.jpg",
-                "width": 300,
-                "height": 250,
-                "asset_type": "image",
-            }
-        },
+        assets=build_assets(image_spec("banner_image", url="https://example.com/creative.jpg", width=300, height=250)),
         principal_id="p1",
         created_date=datetime.now(),
         updated_date=datetime.now(),
@@ -89,14 +76,9 @@ def test_creative_from_dict_with_format_id_object():
         "variants": [],
         "name": "Test Creative",
         "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-        "assets": {
-            "banner_image": {
-                "url": "https://example.com/creative.jpg",
-                "width": 300,
-                "height": 250,
-                "asset_type": "image",
-            }
-        },
+        "assets": build_assets(
+            image_spec("banner_image", url="https://example.com/creative.jpg", width=300, height=250)
+        ),
         "principal_id": "p1",
         "created_date": datetime.now(),
         "updated_date": datetime.now(),
@@ -115,14 +97,7 @@ def test_creative_upgrades_dict_without_agent_url():
         variants=[],
         name="Test Creative",
         format_id={"id": "display_300x250"},  # Missing agent_url - auto-upgraded
-        assets={
-            "banner_image": {
-                "url": "https://example.com/creative.jpg",
-                "width": 300,
-                "height": 250,
-                "asset_type": "image",
-            }
-        },
+        assets=build_assets(image_spec("banner_image", url="https://example.com/creative.jpg", width=300, height=250)),
         principal_id="p1",
         created_date=datetime.now(),
         updated_date=datetime.now(),

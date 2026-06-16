@@ -1,3 +1,9 @@
+# SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+# - [misc] on lines ~339, ~415: UpdateMediaBuySuccess/Error class defs.
+#   Pydantic metaclass interaction in SDK hierarchy; permanent.
+# - [assignment] on lines ~1449, ~1450, ~1637, ~1638: account/idempotency_key
+#   overrides (required -> optional). Architectural; permanent.
+
 import warnings
 from datetime import date, datetime
 
@@ -5,6 +11,8 @@ from datetime import date, datetime
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+
+from src.core.enum_helpers import enum_value
 
 if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
@@ -210,6 +218,21 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     ``SyncAccountsResponse``.
     """
 
+    # SDK 5.7 removed these from parent — declare locally
+    account: Any | None = None
+    sandbox: bool | None = None
+    # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
+    # it (adapters/base.py _build_create_success). Declare it for parity/typing so
+    # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
+    creative_deadline: datetime | None = None
+    # SDK 5.7 also dropped valid_actions and context from the parent, but production
+    # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
+    # and survives a parent extra-mode change, not riding inherited extra='allow'.
+    # valid_actions_for_status() yields strings that are all valid MediaBuyValidAction
+    # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
+    valid_actions: list[MediaBuyValidAction] | None = None
+    context: ContextObject | None = None
+
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
 
@@ -332,7 +355,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
+class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     """Successful update_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking.
@@ -351,7 +374,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
     # while still being AdCP-compliant (those fields are excluded via exclude=True)
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
-    affected_packages: list[AffectedPackage] | None = None  # type: ignore[assignment]
+    affected_packages: list[AffectedPackage] | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -408,7 +431,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
             return f"Media buy {self.media_buy_id} updated successfully."
 
 
-class UpdateMediaBuyError(AdCPUpdateMediaBuyError):
+class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
     """Failed update_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp UpdateMediaBuyError type.
@@ -993,7 +1016,7 @@ class Targeting(TargetingOverlay):
             form_factors: set[str] = set()
             for platform in dp:
                 # Handle both enum values and raw strings
-                p = platform.value if hasattr(platform, "value") else str(platform)
+                p = enum_value(platform)
                 form_factors.update(_PLATFORM_TO_FORM_FACTORS.get(p, []))
             if form_factors:
                 values["device_type_any_of"] = sorted(form_factors)
@@ -1448,7 +1471,7 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
-    packages: list[PackageRequest] | None = None  # type: ignore[assignment]
+    packages: list[PackageRequest] | None = None
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -1637,7 +1660,7 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
-    packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
+    packages: list[AdCPPackageUpdate] | None = None
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.

@@ -30,6 +30,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core import async_utils, context_manager
+from tests.unit._push_notification_helpers import make_push_step, session_returning
 
 
 @pytest.fixture(autouse=True)
@@ -37,40 +38,6 @@ def clean_pinned_tasks():
     async_utils._pinned_tasks.clear()
     yield
     async_utils._pinned_tasks.clear()
-
-
-def _make_step():
-    """A WorkflowStep-like object with the push_notification_config request data."""
-    return SimpleNamespace(
-        step_id="step_1",
-        context_id="ctx_1",
-        tool_name="create_media_buy",
-        response_data={"ok": True},
-        request_data={
-            "protocol": "mcp",
-            "push_notification_config": {"url": "https://buyer.example/webhook"},
-        },
-        context=SimpleNamespace(tenant_id="tenant_1", principal_id="principal_1"),
-    )
-
-
-def _session_for(mappings, context, webhooks):
-    """A session whose scalars() returns mappings, then context, then webhooks.
-
-    _send_push_notifications issues exactly three scalars() queries in order:
-    ObjectWorkflowMapping (.all()), Context (.first()), PushNotificationConfig
-    (.all()).
-    """
-    scalars_mapping = MagicMock()
-    scalars_mapping.all.return_value = mappings
-    scalars_context = MagicMock()
-    scalars_context.first.return_value = context
-    scalars_webhooks = MagicMock()
-    scalars_webhooks.all.return_value = webhooks
-
-    session = MagicMock()
-    session.scalars.side_effect = [scalars_mapping, scalars_context, scalars_webhooks]
-    return session
 
 
 def _drive(send_notification_side):
@@ -83,14 +50,14 @@ def _drive(send_notification_side):
     mapping = SimpleNamespace(object_type="media_buy", object_id="mb_1", action="create")
     context = SimpleNamespace(tenant_id="tenant_1", principal_id="principal_1")
     webhook = SimpleNamespace(id="pnc_1")
-    session = _session_for([mapping], context, [webhook])
+    session = session_returning([mapping], context, [webhook])
 
     fake_service = MagicMock()
     fake_service.send_notification = AsyncMock(side_effect=send_notification_side)
 
     cm = context_manager.ContextManager()
     with patch.object(context_manager, "get_protocol_webhook_service", return_value=fake_service):
-        cm._send_push_notifications(_make_step(), "completed", session)
+        cm._send_push_notifications(make_push_step(), "completed", session)
 
 
 @pytest.mark.asyncio

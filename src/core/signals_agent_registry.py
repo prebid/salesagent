@@ -181,12 +181,12 @@ class SignalsAgentRegistry:
                     )
                 signals = result.data.signals
                 total_duration = time.time() - start_time
-                logger.info(f"[TIMING] Got {len(signals)} signals synchronously in {total_duration:.2f}s total")
+                logger.info(f"[TIMING] Got {len(signals or [])} signals synchronously in {total_duration:.2f}s total")
                 # Convert Signal objects to dicts for internal use
                 # AdCP library returns Signal objects, but our internal code expects dicts
                 # Handle both Signal objects (from adcp library) and dicts (from some test/error scenarios)
                 result_signals = []
-                for signal in signals:
+                for signal in signals or []:
                     if isinstance(signal, dict):
                         # Already a dict, use as-is
                         result_signals.append(signal)

@@ -13,6 +13,7 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers import assert_envelope_shape
 
 
@@ -185,14 +186,7 @@ class TestMCPToolRoundtripMinimal:
                             "width": 300,
                             "height": 250,
                         },
-                        "assets": {
-                            "image": {
-                                "url": "https://example.com/preview.jpg",
-                                "width": 300,
-                                "height": 250,
-                            },
-                            "click_url": {"url": "https://example.com"},
-                        },
+                        "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
                     }
                 ]
             },

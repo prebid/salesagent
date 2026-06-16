@@ -39,6 +39,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
 
 # ---------------------------------------------------------------------------
@@ -1410,13 +1411,17 @@ class TestUC003UploadInlineCreatives:
                                     "creative_id": "c1",
                                     "name": "Creative 1",
                                     "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                    "assets": {"main": {"url": "https://example.com/a1.png"}},
+                                    "assets": build_assets(
+                                        image_spec("main", url="https://example.com/a1.png", width=300, height=250)
+                                    ),
                                 },
                                 {
                                     "creative_id": "c2",
                                     "name": "Creative 2",
                                     "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                    "assets": {"main": {"url": "https://example.com/a2.png"}},
+                                    "assets": build_assets(
+                                        image_spec("main", url="https://example.com/a2.png", width=300, height=250)
+                                    ),
                                 },
                             ],
                         }
@@ -1457,7 +1462,9 @@ class TestUC003UploadInlineCreatives:
                                     "creative_id": "c3",
                                     "name": "Creative 3",
                                     "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                    "assets": {"main": {"url": "https://example.com/a3.png"}},
+                                    "assets": build_assets(
+                                        image_spec("main", url="https://example.com/a3.png", width=300, height=250)
+                                    ),
                                 }
                             ],
                         }
@@ -1478,13 +1485,14 @@ class TestUC003UploadInlineCreatives:
         Covers: UC-003-ALT-UPLOAD-INLINE-CREATIVES-04
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            # Mock _sync_creatives_impl to return a failure
-            from adcp.types import CreativeAction
-
+            # Mock _sync_creatives_impl to return a failure.
+            # Branch normalizes CreativeAction to plain strings everywhere
+            # (production compares ``r.action == "failed"``), so the mock
+            # must use the string form, not the CreativeAction enum.
             mock_sync_response = MagicMock()
             failed_creative = MagicMock()
             failed_creative.creative_id = "c_fail"
-            failed_creative.action = CreativeAction.failed
+            failed_creative.action = "failed"
             mock_error = MagicMock()
             mock_error.message = "Upload failed"
             failed_creative.errors = [mock_error]
@@ -1502,12 +1510,16 @@ class TestUC003UploadInlineCreatives:
                                     "creative_id": "c_fail",
                                     "name": "Bad Creative",
                                     "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                    "assets": {"main": {"url": "https://example.com/fail.png"}},
+                                    "assets": build_assets(
+                                        image_spec("main", url="https://example.com/fail.png", width=300, height=250)
+                                    ),
                                 }
                             ],
                         }
                     ],
                 )
+                # #1307 error-drain: sync failure raises AdCPAdapterError
+                # instead of returning an UpdateMediaBuyError result.
                 with pytest.raises(AdCPAdapterError) as exc_info:
                     _update_media_buy_impl(req=req, identity=identity)
 
@@ -2462,12 +2474,12 @@ class TestUC003ExtK:
         Covers: UC-003-EXT-K-01
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from adcp.types import CreativeAction
-
+            # Branch normalizes CreativeAction to strings (production compares
+            # ``r.action == "failed"``), so use the string form here.
             mock_sync_response = MagicMock()
             failed = MagicMock()
             failed.creative_id = "c_fail"
-            failed.action = CreativeAction.failed
+            failed.action = "failed"
             mock_err = MagicMock()
             mock_err.message = "Network error"
             failed.errors = [mock_err]
@@ -2485,12 +2497,15 @@ class TestUC003ExtK:
                                     "creative_id": "c_fail",
                                     "name": "Fail",
                                     "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                    "assets": {"main": {"url": "https://example.com/fail.png"}},
+                                    "assets": build_assets(
+                                        image_spec("main", url="https://example.com/fail.png", width=300, height=250)
+                                    ),
                                 }
                             ],
                         }
                     ],
                 )
+                # #1307 error-drain: sync failure raises AdCPAdapterError.
                 with pytest.raises(AdCPAdapterError) as exc_info:
                     _update_media_buy_impl(req=req, identity=identity)
 
@@ -2502,12 +2517,12 @@ class TestUC003ExtK:
         Covers: UC-003-EXT-K-02
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from adcp.types import CreativeAction
-
+            # Branch normalizes CreativeAction to strings (production compares
+            # ``r.action == "failed"``), so use the string form here.
             mock_sync_response = MagicMock()
             failed = MagicMock()
             failed.creative_id = "c_fail"
-            failed.action = CreativeAction.failed
+            failed.action = "failed"
             mock_err = MagicMock()
             mock_err.message = "Error"
             failed.errors = [mock_err]
@@ -2525,12 +2540,15 @@ class TestUC003ExtK:
                                     "creative_id": "c_fail",
                                     "name": "Fail",
                                     "format_id": {"agent_url": "http://test.com", "id": "display"},
-                                    "assets": {"main": {"url": "https://example.com/fail.png"}},
+                                    "assets": build_assets(
+                                        image_spec("main", url="https://example.com/fail.png", width=300, height=250)
+                                    ),
                                 }
                             ],
                         }
                     ],
                 )
+                # #1307 error-drain: sync failure raises AdCPAdapterError.
                 with pytest.raises(AdCPAdapterError) as exc_info:
                     _update_media_buy_impl(req=req, identity=identity)
 

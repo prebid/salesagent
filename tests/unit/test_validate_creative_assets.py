@@ -3,11 +3,12 @@
 import pytest
 
 from src.core.helpers import _validate_creative_assets
+from tests.factories.creative_asset import make_legacy_asset_dict
 
 
 def test_validate_assets_valid_dict():
     """Test that valid dict assets pass through unchanged."""
-    assets = {"main_image": {"asset_type": "image", "url": "https://example.com/image.jpg"}}
+    assets = make_legacy_asset_dict("main_image", asset_type="image", url="https://example.com/image.jpg")
 
     result = _validate_creative_assets(assets)
 
@@ -33,8 +34,8 @@ def test_validate_assets_empty_dict():
 def test_validate_assets_multiple_assets():
     """Test dict with multiple assets."""
     assets = {
-        "hero_image": {"asset_type": "image", "url": "https://example.com/hero.jpg"},
-        "logo": {"asset_type": "image", "url": "https://example.com/logo.jpg"},
+        **make_legacy_asset_dict("hero_image", asset_type="image", url="https://example.com/hero.jpg"),
+        **make_legacy_asset_dict("logo", asset_type="image", url="https://example.com/logo.jpg"),
     }
 
     result = _validate_creative_assets(assets)

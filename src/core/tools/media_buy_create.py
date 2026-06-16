@@ -49,6 +49,7 @@ from src.core.exceptions import (
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
+from src.core.helpers import enum_value
 
 
 class PackageAssignmentDict(TypedDict):
@@ -801,11 +802,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         logger.error(f"[APPROVAL] {error_msg}")
                         return False, error_msg
 
-                    delivery_type_str = (
-                        product.delivery_type.value
-                        if hasattr(product.delivery_type, "value")
-                        else str(product.delivery_type)
-                    )
+                    delivery_type_str = enum_value(product.delivery_type)
 
                     # Validate delivery_type is a valid literal
                     if delivery_type_str not in ["guaranteed", "non_guaranteed"]:
@@ -2685,10 +2682,12 @@ async def _create_media_buy_impl(
                         f"Product '{schema_product.name}' ({schema_product.product_id}) is missing GAM configuration. "
                         f"Auto-generating defaults based on product type."
                     )
-                    # Generate defaults based on product delivery type and formats
-                    delivery_type_str = (
-                        str(schema_product.delivery_type) if schema_product.delivery_type else "non_guaranteed"
-                    )
+                    # Generate defaults based on product delivery type and formats.
+                    # delivery_type is a plain DeliveryType enum; normalize to its
+                    # value ('guaranteed'/'non_guaranteed') so generate_default_config's
+                    # equality check selects the right config arm (str(enum) would
+                    # yield 'DeliveryType.guaranteed' and silently mis-route — PR1399).
+                    delivery_type_str = enum_value(schema_product.delivery_type) or "non_guaranteed"
                     # Extract format IDs as strings for config generation
                     formats_list: list[str] | None = None
                     if schema_product.format_ids:
@@ -3049,7 +3048,7 @@ async def _create_media_buy_impl(
                         else:
                             package_budget_value = None
 
-            delivery_type_str = str(pkg_product.delivery_type.value)
+            delivery_type_str = enum_value(pkg_product.delivery_type)
 
             delivery_type_value: Literal["guaranteed", "non_guaranteed"] = cast(
                 Literal["guaranteed", "non_guaranteed"], delivery_type_str
@@ -3645,7 +3644,7 @@ async def _create_media_buy_impl(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             valid_actions=valid_actions_for_status(media_buy_status),
-            creative_deadline=response.creative_deadline,
+            creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
             errors=property_list_unsupported_advisories(req.packages, adapter),
         )
