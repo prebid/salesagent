@@ -30,6 +30,8 @@ comment at the source location.
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 # ── Allowlist ────────────────────────────────────────────────────────────
 # Format: (filename, class_name)
 # Every entry must have a matching FIXME comment at the source location.
@@ -249,7 +251,8 @@ class TestNoBarePydanticBaseModel:
             source = schema_file.read_text()
             still_violations.update(_find_violations(source, schema_file.name))
 
-        stale = ALLOWLIST - still_violations
-        assert not stale, "Allowlist entries that are no longer violations (remove them):\n" + "\n".join(
-            f"  - {f}:{c}" for f, c in sorted(stale)
+        assert_violations_match_allowlist(
+            still_violations,
+            ALLOWLIST,
+            fix_hint="Remove fixed entries from ALLOWLIST.",
         )

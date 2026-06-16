@@ -27,7 +27,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._ast_helpers import iter_module_trees
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_module_trees
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src"]
@@ -92,7 +92,8 @@ def test_no_base_notfound_raise():
 def test_known_violations_not_stale():
     """Every allowlisted (file, function) must still raise the base class."""
     actual = {(rel, func) for rel, func, _ in _find_base_notfound_raises()}
-    stale = KNOWN_VIOLATIONS - actual
-    assert not stale, "Stale allowlist entries (now using a subclass):\n" + "\n".join(
-        f"  {rel} :: {func}" for rel, func in sorted(stale)
+    assert_violations_match_allowlist(
+        actual,
+        KNOWN_VIOLATIONS,
+        fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
     )

@@ -16,6 +16,8 @@ import ast
 from collections.abc import Iterator
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
 
@@ -110,10 +112,10 @@ class TestNoErrorCodeKwargInImpl:
     def test_known_violations_not_stale(self):
         """Every allowlisted (file, function) must still contain a sanctioned site."""
         actual = {(rel, func) for rel, func, _ in _find_error_code_kwargs()}
-        stale = KNOWN_VIOLATIONS - actual
-        assert not stale, (
-            f"Found {len(stale)} stale allowlist entries — the synthesize() call moved or was "
-            f"removed. Update the allowlist:\n" + "\n".join(f"  {rel} :: {func}" for rel, func in sorted(stale))
+        assert_violations_match_allowlist(
+            actual,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
         )
 
     def test_violation_count_capped_at_two(self):

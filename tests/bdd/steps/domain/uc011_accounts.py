@@ -68,9 +68,9 @@ def _brand_id_str(bid: Any) -> str | None:
     """Extract string value from BrandId (RootModel[str]) or return as-is."""
     if bid is None:
         return None
-    if hasattr(bid, "root"):
-        return str(bid.root)
-    return str(bid)
+    if isinstance(bid, str):
+        return bid
+    return str(bid.root)
 
 
 def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) -> Any:
