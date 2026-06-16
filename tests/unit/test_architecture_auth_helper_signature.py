@@ -31,8 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
-from tests.unit._ast_helpers import iter_module_trees
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_module_trees
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUTH_MODULE = REPO_ROOT / "src" / "core" / "auth.py"

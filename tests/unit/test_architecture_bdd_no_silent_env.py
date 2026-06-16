@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # ── Pre-existing violations ──────────────────────────────────────────────
@@ -124,9 +126,10 @@ class TestBddNoCtxGetEnv:
     def test_ctx_get_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
         current = set(_scan_bdd_steps(_has_ctx_get_env, 'ctx.get("env")'))
-        stale = _CTX_GET_ENV_ALLOWLIST - current
-        assert not stale, "Stale _CTX_GET_ENV_ALLOWLIST entries (fixed — remove):\n" + "\n".join(
-            f'  ("{p}", "{n}"),' for p, n in sorted(stale)
+        assert_violations_match_allowlist(
+            current & _CTX_GET_ENV_ALLOWLIST,
+            _CTX_GET_ENV_ALLOWLIST,
+            fix_hint="Remove fixed entries from _CTX_GET_ENV_ALLOWLIST.",
         )
 
 
@@ -152,7 +155,8 @@ class TestBddNoHasattrEnv:
     def test_hasattr_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
         current = set(_scan_bdd_steps(_has_hasattr_env, "hasattr(env, ...)"))
-        stale = _HASATTR_ENV_ALLOWLIST - current
-        assert not stale, "Stale _HASATTR_ENV_ALLOWLIST entries (fixed — remove):\n" + "\n".join(
-            f'  ("{p}", "{n}"),' for p, n in sorted(stale)
+        assert_violations_match_allowlist(
+            current & _HASATTR_ENV_ALLOWLIST,
+            _HASATTR_ENV_ALLOWLIST,
+            fix_hint="Remove fixed entries from _HASATTR_ENV_ALLOWLIST.",
         )

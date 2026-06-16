@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # The repository module is the ONLY allowed location for raw select(MediaPackage)
@@ -111,16 +113,11 @@ class TestNoRawMediaPackageSelect:
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = {(f, fn) for f, fn, _line in _find_raw_media_package_selects()}
-
-        stale = ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            ALLOWLIST,
+            fix_hint="Remove fixed entries from ALLOWLIST.",
+        )
 
     @pytest.mark.arch_guard
     def test_violation_count_matches(self):

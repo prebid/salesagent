@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
 _COVERS_RE = re.compile(r"Covers:\s+([\w-]+)")
 
@@ -432,12 +434,10 @@ class TestObligationTestQuality:
         violations = _scan_all_files()
         violation_ids = {t for t, _, _ in violations}
         allowlist = _load_allowlist()
-
-        stale = allowlist - violation_ids
-        assert not stale, (
-            f"Found {len(stale)} allowlist entries that are no longer violations.\n"
-            f"These tests now call production code — remove from "
-            f"obligation_test_quality_allowlist.json:\n" + "\n".join(f"  {t}" for t in sorted(stale))
+        assert_violations_match_allowlist(
+            violation_ids & allowlist,
+            allowlist,
+            fix_hint="Remove fixed entries from obligation_test_quality_allowlist.json.",
         )
 
     @pytest.mark.arch_guard

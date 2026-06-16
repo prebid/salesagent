@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
 # Exception types that are acceptable to catch with pass/continue
@@ -148,9 +150,8 @@ def test_known_violations_not_stale():
         all_violations.extend(_scan_file(py_file))
 
     actual = {(path, line) for path, line, _ in all_violations}
-    stale = _KNOWN_VIOLATIONS - actual
-
-    assert not stale, (
-        f"Found {len(stale)} stale allowlist entry(ies) — these violations were fixed.\n"
-        "Remove them from _KNOWN_VIOLATIONS:\n\n" + "\n".join(f"  ({path!r}, {line})," for path, line in sorted(stale))
+    assert_violations_match_allowlist(
+        actual,
+        _KNOWN_VIOLATIONS,
+        fix_hint="Remove fixed entries from _KNOWN_VIOLATIONS.",
     )

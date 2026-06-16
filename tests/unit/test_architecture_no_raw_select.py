@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ── Exempt directories and files ────────────────────────────────────
@@ -476,16 +478,11 @@ class TestNoRawSelectOutsideRepositories:
         This test catches stale entries so the allowlist stays honest.
         """
         all_violations = {(f, fn) for f, fn, _model, _line in _find_raw_selects()}
-
-        stale = ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from ALLOWLIST):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            ALLOWLIST,
+            fix_hint="Remove fixed entries from ALLOWLIST.",
+        )
 
     @pytest.mark.arch_guard
     def test_violation_count_matches(self):

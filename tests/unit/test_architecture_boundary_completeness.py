@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 TOOLS_DIR = Path("src/core/tools")
 
 # All _impl functions and their modules
@@ -231,9 +233,8 @@ class TestBoundaryCompleteness:
                 if param not in kwargs and (param_idx < 0 or param_idx >= n_positional):
                     still_violated.add(violation_key)
 
-        fixed = KNOWN_VIOLATIONS - still_violated
-        if fixed:
-            msg = "These known violations have been FIXED — remove from KNOWN_VIOLATIONS:\n" + "\n".join(
-                f"  - {v}" for v in sorted(fixed)
-            )
-            raise AssertionError(msg)
+        assert_violations_match_allowlist(
+            still_violated,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
+        )

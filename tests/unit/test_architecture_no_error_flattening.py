@@ -34,7 +34,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._ast_helpers import iter_module_trees
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_module_trees
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
@@ -149,8 +149,8 @@ def test_no_error_flattening():
 def test_known_violations_not_stale():
     """Every allowlisted (file, function) must still contain a flatten site."""
     actual = {(rel, func) for rel, func, _, _ in _find_flatten_sites()}
-    stale = KNOWN_VIOLATIONS - actual
-    assert not stale, (
-        f"Found {len(stale)} stale allowlist entry(ies) — these flatten sites were fixed.\n"
-        "Remove them from KNOWN_VIOLATIONS:\n\n" + "\n".join(f"  {rel} :: {func}" for rel, func in sorted(stale))
+    assert_violations_match_allowlist(
+        actual,
+        KNOWN_VIOLATIONS,
+        fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
     )

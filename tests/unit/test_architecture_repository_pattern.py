@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
@@ -607,15 +609,11 @@ class TestImplNoDirectDbSession:
             for f, fn, _line in _find_impl_functions_with_db_session(file_path):
                 all_violations.add((f, fn))
 
-        stale = IMPL_SESSION_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            IMPL_SESSION_ALLOWLIST,
+            fix_hint="Remove fixed entries from IMPL_SESSION_ALLOWLIST.",
+        )
 
 
 class TestIntegrationTestsNoInlineSessionAdd:
@@ -658,12 +656,8 @@ class TestIntegrationTestsNoInlineSessionAdd:
             for f, fn, _line in _find_session_add_in_tests(file_path):
                 all_violations.add((f, fn))
 
-        stale = INTEGRATION_SESSION_ADD_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            INTEGRATION_SESSION_ADD_ALLOWLIST,
+            fix_hint="Remove fixed entries from INTEGRATION_SESSION_ADD_ALLOWLIST.",
+        )

@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ThreadRegistry's own module is the ONLY allowed dict+Lock pairing.
@@ -103,6 +105,8 @@ def test_no_raw_thread_dict_with_lock():
 @pytest.mark.arch_guard
 def test_allowlist_has_no_stale_entries():
     """Allowlisted files that no longer violate must be removed from the allowlist."""
-    violations = set(_find_raw_thread_registries())
-    stale = ALLOWLIST - violations
-    assert not stale, f"Stale allowlist entries (no longer violate — remove them): {sorted(stale)}"
+    assert_violations_match_allowlist(
+        set(_find_raw_thread_registries()),
+        ALLOWLIST,
+        fix_hint="Remove fixed entries from ALLOWLIST.",
+    )

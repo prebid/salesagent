@@ -31,6 +31,67 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+# Module-level repo anchor (legacy ``_ast_helpers`` compat — import from here)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCAN_DIRS = [REPO_ROOT / "src/core/tools", REPO_ROOT / "src/adapters"]
+
+
+def rel(path: Path) -> str:
+    """Return path relative to repo root for stable allowlist keys."""
+    return str(path.relative_to(REPO_ROOT))
+
+
+def safe_parse(filepath: Path) -> ast.Module | None:
+    """Parse a Python file, returning None if missing or SyntaxError."""
+    if not filepath.exists():
+        return None
+    try:
+        return ast.parse(filepath.read_text(encoding="utf-8"), filename=str(filepath))
+    except SyntaxError:
+        return None
+
+
+def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]:
+    """Yield ``(parsed_tree, repo_relative_path)`` for parseable ``.py`` under ``scan_dirs``."""
+    for scan_dir in scan_dirs:
+        if not scan_dir.exists():
+            continue
+        for py_file in sorted(scan_dir.rglob("*.py")):
+            if "__pycache__" in str(py_file):
+                continue
+            tree = safe_parse(py_file)
+            if tree is not None:
+                yield tree, rel(py_file)
+
+
+def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
+    """Yield ``(node, enclosing_function_name)`` for every node in ``tree``."""
+
+    def visit(node: ast.AST, func_name: str) -> Iterator[tuple[ast.AST, str]]:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            func_name = node.name
+        yield node, func_name
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child, func_name)
+
+    yield from visit(tree, "<module>")
+
+
+def collect_error_aliases(tree: ast.AST) -> set[str]:
+    """Collect local names that alias the adcp ``Error`` class."""
+    aliases: set[str] = {"Error"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        module = node.module or ""
+        if "error" not in module.split("."):
+            continue
+        for alias in node.names:
+            if alias.name == "Error":
+                aliases.add(alias.asname or alias.name)
+    return aliases
+
+
 # ---------------------------------------------------------------------------
 # AST parsing — mtime-keyed cache
 # ---------------------------------------------------------------------------

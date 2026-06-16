@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root, src_python_files
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root, src_python_files
 
 # Files to scan for database queries
 QUERY_FILES = [
@@ -208,12 +208,11 @@ class TestQueryTypeSafety:
                     still_violated.add(violation_key)
                     break
 
-        fixed = KNOWN_VIOLATIONS - still_violated
-        if fixed:
-            msg = "These known violations have been FIXED — remove from KNOWN_VIOLATIONS:\n" + "\n".join(
-                f"  - {v}" for v in sorted(fixed)
-            )
-            raise AssertionError(msg)
+        assert_violations_match_allowlist(
+            still_violated,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
+        )
 
 
 _LEGACY_QUERY_RE = re.compile(

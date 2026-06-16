@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 
 BANNED_METHODS = {"model_dump", "model_dump_internal"}
@@ -96,12 +98,10 @@ class TestNoModelDumpInImpl:
         """
         all_violations = _find_model_dump_in_impl()
         actual_sites = {(v[0], v[1]) for v in all_violations}
-
-        stale = KNOWN_VIOLATIONS - actual_sites
-        assert not stale, (
-            f"Found {len(stale)} stale entries in KNOWN_VIOLATIONS allowlist.\n"
-            f"These violations have been fixed — remove them from the allowlist:\n"
-            + "\n".join(f"  {path}:{line}" for path, line in sorted(stale))
+        assert_violations_match_allowlist(
+            actual_sites,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
         )
 
     @pytest.mark.arch_guard
