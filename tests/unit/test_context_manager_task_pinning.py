@@ -102,26 +102,26 @@ async def test_webhook_task_discarded_before_result_swallow():
     If discard ran after t.result(), the swallowed exception's traceback frame
     chain could keep the task alive — exactly the leak this fix prevents.
 
-    The discriminator: ``_log_task_result`` calls ``console.print``. We capture
-    the pinned-set membership AT THAT MOMENT. Correct order -> task already
-    discarded (absent). Mutation #2 (discard after on_done) -> task still
-    present when _log_task_result runs.
+    The discriminator: ``_log_task_result`` logs the failure via
+    ``logger.exception``. We capture the pinned-set membership AT THAT MOMENT.
+    Correct order -> task already discarded (absent). Mutation #2 (discard after
+    on_done) -> task still present when _log_task_result runs.
     """
 
     async def boom(**_kwargs):
         raise RuntimeError("simulated webhook failure")
 
     membership_when_logged: list[bool] = []
-    real_print = context_manager.console.print
+    real_exception = context_manager.logger.exception
 
-    def spy_print(*args, **kwargs):
-        # _log_task_result is the only caller that prints "Webhook failed".
-        if args and isinstance(args[0], str) and "Webhook failed" in args[0]:
+    def spy_exception(msg, *args, **kwargs):
+        # _log_task_result is the only caller that logs "Webhook failed".
+        if isinstance(msg, str) and "Webhook failed" in msg:
             task = next(iter(async_utils._pinned_tasks), None)
             membership_when_logged.append(task is not None)
-        return real_print(*args, **kwargs)
+        return real_exception(msg, *args, **kwargs)
 
-    with patch.object(context_manager.console, "print", side_effect=spy_print):
+    with patch.object(context_manager.logger, "exception", side_effect=spy_exception):
         _drive(boom)
         assert len(async_utils._pinned_tasks) == 1
 

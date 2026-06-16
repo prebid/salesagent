@@ -899,8 +899,9 @@ class ContextManager(DatabaseManager):
                                 try:
                                     t.result()
                                     console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
-                                except Exception as e:
-                                    console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
+                                except Exception:
+                                    # Done-callback exceptions can't propagate; log and continue.
+                                    logger.exception(f"Webhook failed for {config_url}")
 
                             # Strong-ref pin against asyncio's weak-ref task
                             # tracker; discard runs before _log_task_result.
@@ -923,12 +924,9 @@ class ContextManager(DatabaseManager):
                     except requests.exceptions.RequestException as e:
                         console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
 
-        except Exception as e:
-            console.print(f"[red]Error sending push notifications: {e}[/red]")
-            # Don't fail the workflow update if notifications fail
-            import traceback
-
-            traceback.print_exc()
+        except Exception:
+            # Notifications are best-effort; don't fail the workflow update.
+            logger.exception("Error sending push notifications")
 
 
 # Singleton instance getter for compatibility
