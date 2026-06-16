@@ -670,11 +670,7 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         # Verify the resolved account_id matches the Given step's account_ref
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
-<<<<<<< HEAD
-            root = account_ref.root  # AccountReference is a RootModel — .root always exists
-=======
             root = account_ref.root
->>>>>>> 3aa73477 (fix: use direct AccountReference.root in uc002 BDD steps)
             if hasattr(root, "account_id"):
                 assert resp == root.account_id, (
                     f"Resolved account_id '{resp}' does not match requested "
