@@ -5,6 +5,7 @@ ARG PYTHON_VERSION=3.12
 ARG PYTHON_BASE_DIGEST=sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 # Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
 ARG SOURCE_DATE_EPOCH=0
+# Canonical uv version: .uv-version (CI reads the file; guard keeps this ARG in sync).
 ARG UV_VERSION=0.11.15
 # Manifest-list digest for uv 0.11.15 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
 ARG UV_IMAGE_DIGEST=sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3

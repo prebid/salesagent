@@ -17,7 +17,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  UV_VERSION: "0.11.15"
   DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
   GEMINI_API_KEY: test_key_for_mocking
   GOOGLE_CLIENT_ID: test_client_id
@@ -38,8 +37,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - name: Run static analysis (make quality-ci)
         run: make quality-ci
 
@@ -58,8 +55,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - name: Run mypy
         run: make typecheck
 
@@ -74,8 +69,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/test_adcp_contract.py
@@ -95,8 +88,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - name: Run security audit
         run: ./scripts/security-audit.sh
 
@@ -129,8 +120,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/smoke/
@@ -148,8 +137,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/ tests/harness/
@@ -203,8 +190,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
@@ -242,8 +227,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - name: Ensure docker-compose alias exists
         run: |
           docker compose version
@@ -301,8 +284,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
@@ -342,8 +323,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
@@ -429,8 +408,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
@@ -451,8 +428,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          uv-version: ${{ env.UV_VERSION }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: unit-coverage

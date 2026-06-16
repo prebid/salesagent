@@ -1,10 +1,5 @@
 name: Setup Python and uv environment
 description: Install Python dependencies via uv with cache.
-inputs:
-  uv-version:
-    description: uv version to install (must match Dockerfile ARG UV_VERSION).
-    required: false
-    default: "0.11.15"
 runs:
   using: composite
   steps:
@@ -13,11 +8,7 @@ runs:
       with:
         python-version-file: .python-version
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
-      with:
-        version: ${{ inputs.uv-version }}
-        python-version-file: .python-version
+    - uses: ./.github/actions/_install-uv
 
     - name: Cache uv dependencies
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import functools
 import re
+import subprocess
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
@@ -215,9 +216,15 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
     yield from sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")])
 
 
-def iter_compose_files(repo: Path) -> Iterator[Path]:
-    """docker-compose*.yml and compose.yaml at repo root."""
-    yield from sorted([*repo.glob("docker-compose*.yml"), *repo.glob("compose.yaml")])
+def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
+    """Yield git-tracked files that exist on disk (hermetic; ignores untracked local files)."""
+    output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True)
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        path = repo / line
+        if path.is_file():
+            yield path
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +235,9 @@ def iter_compose_files(repo: Path) -> Iterator[Path]:
 # a normalized version string ("3.12", "17", "0.11.7") via the first capture group.
 
 _PY_VERSION_PATTERNS: list[tuple[str, str]] = [
-    # Dockerfile / Dockerfile.* — `FROM python:3.12-slim` or `FROM python:3.12.4`
+    # Dockerfile — templated builds: `ARG PYTHON_VERSION=3.12`
+    (r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)", "Dockerfile"),
+    # Dockerfile / Dockerfile.* — literal `FROM python:3.12-slim` (legacy)
     (r"^\s*FROM\s+python:([0-9]+(?:\.[0-9]+)*)", "Dockerfile"),
     # pyproject.toml — `target-version = "py312"` (black/ruff)
     (r'^\s*target-version\s*=\s*["\']py([0-9]{2,3})["\']', "pyproject.toml"),
@@ -249,6 +258,20 @@ _PY_VERSION_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
+_PYTHON_ANCHOR_NAMES = frozenset({"pyproject.toml", "mypy.ini", "tox.ini", ".python-version"})
+
+
+def _python_anchor_candidate(path: Path) -> bool:
+    rel = path.as_posix()
+    if path.name.startswith("Dockerfile"):
+        return True
+    if path.name in _PYTHON_ANCHOR_NAMES:
+        return True
+    if path.suffix in {".yml", ".yaml"} and rel.startswith(".github/workflows/"):
+        return True
+    return path.name in {"action.yml", "action.yaml"} and rel.startswith(".github/actions/")
+
+
 def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
     """Yield (file_path, version_string) for every Python version anchor across repo surfaces.
 
@@ -256,22 +279,11 @@ def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
     requires-python), .python-version, mypy.ini, tox.ini, .github/workflows/*.yml,
     .github/actions/*/action.yml. Returns one tuple per match (a file may have multiple).
 
-    Used by `test_architecture_uv_version_anchor.py` (and python-anchor-consistency) to assert
-    cross-file consistency under D24 + PR 5.
+    Uses ``git ls-files`` so untracked local files cannot affect the guard verdict.
     """
-    candidates: list[Path] = []
-    candidates.extend(repo.glob("Dockerfile*"))
-    for fname in ("pyproject.toml", "mypy.ini", "tox.ini", ".python-version"):
-        p = repo / fname
-        if p.exists():
-            candidates.append(p)
-    candidates.extend(iter_workflow_files(repo))
-    actions_dir = repo / ".github" / "actions"
-    if actions_dir.exists():
-        candidates.extend(actions_dir.rglob("action.yml"))
-        candidates.extend(actions_dir.rglob("action.yaml"))
-
-    for path in candidates:
+    for path in iter_git_tracked_files(repo):
+        if not _python_anchor_candidate(path):
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -291,40 +303,95 @@ def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
 
 
 _PG_IMAGE_LITERAL = re.compile(r"postgres:([0-9]{1,2}(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)(?![0-9])")
-
-# Whole-tree scan skips binary/cache dirs; catches postgres: in .sh/.md/.yml alike.
-_PG_SCAN_SKIP_DIRS = frozenset(
-    {
-        ".git",
-        ".venv",
-        "node_modules",
-        "htmlcov",
-        "__pycache__",
-        ".tox",
-        "test-results",
-        ".beads",
-        "uv.lock",
-    }
-)
+_PG_TAG_PATTERN = _PG_IMAGE_LITERAL.pattern
 _PG_SCAN_SUFFIXES = frozenset({".py", ".yml", ".yaml", ".md", ".sh", ".toml", ".ini", ".txt", ".mdc"})
 
 
-def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
-    """Yield (file_path, image_tag) for every ``postgres:`` literal in tracked text surfaces.
+def postgres_tag_pattern_map() -> dict[str, str]:
+    """Path-suffix → regex map for ``assert_anchor_consistency`` on postgres image tags."""
+    mapping = dict.fromkeys(_PG_SCAN_SUFFIXES, _PG_TAG_PATTERN)
+    mapping["Dockerfile"] = _PG_TAG_PATTERN
+    mapping["compose.yaml"] = _PG_TAG_PATTERN
+    return mapping
 
-    Scans the whole repo tree (not just compose/workflows/conftest) so drift in scripts
-    and docs fails CI the same way as drift in CI YAML.
+
+def _postgres_scan_candidate(path: Path) -> bool:
+    return (
+        path.name.startswith("Dockerfile")
+        or path.suffix in _PG_SCAN_SUFFIXES
+        or path.name in {"compose.yaml", "Dockerfile"}
+    )
+
+
+_SETUP_UV_ACTION = re.compile(r"astral-sh/setup-uv@([0-9a-f]{40})")
+_INSTALL_UV_ACTION = ".github/actions/_install-uv/action.yml"
+_DOCKERFILE_PYTHON_VERSION_RE = re.compile(r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)", re.MULTILINE)
+
+
+def extract_dockerfile_python_version(text: str) -> str | None:
+    """Extract Python version from templated Dockerfile ``ARG PYTHON_VERSION=…`` line."""
+    match = _DOCKERFILE_PYTHON_VERSION_RE.search(text)
+    return match.group(1) if match else None
+
+
+def assert_setup_uv_single_pinned_source(pins: Iterable[tuple[Path, str]], repo: Path) -> None:
+    """Assert ``astral-sh/setup-uv`` is pinned in exactly one composite action file."""
+    pin_list = list(pins)
+    if not pin_list:
+        raise AssertionError("non-vacuity: no astral-sh/setup-uv references found")
+
+    by_file: dict[str, set[str]] = {}
+    for path, pin in pin_list:
+        rel = str(path.relative_to(repo))
+        by_file.setdefault(rel, set()).add(pin)
+
+    if set(by_file) != {_INSTALL_UV_ACTION}:
+        raise AssertionError(
+            "astral-sh/setup-uv must be referenced only from "
+            f"{_INSTALL_UV_ACTION} — found pins in:\n"
+            + "\n".join(f"  {path}: {sorted(values)}" for path, values in sorted(by_file.items()))
+        )
+    if len(by_file[_INSTALL_UV_ACTION]) != 1:
+        raise AssertionError(
+            f"expected exactly one setup-uv pin in {_INSTALL_UV_ACTION}, got {sorted(by_file[_INSTALL_UV_ACTION])}"
+        )
+
+
+def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
+    """Yield (file_path, full_pin) for every ``astral-sh/setup-uv@<sha>`` reference."""
+    install_uv = repo / _INSTALL_UV_ACTION
+    if install_uv.is_file():
+        for m in _SETUP_UV_ACTION.finditer(install_uv.read_text(encoding="utf-8")):
+            yield install_uv, m.group(0)
+
+    for path in iter_git_tracked_files(repo):
+        if path == install_uv or path.suffix not in {".yml", ".yaml"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for m in _SETUP_UV_ACTION.finditer(text):
+            yield path, m.group(0)
+
+
+def iter_hardcoded_uv_version_env(repo: Path) -> Iterator[tuple[Path, int, str]]:
+    """Yield workflow lines that hardcode ``UV_VERSION: "..."`` instead of reading ``.uv-version``."""
+    pattern = re.compile(r'^\s*UV_VERSION:\s*["\']')
+    for path in iter_workflow_files(repo):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if pattern.search(line):
+                yield path, lineno, line.strip()
+
+
+def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
+    """Yield (file_path, image_tag) for every ``postgres:`` literal in git-tracked text surfaces.
+
+    Uses ``git ls-files`` so untracked local files (e.g. ``.claude/`` notes) cannot
+    affect the guard verdict.
     """
-    for path in repo.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in _PG_SCAN_SKIP_DIRS for part in path.parts):
-            continue
-        if path.name.startswith("Dockerfile") or path.suffix in _PG_SCAN_SUFFIXES:
-            pass
-        elif path.name in {"compose.yaml", "Dockerfile"}:
-            pass
-        else:
+    for path in iter_git_tracked_files(repo):
+        if not _postgres_scan_candidate(path):
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -454,6 +521,20 @@ def assert_anchor_consistency(
     if len(distinct) > 1:
         rendered = "\n".join(f"  {p}: {v}" for p, v in sorted(values.items()))
         raise AssertionError(f"{label} drift across sources:\n{rendered}")
+
+
+def anchor_consistency_detects_drift(
+    sources: Iterable[tuple[Path, str]],
+    pattern_map: dict[str, str],
+    *,
+    label: str,
+) -> bool:
+    """Return True when *sources* contain conflicting anchors (mutation self-test probe)."""
+    try:
+        assert_anchor_consistency(sources, pattern_map, label=label)
+    except AssertionError as exc:
+        return f"{label} drift" in str(exc)
+    return False
 
 
 # ---------------------------------------------------------------------------
