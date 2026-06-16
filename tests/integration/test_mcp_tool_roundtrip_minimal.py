@@ -7,6 +7,7 @@ and caused errors.
 Focus: Test parameter-to-schema mapping, not business logic.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -64,6 +65,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
@@ -101,6 +103,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
@@ -237,6 +240,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,

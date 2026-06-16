@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -172,6 +173,7 @@ class TestMcpWireErrorEnvelope:
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     create_test_package_request_dict(
                         product_id=_PRODUCT_ID,
@@ -208,6 +210,7 @@ class TestMcpWireErrorEnvelope:
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     create_test_package_request_dict(
                         product_id=_PRODUCT_ID,

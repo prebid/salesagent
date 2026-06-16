@@ -10,3 +10,14 @@ useDefault = true
 [[allowlists]]
 description = "agent-db skill test-only ENCRYPTION_KEY"
 paths = ['''\.claude/skills/\.agent-db\.env''']
+
+# AdCP idempotency keys are client-chosen request-deduplication identifiers
+# (spec pattern ^[A-Za-z0-9_.:-]{16,255}$), not credentials. Test literals like
+# idempotency_key="unit-test-key-..." trip the generic-api-key rule on entropy
+# alone. Scoped to lines assigning the idempotency_key field in tests, so a
+# real secret elsewhere on a test line still triggers.
+[[allowlists]]
+description = "test-fixture idempotency_key literals (request IDs, not secrets)"
+paths = ['''tests/.*\.py''']
+regexTarget = "line"
+regexes = ['''idempotency_key["']?\s*[:=]+\s*["'][A-Za-z0-9_.:-]{16,255}["']''']

@@ -1127,6 +1127,7 @@ class TestCreativeLifecycleMCP:
                 start_time=datetime.now(UTC) + timedelta(days=1),
                 end_time=datetime.now(UTC) + timedelta(days=30),
                 po_number="PO-TEST-123",
+                idempotency_key=f"int-key-{uuid.uuid4().hex}",
                 identity=identity,
             )
 

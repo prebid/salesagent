@@ -4,6 +4,7 @@ This test file ensures all MCP tools work correctly with proper authentication
 and data validation. It tests the actual server endpoints, not mocks.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -240,6 +241,7 @@ class TestMCPEndpointsComprehensive:
             ],
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
 
         assert len(request.packages) == 2
@@ -340,6 +342,7 @@ class TestMCPEndpointsComprehensive:
                     "start_time": start_time,
                     "end_time": end_time,
                     "po_number": "PO-TEST-12345",  # Required per AdCP spec
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 },
             )
 

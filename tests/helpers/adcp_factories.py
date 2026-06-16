@@ -7,6 +7,7 @@ instead of manually constructing objects to avoid validation errors.
 All factories use sensible defaults for required fields and accept overrides for customization.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -674,6 +675,9 @@ def create_test_media_buy_request_dict(
         "packages": packages,
         "start_time": start_time,
         "end_time": end_time,
+        # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
+        # original response instead of creating a new buy). Override via kwargs.
+        "idempotency_key": f"test-key-{uuid.uuid4().hex}",
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)

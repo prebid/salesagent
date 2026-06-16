@@ -648,6 +648,7 @@ class TestAdCPContract:
             start_time=start_time,
             end_time=end_time,
             po_number="PO-12345",  # Optional per spec
+            idempotency_key="unit-test-key-adcp-create-mb",
         )
 
         # Verify AdCP requirements
@@ -2537,6 +2538,7 @@ class TestAdCPContract:
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
             end_time=end_date,
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
+            idempotency_key="unit-test-key-asap-start-time",
         )
 
         # Verify asap is accepted (library wraps in StartTiming on some SDK versions)
@@ -2579,6 +2581,7 @@ class TestAdCPContract:
             start_time=start_date,
             end_time=end_date,
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
+            idempotency_key="unit-test-key-datetime-start",
         )
 
         # Verify datetime is still accepted (library wraps in StartTiming on some SDK versions)
@@ -2659,6 +2662,7 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
             end_time=end_date,
+            idempotency_key="unit-test-key-brand-inline",
         )
 
         # Verify brand is properly stored
@@ -2679,6 +2683,7 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
             end_time=end_date,
+            idempotency_key="unit-test-key-brand-and-brand-id",
         )
 
         # Verify brand fields

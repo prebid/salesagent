@@ -180,7 +180,16 @@ class McpDispatcher:
         except Exception as exc:
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_envelope_from_mcp_error(exc),
+                # REAL wire only: the raw MCP ToolError JSON when present, else
+                # the envelope the harness reconstruction stashed on the AdCPError
+                # as ``_wire_error_envelope`` (same stash A2A uses). NEVER the
+                # synthesized fallback — a dead MCP wire path must yield None here
+                # (failing assert_envelope_shape), not an envelope regenerated
+                # from the lossy reconstructed exception.
+                wire_error_envelope=_envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None),
+                # What production WOULD emit for the same exception — see the
+                # ImplDispatcher caveat; never a substitute for the wire field.
+                synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
         return TransportResult(payload=payload, envelope={"transport": "mcp"})
 

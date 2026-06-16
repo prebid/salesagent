@@ -48,6 +48,7 @@ class TestInlineCreativesInAdapters:
         # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         return CreateMediaBuyRequest(
             brand={"domain": "example.com"},
+            idempotency_key="unit-test-key-inline-creatives-0001",
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
             packages=[

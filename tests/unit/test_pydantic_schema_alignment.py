@@ -603,6 +603,7 @@ class TestSpecificFieldValidation:
             ],
             start_time="2025-02-01T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
+            idempotency_key="unit-test-key-accepts-brand-mfst",
         )
         # Verify brand was accepted
         assert request.brand is not None

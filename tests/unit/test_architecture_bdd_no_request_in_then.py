@@ -69,10 +69,10 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # Legacy dispatch-in-Then steps — original scenarios are xfailed.
     # Auth and budget enforcement replaced by BR-UC-002-nfr-enforcement.feature.
     # Rate limiting, payload size, SLA test unimplemented features (dead code).
-    "bdd/steps/domain/uc002_nfr.py:122 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:181 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:221 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:382 then_budget_validated_against_min_order",
+    "bdd/steps/domain/uc002_nfr.py:124 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:183 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:226 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:387 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()

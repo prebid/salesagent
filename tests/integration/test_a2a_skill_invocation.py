@@ -7,6 +7,7 @@ to ensure our A2A server properly handles the evolving AdCP spec.
 """
 
 import logging
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -361,6 +362,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],  # Use product_id per AdCP spec
@@ -428,6 +430,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],

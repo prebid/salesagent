@@ -7,6 +7,7 @@ support inventory profiles) to verify the pipeline doesn't break.
 Requires PostgreSQL (integration_db).
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -118,6 +119,7 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
             ],
             start_time=start_time,
             end_time=end_time,
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, task_status = await _create_media_buy_impl(req=req, identity=ctx)
 
@@ -207,6 +209,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
                 ],
                 start_time=start_time,
                 end_time=end_time,
+                idempotency_key=f"int-key-{uuid.uuid4().hex}",
             )
             response, _ = await _create_media_buy_impl(req=req, identity=ctx)
             # Either succeeds or returns structured error - both are valid
@@ -295,6 +298,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             ],
             start_time=start_time,
             end_time=end_time,
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 
@@ -400,6 +404,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             ],
             start_time=start_time,
             end_time=end_time,
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         response, _ = await _create_media_buy_impl(req=req, identity=ctx)
 

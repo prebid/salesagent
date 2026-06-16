@@ -2817,6 +2817,9 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
             start_time=datetime(2025, 1, 1, tzinfo=UTC),
             end_time=datetime(2025, 2, 1, tzinfo=UTC),
             reporting_webhook=reporting_webhook,
+            # Required field — a valid key keeps this step's ValidationError
+            # assertions scoped to the webhook credentials under test.
+            idempotency_key="bdd-webhook-cred-key-0001",
         )
     except ValidationError as exc:
         offending = {".".join(str(p) for p in err["loc"]) for err in exc.errors()}

@@ -42,6 +42,7 @@ def _make_request(product_id: str) -> CreateMediaBuyRequest:
         start_time=_future(1),
         end_time=_future(8),
         packages=[{"product_id": product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+        idempotency_key=f"gam-autoconfig-{product_id}",
     )
 
 
