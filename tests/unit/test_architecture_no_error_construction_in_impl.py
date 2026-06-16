@@ -39,8 +39,8 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
 
 _SKIP_MARKER = "# structural-guard:"
 
-from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
-from tests.unit._ast_helpers import rel as _rel
+from tests.unit._architecture_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
+from tests.unit._architecture_helpers import rel as _rel
 
 
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
@@ -50,7 +50,7 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
     call's line span are legitimate per-item advisory results in a success
     envelope and are excluded.
     """
-    from tests.unit._ast_helpers import collect_error_aliases
+    from tests.unit._architecture_helpers import collect_error_aliases
 
     tree = safe_parse(filepath)
     if tree is None:

@@ -21,7 +21,7 @@ is ALSO a violation here: the protection is real but it must be a sibling
 ``except AdCPError:`` handler so the idiom is uniform and machine-checkable.
 
 Scope: ``src/core/`` and ``src/adapters/`` — the layers that emit AdCP wire
-errors. The shared ``_ast_helpers.SCAN_DIRS`` (``[src/core/tools, src/adapters]``)
+errors. The shared ``_architecture_helpers.SCAN_DIRS`` (``[src/core/tools, src/adapters]``)
 is deliberately NOT reused: it would miss ``src/core/helpers/`` (and the rest of
 ``src/core/``), where a live flatten bug was found.
 

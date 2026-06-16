@@ -51,8 +51,8 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
 }
 
-from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
-from tests.unit._ast_helpers import rel as _rel
+from tests.unit._architecture_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
+from tests.unit._architecture_helpers import rel as _rel
 
 
 def _count_value_error_raises(filepath: Path) -> list[int]:

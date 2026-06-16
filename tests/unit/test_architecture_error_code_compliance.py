@@ -42,7 +42,7 @@ _SCAN_DIRS = [
 ]
 
 
-from tests.unit._ast_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
+from tests.unit._architecture_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
 
 
 def _collect_error_code_literals() -> list[tuple[str, int, str]]:

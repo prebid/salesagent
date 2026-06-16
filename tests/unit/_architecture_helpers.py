@@ -31,7 +31,7 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-# Module-level repo anchor (legacy ``_ast_helpers`` compat — import from here)
+# Module-level repo anchor
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src/core/tools", REPO_ROOT / "src/adapters"]
 
