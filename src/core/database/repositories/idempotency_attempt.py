@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from src.core.database.models import IdempotencyAttempt
 
@@ -50,22 +50,52 @@ class IdempotencyAttemptRepository:
     def tenant_id(self) -> str:
         return self._tenant_id
 
+    def _scope_prefix(self, principal_id: str, account_id: str | None) -> tuple[ColumnElement[bool], ...]:
+        """The (tenant, principal, account) isolation terms shared by EVERY scoped query.
+
+        One home for the isolation prefix so a tenant/principal/account scoping
+        fix lands once, not once per query — missing a copy would silently break
+        isolation for that path, the exact failure mode the DRY-as-correctness
+        rule guards against. ``_scope_filter`` appends the key for keyed lookups;
+        the rate-limit aggregates use the prefix directly. ``account_id is None``
+        renders ``IS NULL`` — matches no-account rows, mirroring the NULLS NOT
+        DISTINCT unique index.
+        """
+        return (
+            IdempotencyAttempt.tenant_id == self._tenant_id,
+            IdempotencyAttempt.principal_id == principal_id,
+            # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
+            IdempotencyAttempt.account_id == account_id,
+        )
+
     def _scope_filter(
         self, principal_id: str, account_id: str | None, idempotency_key: str
     ) -> tuple[ColumnElement[bool], ...]:
         """The (tenant, principal, account, key) WHERE terms the keyed lookups share.
 
         One home so the cache lookup and the degraded post-race path cannot
-        scope the same key differently. ``account_id is None`` renders ``IS
-        NULL`` — matches no-account rows, mirroring the NULLS NOT DISTINCT
-        unique index.
+        scope the same key differently. Builds on ``_scope_prefix`` and appends
+        the key.
         """
         return (
-            IdempotencyAttempt.tenant_id == self._tenant_id,
-            IdempotencyAttempt.principal_id == principal_id,
-            IdempotencyAttempt.account_id == account_id,
+            *self._scope_prefix(principal_id, account_id),
             IdempotencyAttempt.idempotency_key == idempotency_key,
         )
+
+    def _count_and_oldest(
+        self,
+        scope: tuple[ColumnElement[bool], ...],
+        min_column: InstrumentedAttribute[datetime],
+    ) -> tuple[int, datetime | None]:
+        """(COUNT(*), MIN(min_column)) over rows matching ``scope``.
+
+        The two rate-limit aggregates are the same (count, oldest) scope query —
+        differing only in their windowing predicate and the MIN column — so the
+        query shape has one home here.
+        """
+        count = self._session.scalar(select(func.count()).select_from(IdempotencyAttempt).where(*scope)) or 0
+        oldest = self._session.scalar(select(func.min(min_column)).where(*scope))
+        return count, oldest
 
     def find_by_key(
         self,
@@ -181,16 +211,8 @@ class IdempotencyAttemptRepository:
         about row creation, not liveness). Thresholds and the rejection
         decision live in :mod:`src.services.idempotency_policy`.
         """
-        scope = (
-            IdempotencyAttempt.tenant_id == self._tenant_id,
-            IdempotencyAttempt.principal_id == principal_id,
-            # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
-            IdempotencyAttempt.account_id == account_id,
-            IdempotencyAttempt.created_at > since,
-        )
-        count = self._session.scalar(select(func.count()).select_from(IdempotencyAttempt).where(*scope)) or 0
-        oldest = self._session.scalar(select(func.min(IdempotencyAttempt.created_at)).where(*scope))
-        return count, oldest
+        scope = (*self._scope_prefix(principal_id, account_id), IdempotencyAttempt.created_at > since)
+        return self._count_and_oldest(scope, IdempotencyAttempt.created_at)
 
     def count_active(
         self,
@@ -204,15 +226,8 @@ class IdempotencyAttemptRepository:
         Pure scope query; the storage ceiling and ``retry_after`` derivation
         live in :mod:`src.services.idempotency_policy`.
         """
-        scope = (
-            IdempotencyAttempt.tenant_id == self._tenant_id,
-            IdempotencyAttempt.principal_id == principal_id,
-            IdempotencyAttempt.account_id == account_id,
-            IdempotencyAttempt.expires_at > now,
-        )
-        count = self._session.scalar(select(func.count()).select_from(IdempotencyAttempt).where(*scope)) or 0
-        oldest = self._session.scalar(select(func.min(IdempotencyAttempt.expires_at)).where(*scope))
-        return count, oldest
+        scope = (*self._scope_prefix(principal_id, account_id), IdempotencyAttempt.expires_at > now)
+        return self._count_and_oldest(scope, IdempotencyAttempt.expires_at)
 
     def expire_old(self, *, now: datetime | None = None) -> int:
         """Delete all expired attempts for this tenant. Returns the deleted count.
