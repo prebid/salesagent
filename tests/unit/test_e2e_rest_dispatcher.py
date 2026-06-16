@@ -114,33 +114,49 @@ def test_wire_error_envelope_none_on_non_json_crash(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# vu2j (A) — the "invalid" Then-step rejects a server crash
+# vu2j — the "invalid" Then-step reads the WIRE envelope, not a reconstruction
 # --------------------------------------------------------------------------- #
-def _run_invalid_step(error):
+# These pin the wire-based rejection discriminator (_assert_wire_rejection) that
+# replaced the lossy reconstructed-status check. The function consumes the
+# two-layer envelope the dispatcher captured into ctx["wire_error_envelope"]; we
+# feed it real envelope shapes (not a faked transport) and assert which count as a
+# genuine rejection of an invalid field. See tests/CLAUDE.md § Error Verification.
+
+
+def _envelope(code: str, recovery: str) -> dict:
+    layer = {"code": code, "message": f"{code} message", "recovery": recovery}
+    return {"adcp_error": dict(layer), "errors": [dict(layer)]}
+
+
+def _run_invalid_with_wire(envelope: dict) -> None:
     from tests.bdd.steps.domain.uc004_delivery import _assert_partition_or_boundary
 
-    _assert_partition_or_boundary({"error": error}, "invalid", "sampling_method")
+    _assert_partition_or_boundary({"wire_error_envelope": envelope}, "invalid", "sampling_method")
 
 
-def test_invalid_step_rejects_server_crash():
-    """A 5xx/INTERNAL_ERROR crash must not pass as a correct rejection."""
-    crash = AdCPError("HTTP 500: <html>boom</html>")  # defaults: INTERNAL_ERROR / 500
-    with pytest.raises(AssertionError, match="server crash is not a rejection"):
-        _run_invalid_step(crash)
+def test_wire_rejection_accepts_invalid_request():
+    """A schema rejection (INVALID_REQUEST / correctable) is a genuine rejection."""
+    _run_invalid_with_wire(_envelope("INVALID_REQUEST", "correctable"))
 
 
-def test_invalid_step_accepts_coded_4xx_rejection():
-    """A genuine client-side validation rejection (4xx + specific code) passes."""
-    _run_invalid_step(AdCPValidationError("bad sampling_method"))  # VALIDATION_ERROR / 400
+def test_wire_rejection_accepts_terminal_content_error():
+    """A terminal error ABOUT the request content (e.g. ACCOUNT_NOT_FOUND) counts."""
+    _run_invalid_with_wire(_envelope("ACCOUNT_NOT_FOUND", "terminal"))
 
 
-def test_invalid_step_accepts_pydantic_validation_error():
-    """A pydantic ValidationError (clearly a client-side rejection) still passes."""
-    from pydantic import BaseModel, ValidationError
+def test_wire_rejection_rejects_server_crash():
+    """A server crash (INTERNAL_ERROR) is not a rejection of the field."""
+    with pytest.raises(AssertionError, match="server crash or auth failure is not a field rejection"):
+        _run_invalid_with_wire(_envelope("INTERNAL_ERROR", "transient"))
 
-    class _M(BaseModel):
-        x: int
 
-    with pytest.raises(ValidationError) as exc_info:
-        _M(x="not-an-int")
-    _run_invalid_step(exc_info.value)
+def test_wire_rejection_rejects_transient_fault():
+    """A transient server fault (SERVICE_UNAVAILABLE) is not a rejection."""
+    with pytest.raises(AssertionError, match="transient server fault is not a rejection"):
+        _run_invalid_with_wire(_envelope("SERVICE_UNAVAILABLE", "transient"))
+
+
+def test_wire_rejection_rejects_auth_failure():
+    """An auth failure must not pass as a field rejection (vacuous-pass guard)."""
+    with pytest.raises(AssertionError, match="server crash or auth failure is not a field rejection"):
+        _run_invalid_with_wire(_envelope("AUTH_TOKEN_INVALID", "terminal"))

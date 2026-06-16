@@ -1072,8 +1072,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             (
+                # campaign_interval_not_one GRADUATED: the INV-5 validator in
+                # _get_media_buy_delivery_impl now rejects unit=campaign/interval!=1
+                # with AdCPInvalidRequestError(INVALID_REQUEST, suggestion) on every
+                # transport. The remaining rows are still Pydantic-construction
+                # rejections (interval>=1 / enum) not normalized to INVALID_REQUEST.
                 "T-UC-004-partition-attribution",
-                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
+                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             (
@@ -1081,11 +1086,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo with geo_level=metro but no system"},
                 "AdCP spec defines metro/postal_area system requirement only in field description; no validator. See docs/test-debt-bdd-strict-markers.md item C10.",
             ),
-            (
-                "T-UC-004-boundary-attribution",
-                {"unit=campaign with interval=2"},
-                "AdCP Duration spec defines 'interval=1 when unit=campaign' only in description; no validator. Same gap as T-UC-004-attr-campaign-invalid. See docs/test-debt-bdd-strict-markers.md item C10.",
-            ),
+            # GRADUATED (removed): T-UC-004-boundary-attribution "unit=campaign with
+            # interval=2" — BR-RULE-092 INV-5 is now enforced by the _validate_attribution_window
+            # check in _get_media_buy_delivery_impl (returns INVALID_REQUEST on all
+            # transports), so the description-only C10 gap is closed.
             # reporting-dims / attribution boundary invalid-rows: Pydantic DOES
             # reject these (missing geo_level / limit>=1 / enum), but the
             # error is not normalized to AdCPError(INVALID_REQUEST) at the
@@ -1411,10 +1415,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # genuinely PASS on all transports; NO strict=True entry needed
             # (same shape as the reconciled date-range valid rows).
         ]
-        for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
-            if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
-                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-                break
+        # e2e_rest items must NOT be marked by this loop. Its row substrings use
+        # bare transport prefixes ("rest-…", not the "[rest-" bracket guard at :402),
+        # so a "rest-…" row substring-matches an "[e2e_rest-…]" nodeid and would stamp
+        # a strict=True in-process "impl passes" reason onto e2e_rest items —
+        # contradicting the ledger's non-strict policy and, once e2e_rest reaches the
+        # real boundary and passes (e.g. INVALID_REQUEST now emitted), turning the pass
+        # into a spurious strict-XPASS failure. e2e_rest xfails are owned by the
+        # dedicated tripwire blocks (~:1490/:1517) and the ledger collapse. (PR #1420)
+        if not is_e2e_rest:
+            for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
+                if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
 
         # UC-004 boundary scenarios: strict=False because some examples pass.
         # Invalid boundary values SHOULD fail validation but production doesn't validate.
@@ -1523,28 +1536,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
 
         # Graduated: T-UC-004-boundary-attribution — valid examples now pass on ALL transports.
-        # Invalid examples: most fail on a2a/mcp/rest; "campaign with interval=2" fails
-        # on ALL 4 transports (production doesn't validate interval>1 for campaign unit).
+        # Invalid examples interval=0 / unit=weeks / model=last_click still fail on
+        # a2a/mcp/rest (Pydantic ValidationError not normalized to INVALID_REQUEST on
+        # those boundaries). GRADUATED: "campaign with interval=2" — BR-RULE-092 INV-5
+        # is now enforced in _get_media_buy_delivery_impl on ALL transports, so it is
+        # no longer a gap and needs no marker here.
         if "T-UC-004-boundary-attribution" in marker_names:
             _aw_invalid_all = {"interval=0", "unit=weeks", "model=last_click"}
-            _aw_invalid_all_transports = {"unit=campaign with interval=2"}
             _aw_is_invalid_all = any(s in nodeid for s in _aw_invalid_all)
-            _aw_is_invalid_all_transports = any(s in nodeid for s in _aw_invalid_all_transports)
-            # Graduated: valid examples now pass on all transports (impl/a2a/mcp/rest).
-            # Only invalid examples still need xfails.
             if _aw_is_invalid_all and (is_a2a or is_mcp or is_rest):
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="attribution_window boundary: production gaps on this transport", strict=False
-                    )
-                )
-            elif _aw_is_invalid_all_transports:
-                # "campaign with interval=2": production accepts it on all transports
-                # — spec says must be 1, production doesn't validate
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="attribution_window boundary: campaign unit interval=2 not validated — spec-production gap",
-                        strict=False,
                     )
                 )
             # Graduated: e2e_rest invalid attribution_window examples now return 500

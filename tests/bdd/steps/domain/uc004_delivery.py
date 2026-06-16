@@ -2595,6 +2595,67 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             assert mb_id is not None, f"Valid {field}: delivery missing media_buy_id"
 
 
+def _assert_wire_rejection(ctx: dict, field: str) -> None:
+    """Assert an "invalid" input was rejected, reading the REAL wire envelope.
+
+    Per tests/CLAUDE.md § Error Verification: assert on the two-layer envelope the
+    buyer actually received (captured per-transport by the dispatcher into
+    ``ctx["wire_error_envelope"]``), NOT a reconstructed exception. Reconstruction
+    is lossy — it drops the HTTP status, so a genuine 400 ``INVALID_REQUEST`` looked
+    like a 500 server crash to the old ``status < 500`` guard.
+
+    A genuine validation rejection is a two-layer AdCP error whose ``recovery`` is
+    ``correctable`` (the buyer can fix the request and resend). A server crash
+    (``INTERNAL_ERROR``) is ``transient``/``terminal`` or carries no envelope at all,
+    so it can never satisfy this — which is exactly the discrimination we want.
+
+    Legacy fallback: when no wire envelope is present (an in-process path that
+    raised a bare ``ValidationError`` before reaching a transport boundary), fall
+    back to the reconstructed ``ctx["error"]`` — kept only until every path exposes
+    a wire envelope.
+    """
+    envelope = ctx.get("wire_error_envelope")
+    if isinstance(envelope, dict) and "adcp_error" in envelope:
+        layer = envelope["adcp_error"]
+        code = layer.get("code")
+        recovery = layer.get("recovery")
+        # A rejection of an invalid FIELD must be about the request CONTENT, not a
+        # server fault and not a credential failure:
+        #   * INTERNAL_ERROR (crash) / transient (RATE_LIMITED, SERVICE_UNAVAILABLE)
+        #     — server fault, the field was never evaluated.
+        #   * AUTH_REQUIRED / AUTH_TOKEN_INVALID — credential failure; the request
+        #     never reached field validation. Accepting it would be a VACUOUS pass
+        #     (e.g. a broken e2e auth setup masquerading as "field correctly rejected").
+        # A genuine content rejection is ``correctable`` (fix the field, e.g.
+        # INVALID_REQUEST / VALIDATION_ERROR) or ``terminal`` about the content
+        # itself (e.g. ACCOUNT_NOT_FOUND — the account ref in the request is wrong).
+        _NON_REJECTION = {"INTERNAL_ERROR", "AUTH_REQUIRED", "AUTH_TOKEN_INVALID"}
+        assert code and code not in _NON_REJECTION, (
+            f"Invalid {field}: expected a content rejection on the wire, got code={code!r} "
+            f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
+        )
+        assert recovery in ("correctable", "terminal"), (
+            f"Invalid {field}: expected a request rejection (recovery correctable/terminal), got "
+            f"recovery={recovery!r} — a transient server fault is not a rejection. Envelope: {envelope}"
+        )
+        return
+
+    # Legacy fallback — no wire envelope captured (bare in-process exception).
+    from pydantic import ValidationError
+
+    from src.core.exceptions import AdCPError
+
+    assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
+    error = ctx["error"]
+    assert isinstance(error, (AdCPError, ValidationError)), (
+        f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
+    )
+    if isinstance(error, AdCPError):
+        assert error.error_code and error.error_code != "INTERNAL_ERROR", (
+            f"Invalid {field}: expected a validation rejection, got {error.error_code}: {error}"
+        )
+
+
 def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknown") -> None:
     """Assert partition/boundary outcome with field-aware content validation."""
     expected = expected.strip()
@@ -2604,26 +2665,7 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         assert "response" in ctx, f"Expected response for valid {field} but none found"
         _assert_valid_content(ctx, field)
     elif expected == "invalid":
-        from pydantic import ValidationError
-
-        from src.core.exceptions import AdCPError
-
-        assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
-        error = ctx["error"]
-        assert isinstance(error, (AdCPError, ValidationError)), (
-            f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
-        )
-        # A server crash (5xx) is NOT a correct rejection of invalid input. The
-        # e2e_rest dispatcher wraps a non-JSON 5xx as a bare AdCPError whose code
-        # defaults to INTERNAL_ERROR (status 500); a genuine validation rejection
-        # carries a specific 4xx code. Require the latter so a crash can't pass as
-        # "correctly rejected" once these scenarios graduate off the ledger (#1420).
-        if isinstance(error, AdCPError):
-            status = getattr(error, "status_code", None)
-            assert error.error_code and error.error_code != "INTERNAL_ERROR" and (status is None or status < 500), (
-                f"Invalid {field}: expected a client-side validation rejection, got "
-                f"{error.error_code} (status {status}): {error} — a server crash is not a rejection"
-            )
+        _assert_wire_rejection(ctx, field)
     else:
         m = re.match(r'error "(.+?)" with suggestion', expected)
         if m:

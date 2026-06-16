@@ -745,20 +745,44 @@ class TestRESTSymmetricValueErrorAndPermissionError:
                 message_substr="tenant scope mismatch",
             )
 
-    def test_request_validation_error_unaffected(self):
-        """FastAPI's RequestValidationError handler is NOT overridden by our ValueError handler.
+    async def test_request_validation_error_returns_invalid_request_envelope(self):
+        """Request-body schema failures return the AdCP INVALID_REQUEST envelope.
 
-        ``RequestValidationError`` is not a ``ValueError`` subclass, so FastAPI's
-        existing 422 + ``{"detail": [...]}`` response shape for request-body
-        validation failures continues to work — only application-raised
-        ``ValueError`` is wrapped into the AdCP envelope.
+        A malformed/out-of-range/out-of-enum request body ("violates schema
+        constraints" per the AdCP error vocabulary) is mapped to INVALID_REQUEST by
+        the dedicated ``RequestValidationError`` handler, so REST matches the MCP/A2A
+        boundaries instead of emitting FastAPI's default raw ``422 {"detail": [...]}``.
+
+        ``RequestValidationError`` is not a ``ValueError`` subclass, so it needs its
+        OWN handler — guard that invariant too, since if it ever became one the
+        ValueError handler would shadow this one.
         """
+        import json
+
         from fastapi.exceptions import RequestValidationError
+        from starlette.requests import Request
+
+        from src.app import request_validation_error_handler
 
         assert not issubclass(RequestValidationError, ValueError), (
             "RequestValidationError must not inherit ValueError, otherwise our "
-            "ValueError handler would shadow FastAPI's request-body 422 handler."
+            "ValueError handler would shadow the dedicated request-validation handler."
         )
+
+        exc = RequestValidationError(
+            [
+                {
+                    "loc": ("body", "attribution_window", "post_click", "interval"),
+                    "msg": "Input should be greater than or equal to 1",
+                    "type": "greater_than_equal",
+                }
+            ]
+        )
+        request = Request({"type": "http", "method": "POST", "path": "/api/v1/media-buys/delivery", "headers": []})
+        response = await request_validation_error_handler(request, exc)
+
+        assert response.status_code == 400
+        assert_envelope_shape(json.loads(response.body), "INVALID_REQUEST", recovery="correctable")
 
 
 # ---------------------------------------------------------------------------

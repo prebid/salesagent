@@ -50,6 +50,12 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
             result = env.call_via(transport, **kwargs)
             if result.is_error:
                 ctx["error"] = result.error
+                # Expose the REAL wire error envelope (transport-specific shape,
+                # normalized to the two-layer dict by the dispatcher) so Then-steps
+                # can assert on what the buyer actually received instead of a lossy
+                # reconstruction of ``ctx["error"]``. IMPL has no wire — fall back to
+                # the synthesized envelope. See tests/CLAUDE.md § Error Verification.
+                ctx["wire_error_envelope"] = result.wire_error_envelope or result.synthesized_error_envelope
             else:
                 ctx["response"] = result.payload
         except Exception as exc:

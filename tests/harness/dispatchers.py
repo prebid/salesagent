@@ -256,8 +256,9 @@ class RestE2EDispatcher:
                 error.status_code = response.status_code
                 return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
             # Structured JSON error: mirror the in-process RestDispatcher and expose
-            # the wire envelope so the mandated assert_envelope_shape() authority
-            # works on the e2e_rest transport too (#1420).
+            # the raw two-layer body as wire_error_envelope so error Then-steps assert
+            # on the buyer-visible envelope (e.g. uc004 _assert_wire_rejection, or
+            # assert_envelope_shape) instead of a lossy reconstructed exception. (#1420)
             error = env.parse_rest_error(response.status_code, body)
             return TransportResult(
                 payload=None,

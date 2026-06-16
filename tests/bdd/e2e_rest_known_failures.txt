@@ -12,6 +12,16 @@
 # the file shrinks to ~0. By mechanism: formats 140 (uc005/uc006/get_products),
 # adapter-delivery 124 (uc004), account/billing 44 (uc011). [308 total after #1420
 # pruned 4 stale param-renamed nodeids from the 2026-06-11 origin/main merge]
+#
+# NOTE — the `-invalid]` entries are NOT mock-incompatible: they are server-side
+# validation gaps. Their Then-step asserts the server REJECTS bad input, which is
+# independent of any in-process mock. The schema-violation cases (bad enum / below
+# minimum) are now closed at the production layer by the REST RequestValidationError
+# -> INVALID_REQUEST handler (src/app.py) and verified over e2e_rest (auth now
+# resolves via subdomain_for()). They consequently XPASS and must be retired — but
+# via the rigorous per-scenario inspection tracked in salesagent-rlgl (scenario ->
+# business rule -> use case -> siblings -> production), NOT a bulk delete: an XPASS
+# means "inspect why", never "stale, remove".
 
 # --- get_products_inventory_profile (6) ---
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_preserves_them[e2e_rest]
