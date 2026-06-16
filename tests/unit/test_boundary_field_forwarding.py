@@ -168,6 +168,7 @@ _CREATE_NOT_FORWARDED = {
     # Listed (not omitted) so they are tracked, not silently dropped — wire or
     # confirm-drop each before buyers rely on them.
     "adcp_major_version",
+    "adcp_version",
     "advertiser_industry",
     "agency_estimate_number",
     "artifact_webhook",
