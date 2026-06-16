@@ -20,9 +20,36 @@ from rich.console import Console
 
 from src.core.exceptions import (
     AdCPError,
+    AdCPInvalidRequestError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
+
+
+def _validate_attribution_window(attribution_window) -> None:
+    """Enforce BR-RULE-092 INV-5: a 'campaign'-unit Duration must have interval == 1.
+
+    The AdCP Duration schema documents "interval must be 1 when unit is campaign"
+    (the window spans the full campaign flight) in its description only — it is a
+    cross-field constraint JSON Schema cannot express, so neither the SDK model nor
+    FastAPI's request validation rejects ``interval != 1``. Enforce it here so a
+    malformed campaign window is rejected with the spec ``INVALID_REQUEST`` code
+    instead of being silently accepted.
+    """
+    if attribution_window is None:
+        return
+    for window in (attribution_window.post_click, attribution_window.post_view):
+        if window is None:
+            continue
+        unit = getattr(window.unit, "value", window.unit)
+        if unit == "campaign" and window.interval != 1:
+            raise AdCPInvalidRequestError(
+                "attribution_window: interval must be 1 when unit is 'campaign' "
+                "(the window spans the full campaign flight)",
+                field="attribution_window",
+                suggestion="set interval to 1 when unit is 'campaign'",
+            )
+
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -94,6 +121,10 @@ def _get_media_buy_delivery_impl(
     AdCP-compliant implementation that handles start_date/end_date parameters
     and returns spec-compliant response format.
     """
+
+    # BR-RULE-092 INV-5: reject a campaign-unit attribution window with interval != 1
+    # (cross-field constraint the schema can't express, so it reaches us as valid).
+    _validate_attribution_window(req.attribution_window)
 
     # Validate identity is provided
     identity = require_identity(identity, context=req.context)

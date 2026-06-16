@@ -18,6 +18,7 @@ from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.types import AgentCard as A2AAgentCard
 from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastmcp.exceptions import ToolError
@@ -35,6 +36,7 @@ from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.exceptions import (
     AdCPError,
+    AdCPInvalidRequestError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
@@ -201,9 +203,43 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     on every transport, not the 500 default FastAPI gives unhandled errors.
 
     Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
-    ValueError subclass) — request-body validation keeps its existing handler.
+    ValueError subclass) — that has its own handler below.
     """
     return _envelope_response(request, normalize_to_adcp_error(exc))
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Translate FastAPI request-body schema failures into the AdCP envelope.
+
+    A payload that is malformed or violates a schema constraint (a missing,
+    mistyped, out-of-enum, or out-of-range field — exactly what FastAPI's
+    ``RequestValidationError`` represents) maps to the standard ``INVALID_REQUEST``
+    code per the AdCP error-code vocabulary ("Request is malformed, missing
+    required fields, or violates schema constraints").
+
+    Without this handler FastAPI emits its default raw ``422 {"detail": [...]}``,
+    which is NOT the two-layer envelope buyers parse — so the REST boundary
+    silently diverged from MCP/A2A (which wrap schema rejections in the AdCP
+    envelope). Surfacing the first failure's pointer as ``field`` keeps the
+    response actionable; the full list is preserved under ``details``.
+    """
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    # Drop the leading "body"/"query" location segment; join the rest into the
+    # JSONPath-lite ``field`` the envelope already uses (e.g. attribution_window.post_click.interval).
+    loc = [str(p) for p in first.get("loc", ()) if p not in ("body", "query", "path")]
+    field = ".".join(loc) or None
+    message = first.get("msg") or "Request failed schema validation"
+    adcp_exc = AdCPInvalidRequestError(
+        message,
+        field=field,
+        suggestion="check request parameters and fix",
+        details={
+            "validation_errors": [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")} for e in errors]
+        },
+    )
+    return _envelope_response(request, adcp_exc)
 
 
 @app.exception_handler(PermissionError)
