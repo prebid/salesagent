@@ -111,15 +111,27 @@ elif [ "$MODE" = "ci" ]; then
         collect_reports
         # Determine success from JSON reports, not tox exit code —
         # PIPESTATUS[0] with process substitution returns stale values.
+        #
+        # A suite that crashes BEFORE writing its JSON (e.g. a pytest usage
+        # error like missing pytest-xdist) must count as a FAILURE, not be
+        # silently skipped. So assert the full EXPECTED set of reports exists
+        # AND has exitcode 0 — never trust a green just because some reports
+        # happen to be present.
         _any_fail=false
-        for _rpt in "$RESULTS_DIR"/*.json; do
-            [ -f "$_rpt" ] || continue
-            if python3 -c "import json,sys; d=json.load(open('$_rpt')); sys.exit(0 if d.get('exitcode',1)==0 else 1)" 2>/dev/null; then
-                :
-            else
-                _any_fail=true; break
+        for _name in unit integration e2e admin bdd ui; do
+            _rpt="$RESULTS_DIR/${_name}.json"
+            if [ ! -f "$_rpt" ]; then
+                echo -e "${RED}MISSING report: ${_name}.json — suite crashed before writing it (treated as FAILURE)${NC}"
+                _any_fail=true; continue
+            fi
+            if ! python3 -c "import json,sys; d=json.load(open('$_rpt')); sys.exit(0 if d.get('exitcode',1)==0 else 1)" 2>/dev/null; then
+                echo -e "${RED}FAILED suite: ${_name}${NC}"
+                _any_fail=true
             fi
         done
+        # Belt-and-suspenders: a non-zero tox exit is also a failure even if
+        # every expected report somehow looks clean.
+        [ "${TOX_RC:-0}" -ne 0 ] && _any_fail=true
         [ "$_any_fail" = true ] && FAILURES="tox"
 
         # Coverage combine runs separately — tox -p hangs when the coverage

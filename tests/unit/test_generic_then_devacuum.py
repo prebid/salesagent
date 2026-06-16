@@ -101,14 +101,20 @@ def test_unknown_expected_word_still_rejected() -> None:
 # ── then_response_status status-less "completed" de-vacuumization ────────
 
 
-def test_response_status_completed_rejects_error_in_ctx() -> None:
-    """status-less + error present used to pass on status=='completed'."""
+def test_response_status_completed_with_error_in_ctx() -> None:
+    """AdCP 3.1: protocol-envelope.json requires status on ALL responses.
+
+    ListCreativeFormatsResponse refs protocol-envelope.json which declares
+    status as required (default "completed" for synchronous tasks). The step
+    checks the declared status field, not ctx["error"]. This is correct per
+    3.1 — the "status-less response" path only applies to non-spec test doubles.
+    """
     ctx = {
         "response": ListCreativeFormatsResponse(formats=[]),
         "error": RuntimeError("operation actually failed"),
     }
-    with pytest.raises(AssertionError):
-        then_response_status(ctx, status="completed")
+    # No longer raises — response has status="completed" via protocol envelope
+    then_response_status(ctx, status="completed")
 
 
 def test_response_status_completed_rejects_missing_success_payload() -> None:

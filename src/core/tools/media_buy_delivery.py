@@ -22,6 +22,7 @@ from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
 )
+from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -687,7 +688,7 @@ def _resolve_delivery_status_filter(
         return [to_internal(status_filter)]
 
     # Handle special values (e.g., "all" via mock or raw string)
-    status_str = status_filter.value if hasattr(status_filter, "value") else str(status_filter)
+    status_str = enum_value(status_filter)
     if status_str == "all":
         return list(valid_internal_statuses)
 
@@ -918,12 +919,12 @@ def _build_geo_breakdown(
         return None
 
     geo_level = geo_dim.geo_level
-    geo_level_str = geo_level.value if hasattr(geo_level, "value") else str(geo_level)
+    geo_level_str = enum_value(geo_level)
 
     system = geo_dim.system
     system_str: str | None = None
     if system is not None:
-        system_str = system.value if hasattr(system, "value") else str(system)
+        system_str = enum_value(system)
 
     # geo_code is required by the spec; use a representative aggregate marker.
     return [

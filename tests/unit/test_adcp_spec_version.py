@@ -2,7 +2,7 @@
 
 import adcp
 
-EXPECTED_SPEC_VERSION = "3.0.1"
+EXPECTED_SPEC_VERSION = "3.1.0-beta.3"
 
 
 def test_adcp_spec_version_matches_pin() -> None:

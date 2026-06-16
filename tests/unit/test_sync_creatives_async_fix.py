@@ -11,11 +11,12 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import CreativeAction, FormatId
+from adcp.types import FormatId
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import make_mock_uow
 
 
@@ -122,7 +123,7 @@ class TestSyncCreativesErrorHandling:
                     # Verify the error was captured with the correct creative_id
                     assert len(result.creatives) == 1
                     assert result.creatives[0].creative_id == "test_creative_123"
-                    assert result.creatives[0].action == CreativeAction.failed
+                    assert result.creatives[0].action == "failed"
                     assert len(result.creatives[0].errors) > 0
 
     @pytest.mark.asyncio
@@ -203,7 +204,7 @@ class TestSyncCreativesErrorHandling:
                     # Verify error was captured with correct creative_id
                     assert len(result.creatives) == 1
                     assert result.creatives[0].creative_id == "test_creative_456"
-                    assert result.creatives[0].action == CreativeAction.failed
+                    assert result.creatives[0].action == "failed"
                     assert any("preview" in err.message.lower() for err in result.creatives[0].errors)
 
 
@@ -236,7 +237,9 @@ class TestSyncCreativesAsyncScenario:
             "creative_id": "test_creative_789",
             "name": "Test Creative",
             "format_id": {"agent_url": "https://example.com", "id": "display_300x250"},
-            "assets": {"banner_image": {"url": "https://example.com/image.png"}},
+            "assets": build_assets(
+                image_spec("banner_image", url="https://example.com/image.png", width=300, height=250)
+            ),
         }
 
         with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:

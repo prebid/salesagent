@@ -15,7 +15,6 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
-from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.config_loader import set_current_tenant
@@ -31,6 +30,7 @@ from src.core.database.models import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, SyncCreativesResponse
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.creative_asset import asset_spec, build_assets, image_spec
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -333,7 +333,7 @@ class TestCreativeLifecycleMCP:
                     "url": "https://example.com/old.jpg",
                     "width": 300,
                     "height": 250,
-                    "assets": {"main": {"url": "https://example.com/old.jpg", "width": 300, "height": 250}},
+                    "assets": build_assets(image_spec("banner")),
                 },
             )
             session.add(existing_creative)
@@ -364,7 +364,7 @@ class TestCreativeLifecycleMCP:
         if isinstance(creative_item, dict):
             assert creative_item.get("action") == "updated"
         else:
-            assert creative_item.action == CreativeAction.updated
+            assert creative_item.action == "updated"
 
         # Verify database update
         with get_db_session() as session:
@@ -472,9 +472,9 @@ class TestCreativeLifecycleMCP:
                 action = c.get("action")
             else:
                 action = getattr(c, "action", None)
-            if action in ("created", CreativeAction.created):
+            if action in ("created",):
                 created_count += 1
-            elif action in ("failed", CreativeAction.failed):
+            elif action in ("failed",):
                 failed_count += 1
         assert created_count == 1, f"Expected 1 created, got {created_count}. Creatives: {response.creatives}"
         assert failed_count == 1, f"Expected 1 failed, got {failed_count}. Creatives: {response.creatives}"
@@ -505,13 +505,7 @@ class TestCreativeLifecycleMCP:
                         "url": f"https://example.com/creative_{i}.jpg",
                         "width": 300,
                         "height": 250,
-                        "assets": {
-                            "main": {
-                                "url": f"https://example.com/creative_{i}.jpg",
-                                "width": 300,
-                                "height": 250,
-                            }
-                        },
+                        "assets": build_assets(image_spec("banner")),
                     },
                 )
                 for i in range(5)
@@ -550,7 +544,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": {"main": {"url": f"https://example.com/approved_{i}.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(3)
             ] + [
@@ -562,7 +556,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_728x90_image",
                     status="pending_review",
-                    data={"assets": {"main": {"url": f"https://example.com/pending_{i}.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ]
@@ -612,7 +606,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": {"main": {"url": f"https://example.com/banner_{i}.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ] + [
@@ -624,7 +618,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="video_instream_15s",
                     status="approved",
-                    data={"duration": 15.0, "assets": {"main": {"url": f"https://example.com/video_{i}.mp4"}}},
+                    data={"duration": 15.0, "assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(3)
             ]
@@ -687,7 +681,7 @@ class TestCreativeLifecycleMCP:
                     format="display_300x250_image",
                     status="approved",
                     created_at=now - timedelta(days=10 + i),  # 10+ days ago
-                    data={"assets": {"main": {"url": f"https://example.com/old_{i}.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ] + [
@@ -700,7 +694,7 @@ class TestCreativeLifecycleMCP:
                     format="display_300x250_image",
                     status="approved",
                     created_at=now - timedelta(days=2 + i),  # 2-3 days ago
-                    data={"assets": {"main": {"url": f"https://example.com/recent_{i}.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ]
@@ -734,7 +728,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": {"main": {"url": "https://example.com/holiday_banner.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 ),
                 DBCreative(
                     tenant_id=self.test_tenant_id,
@@ -744,7 +738,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="video_instream_15s",
                     status="approved",
-                    data={"assets": {"main": {"url": "https://example.com/holiday_video.mp4"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 ),
                 DBCreative(
                     tenant_id=self.test_tenant_id,
@@ -754,7 +748,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_728x90_image",
                     status="approved",
-                    data={"assets": {"main": {"url": "https://example.com/summer_banner.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 ),
             ]
             session.add_all(creatives)
@@ -793,7 +787,7 @@ class TestCreativeLifecycleMCP:
                     agent_url="https://creative.adcontextprotocol.org",
                     format="display_300x250_image",
                     status="approved",
-                    data={"assets": {"main": {"url": f"https://example.com/creative_{i:02d}.jpg"}}},
+                    data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(25)  # Create 25 creatives
             ]
@@ -844,7 +838,7 @@ class TestCreativeLifecycleMCP:
                 agent_url="https://creative.adcontextprotocol.org",
                 format="display_300x250_image",
                 status="approved",
-                data={"assets": {"main": {"url": "https://example.com/assigned_1.jpg"}}},
+                data={"assets": build_assets(image_spec("banner"))},
             )
             creative_2 = DBCreative(
                 tenant_id=self.test_tenant_id,
@@ -854,7 +848,7 @@ class TestCreativeLifecycleMCP:
                 agent_url="https://creative.adcontextprotocol.org",
                 format="display_300x250_image",
                 status="approved",
-                data={"assets": {"main": {"url": "https://example.com/unassigned.jpg"}}},
+                data={"assets": build_assets(image_spec("banner"))},
             )
             session.add_all([creative_1, creative_2])
 
@@ -957,16 +951,9 @@ class TestCreativeLifecycleMCP:
                 agent_url="https://creative.adcontextprotocol.org",
                 format="display_300x250_image",
                 status="approved",
-                data={
-                    "assets": {
-                        "banner_image": {
-                            # Missing URL - only has dimensions
-                            "width": 300,
-                            "height": 250,
-                        }
-                        # Removed click_url so fallback logic has no URL to find
-                    }
-                },
+                # Image asset with dimensions but NO url (and no click_url fallback),
+                # so the validator finds no media URL and must raise.
+                data={"assets": build_assets(asset_spec("banner_image", "image", width=300, height=250))},
             )
             session.add(creative_no_url)
             session.commit()

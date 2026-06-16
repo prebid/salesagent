@@ -51,16 +51,24 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
+#
+# FIXME(#1442): The *Body REST request models below inherit bare
+# pydantic.BaseModel and so lack the Pattern #7 environment-based extra-field
+# policy (extra="forbid" in dev/CI, extra="ignore" in prod). They parse buyer
+# REST input and should extend SalesAgentBaseModel. Migrating them changes
+# extra-field handling on the REST boundary, a behavioral change that needs
+# REST integration coverage before flipping -- tracked as a follow-up. Until
+# then they are allowlisted in tests/unit/test_architecture_no_bare_basemodel.py.
 
 
-class GetProductsBody(BaseModel):
+class GetProductsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     brief: str = ""
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
-class CreateMediaBuyBody(BaseModel):
+class CreateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     brand: BrandReference | str | None = None  # adcp 3.6.0: BrandReference with domain field
     packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
@@ -71,7 +79,7 @@ class CreateMediaBuyBody(BaseModel):
     adcp_version: str = "1.0.0"
 
 
-class UpdateMediaBuyBody(BaseModel):
+class UpdateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     paused: bool | None = None
     flight_start_date: str | None = None
     flight_end_date: str | None = None
@@ -82,7 +90,7 @@ class UpdateMediaBuyBody(BaseModel):
     adcp_version: str = "1.0.0"
 
 
-class GetMediaBuyDeliveryBody(BaseModel):
+class GetMediaBuyDeliveryBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     media_buy_ids: list[str] | None = None
     status_filter: Any = None
     start_date: str | None = None
@@ -94,7 +102,7 @@ class GetMediaBuyDeliveryBody(BaseModel):
     adcp_version: str = "1.0.0"
 
 
-class SyncCreativesBody(BaseModel):
+class SyncCreativesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     creatives: list[dict[str, Any]] = []
     assignments: dict[str, Any] | None = None
     creative_ids: list[str] | None = None
@@ -104,7 +112,7 @@ class SyncCreativesBody(BaseModel):
     adcp_version: str = "1.0.0"
 
 
-class ListCreativesBody(BaseModel):
+class ListCreativesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     media_buy_id: str | None = None
     media_buy_ids: list[str] | None = None
     status: str | None = None
@@ -112,13 +120,13 @@ class ListCreativesBody(BaseModel):
     adcp_version: str = "1.0.0"
 
 
-class UpdatePerformanceIndexBody(BaseModel):
+class UpdatePerformanceIndexBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     media_buy_id: str
     performance_data: list[dict[str, Any]] = []
     adcp_version: str = "1.0.0"
 
 
-class ListCreativeFormatsBody(BaseModel):
+class ListCreativeFormatsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     format_ids: list[dict[str, Any]] | None = None
     name_search: str | None = None
     is_responsive: bool | None = None
@@ -135,13 +143,13 @@ class ListCreativeFormatsBody(BaseModel):
     adcp_version: str = "1.0.0"
 
 
-class ListAuthorizedPropertiesBody(BaseModel):
+class ListAuthorizedPropertiesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     property_tags: list[str] | None = None
     publisher_domains: list[str] | None = None
     adcp_version: str = "1.0.0"
 
 
-class ListAccountsBody(BaseModel):
+class ListAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     status: str | None = None
     sandbox: bool | None = None
     pagination: dict[str, Any] | None = None
@@ -149,7 +157,7 @@ class ListAccountsBody(BaseModel):
     adcp_version: str = "1.0.0"
 
 
-class SyncAccountsBody(BaseModel):
+class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     accounts: list[dict[str, Any]] = []
     delete_missing: bool = False
     dry_run: bool = False

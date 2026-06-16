@@ -19,6 +19,7 @@ from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adc
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
+from tests.factories.creative_asset import build_assets, image_spec
 
 
 def create_test_product(
@@ -472,7 +473,9 @@ def create_test_creative_asset(
         creative_id: Creative identifier
         name: Human-readable creative name
         format_id: FormatId object or string
-        assets: Assets dict keyed by asset_role. Defaults to {"primary": {"url": "https://example.com/creative.jpg"}}
+        assets: Assets dict keyed by asset_role; each value is a list of
+            discriminated-union asset objects (SDK 5.7 shape). Defaults to a
+            single image asset under the "primary" role.
         **kwargs: Additional optional fields (inputs, tags, approved, etc.)
 
     Returns:
@@ -482,14 +485,17 @@ def create_test_creative_asset(
         creative = create_test_creative_asset(
             creative_id="creative_001",
             format_id="video_1920x1080",
-            assets={"primary": {"url": "https://cdn.example.com/video.mp4", "mime_type": "video/mp4"}}
+            assets=build_assets(image_spec("primary", url="https://cdn.example.com/banner.png"))
         )
     """
     if isinstance(format_id, str):
         format_id = create_test_format_id(format_id)
 
     if assets is None:
-        assets = {"primary": {"url": "https://example.com/creative.jpg"}}
+        # SDK 5.7: assets values must be lists of discriminated-union asset
+        # models (asset_type tag), not bare dicts. Build the list shape via the
+        # AssetSpec mechanism instead of hand-rolling the shape.
+        assets = build_assets(image_spec("primary", url="https://example.com/creative.jpg"))
 
     return CreativeAsset(creative_id=creative_id, name=name, format_id=format_id, assets=assets, **kwargs)
 

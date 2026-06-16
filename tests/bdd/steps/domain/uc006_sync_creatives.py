@@ -22,6 +22,13 @@ from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.creative_asset import (
+    assert_assets,
+    build_assets,
+    image_spec,
+    text_spec,
+    url_spec,
+)
 from tests.factories.principal import PrincipalFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -44,25 +51,18 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
         return (
             _E2E_FORMAT_ID,
             _E2E_AGENT_URL,
-            {
-                "banner_image": {
-                    "url": "https://example.com/banner.png",
-                    "width": 300,
-                    "height": 250,
-                },
-                "click_url": {"url": "https://example.com/landing"},
-            },
+            build_assets(
+                image_spec("banner_image", url="https://example.com/banner.png"),
+                url_spec("click_url", url="https://example.com/landing"),
+            ),
         )
+    # SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role.
+    # Build via the canonical AssetSpec mechanism (image_spec/build_assets) so the
+    # shape lives in exactly one place — see GH #1391.
     return (
         "display_300x250",
         env.DEFAULT_AGENT_URL,
-        {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        build_assets(image_spec("image")),
     )
 
 
@@ -801,13 +801,7 @@ def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None
         "creative_id": creative_id,
         "name": "Test Creative (format partition)",
         "format_id": {"id": creative_format, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = creative_format
@@ -1833,13 +1827,7 @@ def given_creative_with_unknown_format(ctx: dict) -> None:
         "creative_id": creative_id,
         "name": "Unknown Format Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -1868,13 +1856,7 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
         "creative_id": creative_id,
         "name": "Unreachable Agent Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -2642,13 +2624,7 @@ def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
         "creative_id": f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
         "name": name,
         "format_id": None,
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -2662,13 +2638,7 @@ def given_creative_format_id_empty_name(ctx: dict) -> None:
         "creative_id": "creative-fmt-empty-name-001",
         "name": "",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = "display_300x250"
@@ -3564,9 +3534,7 @@ def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
         "creative_id": creative_id,
         "name": "URL Normalization Creative",
         "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": {
-            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -3744,13 +3712,7 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
         "name": "Provenance Source Type Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
         "provenance": {"digital_source_type": source_type},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image", url="https://example.com/banner.png")),
     }
     ctx.setdefault("creatives", []).append(payload)
     ctx["creative_format_id"] = format_id
@@ -3759,7 +3721,12 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
 
 @given(parsers.parse('an asset within the creative declaring digital_source_type "{source_type}"'))
 def given_asset_with_provenance_source_type(ctx: dict, source_type: str) -> None:
-    """Add asset-level provenance to the last creative's first asset."""
+    """Add asset-level provenance to the last creative's first asset.
+
+    The image slot is an individual asset (single object), so asset-level provenance
+    attaches directly to that object (AdCP core/provenance.json — provenance attaches to
+    individual assets; the most-specific provenance replaces the inherited one).
+    """
     creative_payload = ctx["creatives"][-1]
     assets = creative_payload.get("assets", {})
     first_key = next(iter(assets))
@@ -4014,13 +3981,7 @@ def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
         "creative_id": creative_id,
         "name": f"Synced creative {creative_id}",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
@@ -4178,9 +4139,7 @@ def given_creative_with_adapter_format(ctx: dict) -> None:
         "creative_id": "creative-adapter-fmt-001",
         "name": "Adapter Format Creative",
         "format_id": {"id": format_id, "agent_url": "adapter://local-gam"},
-        "assets": {
-            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -4259,9 +4218,7 @@ def given_creative_with_agent_url_and_format(ctx: dict, agent_url: str, format_i
         "creative_id": "creative-fmt-match-001",
         "name": "Format Match Creative",
         "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": {
-            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -4572,9 +4529,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
         "creative_id": "creative-generative-001",
         "name": "Generative Creative",
         "format_id": fmt,
-        "assets": {
-            "message": {"content": "Generate a banner ad for summer sale"},
-        },
+        "assets": build_assets(text_spec("message", content="Generate a banner ad for summer sale")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4608,9 +4563,7 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
     creative_payload = {
         "creative_id": "creative-no-fmt-001",
         "name": "Creative Without Format",
-        "assets": {
-            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_no_format"] = True
@@ -4638,9 +4591,7 @@ def given_creative_empty_name_known_format(ctx: dict) -> None:
         "creative_id": "creative-empty-name-001",
         "name": "",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = "display_300x250"
@@ -4793,9 +4744,7 @@ def given_any_assets(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add assets to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {}).update(
-        {"image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}
-    )
+    last_creative.setdefault("assets", {}).update(build_assets(image_spec("image")))
 
 
 @given("message asset with prompt text")
@@ -4808,7 +4757,9 @@ def given_message_asset_with_prompt(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {})["message"] = {"content": "Generate a banner ad for summer sale"}
+    last_creative.setdefault("assets", {}).update(
+        build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
+    )
 
 
 @given("no prompt assets or inputs")
@@ -4838,7 +4789,9 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    last_creative.setdefault("assets", {})["message"] = {"content": "Generate a banner ad for summer sale"}
+    last_creative.setdefault("assets", {}).update(
+        build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
+    )
     # Remove GEMINI_API_KEY from config mock
     env = ctx["env"]
     env.mock["config"].return_value.gemini_api_key = None
@@ -4878,9 +4831,7 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
         "creative_id": "creative-gen-prompt-001",
         "name": "Generative With Prompt",
         "format_id": fmt,
-        "assets": {
-            "message": {"content": asset_prompt},
-        },
+        "assets": build_assets(text_spec("message", content=asset_prompt)),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -4927,9 +4878,7 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
         "creative_id": "creative-gen-no-key-001",
         "name": "Generative No Key",
         "format_id": fmt,
-        "assets": {
-            "message": {"content": "Generate a banner ad"},
-        },
+        "assets": build_assets(text_spec("message", content="Generate a banner ad")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -5018,9 +4967,7 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
         "creative_id": "creative-gen-inv1-001",
         "name": "Generative Detection Test",
         "format_id": fmt,
-        "assets": {
-            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
@@ -5188,19 +5135,18 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    user_image = image_spec("image", url="https://example.com/user-banner.png")
     creative_payload = {
         "creative_id": "creative-gen-inv6-001",
         "name": "Generative With User Assets",
         "format_id": fmt,
-        "assets": {
-            "message": {"content": "Generate a responsive ad"},
-            "image": {"url": "https://example.com/user-banner.png", "width": 300, "height": 250},
-        },
+        "assets": build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
     ctx["generative_creative"] = True
-    ctx["user_provided_assets"] = {"image": creative_payload["assets"]["image"]}
+    # The same spec(s) used to build the mock are stored for verification (assert_assets).
+    ctx["user_provided_assets"] = [user_image]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5395,46 +5341,42 @@ def then_existing_data_preserved(ctx: dict) -> None:
             )
 
 
+def _stored_assets_for_last_creative(ctx: dict) -> dict:
+    """Fetch the last synced creative's stored ``data['assets']`` from the DB."""
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    env = ctx["env"]
+    session = env.get_session()
+    assert session is not None, "Harness must provide a DB session for asset verification"
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    db_creative = session.scalars(
+        select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
+    ).first()
+    assert db_creative is not None, f"Creative {creative_id} not found in DB"
+    return (db_creative.data or {}).get("assets", {})
+
+
 @then("the user-provided assets should be preserved")
 def then_user_assets_preserved(ctx: dict) -> None:
     """Assert user-provided assets are preserved in the DB after generative build.
 
     INV-6: user assets take priority over generative output. Verify the stored
-    creative's assets match the user-provided values exactly (deep-equal), not just
-    that the key exists. This catches generated content overwriting user values.
+    creative's assets still carry each user-provided asset's fields (field
+    containment, via assert_assets — production enriches the stored object with
+    null-default fields, so this is containment, not byte-for-byte equality). This
+    catches generated content overwriting user values.
     """
     error = ctx.get("error")
     if error is not None:
         pytest.xfail(f"SPEC-PRODUCTION GAP: expected user assets preserved but got {type(error).__name__}: {error}")
 
-    env = ctx["env"]
-    session = env.get_session()
-    assert session is not None, "Harness must provide a DB session for asset preservation check"
-
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative as CreativeModel
-
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    db_creative = session.scalars(
-        select(CreativeModel).filter_by(
-            creative_id=creative_id,
-            tenant_id=env._tenant_id,
-        )
-    ).first()
-    assert db_creative is not None, f"Creative {creative_id} not found in DB"
-    creative_data = db_creative.data or {}
-    stored_assets = creative_data.get("assets", {})
-    user_assets = ctx["user_provided_assets"]
-    assert user_assets, "Given step must populate user_provided_assets with at least one asset"
-    for asset_key, user_value in user_assets.items():
-        assert asset_key in stored_assets, (
-            f"User-provided '{asset_key}' asset missing from stored assets: {list(stored_assets.keys())}"
-        )
-        assert stored_assets[asset_key] == user_value, (
-            f"User-provided '{asset_key}' asset was overwritten by generated content. "
-            f"Expected {user_value!r}, got {stored_assets[asset_key]!r}"
-        )
+    stored_assets = _stored_assets_for_last_creative(ctx)
+    specs = ctx["user_provided_assets"]
+    assert specs, "Given step must populate user_provided_assets with at least one asset"
+    # Same specs that built the mock verify the stored result (shape + containment handled in AssetSpec).
+    assert_assets(stored_assets, *specs)
 
 
 @then("user assets should take priority over any generated content")
@@ -5447,40 +5389,20 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
     error = ctx.get("error")
     if error is not None:
         pytest.xfail(f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}")
-    env = ctx["env"]
-    session = env.get_session()
-    if session is None:
+    if ctx["env"].get_session() is None:
         pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify asset priority")
 
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative as CreativeModel
-
-    creative_id = ctx["creatives"][-1]["creative_id"]
-    db_creative = session.scalars(
-        select(CreativeModel).filter_by(
-            creative_id=creative_id,
-            tenant_id=env._tenant_id,
-        )
-    ).first()
-    assert db_creative is not None, f"Creative {creative_id} not found in DB"
-
-    creative_data = db_creative.data or {}
-    stored_assets = creative_data.get("assets", {})
-    user_assets = ctx.get("user_provided_assets", {})
-    # User-provided image asset should be preserved, not overwritten by generated assets.
-    # Production may normalize/enrich the asset dict with additional fields (e.g., format,
-    # alt_text, provenance), so we check containment rather than exact equality.
-    if "image" in user_assets:
-        assert "image" in stored_assets, (
-            f"User-provided 'image' asset should be preserved in creative data, "
-            f"got assets keys: {list(stored_assets.keys())}"
-        )
-        stored_image = stored_assets["image"]
-        for key, value in user_assets["image"].items():
-            assert stored_image.get(key) == value, (
-                f"User-provided image['{key}'] should be preserved. Expected {value!r}, got {stored_image.get(key)!r}"
-            )
+    stored_assets = _stored_assets_for_last_creative(ctx)
+    # User-provided assets must survive the generative build (not overwritten by generated content).
+    assert_assets(stored_assets, *ctx.get("user_provided_assets", []))
+    # PRIORITY (distinct from mere preservation): the generative output must NOT be merged in —
+    # no asset role beyond the ones the buyer submitted may appear in the stored creative.
+    submitted_roles = set(ctx["creatives"][-1].get("assets", {}))
+    leaked = set(stored_assets) - submitted_roles
+    assert not leaked, (
+        f"INV-6: generated assets {sorted(leaked)} leaked into stored creative; "
+        f"user-submitted roles were {sorted(submitted_roles)}. User assets must take priority."
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5744,13 +5666,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
         "creative_id": creative_id,
         "name": f"Synced creative {creative_id}",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
@@ -5926,13 +5842,7 @@ def given_creative_with_invalid_format_id(ctx: dict) -> None:
         "creative_id": creative_id,
         "name": "Invalid Format Creative",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -6731,13 +6641,7 @@ def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
         "creative_id": creative_id,
         "name": f"Creative {creative_id}",
         "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": {
-            "image": {
-                "url": "https://example.com/banner.png",
-                "width": 300,
-                "height": 250,
-            },
-        },
+        "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_id"] = creative_id
@@ -7024,3 +6928,76 @@ def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
             f"but DB has creative-A.weight={assignment_a.weight}, creative-B.weight={assignment_b.weight}. "
             f"Production hard-codes weight=100 on all assignments."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# All-failed success-variant invariant (PR1399 R3-F2)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the Buyer has {count:d} creatives that all fail validation"))
+def given_creatives_all_fail(ctx: dict, count: int) -> None:
+    """Set up `count` creatives that each fail per-creative validation.
+
+    Empty name fails validation; under validation_mode='lenient' each failure
+    is reported as a per-creative result (action='failed') INSIDE the success
+    variant rather than collapsing the whole operation to the error variant.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id, agent_url, assets = _format_payload(ctx, env)
+    creatives = ctx.setdefault("creatives", [])
+    for i in range(count):
+        creatives.append(
+            {
+                "creative_id": f"creative-fail-{i:03d}",
+                "name": "",  # empty name → per-creative validation failure
+                "format_id": {"id": format_id, "agent_url": agent_url},
+                "assets": assets,
+            }
+        )
+    ctx["validation_mode"] = "lenient"
+
+
+@then("the response is the success variant carrying a creatives array")
+def then_success_variant_with_creatives(ctx: dict) -> None:
+    """Success variant (not error variant): a creatives array is present.
+
+    The all-failed sync must NOT collapse to the error variant — per the pinned
+    3.1 oneOf, per-item failures live inside SyncCreativesSuccess (required:
+    ['creatives']). So there is no operation-level error and the response
+    carries a creatives list.
+    """
+    assert ctx.get("error") is None, (
+        f"expected the success variant, but got an operation-level error: {ctx.get('error')!r}"
+    )
+    response = ctx.get("response")
+    assert response is not None, "expected a sync_creatives response payload"
+    assert isinstance(response.creatives, list), f"creatives must be a list, got {type(response.creatives).__name__}"
+
+
+@then(parsers.parse('every creative result has action "{action}"'))
+def then_every_creative_action(ctx: dict, action: str) -> None:
+    """Every per-creative result carries the given action (e.g. 'failed')."""
+    response = ctx.get("response")
+    assert response is not None, "expected a sync_creatives response payload"
+    assert response.creatives, "expected at least one per-creative result"
+    actions = [_action_str(c.action) for c in response.creatives]
+    assert actions == [action] * len(actions), f"expected every action == {action!r}, got {actions}"
+
+
+@then("the response does not carry an operation-level errors array")
+def then_no_operation_level_errors(ctx: dict) -> None:
+    """Confirm the success variant, not the error variant.
+
+    The success variant has no operation-level `errors` field (that field is
+    unique to the SyncCreativesError variant). Per-creative errors live on each
+    result's own `errors`, which is distinct.
+    """
+    response = ctx.get("response")
+    assert response is not None, "expected a sync_creatives response payload"
+    operation_errors = getattr(response, "errors", None)
+    assert operation_errors is None, (
+        f"success variant must not carry operation-level errors[]; got {operation_errors!r}"
+    )

@@ -10,6 +10,8 @@ import warnings
 from datetime import UTC, datetime
 from typing import Any
 
+from tests.factories.creative_asset import build_assets, image_spec
+
 
 def generate_buyer_ref(prefix: str = "test") -> str:
     """Generate a unique buyer reference."""
@@ -225,14 +227,7 @@ def build_creative(
     # For display formats, use image asset
     # For video formats, use video asset
     # Default to image for now
-    assets: dict[str, Any] = {
-        "primary": {
-            "asset_type": "image",
-            "url": asset_url,
-            "width": 300,
-            "height": 250,
-        }
-    }
+    assets: dict[str, Any] = build_assets(image_spec("primary", url=asset_url, width=300, height=250))
 
     creative: dict[str, Any] = {
         "creative_id": creative_id,

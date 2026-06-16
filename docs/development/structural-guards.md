@@ -28,9 +28,10 @@ correct. The guards make these structural invariants machine-checkable.
 fails CI immediately. When an existing violation is fixed, the stale-allowlist
 test forces you to remove the entry.
 
-**FIXME comments link to beads tasks.** Every allowlisted violation has a
-corresponding `# FIXME(salesagent-xxxx)` comment at the source location,
-linking to a tracked issue.
+**FIXME comments link to a GitHub issue/PR.** Every allowlisted violation has a
+corresponding `# FIXME(#<gh-issue>)` comment at the source location, linking to
+a tracked GitHub issue/PR. Use the GitHub number, never a local beads id — beads
+ids don't resolve for outside contributors reading the code.
 
 **AST scanning, not runtime execution.** Guards parse Python source with the
 `ast` module. They don't import or execute business logic, so they run fast
@@ -491,7 +492,7 @@ providing coverage in the CI smoke-tests job before unit tests run.
 3. Include an allowlist for pre-existing violations
 4. Include a stale-allowlist test that fails when a violation is fixed but the
    entry remains
-5. Add FIXME comments at each violation site: `# FIXME(salesagent-xxxx): description`
+5. Add FIXME comments at each violation site: `# FIXME(#<gh-issue>): description` (GitHub issue/PR number, never a beads id)
 6. Document the guard in this file
 
 ## Running Guards

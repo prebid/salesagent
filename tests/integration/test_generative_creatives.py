@@ -11,13 +11,14 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from adcp.types import CreativeAction
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.schemas import SyncCreativesResponse
+from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv
+from tests.helpers.creative_test_helpers import creative_payload
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -26,14 +27,15 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 def _creative(**overrides) -> dict:
     """Minimal creative dict for testing."""
-    defaults = {
-        "creative_id": "gen-creative-001",
-        "name": "Test Generative Creative",
-        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
-        "assets": {"message": {"content": "Create a banner ad for eco-friendly products"}},
-    }
-    defaults.update(overrides)
-    return defaults
+    return creative_payload(
+        **{
+            "creative_id": "gen-creative-001",
+            "name": "Test Generative Creative",
+            "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_generative"},
+            "assets": build_assets(text_spec("message", content="Create a banner ad for eco-friendly products")),
+            **overrides,
+        }
+    )
 
 
 class TestGenerativeCreatives:
@@ -72,7 +74,7 @@ class TestGenerativeCreatives:
         # Verify result
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == CreativeAction.created
+        assert result.creatives[0].action == "created"
 
         # Verify creative stored with generative data
         with get_db_session() as session:
@@ -121,14 +123,14 @@ class TestGenerativeCreatives:
                         creative_id="static-creative-001",
                         name="Test Static Creative",
                         format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        assets={"image": {"url": "https://example.com/banner.png"}},
+                        assets=build_assets(image_spec("image", url="https://example.com/banner.png")),
                     )
                 ]
             )
 
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == CreativeAction.created
+        assert result.creatives[0].action == "created"
         assert registry.preview_creative.called
         assert not registry.build_creative.called
 
@@ -148,14 +150,14 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-002",
                         format_id=fmt,
-                        assets={"message": {"content": "Test message"}},
+                        assets=build_assets(text_spec("message", content="Test message")),
                     )
                 ]
             )
 
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
-        assert result.creatives[0].action == CreativeAction.failed
+        assert result.creatives[0].action == "failed"
         assert result.creatives[0].errors
         assert any("GEMINI_API_KEY" in str(err) for err in result.creatives[0].errors)
 
@@ -171,7 +173,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-003",
                         format_id=fmt,
-                        assets={"brief": {"content": "Message from brief"}},
+                        assets=build_assets(text_spec("brief", content="Message from brief")),
                     )
                 ]
             )
@@ -222,7 +224,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets={"message": {"content": "Initial message"}},
+                        assets=build_assets(text_spec("message", content="Initial message")),
                     )
                 ]
             )
@@ -244,7 +246,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-005",
                         format_id=fmt,
-                        assets={"message": {"content": "Refined message"}},
+                        assets=build_assets(text_spec("message", content="Refined message")),
                     )
                 ]
             )
@@ -269,7 +271,7 @@ class TestGenerativeCreatives:
                     _creative(
                         creative_id="gen-creative-006",
                         format_id=fmt,
-                        assets={"message": {"content": "Test message"}},
+                        assets=build_assets(text_spec("message", content="Test message")),
                     )
                 ]
             )
