@@ -137,10 +137,12 @@ class MediaBuyCreateEnv(IntegrationEnv):
         return product, pricing_option
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
-        """Mock context manager that delegates create_context / create_workflow_step to the REAL one.
+        """Mock context manager that delegates create_context / create_workflow_step /
+        link_workflow_to_object to the REAL one.
 
-        Persisting real Context / WorkflowStep rows lets the manual-approval path satisfy
-        the ObjectWorkflowMapping foreign keys while the other ContextManager methods stay mocked.
+        Persisting real Context / WorkflowStep / ObjectWorkflowMapping rows lets both
+        the manual-approval path and the auto-approve path satisfy the FK constraints
+        that _send_push_notifications relies on to deliver webhooks.
         """
         from src.core.context_manager import get_context_manager
 
@@ -159,9 +161,13 @@ class MediaBuyCreateEnv(IntegrationEnv):
             kwargs.setdefault("tool_name", tool_name)
             return real.create_workflow_step(**kwargs)
 
+        def _link_workflow_to_object(*_args: Any, **kwargs: Any):
+            return real.link_workflow_to_object(**kwargs)
+
         mgr.create_context.side_effect = _create_context
         mgr.get_context.return_value = None
         mgr.create_workflow_step.side_effect = _create_workflow_step
+        mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
         mgr.update_workflow_step.return_value = None
         mgr.add_message.return_value = None
         return mgr
