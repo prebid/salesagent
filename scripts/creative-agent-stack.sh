@@ -55,21 +55,62 @@ _fetch_tarball() {
         | tar xz -C "$SRC" --strip-components=1
 }
 
-_build_image() {
-    local cache_scope="adcp-creative-agent-${ADCP_PIN}"
-    # ACTIONS_RUNTIME_TOKEN is exposed to run: steps via ghaction-github-runtime in CI
-    # (v1 ACTIONS_CACHE_URL is not available in shell steps; v2 uses ACTIONS_RESULTS_URL).
-    if [ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]; then
-        echo "[creative-agent] buildx build $IMAGE (adcp@${ADCP_PIN}, gha cache scope=${cache_scope})"
-        docker buildx build \
-            --load \
-            -t "$IMAGE" \
-            --cache-from "type=gha,scope=${cache_scope}" \
-            --cache-to "type=gha,mode=max,scope=${cache_scope}" \
-            "$SRC"
+_ensure_tarball() {
+    if [ ! -f "$SRC/Dockerfile" ]; then
+        echo "[creative-agent] fetching adcp@${ADCP_PIN}"
+        _retry 3 _fetch_tarball
+    fi
+}
+
+_ghcr_ref() {
+    echo "${CREATIVE_AGENT_GHCR_IMAGE}:${ADCP_PIN}"
+}
+
+_ghcr_image_exists() {
+    docker manifest inspect "$(_ghcr_ref)" >/dev/null 2>&1
+}
+
+_pull_from_ghcr() {
+    local ref="$(_ghcr_ref)"
+    echo "[creative-agent] pulling ${ref} from ghcr.io"
+    docker pull "$ref"
+    docker tag "$ref" "$IMAGE"
+}
+
+_build_image_local() {
+    echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
+    docker build -t "$IMAGE" "$SRC"
+}
+
+_build_for_ghcr() {
+    local ref="$(_ghcr_ref)"
+    echo "[creative-agent] docker build ${ref} (adcp@${ADCP_PIN})"
+    docker build -t "$ref" -t "$IMAGE" "$SRC"
+}
+
+_push_to_ghcr() {
+    local ref="$(_ghcr_ref)"
+    echo "[creative-agent] pushing ${ref} to ghcr.io"
+    docker push "$ref"
+}
+
+_ensure_image() {
+    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ]; then
+        if _ghcr_image_exists; then
+            _retry 3 _pull_from_ghcr
+        else
+            _ensure_tarball
+            _retry 3 _build_for_ghcr
+            _retry 3 _push_to_ghcr || \
+                echo "[creative-agent] WARN: ghcr.io push skipped; using local image" >&2
+        fi
     else
-        echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
-        docker build -t "$IMAGE" "$SRC"
+        _ensure_tarball
+        _retry 3 _build_image_local
     fi
 }
 
@@ -81,15 +122,7 @@ cmd_up() {
         return 0
     fi
 
-    # Source tarball pinned to ADCP_PIN (cached by pin in the path)
-    if [ ! -f "$SRC/Dockerfile" ]; then
-        echo "[creative-agent] fetching adcp@${ADCP_PIN}"
-        _retry 3 _fetch_tarball
-    fi
-
-    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        _retry 3 _build_image
-    fi
+    _ensure_image
 
     docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
 

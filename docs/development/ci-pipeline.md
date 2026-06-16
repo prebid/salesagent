@@ -131,27 +131,29 @@ failure that prompted pinning (April 2026).
 The pin lives only in [`scripts/creative-agent-stack.sh`](../../scripts/creative-agent-stack.sh)
 — both CI and `run_all_tests.sh` call that script so local and CI cannot diverge.
 
-### CI build cache and retries
+### CI image cache (ghcr.io) and retries
 
 On ephemeral GitHub Actions runners, local `/tmp` tarball reuse and `docker image
 inspect` guards do not survive between runs. The creative shard therefore:
 
-1. Runs `docker/setup-buildx-action` and `ghaction-github-runtime` (creative
-   matrix leg only) before `creative-agent-stack.sh up`. The runtime action
-   exposes `ACTIONS_RUNTIME_TOKEN` to shell steps — without it, `type=gha` cache
-   backends cannot authenticate (unlike `docker/build-push-action`, which injects
-   the token internally).
-2. Uses `docker buildx build --cache-from/to type=gha` inside the script when
-   `ACTIONS_RUNTIME_TOKEN` is present. Cache scope is
-   `adcp-creative-agent-${ADCP_PIN}` so a pin bump invalidates stale layers.
+1. Logs in to `ghcr.io` via `docker/login-action` (creative matrix leg only) and
+   sets `CREATIVE_AGENT_GHCR_IMAGE=ghcr.io/<repo>/adcp-creative-agent` before
+   `creative-agent-stack.sh up`.
+2. Inside the script, when `CREATIVE_AGENT_GHCR_IMAGE` is set:
+   - **Warm run** (image tag `${ADCP_PIN}` already in ghcr.io): `docker pull` +
+     retag to local `adcp-creative-agent` — no compile, no buildx `--load`.
+   - **Cold run** (pin bump or first publish): fetch tarball, `docker build`,
+     `docker push` to `ghcr.io/...:${ADCP_PIN}`.
 3. Falls back to plain `docker build` locally — no CI-only env required for
    `run_all_tests.sh`.
 
-Tarball fetch (`curl -f`) and docker build each retry up to 3 times with
-exponential backoff to absorb transient `ECONNRESET` flakes.
+Tarball fetch (`curl -f`), `docker pull`, `docker build`, and `docker push` each
+retry up to 3 times with exponential backoff to absorb transient `ECONNRESET`
+flakes.
 
-The `integration-tests` job grants `actions: write` so buildx can upload GHA
-cache entries (same pattern as [`release-please.yml`](../../.github/workflows/release-please.yml)).
+The `integration-tests` job grants `packages: write` so the creative shard can
+publish the pre-built image (same registry pattern as
+[`release-please.yml`](../../.github/workflows/release-please.yml)).
 
 ### Creative agent infrastructure
 
