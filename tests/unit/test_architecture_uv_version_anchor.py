@@ -12,9 +12,11 @@ import pytest
 
 from tests.unit._architecture_helpers import (
     anchor_consistency_detects_drift,
+    assert_adr008_target_version_pinned,
     assert_anchor_consistency,
     assert_setup_uv_single_pinned_source,
     extract_dockerfile_python_version,
+    extract_python_version_anchors,
     iter_hardcoded_python_version_yaml,
     iter_hardcoded_uv_version_env,
     iter_python_version_anchors,
@@ -39,6 +41,10 @@ _KNOWN_BAD_DOCKERFILE_PYTHON = {
     "templated_from_only": "FROM python:${PYTHON_VERSION}-slim AS builder\n",
     "arg_anchor": "ARG PYTHON_VERSION=3.12\nFROM python:${PYTHON_VERSION}-slim AS builder\n",
 }
+
+_KNOWN_BAD_TARGET_VERSION_SOURCES = [
+    (Path("pyproject.toml"), 'target-version = "py310"\n'),
+]
 
 _KNOWN_BAD_SETUP_UV_PINS = [
     (Path(".github/actions/_install-uv/action.yml"), "astral-sh/setup-uv@1111111111111111111111111111111111111111"),
@@ -162,6 +168,8 @@ def test_python_version_anchors_consistent() -> None:
 
     assert not drift, f"python version drift — canonical {major_minor} from .python-version:\n" + "\n".join(drift)
 
+    assert_adr008_target_version_pinned(anchors, repo)
+
 
 @pytest.mark.arch_guard
 def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
@@ -177,6 +185,23 @@ def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
     assert candidates, "non-vacuity: expected git-tracked github yaml anchor candidates"
     assert any(path.startswith(".github/workflows/") for path in candidates)
     assert any(path.startswith(".github/actions/") for path in candidates)
+
+
+@pytest.mark.arch_guard
+def test_target_version_anchor_must_stay_py311() -> None:
+    """Mutation self-test: ADR-008 deferred target-version downgrade must fail the guard."""
+    repo = repo_root()
+    anchors = list(iter_python_version_anchors(repo))
+    assert_adr008_target_version_pinned(anchors, repo)
+
+    bad_path, bad_text = _KNOWN_BAD_TARGET_VERSION_SOURCES[0]
+    bad_anchors = [
+        (repo / bad_path, version, anchor_kind)
+        for version, anchor_kind in extract_python_version_anchors(bad_path, bad_text)
+    ]
+    assert bad_anchors, "known-bad fixture must yield a target-version anchor"
+    with pytest.raises(AssertionError, match="ADR-008 target-version must stay py311"):
+        assert_adr008_target_version_pinned(bad_anchors, repo)
 
 
 @pytest.mark.arch_guard

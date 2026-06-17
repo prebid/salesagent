@@ -11,6 +11,7 @@ from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_violations_match_allowlist,
     iter_call_expressions,
+    postgres_image_ref,
     postgres_tag_pattern_map,
     uv_version_pattern_map,
 )
@@ -23,10 +24,6 @@ other.i()
 def inner():
     inner_call()
 """
-
-
-def _pg_image(tag: str) -> str:
-    return f"{'postgres'}:{tag}"
 
 
 @pytest.mark.arch_guard
@@ -121,7 +118,7 @@ def test_assert_anchor_consistency_flags_intra_file_drift() -> None:
     sources = [
         (
             Path("ci.yml"),
-            f"services:\n  db1:\n    image: {_pg_image('17-alpine')}\n  db2:\n    image: {_pg_image('15-alpine')}\n",
+            f"services:\n  db1:\n    image: {postgres_image_ref('17-alpine')}\n  db2:\n    image: {postgres_image_ref('15-alpine')}\n",
         ),
     ]
 
