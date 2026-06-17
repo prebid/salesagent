@@ -457,6 +457,13 @@ def _run_status_watch_thread(
         client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
         orders_manager = GAMOrdersManager(client_manager, dry_run=False)
 
+        # Wait before the first poll so that execute_approved_media_buy has time to
+        # commit the external_id stamp on the media buy.  The status poller is started
+        # from inside google_ad_manager.create_media_buy; the stamp is written by
+        # execute_approved_media_buy after that call returns — an immediate first poll
+        # races the stamp commit and loses.
+        time.sleep(min(poll_interval_seconds, 15))
+
         for attempt in range(1, max_attempts + 1):
             _update_approval_progress(
                 approval_id,
@@ -515,15 +522,36 @@ def _run_status_watch_thread(
 
 def _activate_media_buy(media_buy_id: str, order_id: str, tenant_id: str) -> None:
     """Set the media buy status to 'active' and sync the GAM order status after external approval."""
+    activated_id: str | None = None
     try:
         from src.core.database.repositories import MediaBuyUoW
 
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.media_buys is not None
-            uow.media_buys.update_status(media_buy_id, "active")
-        logger.info(f"Media buy {media_buy_id} activated after external GAM order approval")
+            # Try by DB primary key first (works when media_buy_id is already the PK).
+            updated = uow.media_buys.update_status(media_buy_id, "active")
+            if updated is None:
+                # media_buy_id was the GAM order ID, not the DB PK.
+                # Native AdCP buys store the GAM order ID in external_id (stamped
+                # by execute_approved_media_buy after adapter creation succeeds).
+                buy = uow.media_buys.get_by_external_id(order_id)
+                if buy is not None:
+                    updated = uow.media_buys.update_status(buy.media_buy_id, "active")
+            # Capture the PK string before the session closes (avoid detached-instance access).
+            if updated is not None:
+                activated_id = updated.media_buy_id
+
     except Exception as e:
         logger.error(f"Failed to activate media buy {media_buy_id} after order approval: {e}", exc_info=True)
+        return
+
+    if activated_id is not None:
+        logger.info(f"Media buy {activated_id} activated after external GAM order approval")
+    else:
+        logger.error(
+            f"Could not find media buy for order {order_id} "
+            f"(tried media_buy_id={media_buy_id!r}, external_id={order_id!r}) — status not updated"
+        )
 
     try:
         from src.core.database.models import GAMOrder

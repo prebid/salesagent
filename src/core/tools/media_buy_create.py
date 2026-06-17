@@ -1453,6 +1453,20 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
         logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}")
 
+        # Stamp external_id with the GAM order ID so the background status poller can find
+        # this media buy by order_id.  Native AdCP buys use a mb_<uuid> PK and carry no
+        # external_id until this point; without the stamp, _activate_media_buy falls back
+        # to get_by_external_id which also finds nothing.
+        if response.media_buy_id and response.media_buy_id != media_buy_id:
+            with MediaBuyUoW(tenant_id) as uow_ext:
+                assert uow_ext.media_buys is not None
+                buy_row = uow_ext.media_buys.get_by_id(media_buy_id)
+                if buy_row and not buy_row.external_id:
+                    buy_row.external_id = response.media_buy_id
+                    logger.info(
+                        f"[APPROVAL] Stamped external_id={response.media_buy_id!r} on media buy {media_buy_id}"
+                    )
+
         # Persist platform_line_item_ids from adapter response (same as auto-approval path)
         # Adapters (GAM, Broadstreet) attach _platform_line_item_ids to the response object
         # These are required for update_media_buy operations (budget updates, pause/resume)
