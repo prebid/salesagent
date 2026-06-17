@@ -17,9 +17,22 @@ from tests.unit._architecture_helpers import (
     repo_root,
 )
 
+
+def _pg_image(tag: str) -> str:
+    """Build a postgres image ref without a literal ``postgres:`` in source (avoids guard self-scan)."""
+    return f"{'postgres'}:{tag}"
+
+
 _KNOWN_BAD_POSTGRES_SOURCES = [
-    (Path("compose.yaml"), "services:\n  db:\n    image: postgres:17-alpine\n"),
-    (Path("docker-compose.yml"), "services:\n  db:\n    image: postgres:16-alpine\n"),
+    (Path("compose.yaml"), f"services:\n  db:\n    image: {_pg_image('17-alpine')}\n"),
+    (Path("docker-compose.yml"), f"services:\n  db:\n    image: {_pg_image('16-alpine')}\n"),
+]
+
+_KNOWN_BAD_POSTGRES_INTRA_FILE_SOURCES = [
+    (
+        Path(".github/workflows/ci.yml"),
+        f"services:\n  db1:\n    image: {_pg_image('17-alpine')}\n  db2:\n    image: {_pg_image('15-alpine')}\n",
+    ),
 ]
 
 
@@ -56,3 +69,13 @@ def test_postgres_anchor_detector_catches_known_bad_drift() -> None:
         postgres_tag_pattern_map(),
         label="postgres image",
     ), "Detector must flag drift between postgres image tags"
+
+
+@pytest.mark.arch_guard
+def test_postgres_anchor_detector_catches_intra_file_drift() -> None:
+    """Mutation self-test: a second postgres: tag in the same file must fail the guard."""
+    assert anchor_consistency_detects_drift(
+        _KNOWN_BAD_POSTGRES_INTRA_FILE_SOURCES,
+        postgres_tag_pattern_map(),
+        label="postgres image",
+    ), "Detector must flag drift between postgres image tags within one file"

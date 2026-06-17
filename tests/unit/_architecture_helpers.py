@@ -233,46 +233,85 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
 
 # Patterns intentionally permissive: surfaces use varied formats. Each returns
 # a normalized version string ("3.12", "17", "0.11.7") via the first capture group.
+# ``anchor_kind`` labels the surface (e.g. ``target-version``) for ADR-008 exemptions.
 
-_PY_VERSION_PATTERNS: list[tuple[str, str]] = [
+_PY_VERSION_PATTERNS: list[tuple[str, str, str]] = [
     # Dockerfile — templated builds: `ARG PYTHON_VERSION=3.12`
-    (r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)", "Dockerfile"),
+    (r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)", "Dockerfile", "dockerfile-arg"),
     # Dockerfile / Dockerfile.* — literal `FROM python:3.12-slim` (legacy)
-    (r"^\s*FROM\s+python:([0-9]+(?:\.[0-9]+)*)", "Dockerfile"),
+    (r"^\s*FROM\s+python:([0-9]+(?:\.[0-9]+)*)", "Dockerfile", "dockerfile-from"),
     # pyproject.toml — `target-version = "py312"` (black/ruff)
-    (r'^\s*target-version\s*=\s*["\']py([0-9]{2,3})["\']', "pyproject.toml"),
+    (r'^\s*target-version\s*=\s*["\']py([0-9]{2,3})["\']', "pyproject.toml", "target-version"),
     # pyproject.toml — `python_version = "3.12"` (mypy section)
-    (r'^\s*python_version\s*=\s*["\']?([0-9]+\.[0-9]+)', "pyproject.toml"),
+    (r'^\s*python_version\s*=\s*["\']?([0-9]+\.[0-9]+)', "pyproject.toml", "python_version"),
     # pyproject.toml — `requires-python = ">=3.12"`
-    (r'^\s*requires-python\s*=\s*["\']>=\s*([0-9]+\.[0-9]+)', "pyproject.toml"),
+    (r'^\s*requires-python\s*=\s*["\']>=\s*([0-9]+\.[0-9]+)', "pyproject.toml", "requires-python"),
     # mypy.ini — `python_version = 3.12`
-    (r"^\s*python_version\s*=\s*([0-9]+\.[0-9]+)", "mypy.ini"),
+    (r"^\s*python_version\s*=\s*([0-9]+\.[0-9]+)", "mypy.ini", "python_version"),
     # .python-version — bare version string
-    (r"^\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$", ".python-version"),
+    (r"^\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$", ".python-version", "python-version-file"),
     # tox.ini — `basepython = python3.12`
-    (r"^\s*basepython\s*=\s*python([0-9]+\.[0-9]+)", "tox.ini"),
-    # .github/workflows/*.yml + actions/*/action.yml — `python-version: '3.12'` or
-    # `python-version: ['3.12', '3.13']` first match
-    (r"^\s*python-version:\s*['\"]?([0-9]+\.[0-9]+)", ".yml"),
-    (r"^\s*python-version:\s*['\"]?([0-9]+\.[0-9]+)", ".yaml"),
+    (r"^\s*basepython\s*=\s*python([0-9]+\.[0-9]+)", "tox.ini", "basepython"),
+    # .github/workflows/*.yml + actions/*/action.yml — `python-version: '3.12'`
+    (r"^\s*python-version:\s*['\"]?([0-9]+\.[0-9]+)", ".yml", "workflow-python-version"),
+    (r"^\s*python-version:\s*['\"]?([0-9]+\.[0-9]+)", ".yaml", "workflow-python-version"),
 ]
 
+_UV_VERSION_FILE_RE = re.compile(r"^\s*([\d.]+)\s*$", re.MULTILINE)
+_DOCKERFILE_UV_VERSION_RE = re.compile(r"ARG UV_VERSION=([\d.]+)")
+_PYTHON_VERSION_FILE_RE = re.compile(r"^\s*([0-9]+\.[0-9]+)", re.MULTILINE)
+_DOCKERFILE_PYTHON_VERSION_RE = re.compile(r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)", re.MULTILINE)
+_DOCKERFILE_UV_IMAGE_DIGEST_RE = re.compile(
+    r"^\s*ARG\s+UV_IMAGE_DIGEST=sha256:[a-f0-9]{64}\s*$",
+    re.MULTILINE,
+)
+_DOCKERFILE_PYTHON_BASE_DIGEST_RE = re.compile(
+    r"^\s*ARG\s+PYTHON_BASE_DIGEST=sha256:[a-f0-9]{64}\s*$",
+    re.MULTILINE,
+)
 
 _PYTHON_ANCHOR_NAMES = frozenset({"pyproject.toml", "mypy.ini", "tox.ini", ".python-version"})
 
 
-def _python_anchor_candidate(path: Path) -> bool:
-    rel = path.as_posix()
+def uv_version_pattern_map() -> dict[str, str]:
+    """Path-suffix → regex map for ``assert_anchor_consistency`` on uv version anchors."""
+    return {
+        ".uv-version": _UV_VERSION_FILE_RE.pattern,
+        "Dockerfile": _DOCKERFILE_UV_VERSION_RE.pattern,
+    }
+
+
+def python_version_pattern_map() -> dict[str, str]:
+    """Path-suffix → regex map for ``assert_anchor_consistency`` on Python version anchors."""
+    return {
+        ".python-version": _PYTHON_VERSION_FILE_RE.pattern,
+        "Dockerfile": _DOCKERFILE_PYTHON_VERSION_RE.pattern,
+    }
+
+
+def _repo_relative(path: Path, repo: Path) -> str:
+    return str(path.relative_to(repo))
+
+
+def _github_yaml_candidate(path: Path, repo: Path) -> bool:
+    rel_path = _repo_relative(path, repo)
+    return path.suffix in {".yml", ".yaml"} and (
+        rel_path.startswith(".github/workflows/") or rel_path.startswith(".github/actions/")
+    )
+
+
+def _python_anchor_candidate(path: Path, repo: Path) -> bool:
+    rel_path = _repo_relative(path, repo)
     if path.name.startswith("Dockerfile"):
         return True
     if path.name in _PYTHON_ANCHOR_NAMES:
         return True
-    if path.suffix in {".yml", ".yaml"} and rel.startswith(".github/workflows/"):
+    if path.suffix in {".yml", ".yaml"} and rel_path.startswith(".github/workflows/"):
         return True
-    return path.name in {"action.yml", "action.yaml"} and rel.startswith(".github/actions/")
+    return path.name in {"action.yml", "action.yaml"} and rel_path.startswith(".github/actions/")
 
 
-def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
+def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str, str]]:
     """Yield (file_path, version_string) for every Python version anchor across repo surfaces.
 
     Surfaces scanned: Dockerfile / Dockerfile.*, pyproject.toml (target-version, python_version,
@@ -282,24 +321,24 @@ def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
     Uses ``git ls-files`` so untracked local files cannot affect the guard verdict.
     """
     for path in iter_git_tracked_files(repo):
-        if not _python_anchor_candidate(path):
+        if not _python_anchor_candidate(path, repo):
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for pattern, suffix_hint in _PY_VERSION_PATTERNS:
+        for pattern, suffix_hint, anchor_kind in _PY_VERSION_PATTERNS:
             if not str(path).endswith(suffix_hint):
                 continue
             for m in re.finditer(pattern, text, flags=re.MULTILINE):
                 version = m.group(1)
                 # Normalize "py312" → "3.12" for black/ruff target-version values
-                if pattern.startswith(r"^\s*target-version"):
+                if anchor_kind == "target-version":
                     if len(version) == 3:  # "312"
                         version = f"{version[0]}.{version[1:]}"
                     elif len(version) == 2:  # "312" via 2-digit major
                         version = f"{version[0]}.{version[1]}"
-                yield path, version
+                yield path, version, anchor_kind
 
 
 _PG_IMAGE_LITERAL = re.compile(r"postgres:([0-9]{1,2}(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)(?![0-9])")
@@ -325,7 +364,8 @@ def _postgres_scan_candidate(path: Path) -> bool:
 
 _SETUP_UV_ACTION = re.compile(r"astral-sh/setup-uv@([0-9a-f]{40})")
 _INSTALL_UV_ACTION = ".github/actions/_install-uv/action.yml"
-_DOCKERFILE_PYTHON_VERSION_RE = re.compile(r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)", re.MULTILINE)
+_HARDCODED_UV_VERSION_ENV_RE = re.compile(r'^\s*UV_VERSION:\s*["\']')
+_HARDCODED_PYTHON_VERSION_RE = re.compile(r"python-version:\s*['\"]?[0-9]")
 
 
 def extract_dockerfile_python_version(text: str) -> str | None:
@@ -376,12 +416,45 @@ def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
 
 
 def iter_hardcoded_uv_version_env(repo: Path) -> Iterator[tuple[Path, int, str]]:
-    """Yield workflow lines that hardcode ``UV_VERSION: "..."`` instead of reading ``.uv-version``."""
-    pattern = re.compile(r'^\s*UV_VERSION:\s*["\']')
-    for path in iter_workflow_files(repo):
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if pattern.search(line):
+    """Yield workflow/action lines that hardcode ``UV_VERSION: "..."`` instead of reading ``.uv-version``."""
+    for path in iter_git_tracked_files(repo):
+        if not _github_yaml_candidate(path, repo):
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(lines, 1):
+            if _HARDCODED_UV_VERSION_ENV_RE.search(line):
                 yield path, lineno, line.strip()
+
+
+def iter_hardcoded_python_version_yaml(repo: Path) -> Iterator[tuple[Path, int, str]]:
+    """Yield workflow/action lines that hardcode ``python-version:`` instead of ``python-version-file``."""
+    for path in iter_git_tracked_files(repo):
+        if not _github_yaml_candidate(path, repo):
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for lineno, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if "python-version-file" in stripped:
+                continue
+            if _HARDCODED_PYTHON_VERSION_RE.search(stripped):
+                yield path, lineno, stripped
+
+
+def assert_dockerfile_digest_args_present(text: str) -> None:
+    """Assert Dockerfile declares digest-pinned ``UV_IMAGE_DIGEST`` and ``PYTHON_BASE_DIGEST`` ARGs."""
+    missing: list[str] = []
+    if not _DOCKERFILE_UV_IMAGE_DIGEST_RE.search(text):
+        missing.append("ARG UV_IMAGE_DIGEST=sha256:<64-hex>")
+    if not _DOCKERFILE_PYTHON_BASE_DIGEST_RE.search(text):
+        missing.append("ARG PYTHON_BASE_DIGEST=sha256:<64-hex>")
+    if missing:
+        raise AssertionError("Dockerfile missing digest ARG pins:\n" + "\n".join(f"  {item}" for item in missing))
 
 
 def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
@@ -489,37 +562,44 @@ def assert_violations_match_allowlist(
 # ---------------------------------------------------------------------------
 
 
+def _pattern_for_path(path: Path, pattern_map: dict[str, str]) -> str | None:
+    for path_key, pat in pattern_map.items():
+        if str(path).endswith(path_key) or str(path) == path_key:
+            return pat
+    return None
+
+
 def assert_anchor_consistency(
     sources: Iterable[tuple[Path, str]],
     pattern_map: dict[str, str],
     *,
     label: str,
 ) -> None:
-    """Assert that every source extracts the same anchor value.
+    """Assert that every regex match in every source extracts the same anchor value.
 
-    `sources` is an iterable of (path, text) tuples. `pattern_map` maps a path
-    string (or path-suffix that endswith-matches) to a regex with one capture
-    group that extracts the anchor value (e.g., "3.12").
-
-    Raises AssertionError("drift: ...") if any pair of extracted values differ.
+    Uses ``finditer`` per file so multiple anchors in one file (e.g. four postgres
+    services in ``ci.yml``) cannot drift undetected.
     """
-    values: dict[Path, str] = {}
+    matches: list[tuple[Path, str]] = []
     for path, text in sources:
-        pattern = None
-        for path_key, pat in pattern_map.items():
-            if str(path).endswith(path_key) or str(path) == path_key:
-                pattern = pat
-                break
+        pattern = _pattern_for_path(path, pattern_map)
         if pattern is None:
             raise AssertionError(f"{label} anchor: no pattern for {path}")
-        m = re.search(pattern, text, flags=re.MULTILINE)
-        if not m:
+        found = list(re.finditer(pattern, text, flags=re.MULTILINE))
+        if not found:
             raise AssertionError(f"{label} anchor: pattern {pattern!r} did not match in {path}")
-        values[path] = m.group(1)
+        matches.extend((path, m.group(1)) for m in found)
 
-    distinct = set(values.values())
+    assert matches, f"non-vacuity: no {label} anchors matched"
+
+    distinct = {value for _, value in matches}
     if len(distinct) > 1:
-        rendered = "\n".join(f"  {p}: {v}" for p, v in sorted(values.items()))
+        by_path: dict[Path, set[str]] = {}
+        for path, value in matches:
+            by_path.setdefault(path, set()).add(value)
+        rendered = "\n".join(
+            f"  {path}: {sorted(values)}" for path, values in sorted(by_path.items(), key=lambda item: str(item[0]))
+        )
         raise AssertionError(f"{label} drift across sources:\n{rendered}")
 
 

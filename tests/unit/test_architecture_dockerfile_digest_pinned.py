@@ -10,6 +10,7 @@ import pytest
 
 from tests.unit._architecture_helpers import (
     _ROOT_USER_DIRECTIVES,
+    assert_dockerfile_digest_args_present,
     find_unpinned_dockerfile_from_lines,
     format_failure,
     repo_root,
@@ -20,6 +21,19 @@ _KNOWN_BAD_FROM = [
     "FROM ghcr.io/astral-sh/uv:0.11.15 AS uv",
     "FROM node:20-slim AS build",
 ]
+
+
+@pytest.mark.arch_guard
+def test_dockerfile_digest_args_present() -> None:
+    """Dockerfile must declare digest-pinned UV_IMAGE_DIGEST and PYTHON_BASE_DIGEST ARGs."""
+    assert_dockerfile_digest_args_present((repo_root() / "Dockerfile").read_text(encoding="utf-8"))
+
+
+@pytest.mark.arch_guard
+def test_dockerfile_digest_args_detector_catches_missing_pins() -> None:
+    """Mutation self-test: Dockerfile without digest ARGs must fail the guard."""
+    with pytest.raises(AssertionError, match="Dockerfile missing digest ARG pins"):
+        assert_dockerfile_digest_args_present("ARG PYTHON_VERSION=3.12\nFROM python:3.12-slim\n")
 
 
 @pytest.mark.arch_guard

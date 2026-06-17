@@ -6,7 +6,6 @@ and the setup-env composite action.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -16,30 +15,25 @@ from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_setup_uv_single_pinned_source,
     extract_dockerfile_python_version,
+    iter_hardcoded_python_version_yaml,
     iter_hardcoded_uv_version_env,
     iter_python_version_anchors,
     iter_setup_uv_action_pins,
     iter_workflow_files,
+    python_version_pattern_map,
     repo_root,
+    uv_version_pattern_map,
 )
 
 _KNOWN_BAD_UV_VERSION_SOURCES = [
     (Path(".uv-version"), "0.11.15\n"),
     (Path("Dockerfile"), "ARG UV_VERSION=0.11.14\n"),
 ]
-_KNOWN_BAD_UV_VERSION_PATTERNS = {
-    ".uv-version": r"^\s*([\d.]+)\s*$",
-    "Dockerfile": r"ARG UV_VERSION=([\d.]+)",
-}
 
 _KNOWN_BAD_PYTHON_VERSION_SOURCES = [
     (Path(".python-version"), "3.12\n"),
     (Path("Dockerfile"), "ARG PYTHON_VERSION=3.11\nFROM python:${PYTHON_VERSION}-slim\n"),
 ]
-_KNOWN_BAD_PYTHON_VERSION_PATTERNS = {
-    ".python-version": r"^\s*([0-9]+\.[0-9]+)",
-    "Dockerfile": r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)",
-}
 
 _KNOWN_BAD_DOCKERFILE_PYTHON = {
     "templated_from_only": "FROM python:${PYTHON_VERSION}-slim AS builder\n",
@@ -65,17 +59,14 @@ def test_uv_version_consistent() -> None:
             (repo / ".uv-version", _read(".uv-version")),
             (repo / "Dockerfile", _read("Dockerfile")),
         ],
-        {
-            ".uv-version": r"^\s*([\d.]+)\s*$",
-            "Dockerfile": r"ARG UV_VERSION=([\d.]+)",
-        },
+        uv_version_pattern_map(),
         label="uv version",
     )
 
 
 @pytest.mark.arch_guard
 def test_workflows_do_not_hardcode_uv_version_env() -> None:
-    """Workflow env blocks must not copy uv version literals — use _install-uv instead."""
+    """Workflow/action env blocks must not copy uv version literals — use _install-uv instead."""
     violations = [
         f"{path.relative_to(repo_root())}:{lineno}: {line}"
         for path, lineno, line in iter_hardcoded_uv_version_env(repo_root())
@@ -103,7 +94,7 @@ def test_uv_version_anchor_detector_catches_known_bad_drift() -> None:
     """Mutation self-test: mismatched .uv-version vs Dockerfile ARG must fail the guard."""
     assert anchor_consistency_detects_drift(
         _KNOWN_BAD_UV_VERSION_SOURCES,
-        _KNOWN_BAD_UV_VERSION_PATTERNS,
+        uv_version_pattern_map(),
         label="uv version",
     ), "Detector must flag drift between .uv-version and Dockerfile ARG UV_VERSION"
 
@@ -113,7 +104,7 @@ def test_python_version_anchor_detector_catches_known_bad_drift() -> None:
     """Mutation self-test: mismatched .python-version vs Dockerfile ARG must fail the guard."""
     assert anchor_consistency_detects_drift(
         _KNOWN_BAD_PYTHON_VERSION_SOURCES,
-        _KNOWN_BAD_PYTHON_VERSION_PATTERNS,
+        python_version_pattern_map(),
         label="python version",
     ), "Detector must flag drift between .python-version and Dockerfile ARG PYTHON_VERSION"
 
@@ -146,45 +137,56 @@ def test_python_version_anchors_consistent() -> None:
             (repo / ".python-version", _read(".python-version")),
             (repo / "Dockerfile", _read("Dockerfile")),
         ],
-        {
-            ".python-version": r"^\s*([0-9]+\.[0-9]+)",
-            "Dockerfile": r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)",
-        },
+        python_version_pattern_map(),
         label="python version",
     )
 
     anchors = list(iter_python_version_anchors(repo))
     assert anchors, "non-vacuity: iter_python_version_anchors found no python version anchors"
-    assert any(path.name == "Dockerfile" for path, _ in anchors), (
+    assert any(path.name == "Dockerfile" for path, _, _ in anchors), (
         "non-vacuity: Dockerfile must contribute a PYTHON_VERSION anchor (expected ARG PYTHON_VERSION=...)"
+    )
+    assert any(kind == "requires-python" for _, _, kind in anchors), (
+        "non-vacuity: pyproject.toml requires-python anchor must be scanned"
     )
 
     drift: list[str] = []
-    for path, version in anchors:
+    for path, version, anchor_kind in anchors:
         if path.name in {".python-version", "Dockerfile"}:
             continue
         # ADR-008: ruff/black target-version stays py311 until a dedicated post-#1234 PR.
-        if path.name == "pyproject.toml" and version == "3.11":
+        if anchor_kind == "target-version":
             continue
         if version != major_minor:
-            drift.append(f"{path.relative_to(repo)}: {version}")
+            drift.append(f"{path.relative_to(repo)} ({anchor_kind}): {version}")
 
     assert not drift, f"python version drift — canonical {major_minor} from .python-version:\n" + "\n".join(drift)
 
 
 @pytest.mark.arch_guard
+def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
+    """Workflow and composite-action YAML must be in the python anchor scan surface."""
+    from tests.unit._architecture_helpers import _python_anchor_candidate, iter_git_tracked_files
+
+    repo = repo_root()
+    candidates = {
+        str(path.relative_to(repo))
+        for path in iter_git_tracked_files(repo)
+        if _python_anchor_candidate(path, repo) and path.suffix in {".yml", ".yaml"}
+    }
+    assert candidates, "non-vacuity: expected git-tracked github yaml anchor candidates"
+    assert any(path.startswith(".github/workflows/") for path in candidates)
+    assert any(path.startswith(".github/actions/") for path in candidates)
+
+
+@pytest.mark.arch_guard
 def test_workflows_use_python_version_file() -> None:
-    """Workflows must not hardcode python-version when setup-env reads .python-version."""
-    violations: list[str] = []
-    for wf in iter_workflow_files(repo_root()):
-        for lineno, line in enumerate(wf.read_text(encoding="utf-8").splitlines(), 1):
-            stripped = line.strip()
-            if "python-version-file" in stripped:
-                continue
-            if re.search(r"python-version:\s*['\"]?[0-9]", stripped):
-                rel = wf.relative_to(repo_root())
-                violations.append(f"{rel}:{lineno}: {stripped}")
+    """Workflows/actions must not hardcode python-version when setup-env reads .python-version."""
+    violations = [
+        f"{path.relative_to(repo_root())}:{lineno}: {line}"
+        for path, lineno, line in iter_hardcoded_python_version_yaml(repo_root())
+    ]
     assert not violations, (
-        "Hardcoded python-version in workflows — use python-version-file: .python-version via _setup-env:\n"
+        "Hardcoded python-version in workflows/actions — use python-version-file: .python-version via _setup-env:\n"
         + "\n".join(violations)
     )
