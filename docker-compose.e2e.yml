@@ -36,6 +36,12 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      # Pin strict schema validation (extra="forbid") for the e2e_rest boundary so
+      # the live server rejects spec-invalid input the same way the dev/test
+      # transports do. is_production() defaults to "development" already, but make
+      # it explicit so a future Dockerfile/env change can't silently flip the
+      # boundary to production's lenient extra="ignore". (salesagent-hm9q)
+      ENVIRONMENT: development
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
