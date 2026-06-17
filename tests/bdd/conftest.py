@@ -409,22 +409,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
-        # adcp 5.7 SDK dropped the type filter from ListCreativeFormatsRequest
-        # (the pin 04f59d2d5 RETAINS it). Over e2e_rest the filter is neither
-        # transmitted (build_rest_body returns {} — ListCreativeFormatsBody has
-        # no filter params) nor honored, so these in-process strict markers
-        # cannot hold; their e2e_rest variants are owned by the ledger
-        # (e2e_rest_known_failures.txt), NOT retired (field still in the pin).
-        # (salesagent-7fye)
-        type_filter_e2e_ledgered = {
+        # uc005 list_creative_formats filters are NOT transmitted over e2e_rest:
+        # build_rest_body() returns {} (stale — ListCreativeFormatsBody declares
+        # the fields, but the harness drops them; tracked separately). So the live
+        # server never observes these filters/validations and the in-process
+        # strict markers cannot hold over e2e_rest. Mark strict=False (tolerate
+        # either outcome) until build_rest_body transmits the route-body fields.
+        # NOT retirements — type is still in the pin (04f59d2d5); disclosure
+        # uniqueItems is a separate production gap. (salesagent-7fye / -95kz)
+        uc005_filter_e2e_untestable = {
+            # type filter — also removed from the 5.7 SDK (pin retains it)
             "T-UC-005-inv-031-1-violated",
             "T-UC-005-partition-type-filter",
             "T-UC-005-boundary-type-filter",
+            # disclosure_positions duplicate — prod also lacks the pin's uniqueItems
+            "T-UC-005-partition-disclosure",
+            "T-UC-005-boundary-disclosure",
         }
-        type_filter_e2e_reason = (
-            "e2e_rest: type filter removed from adcp 5.7 SDK (pin 04f59d2d5 retains it) and not "
-            "transmitted (build_rest_body returns {}); type rejection is untestable over e2e_rest "
-            "until upstream pin/SDK reconciliation"
+        uc005_filter_e2e_reason = (
+            "e2e_rest: uc005 filter not transmitted (build_rest_body returns {}); filter/validation "
+            "untestable over e2e_rest until the harness sends route-body fields"
         )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
@@ -676,9 +680,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Selective xfail for parametrized scenarios
             for tag, substrings, reason in _SELECTIVE_XFAIL:
                 if tag in marker_names:
-                    if is_e2e_rest and tag in type_filter_e2e_ledgered:
-                        # tolerate either outcome — see type_filter_e2e_reason (salesagent-7fye)
-                        item.add_marker(pytest.mark.xfail(reason=type_filter_e2e_reason, strict=False))
+                    if is_e2e_rest and tag in uc005_filter_e2e_untestable:
+                        # tolerate either outcome — see uc005_filter_e2e_reason (salesagent-7fye)
+                        item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
                         break
                     if any(s in item.nodeid for s in substrings):
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
@@ -718,9 +722,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
             if tag in marker_names:
-                if is_e2e_rest and tag in type_filter_e2e_ledgered:
-                    # tolerate either outcome — see type_filter_e2e_reason (salesagent-7fye)
-                    item.add_marker(pytest.mark.xfail(reason=type_filter_e2e_reason, strict=False))
+                if is_e2e_rest and tag in uc005_filter_e2e_untestable:
+                    # tolerate either outcome — see uc005_filter_e2e_reason (salesagent-7fye)
+                    item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
                     break
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
