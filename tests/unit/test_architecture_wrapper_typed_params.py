@@ -174,6 +174,7 @@ class TestMcpWrapperTypedParams:
     """MCP wrappers must not use Any or dict for domain parameters."""
 
     @pytest.mark.parametrize("module_path,func_name", MCP_WRAPPERS)
+    @pytest.mark.arch_guard
     def test_no_any_params(self, module_path: str, func_name: str):
         """No MCP wrapper parameter should use Any type."""
         violations = _check_no_any_params(module_path, func_name)
@@ -184,6 +185,7 @@ class TestMcpWrapperTypedParams:
         )
 
     @pytest.mark.parametrize("module_path,func_name", MCP_WRAPPERS)
+    @pytest.mark.arch_guard
     def test_no_dict_params(self, module_path: str, func_name: str):
         """No MCP wrapper parameter should use bare dict (except allowed params)."""
         violations = _check_no_dict_params(module_path, func_name)
@@ -194,6 +196,7 @@ class TestMcpWrapperTypedParams:
         )
 
     @pytest.mark.parametrize("module_path,func_name", MCP_WRAPPERS)
+    @pytest.mark.arch_guard
     def test_sdk_typed_params(self, module_path: str, func_name: str):
         """Parameters with known SDK types must use them, not dict or Any."""
         violations = _check_sdk_typed_params(module_path, func_name)
@@ -208,6 +211,7 @@ class TestA2aRawWrapperTypedParams:
     """A2A _raw wrappers must not use Any or dict for domain parameters."""
 
     @pytest.mark.parametrize("module_path,func_name", A2A_RAW_WRAPPERS)
+    @pytest.mark.arch_guard
     def test_no_any_params(self, module_path: str, func_name: str):
         """No A2A _raw wrapper parameter should use Any type."""
         violations = _check_no_any_params(module_path, func_name)
@@ -218,6 +222,7 @@ class TestA2aRawWrapperTypedParams:
         )
 
     @pytest.mark.parametrize("module_path,func_name", A2A_RAW_WRAPPERS)
+    @pytest.mark.arch_guard
     def test_no_dict_params(self, module_path: str, func_name: str):
         """No A2A _raw wrapper parameter should use bare dict (except allowed params)."""
         violations = _check_no_dict_params(module_path, func_name)
@@ -228,6 +233,7 @@ class TestA2aRawWrapperTypedParams:
         )
 
     @pytest.mark.parametrize("module_path,func_name", A2A_RAW_WRAPPERS)
+    @pytest.mark.arch_guard
     def test_sdk_typed_params(self, module_path: str, func_name: str):
         """Parameters with known SDK types must use them, not dict or Any."""
         violations = _check_sdk_typed_params(module_path, func_name)

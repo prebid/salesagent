@@ -25,6 +25,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 # Pattern A (``Error(code=...)`` construction in business logic) is fully drained:
 # the cap is empty, so any new site fails the guard immediately. The handful of
 # legitimate per-item advisory ``Error(code=...)`` sites in success envelopes
@@ -40,8 +42,8 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
 # hatch stays a vocabulary, not a free-text bypass.
 _SKIP_MARKER = "# structural-guard: advisory"
 
-from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
-from tests.unit._ast_helpers import rel as _rel
+from tests.unit._architecture_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
+from tests.unit._architecture_helpers import rel as _rel
 
 # Pattern A scans wider than the shared default: src/services builds advisory
 # payloads, so an Error(code=...) constructor relocated there must not escape.
@@ -68,7 +70,7 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
     and are excluded; the marker is line-anchored so it can only exempt the
     call it is visually attached to.
     """
-    from tests.unit._ast_helpers import collect_error_aliases
+    from tests.unit._architecture_helpers import collect_error_aliases
 
     tree = safe_parse(filepath)
     if tree is None:
@@ -104,6 +106,7 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
 class TestNoErrorConstructionInImpl:
     """Pattern A (``Error(code=...)`` in business logic) is forbidden and shrinking."""
 
+    @pytest.mark.arch_guard
     def test_pattern_a_sites_within_caps(self):
         """Every scanned file must be at or below its allowlisted cap. New files fail immediately."""
         from tests.unit._per_file_cap_guard import assert_per_file_caps
@@ -117,12 +120,14 @@ class TestNoErrorConstructionInImpl:
             rel=_rel,
         )
 
+    @pytest.mark.arch_guard
     def test_capped_files_still_exist(self):
         """Stale-cap detection: if a file in the cap dict no longer exists, the cap is stale."""
         from tests.unit._per_file_cap_guard import assert_capped_files_still_exist
 
         assert_capped_files_still_exist(PATTERN_A_PER_FILE_CAP, "PATTERN_A_PER_FILE_CAP", repo_root=REPO_ROOT)
 
+    @pytest.mark.arch_guard
     def test_caps_only_shrink(self):
         """Sites in capped files must equal the cap exactly (or be below it).
 

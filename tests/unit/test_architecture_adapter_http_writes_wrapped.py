@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._ast_helpers import REPO_ROOT, rel, safe_parse
+from tests.unit._architecture_helpers import REPO_ROOT, rel, safe_parse
 
 # Adapter HTTP-write sites that emit a raw (non-AdCPError) transport failure.
 # MUST stay empty — wrap the write instead of allowlisting it.

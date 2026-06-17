@@ -35,6 +35,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _APP_PY = Path(__file__).resolve().parents[2] / "src" / "app.py"
 
 _LIFESPAN_FUNC = "app_lifespan"
@@ -65,6 +67,7 @@ class TestAppLifespanIsServiceAgnostic:
         assert _APP_PY.exists(), f"Expected {_APP_PY} to exist"
         return ast.parse(_APP_PY.read_text(encoding="utf-8"), filename=str(_APP_PY))
 
+    @pytest.mark.arch_guard
     def test_no_private_webhook_singleton_import_anywhere_in_app(self):
         """``src/app.py`` must NOT import the private ``_webhook_service`` at all.
 
@@ -83,6 +86,7 @@ class TestAppLifespanIsServiceAgnostic:
             f"shutdown via {_LIFECYCLE_MODULE}.register_shutdown (x2h.6)."
         )
 
+    @pytest.mark.arch_guard
     def test_app_lifespan_uses_shutdown_callback_registry(self):
         """``app_lifespan`` must call ``run_all_shutdown_callbacks``.
 
@@ -105,6 +109,7 @@ class TestAppLifespanIsServiceAgnostic:
             f"(PR #1264 fix #3 regression)."
         )
 
+    @pytest.mark.arch_guard
     def test_run_all_shutdown_callbacks_is_imported(self):
         """``src/app.py`` must import ``run_all_shutdown_callbacks`` from lifecycle."""
         tree = self._module_tree()
@@ -120,6 +125,7 @@ class TestAppLifespanIsServiceAgnostic:
             f"the service-agnostic shutdown entry point (salesagent-x2h.6)."
         )
 
+    @pytest.mark.arch_guard
     def test_no_service_imports_in_app_lifespan(self):
         """``app_lifespan`` must contain NO ``from src.services...`` import and
         must not name any service webhook accessor.

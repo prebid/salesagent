@@ -15,6 +15,8 @@ beads: salesagent-t735
 
 import ast
 
+import pytest
+
 from scripts.ci.migration_helpers import (
     MIGRATIONS_DIR,
     is_empty_body,
@@ -78,6 +80,7 @@ def _extract_table_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[st
 class TestMigrationCompleteness:
     """Every non-merge migration must have non-empty upgrade() and downgrade()."""
 
+    @pytest.mark.arch_guard
     def test_non_merge_migrations_have_upgrade(self):
         """Every non-merge migration must define a non-empty upgrade() function."""
         missing = []
@@ -101,6 +104,7 @@ class TestMigrationCompleteness:
 
         assert not violations, "Migration completeness violations:\n" + "\n".join(f"  {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_non_merge_migrations_have_downgrade(self):
         """Every non-merge migration must define a non-empty downgrade() function."""
         missing = []
@@ -127,6 +131,7 @@ class TestMigrationCompleteness:
 
         assert not violations, "Migration completeness violations:\n" + "\n".join(f"  {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_downgrade_covers_upgrade_tables(self):
         """downgrade() must reference the same tables as upgrade().
 
@@ -163,6 +168,7 @@ class TestMigrationCompleteness:
             + "\n\nEvery table modified in upgrade() should be referenced in downgrade()."
         )
 
+    @pytest.mark.arch_guard
     def test_known_empty_downgrades_still_exist(self):
         """Stale allowlist detection for KNOWN_EMPTY_DOWNGRADE."""
         stale = []
@@ -184,6 +190,7 @@ class TestMigrationCompleteness:
 
         assert not stale, "Stale entries in KNOWN_EMPTY_DOWNGRADE:\n" + "\n".join(f"  {s}" for s in stale)
 
+    @pytest.mark.arch_guard
     def test_known_downgrade_gaps_still_exist(self):
         """Stale allowlist detection — remove entries when fixed."""
         stale = []

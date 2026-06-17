@@ -21,6 +21,8 @@ import importlib
 import inspect
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 # ── Build set of locally-exported schema names ───────────────────────────
 
 _LOCAL_SCHEMA_NAMES: set[str] | None = None
@@ -198,7 +200,8 @@ class TestLocalSchemaImports:
                     if imported_name in local_names:
                         still_violations.add((rel_path, imported_name))
 
-        stale = ALLOWLIST - still_violations
-        assert not stale, "Allowlist entries that are no longer violations (remove them):\n" + "\n".join(
-            f"  - {f}:{n}" for f, n in sorted(stale)
+        assert_violations_match_allowlist(
+            still_violations,
+            ALLOWLIST,
+            fix_hint="Remove fixed entries from ALLOWLIST.",
         )

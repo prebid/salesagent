@@ -106,6 +106,12 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
 | Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
+| Pre-commit no additional_deps | No `additional_dependencies` in `.pre-commit-config.yaml` (ADR-001) | `test_architecture_pre_commit_no_additional_deps.py` |
+| Pre-commit hook count | Commit-stage hooks stay within D27 ceiling (≤12) | `test_architecture_pre_commit_hook_count.py` |
+| No tenant.config access | Per-field tenant columns, not legacy `tenant.config` | `test_architecture_no_tenant_config.py` |
+| JSONType columns | JSON DB columns use `JSONType`, not plain `JSON` | `test_architecture_jsontype_columns.py` |
+| No defensive RootModel | No `hasattr(x, "root")` without `# noqa: rootmodel` | `test_architecture_no_defensive_rootmodel.py` |
+| Import usage in src/ | Classes/functions used in `src/` must be imported | `test_architecture_import_usage.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead

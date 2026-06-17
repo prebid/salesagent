@@ -40,7 +40,7 @@ def test_pricing_option_rootmodel_unwrapping():
     po = product.pricing_options[0]
 
     # Should be wrapped in RootModel
-    assert hasattr(po, "root"), "pricing_options[0] should have .root attribute (is RootModel)"
+    assert hasattr(po, "root"), "pricing_options[0] should have .root attribute (is RootModel)"  # noqa: rootmodel
 
     # adcp 3.9: PricingOption RootModel now proxies attributes from .root,
     # so .pricing_model is accessible directly on the wrapper

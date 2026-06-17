@@ -541,7 +541,7 @@ def _assert_account_resolution_succeeds(ctx: dict) -> None:
     # Compare against the expected account_id from the request's account_ref
     account_ref = ctx.get("account_ref")
     if account_ref is not None:
-        root = account_ref.root  # AccountReference is a RootModel — .root always exists
+        root = account_ref.root
         if hasattr(root, "account_id"):
             # Explicit account_id reference — resolved must match exactly
             assert resolved_id == root.account_id, (
@@ -670,7 +670,7 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         # Verify the resolved account_id matches the Given step's account_ref
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
-            root = account_ref.root  # AccountReference is a RootModel — .root always exists
+            root = account_ref.root
             if hasattr(root, "account_id"):
                 assert resp == root.account_id, (
                     f"Resolved account_id '{resp}' does not match requested "
