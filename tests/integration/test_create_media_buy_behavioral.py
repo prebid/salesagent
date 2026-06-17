@@ -731,25 +731,25 @@ class TestMainFlowObligations:
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        ctx_mgr_mock = env.mock["context_mgr"].return_value
-        ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
-            step_id=ANY,
-            object_type="media_buy",
-            object_id=result.response.media_buy_id,
-            action="create",
-            tenant_id=ANY,
-        )
-        # link_workflow_to_object must be called BEFORE update_workflow_step("completed")
-        link_call_idx = next(i for i, c in enumerate(ctx_mgr_mock.method_calls) if c[0] == "link_workflow_to_object")
-        complete_call_idx = next(
-            i
-            for i, c in enumerate(ctx_mgr_mock.method_calls)
-            if c[0] == "update_workflow_step" and c[2].get("status") == "completed"
-        )
-        assert link_call_idx < complete_call_idx, (
-            "link_workflow_to_object must be called before update_workflow_step(status='completed')"
-        )
+            assert isinstance(result.response, CreateMediaBuySuccess)
+            ctx_mgr_mock = env.mock["context_mgr"].return_value
+            ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
+                step_id=ANY,
+                object_type="media_buy",
+                object_id=result.response.media_buy_id,
+                action="create",
+                tenant_id=ANY,
+            )
+            # link_workflow_to_object must be called BEFORE update_workflow_step("completed")
+            link_call_idx = next(i for i, c in enumerate(ctx_mgr_mock.method_calls) if c[0] == "link_workflow_to_object")
+            complete_call_idx = next(
+                i
+                for i, c in enumerate(ctx_mgr_mock.method_calls)
+                if c[0] == "update_workflow_step" and c[2].get("status") == "completed"
+            )
+            assert link_call_idx < complete_call_idx, (
+                "link_workflow_to_object must be called before update_workflow_step(status='completed')"
+            )
 
     @pytest.mark.asyncio
     async def test_authentication_extracts_principal_id(self):
@@ -1382,15 +1382,15 @@ class TestCrossCuttingObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        assert result.response.media_buy_id is not None
-        ctx_mgr_mock = env.mock["context_mgr"].return_value
-        ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
-            step_id=ANY,
-            object_type="media_buy",
-            object_id=result.response.media_buy_id,
-            action="create",
-            tenant_id=ANY,
-        )
+            assert result.response.media_buy_id is not None
+            ctx_mgr_mock = env.mock["context_mgr"].return_value
+            ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
+                step_id=ANY,
+                object_type="media_buy",
+                object_id=result.response.media_buy_id,
+                action="create",
+                tenant_id=ANY,
+            )
 
     @pytest.mark.asyncio
     async def test_creative_in_valid_state_assigned_successfully(self):
