@@ -47,4 +47,4 @@ def test_repo_invariants_skip_detector_allows_skipif(tmp_path) -> None:
         encoding="utf-8",
     )
     hits = check_no_skip_tests([ok_file])
-    assert not hits, "check_no_skip_tests must not flag @pytest.mark.skipif"
+    assert not hits, "check_no_skip_tests must not flag conditional skip marker"
