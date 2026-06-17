@@ -1541,6 +1541,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
+        # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
+        # in-process — when only end_date is given, production defaults start to
+        # today-30d, not the media buy creation date the Then-step asserts. The
+        # _UC004_GENUINE_XFAIL_ROWS loop is gated to in-process only (see :1422),
+        # so e2e_rest needs its own strict tripwire. Deterministic: the live
+        # server reliably returns today-30d. Retire when Gap G40 is closed.
+        if is_e2e_rest and "T-UC-004-daterange-end-only" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: Gap G40 — start defaults to today-30d, not media buy creation date",
+                    strict=True,
+                )
+            )
+
         # attribution_window REFERENCE (clean scenario->step->harness path): the Examples
         # name the exact error code (error "INVALID_REQUEST"), the step asserts it on the
         # harness wire envelope. interval=0 / unit=weeks / model=last_click now PASS on
@@ -2756,7 +2770,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv() as env:
+            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant

@@ -49,6 +49,22 @@ def _ensure_test_auth_enabled():
 
     engine = create_engine(db_url)
     with engine.connect() as conn:
+        # bdd's _reset_e2e_db TRUNCATEs tenants CASCADE, so the server-seeded
+        # default tenant may be gone by the time the (serial) ui suite runs.
+        # Re-create it idempotently before configuring it, supplying the
+        # NOT-NULL columns that lack a server default (mirrors init_db() in
+        # src/core/database/database.py); ON CONFLICT keeps it a no-op when the
+        # server-seeded row is still present.
+        conn.execute(
+            text(
+                "INSERT INTO tenants"
+                " (tenant_id, name, subdomain, is_active, billing_plan,"
+                "  enable_axe_signals, human_review_required, approval_mode)"
+                " VALUES ('default', 'UI Smoke Tenant', 'default', true, 'standard',"
+                "  false, false, 'require-human')"
+                " ON CONFLICT (tenant_id) DO NOTHING"
+            )
+        )
         conn.execute(text("UPDATE tenants SET auth_setup_mode = true WHERE tenant_id = 'default'"))
         # Configure as GAM tenant so inventory tree UI paths are exercised
         conn.execute(text("UPDATE tenants SET ad_server = 'google_ad_manager' WHERE tenant_id = 'default'"))
