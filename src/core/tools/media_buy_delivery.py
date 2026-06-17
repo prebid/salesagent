@@ -51,7 +51,7 @@ def _validate_attribution_window(attribution_window) -> None:
                 "attribution_window: interval must be 1 when unit is 'campaign' "
                 "(the window spans the full campaign flight)",
                 field="attribution_window",
-                suggestion="set interval to 1 when unit is 'campaign'",
+                suggestion="interval must be 1 when unit is 'campaign'",
             )
 
 

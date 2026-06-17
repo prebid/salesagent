@@ -1001,7 +1001,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # T-UC-004-attr-campaign-valid: resolved — _impl now resolves campaign unit to days
             # campaign unit interval validation: _impl doesn't validate attribution_window
             "T-UC-004-attr-campaign-invalid": (
-                "attribution_window campaign unit validation not implemented in _impl",
+                # INV-5 IS implemented (_validate_attribution_window raises VALIDATION_ERROR);
+                # the in-process request path drops attribution_window.post_click (#1462) so it
+                # can't fire there. Reason corrected per PR #1420 reviewer nit.
+                "attribution_window campaign INV-5 can't fire in-process — request path drops post_click (#1462)",
                 True,
             ),
             # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
@@ -1785,11 +1788,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "reporting_dimensions validation not implemented — production accepts invalid configs",
             ),
-            # attribution_window: production doesn't validate interval<=0, invalid unit/model, campaign interval
+            # attribution_window: validation IS implemented (SDK model enum/range +
+            # _validate_attribution_window for campaign INV-5, emitting VALIDATION_ERROR),
+            # but the in-process request path drops attribution_window.post_click (#1462)
+            # so it can't fire in-process; e2e_rest parses the body server-side and asserts
+            # for real. (Reason corrected per PR #1420 reviewer nit; not "not implemented".)
             (
                 "T-UC-004-partition-attribution",
                 {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
-                "attribution_window validation not implemented — production accepts invalid configs",
+                "attribution_window validation can't fire in-process — request path drops post_click (#1462)",
             ),
             # daily breakdown: production doesn't validate non-boolean values
             (

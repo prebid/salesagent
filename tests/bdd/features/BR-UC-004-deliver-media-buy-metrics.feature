@@ -631,7 +631,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 2, "unit": "campaign"}}
     Then the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "interval must be 1"
     And the error should include "suggestion" field
     And the suggestion should contain "interval must be 1"
