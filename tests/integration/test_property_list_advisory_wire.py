@@ -26,7 +26,6 @@ Reverting any single attachment site turns at least one test here red.
 
 from __future__ import annotations
 
-import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -108,14 +107,9 @@ def _patched_resolver():
 
 
 def _build_create_request() -> CreateMediaBuyRequest:
-    # Idempotency keys are per-call-unique (reused keys replay the cached
-    # response once the required-key change lands; spec shape: min 16,
-    # charset [A-Za-z0-9_.:-]). The MCP/A2A wire dicts stay keyless until
-    # the wrappers accept the parameter.
-    return CreateMediaBuyRequest(
-        idempotency_key=f"prop-list-advisory-{uuid.uuid4().hex}",
-        **create_test_property_list_create_params(PRODUCT_ID),
-    )
+    # idempotency_key comes from create_test_property_list_create_params
+    # (per-call-unique; required on every mutating request since AdCP 3.1).
+    return CreateMediaBuyRequest(**create_test_property_list_create_params(PRODUCT_ID))
 
 
 def _make_identity(*, human_review_required: bool = False):
@@ -140,8 +134,12 @@ def _make_identity(*, human_review_required: bool = False):
 
 
 def _advisory_entries(ext) -> list[dict]:
-    vendor = getattr(ext, "prebid", None)
-    entries = vendor.get("property_list_advisories") if isinstance(vendor, dict) else None
+    # ext is a plain dict on the construction path (prebid_ext returns a dict);
+    # prebid_vendor resolves the vendor block from either a dict or a model.
+    from src.core.ext_namespace import prebid_vendor
+
+    vendor = prebid_vendor(ext)
+    entries = vendor.get("property_list_advisories") if vendor else None
     assert entries, f"expected ext.prebid.property_list_advisories on the success payload; got ext={ext!r}"
     return entries
 

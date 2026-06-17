@@ -170,6 +170,10 @@ def create_test_property_list_create_params(product_id: str) -> dict[str, Any]:
         ],
         "start_time": start,
         "end_time": end,
+        # Required on every mutating request (AdCP 3.1 idempotency); unique per
+        # call so wire retries don't replay. Callers splatting this into
+        # CreateMediaBuyRequest(**params) inherit it.
+        "idempotency_key": f"prop-list-{uuid.uuid4().hex}",
     }
 
 

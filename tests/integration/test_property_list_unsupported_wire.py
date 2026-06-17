@@ -34,8 +34,6 @@ Covers: UC-003 honest-declaration property_list reject — wire shape (update)
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 from a2a.types import Message, Task
 
@@ -64,14 +62,9 @@ _FIELD = "packages[0].targeting_overlay.property_list"
 
 def _build_create_request() -> CreateMediaBuyRequest:
     """A create request whose single package carries property_list targeting."""
-    # Idempotency keys are per-call-unique (reused keys replay the cached
-    # response once the required-key change lands; spec shape: min 16,
-    # charset [A-Za-z0-9_.:-]). The MCP/A2A wire dicts stay keyless until
-    # the wrappers accept the parameter.
-    return CreateMediaBuyRequest(
-        idempotency_key=f"prop-list-wire-{uuid.uuid4().hex}",
-        **create_test_property_list_create_params(PRODUCT_ID),
-    )
+    # idempotency_key comes from create_test_property_list_create_params
+    # (per-call-unique; required on every mutating request since AdCP 3.1).
+    return CreateMediaBuyRequest(**create_test_property_list_create_params(PRODUCT_ID))
 
 
 def _build_update_packages(package_id: str) -> list[dict]:

@@ -142,9 +142,9 @@ def _build_property_list_create_request() -> CreateMediaBuyRequest:
     contract assertions (error code, recovery, field, suggestion, envelope
     round-trip).
     """
+    # idempotency_key comes from create_test_property_list_create_params
+    # (per-call-unique; required on every mutating request since AdCP 3.1).
     return CreateMediaBuyRequest(
-        # per-call-unique: reused keys replay once the required-key change lands
-        idempotency_key=f"prop-list-cap-{uuid.uuid4().hex}",
         **create_test_property_list_create_params("prod_property_targeting_allowed"),
     )
 
