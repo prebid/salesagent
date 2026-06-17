@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, safe_parse
+from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions, safe_parse
 
 # Adapter-raised typed errors with no raise-site ``pytest.raises`` test. MUST stay
 # empty — a new uncovered adapter raise fails the guard immediately. Do not add
@@ -91,13 +91,9 @@ def collect_pytest_raises_classes() -> set[str]:
         tree = safe_parse(filepath)
         if tree is None:
             continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
+        for node in iter_call_expressions(tree, name="raises"):
             func = node.func
-            is_raises = (isinstance(func, ast.Attribute) and func.attr == "raises") or (
-                isinstance(func, ast.Name) and func.id == "raises"
-            )
+            is_raises = isinstance(func, ast.Attribute) or isinstance(func, ast.Name)
             if not is_raises or not node.args:
                 continue
             first = node.args[0]

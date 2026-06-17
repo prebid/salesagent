@@ -24,6 +24,7 @@ from scripts.ci.migration_helpers import (
     iter_migration_trees,
     parse_function,
 )
+from tests.unit._architecture_helpers import iter_call_expressions
 
 # Alembic operations that modify schema structure
 SCHEMA_OPS = {
@@ -63,9 +64,7 @@ KNOWN_DOWNGRADE_COVERAGE_GAPS = {
 def _extract_table_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """Extract table names referenced in op.XXX() calls."""
     tables = set()
-    for child in ast.walk(node):
-        if not isinstance(child, ast.Call):
-            continue
+    for child in iter_call_expressions(node):
         func = child.func
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             if func.value.id == "op" and func.attr in SCHEMA_OPS:

@@ -176,6 +176,21 @@ def iter_call_expressions(tree: ast.Module, name: str | None = None) -> Iterator
             yield node
 
 
+def iter_architecture_guard_trees(
+    *,
+    exempt: Iterable[Path] | None = None,
+) -> Iterator[tuple[Path, ast.Module]]:
+    """Yield ``(repo_relative_path, parsed_tree)`` for each ``test_architecture_*.py`` module."""
+    repo = repo_root()
+    skip = set(exempt or ())
+    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
+        rel = path.relative_to(repo)
+        if rel in skip:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        yield rel, tree
+
+
 # ---------------------------------------------------------------------------
 # File iteration
 # ---------------------------------------------------------------------------

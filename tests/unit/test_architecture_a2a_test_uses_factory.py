@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 
 def _a2a_test_files() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[2]
@@ -31,13 +33,12 @@ def _a2a_test_files() -> list[Path]:
 def _find_resolved_identity_calls(path: Path) -> list[int]:
     tree = ast.parse(path.read_text(), filename=str(path))
     lines: list[int] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-                lines.append(node.lineno)
-            elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-                lines.append(node.lineno)
+    for node in iter_call_expressions(tree):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
+            lines.append(node.lineno)
+        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
+            lines.append(node.lineno)
     return lines
 
 

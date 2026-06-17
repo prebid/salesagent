@@ -55,7 +55,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 from tests.unit._bdd_guard_helpers import iter_then_functions
 
 # ── Dispatch methods that indicate a When action ────────────────────────
@@ -149,10 +149,7 @@ def _find_dispatch_call(
     ``dispatch_request(...)``, and ``client.post(...)`` — all of which
     perform actions rather than verify outcomes.
     """
-    for node in ast.walk(func):
-        if not isinstance(node, ast.Call):
-            continue
-        # method call: obj.method(...)
+    for node in iter_call_expressions(func):  # method call: obj.method(...)
         if isinstance(node.func, ast.Attribute):
             if node.func.attr in _DISPATCH_METHODS:
                 return True

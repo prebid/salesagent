@@ -28,6 +28,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 # Per-file cap on hand-rolled mock constructions in behavioral test files.
 # Frozen at the current count; can only shrink. New behavioral files with mock
 # constructions fail immediately (force a deliberate cap entry or harness use).
@@ -70,13 +72,12 @@ def _count_mock_constructions(filepath: Path) -> list[int]:
     except (OSError, SyntaxError):
         return []
     lines: list[int] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id in _MOCK_CALLABLES:
-                lines.append(node.lineno)
-            elif isinstance(func, ast.Attribute) and func.attr in _MOCK_CALLABLES:
-                lines.append(node.lineno)
+    for node in iter_call_expressions(tree):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in _MOCK_CALLABLES:
+            lines.append(node.lineno)
+        elif isinstance(func, ast.Attribute) and func.attr in _MOCK_CALLABLES:
+            lines.append(node.lineno)
     return lines
 
 

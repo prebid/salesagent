@@ -39,7 +39,7 @@ PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
 
 _SKIP_MARKER = "# structural-guard:"
 
-from tests.unit._architecture_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
+from tests.unit._architecture_helpers import REPO_ROOT, SCAN_DIRS, iter_call_expressions, safe_parse
 from tests.unit._architecture_helpers import rel as _rel
 
 
@@ -59,9 +59,7 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
     source_lines = filepath.read_text().splitlines()
     aliases = collect_error_aliases(tree)
     lines: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node in iter_call_expressions(tree):
         func = node.func
         matched = False
         if isinstance(func, ast.Name) and func.id in aliases:

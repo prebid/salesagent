@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Files that contain Given steps populating registry_formats
@@ -53,10 +55,11 @@ def _body_appends_dict_to_registry(func: ast.FunctionDef | ast.AsyncFunctionDef)
                     return True
 
         # .append({...}) or .extend([{...}])
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr in ("append", "extend") and node.args:
-                if _value_contains_dict(node.args[0]):
-                    return True
+        for node in iter_call_expressions(func):
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr in ("append", "extend") and node.args:
+                    if _value_contains_dict(node.args[0]):
+                        return True
 
     return False
 

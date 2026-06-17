@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Functions that legitimately bypass transport dispatch.
@@ -48,14 +50,11 @@ def _is_when_or_given_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) ->
 
 def _has_direct_impl_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function body calls .call_impl() or any _impl() function directly."""
-    for node in ast.walk(func):
-        if isinstance(node, ast.Call):
-            # Check for env.call_impl(...)
-            if isinstance(node.func, ast.Attribute) and node.func.attr == "call_impl":
-                return True
-            # Check for _xxx_impl(...)
-            if isinstance(node.func, ast.Name) and node.func.id.endswith("_impl"):
-                return True
+    for node in iter_call_expressions(func):
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "call_impl":
+            return True
+        if isinstance(node.func, ast.Name) and node.func.id.endswith("_impl"):
+            return True
     return False
 
 

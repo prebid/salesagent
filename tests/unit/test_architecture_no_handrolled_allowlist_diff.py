@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import iter_architecture_guard_trees, repo_root
 
 _EXEMPT = {
     Path("tests/unit/_architecture_helpers.py"),
@@ -52,14 +52,8 @@ def _assigns_handrolled_allowlist_diff(node: ast.AST) -> bool:
 
 
 def _find_handrolled_allowlist_diffs() -> list[str]:
-    repo = repo_root()
     violations: list[str] = []
-    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
-        rel = path.relative_to(repo)
-        if rel in _EXEMPT:
-            continue
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
+    for rel, tree in iter_architecture_guard_trees(exempt=_EXEMPT):
         for node in ast.walk(tree):
             if _assigns_handrolled_allowlist_diff(node):
                 lineno = getattr(node, "lineno", "?")
@@ -68,11 +62,8 @@ def _find_handrolled_allowlist_diffs() -> list[str]:
 
 
 def _find_ast_helpers_imports() -> list[str]:
-    repo = repo_root()
     violations: list[str] = []
-    for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
-        rel = path.relative_to(repo)
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for rel, tree in iter_architecture_guard_trees():
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "tests.unit._ast_helpers":
                 violations.append(f"{rel}:{node.lineno}: imports tests.unit._ast_helpers")

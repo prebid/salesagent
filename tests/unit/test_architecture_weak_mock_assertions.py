@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "tests",)
@@ -123,19 +123,17 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
         has_bare_called_once = False
         has_call_args = False
 
-        for child in ast.walk(node):
-            # Bare assert_called()/assert_called_once() — exactly zero arguments
-            if isinstance(child, ast.Call):
-                func = child.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr in {"assert_called", "assert_called_once"}
-                    and len(child.args) == 0
-                    and len(child.keywords) == 0
-                ):
-                    has_bare_called_once = True
+        for child in iter_call_expressions(node):
+            func = child.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in {"assert_called", "assert_called_once"}
+                and len(child.args) == 0
+                and len(child.keywords) == 0
+            ):
+                has_bare_called_once = True
 
-            # .call_args attribute access (any object)
+        for child in ast.walk(node):
             if isinstance(child, ast.Attribute) and child.attr == "call_args":
                 has_call_args = True
 
@@ -264,19 +262,17 @@ def _find_bare_assertions(file_path: str) -> list[tuple[str, str, int]]:
         has_bare_called_once = False
         has_call_args = False
 
-        for child in ast.walk(node):
-            # Bare assert_called()/assert_called_once() — exactly zero arguments
-            if isinstance(child, ast.Call):
-                func = child.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr in {"assert_called", "assert_called_once"}
-                    and len(child.args) == 0
-                    and len(child.keywords) == 0
-                ):
-                    has_bare_called_once = True
+        for child in iter_call_expressions(node):
+            func = child.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in {"assert_called", "assert_called_once"}
+                and len(child.args) == 0
+                and len(child.keywords) == 0
+            ):
+                has_bare_called_once = True
 
-            # .call_args attribute access (any object)
+        for child in ast.walk(node):
             if isinstance(child, ast.Attribute) and child.attr == "call_args":
                 has_call_args = True
 
