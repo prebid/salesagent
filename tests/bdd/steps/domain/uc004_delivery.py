@@ -2595,47 +2595,56 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             assert mb_id is not None, f"Valid {field}: delivery missing media_buy_id"
 
 
+def _assert_error_outcome(ctx: dict, code: str, field: str, *, require_suggestion: bool) -> None:
+    """Reference error assertion (clean scenario -> step -> harness path).
+
+    The SCENARIO names the expected wire error CODE (its Examples `expected` column);
+    this step asserts the harness-normalized two-layer envelope carries it, with the
+    ``recovery`` the AdCP schema classifies for that code. No transport awareness, no
+    per-field hard-coding, no reconstruction:
+      * the expected code comes from the scenario,
+      * the recovery comes from the schema (``STANDARD_ERROR_CODES`` mirrors
+        adcp error-code.json),
+      * the envelope comes from the harness (``ctx["wire_error_envelope"]``, populated
+        per-transport by the dispatcher — REST body / MCP ToolError JSON / A2A artifact
+        / e2e HTTP), so the same assertion holds on every transport.
+    """
+    from adcp.server.helpers import STANDARD_ERROR_CODES
+
+    from tests.helpers import assert_envelope_shape
+
+    spec = STANDARD_ERROR_CODES.get(code)
+    assert spec is not None, f"{code!r} is not a standard AdCP error code (error-code.json)"
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, (
+        f"Expected {field} rejected with {code}, but the operation succeeded — no wire error "
+        f"envelope. response={ctx.get('response')!r}"
+    )
+    assert_envelope_shape(envelope, code, recovery=spec["recovery"])
+    if require_suggestion:
+        assert envelope.get("adcp_error", {}).get("suggestion"), (
+            f"Expected a suggestion in the {code} envelope for {field}: {envelope}"
+        )
+
+
 def _assert_wire_rejection(ctx: dict, field: str) -> None:
-    """Assert an "invalid" input was rejected, reading the REAL wire envelope.
-
-    Per tests/CLAUDE.md § Error Verification: assert on the two-layer envelope the
-    buyer actually received (captured per-transport by the dispatcher into
-    ``ctx["wire_error_envelope"]``), NOT a reconstructed exception. Reconstruction
-    is lossy — it drops the HTTP status, so a genuine 400 ``INVALID_REQUEST`` looked
-    like a 500 server crash to the old ``status < 500`` guard.
-
-    A genuine validation rejection is a two-layer AdCP error whose ``recovery`` is
-    ``correctable`` (the buyer can fix the request and resend). A server crash
-    (``INTERNAL_ERROR``) is ``transient``/``terminal`` or carries no envelope at all,
-    so it can never satisfy this — which is exactly the discrimination we want.
-
-    Legacy fallback: when no wire envelope is present (an in-process path that
-    raised a bare ``ValidationError`` before reaching a transport boundary), fall
-    back to the reconstructed ``ctx["error"]`` — kept only until every path exposes
-    a wire envelope.
+    """Generic 'invalid' fallback for fields whose Examples do not YET name a specific
+    error code (migration to ``error "<CODE>"`` pending — attribution_window is the
+    migrated reference). Asserts a well-formed two-layer AdCP CLIENT rejection on the
+    wire: not a server fault (INTERNAL_ERROR / transient) and not an auth failure. The
+    precise code/recovery is asserted only once the scenario carries it.
     """
     envelope = ctx.get("wire_error_envelope")
     if isinstance(envelope, dict) and "adcp_error" in envelope:
         layer = envelope["adcp_error"]
         code = layer.get("code")
         recovery = layer.get("recovery")
-        # A rejection of an invalid FIELD must be about the request CONTENT, not a
-        # server fault and not a credential failure:
-        #   * INTERNAL_ERROR (crash) / transient (RATE_LIMITED, SERVICE_UNAVAILABLE)
-        #     — server fault, the field was never evaluated.
-        #   * AUTH_REQUIRED / AUTH_TOKEN_INVALID — credential failure; the request
-        #     never reached field validation. Accepting it would be a VACUOUS pass
-        #     (e.g. a broken e2e auth setup masquerading as "field correctly rejected").
-        # A genuine content rejection is ``correctable`` (fix the field, e.g.
-        # INVALID_REQUEST / VALIDATION_ERROR) or ``terminal`` about the content
-        # itself (e.g. ACCOUNT_NOT_FOUND — the account ref in the request is wrong).
-        _NON_REJECTION = {"INTERNAL_ERROR", "AUTH_REQUIRED", "AUTH_TOKEN_INVALID"}
-        assert code and code not in _NON_REJECTION, (
-            f"Invalid {field}: expected a content rejection on the wire, got code={code!r} "
+        assert code and code not in {"INTERNAL_ERROR", "AUTH_REQUIRED", "AUTH_TOKEN_INVALID"}, (
+            f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
         )
         assert recovery in ("correctable", "terminal"), (
-            f"Invalid {field}: expected a request rejection (recovery correctable/terminal), got "
+            f"Invalid {field}: expected a client rejection (recovery correctable/terminal), got "
             f"recovery={recovery!r} — a transient server fault is not a rejection. Envelope: {envelope}"
         )
         return
@@ -2656,6 +2665,11 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         )
 
 
+# Fields migrated to the clean reference path (scenario names the exact error code,
+# step asserts it on the harness wire envelope). attribution_window is the first.
+_WIRE_ASSERTED_FIELDS = {"attribution_window"}
+
+
 def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknown") -> None:
     """Assert partition/boundary outcome with field-aware content validation."""
     expected = expected.strip()
@@ -2664,22 +2678,32 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         assert "error" not in ctx, f"Expected valid {field} result but got error: {ctx.get('error')}"
         assert "response" in ctx, f"Expected response for valid {field} but none found"
         _assert_valid_content(ctx, field)
-    elif expected == "invalid":
+        return
+    if expected == "invalid":
         _assert_wire_rejection(ctx, field)
-    else:
-        m = re.match(r'error "(.+?)" with suggestion', expected)
-        if m:
-            from src.core.exceptions import AdCPError
+        return
 
-            code = m.group(1)
-            assert "error" in ctx, f"Expected error '{code}' for {field} but operation succeeded"
-            error = ctx["error"]
-            assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
-            assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
+    # error "<CODE>" [with suggestion] — the scenario names the expected code.
+    m = re.match(r'error "(?P<code>[A-Z_]+)"(?P<sug> with suggestion)?$', expected)
+    if m:
+        code = m.group("code")
+        require_suggestion = bool(m.group("sug"))
+        if field in _WIRE_ASSERTED_FIELDS:
+            _assert_error_outcome(ctx, code, field, require_suggestion=require_suggestion)
+            return
+        # Legacy reconstructed path (other fields, pending migration to the wire path).
+        from src.core.exceptions import AdCPError
+
+        assert "error" in ctx, f"Expected error '{code}' for {field} but operation succeeded"
+        error = ctx["error"]
+        assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
+        assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
+        if require_suggestion:
             suggestion = (error.details or {}).get("suggestion")
             assert suggestion, f"Expected suggestion in error for {field}, got details: {error.details}"
-        else:
-            raise AssertionError(f"Unexpected expected value '{expected}' for {field}")
+        return
+
+    raise AssertionError(f"Unexpected expected value '{expected}' for {field}")
 
 
 @then(parsers.re(r"the (?P<field>.+) validation should result in (?P<expected>.+)"))

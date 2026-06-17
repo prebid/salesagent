@@ -122,12 +122,13 @@ def _get_media_buy_delivery_impl(
     and returns spec-compliant response format.
     """
 
-    # BR-RULE-092 INV-5: reject a campaign-unit attribution window with interval != 1
-    # (cross-field constraint the schema can't express, so it reaches us as valid).
-    _validate_attribution_window(req.attribution_window)
-
     # Validate identity is provided
     identity = require_identity(identity, context=req.context)
+
+    # BR-RULE-092 INV-5: reject a campaign-unit attribution window with interval != 1
+    # (cross-field constraint the schema can't express, so it reaches us as valid).
+    # After require_identity so an unauthenticated caller gets AUTH_REQUIRED first.
+    _validate_attribution_window(req.attribution_window)
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()

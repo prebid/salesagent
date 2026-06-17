@@ -1071,16 +1071,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            (
-                # campaign_interval_not_one GRADUATED: the INV-5 validator in
-                # _get_media_buy_delivery_impl now rejects unit=campaign/interval!=1
-                # with AdCPInvalidRequestError(INVALID_REQUEST, suggestion) on every
-                # transport. The remaining rows are still Pydantic-construction
-                # rejections (interval>=1 / enum) not normalized to INVALID_REQUEST.
-                "T-UC-004-partition-attribution",
-                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model"},
-                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # GRADUATED (removed): T-UC-004-partition-attribution interval_zero /
+            # interval_negative / invalid_unit / invalid_model — the attribution_window
+            # reference now asserts the wire envelope (error "INVALID_REQUEST" with
+            # suggestion), which a2a/mcp/rest emit, closing the old reconstructed-path
+            # C4 gap. campaign_interval_not_one is xfailed separately below (#1462,
+            # post_click dropped in the in-process request path).
             (
                 "T-UC-004-boundary-reporting-dims",
                 {"geo with geo_level=metro but no system"},
@@ -1480,8 +1476,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="reporting_dimensions boundary: validation gaps on some transports", strict=False
                     )
                 )
-            # Graduated: e2e_rest invalid reporting_dimensions examples now return 500
-            # (not empty body), so the test handles them correctly.
+            # Graduated: e2e_rest invalid reporting_dimensions schema violations now
+            # return 400 INVALID_REQUEST (the RequestValidationError handler in
+            # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
+            # handles them.
 
         # Graduated: T-UC-004-boundary-sampling — "Not provided" passes everywhere;
         # "random"/"failures_only" pass on rest only; "Unknown string" passes on impl only.
@@ -1535,23 +1533,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # Graduated: T-UC-004-boundary-attribution — valid examples now pass on ALL transports.
-        # Invalid examples interval=0 / unit=weeks / model=last_click still fail on
-        # a2a/mcp/rest (Pydantic ValidationError not normalized to INVALID_REQUEST on
-        # those boundaries). GRADUATED: "campaign with interval=2" — BR-RULE-092 INV-5
-        # is now enforced in _get_media_buy_delivery_impl on ALL transports, so it is
-        # no longer a gap and needs no marker here.
-        if "T-UC-004-boundary-attribution" in marker_names:
-            _aw_invalid_all = {"interval=0", "unit=weeks", "model=last_click"}
-            _aw_is_invalid_all = any(s in nodeid for s in _aw_invalid_all)
-            if _aw_is_invalid_all and (is_a2a or is_mcp or is_rest):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="attribution_window boundary: production gaps on this transport", strict=False
-                    )
+        # attribution_window REFERENCE (clean scenario->step->harness path): the Examples
+        # name the exact error code (error "INVALID_REQUEST"), the step asserts it on the
+        # harness wire envelope. interval=0 / unit=weeks / model=last_click now PASS on
+        # a2a/mcp/rest (RequestValidationError handler emits INVALID_REQUEST). The one
+        # remaining gap is "campaign with interval=2": INV-5 can't fire because the
+        # in-process request path drops attribution_window.post_click (#1462). e2e_rest
+        # parses the body server-side, so it is NOT marked here (it asserts for real).
+        _aw_campaign_invalid = (
+            "T-UC-004-boundary-attribution" in marker_names and "unit=campaign with interval=2" in nodeid
+        )
+        _aw_partition_campaign = (
+            "T-UC-004-partition-attribution" in marker_names and "campaign_interval_not_one" in nodeid
+        )
+        # #1462: the request path drops attribution_window.post_click, so the validation
+        # never sees the window and the call succeeds instead of being rejected. This
+        # manifests transport-/shape-specifically: campaign interval=2 on the in-process
+        # transports, and EVERY error row of the partition shape over e2e_rest. The
+        # boundary shape over e2e_rest is unaffected (it asserts for real and passes).
+        _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
+        _hits_1462 = ((_aw_campaign_invalid or _aw_partition_campaign) and (is_a2a or is_mcp or is_rest)) or (
+            _aw_partition_error and is_e2e_rest
+        )
+        if _hits_1462:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="attribution_window: validation can't fire — the request path drops "
+                    "attribution_window.post_click (#1462)",
+                    strict=True,
                 )
-            # Graduated: e2e_rest invalid attribution_window examples now return 500
-            # (not empty body), so the test handles them correctly.
+            )
+            # Graduated: e2e_rest invalid attribution_window schema violations now
+            # return 400 INVALID_REQUEST (the RequestValidationError handler in
+            # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
+            # handles them.
 
         # Graduated: T-UC-004-boundary-account — transport-aware.
         # "account_id present"/"brand + operator" (valid): fail on mcp/rest only.
@@ -1632,8 +1647,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
-            # Graduated: e2e_rest invalid status_filter examples now return 500
-            # (not empty body), so the test handles them correctly.
+            # Graduated: e2e_rest invalid status_filter (unknown enum value) now
+            # returns 400 INVALID_REQUEST (the RequestValidationError handler in
+            # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
+            # handles it.
             # adcp 3.12: pending_activation renamed to pending_start — feature file
             # still uses old name, schema rejects it as unknown enum value.
             if "pending_activation" in nodeid or "all 6 statuses" in nodeid:
@@ -1654,8 +1671,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # Graduated: e2e_rest media_buy_resolution "empty array" now returns 500
-        # (not empty body), so the test handles it correctly.
+        # Graduated: e2e_rest media_buy_resolution "empty array" now returns a
+        # structured AdCP error envelope (not a raw 500/empty body), so the
+        # wire-envelope assertion handles it.
 
         # e2e_rest: principal_ownership "differs from owner" — ownership check not enforced
         # through REST layer; test succeeds when it should fail (strict=True xfail).
@@ -2515,8 +2533,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         if any(t.startswith(tag_prefix) for t in marker_names) and required_tag in marker_names:
             return
 
-    transports = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
-    ids = ["impl", "a2a", "mcp", "rest"]
+    # IMPL sunsetted: it adds no coverage the wire transports don't, and it has no
+    # wire envelope (so it can't participate in error-envelope assertions). The four
+    # truthful transports are a2a/mcp/rest + e2e_rest (added below when enabled).
+    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["a2a", "mcp", "rest"]
 
     if os.environ.get("BDD_E2E_ENABLED") == "true":
         transports.append(Transport.E2E_REST)
