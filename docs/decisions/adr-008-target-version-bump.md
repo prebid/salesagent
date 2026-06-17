@@ -27,14 +27,13 @@ hand-reviewable concern.
 Defer the target-version bump to a separate PR after #1234 closes.
 
 **PR 5 retains** (the load-bearing piece — anchor consolidation):
-- cross-surface uv version consolidation (`UV_VERSION` anchor across Dockerfile, setup-env action, workflows)
-- cross-surface Python version consolidation (`.python-version`, mypy.ini, tox.ini, Dockerfile, pyproject.toml `requires-python`)
-- cross-surface Postgres version consolidation (compose files already at 17-alpine; only Dockerfile + workflows need anchoring)
-- structural guard `test_architecture_uv_version_anchor.py` (extended to cover all named anchors)
+- cross-surface uv version consolidation (`UV_VERSION` anchor across Dockerfile, `_install-uv` composite action, workflows)
+- cross-surface Python version consolidation (`.python-version`, `mypy.ini`, Dockerfile `ARG PYTHON_VERSION`, `pyproject.toml` `requires-python`)
+- cross-surface Postgres version consolidation (`docker-compose*.yml`, `compose.yaml`, `.github/workflows/`, git-tracked scripts/docs — Dockerfile has no postgres image)
+- structural guards `test_architecture_uv_version_anchor.py` and `test_architecture_postgres_image_anchor.py` (extended to cover all named anchors)
 
 **PR 5 drops** (deferred per this ADR):
-- `[tool.black].target-version` py311 → py312
-- `[tool.ruff].target-version` py311 → py312
+- `[tool.ruff].target-version` py311 → py312 (`pyproject.toml` has no `[tool.black]` section; ruff is the sole `target-version` surface today)
 - `ruff check --target-version py312 --fix --select UP` mass-fix
 - `--no-verify` carve-out (was needed because the UP040 fix-cycle could mismatch hooks)
 
