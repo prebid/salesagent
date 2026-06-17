@@ -19,7 +19,16 @@ from adcp.types import CreativeAction
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
-from tests.harness import make_mock_uow
+from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
+from tests.helpers.creative_test_helpers import (
+    make_creative_dict as _make_creative_dict,
+)
+from tests.helpers.creative_test_helpers import (
+    make_creative_uow as _make_creative_uow_raw,
+)
+from tests.helpers.creative_test_helpers import (
+    sync_patches as _sync_patches,
+)
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -46,67 +55,8 @@ def mock_format_spec():
     return spec
 
 
-def _make_creative_dict(creative_id="c1", name="Test Banner"):
-    return {
-        "creative_id": creative_id,
-        "name": name,
-        "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
-        "variants": [],
-    }
-
-
 def _make_creative_uow():
-    """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
-    mock_creative_repo = MagicMock()
-    mock_creative_repo.get_provenance_policies.return_value = []
-    mock_creative_repo.get_by_id.return_value = None
-    mock_creative_repo.begin_nested.return_value.__enter__ = MagicMock(return_value=None)
-    mock_creative_repo.begin_nested.return_value.__exit__ = MagicMock(return_value=None)
-
-    # create() must return a mock with proper string attributes (Pydantic validation)
-    def mock_create(**kwargs):
-        db_creative = MagicMock()
-        db_creative.creative_id = kwargs.get("creative_id", "c_unknown")
-        db_creative.status = kwargs.get("status", "approved")
-        return db_creative
-
-    mock_creative_repo.create.side_effect = mock_create
-
-    _, mock_uow = make_mock_uow(repos={"creatives": mock_creative_repo})
-    return mock_uow, mock_creative_repo
-
-
-def _sync_patches():
-    """Context manager returning (mock_creative_repo, mock_registry) with standard patches."""
-    from contextlib import contextmanager
-
-    @contextmanager
-    def ctx(mock_format_spec_arg=None):
-        async def mock_list_all_formats(tenant_id=None):
-            return [mock_format_spec_arg] if mock_format_spec_arg else []
-
-        async def mock_get_format(agent_url, format_id):
-            return mock_format_spec_arg
-
-        mock_registry = Mock()
-        mock_registry.list_all_formats = mock_list_all_formats
-        mock_registry.get_format = mock_get_format
-
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        with (
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry),
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_wf_uow,
-        ):
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-            mock_uow_cls.return_value.__exit__.return_value = None
-            yield mock_creative_repo, mock_registry
-
-    return ctx
+    return _make_creative_uow_raw()
 
 
 # ===========================================================================
@@ -127,7 +77,7 @@ class TestSyncPushNotificationConfig:
                 identity=identity,
                 push_notification_config={"url": "https://hook.example.com"},
             )
-        assert response.creatives[0].action == CreativeAction.created
+        assert response.creatives[0].action == "created"
 
     def test_push_notification_config_model_form(self, identity, mock_format_spec):
         """Line 120-121: typed PushNotificationConfig with URL."""
@@ -146,7 +96,7 @@ class TestSyncPushNotificationConfig:
                 identity=identity,
                 push_notification_config=config,
             )
-        assert response.creatives[0].action == CreativeAction.created
+        assert response.creatives[0].action == "created"
 
 
 class TestSyncBaseModelNormalization:
@@ -161,7 +111,7 @@ class TestSyncBaseModelNormalization:
             creative_id: str = "c_custom"
             name: str = "Custom Banner"
             format_id: dict = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}
-            assets: dict = {"banner_image": {"url": "https://example.com/banner.png"}}
+            assets: dict = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
             variants: list = []
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
@@ -196,7 +146,7 @@ class TestSyncDryRunExistingCreative:
             )
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].action == CreativeAction.updated
+        assert response.creatives[0].action == "updated"
 
 
 class TestSyncUnchangedCount:
@@ -236,7 +186,7 @@ class TestSyncUnchangedCount:
                 )
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].action == CreativeAction.unchanged
+        assert response.creatives[0].action == "unchanged"
 
 
 class TestSyncAiReviewReasonOnUpdate:
@@ -290,7 +240,7 @@ class TestSyncAiReviewReasonOnUpdate:
                 )
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].action == CreativeAction.updated
+        assert response.creatives[0].action == "updated"
 
 
 class TestSyncProvenanceWarningOnUpdate:
@@ -396,8 +346,8 @@ class TestSyncMixedMessageSuffix:
 
         # Should have 1 created + 1 updated
         actions = {r.action for r in response.creatives}
-        assert CreativeAction.created in actions
-        assert CreativeAction.updated in actions
+        assert "created" in actions
+        assert "updated" in actions
 
 
 # ===========================================================================
@@ -634,15 +584,13 @@ class TestValidationEdgeCases:
 
     def test_tags_passthrough(self, mock_format_spec):
         """Line 72: creative with non-empty tags."""
-        from adcp.types import CreativeAsset
-
         from src.core.tools.creatives._validation import _validate_creative_input
 
-        creative = CreativeAsset(
+        creative = make_creative_asset_minimal(
             creative_id="c1",
             name="Test Banner",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-            assets={"image": {"url": "https://example.com/img.png"}},
+            assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             tags=["automotive", "display"],
             variants=[],
         )

@@ -13,7 +13,6 @@ from typing import Any
 
 from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import McpWebhookPayload
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
@@ -310,6 +309,15 @@ class DeliveryWebhookScheduler:
                     is_active=True,
                 )
 
+            # Wire vs internal task_type distinction:
+            # - metadata["task_type"] = "media_buy_delivery" -- internal logging/dedup label
+            #   used by protocol_webhook_service guards and WebhookDeliveryLog queries.
+            # - SDK task_type = "update_media_buy" -- AdCP spec TaskType enum value
+            #   for the wire payload (delivery reports are status updates on media buys).
+            # These are intentionally different: the internal label predates the SDK enum
+            # and is used for DB filtering, while the wire value must be spec-compliant.
+            # Renaming the metadata key is not safe without migrating DB records and
+            # updating all 6 protocol_webhook_service guard checks.
             metadata = {
                 "task_type": "media_buy_delivery",
                 "tenant_id": media_buy.tenant_id,
@@ -317,16 +325,15 @@ class DeliveryWebhookScheduler:
                 "media_buy_id": media_buy.media_buy_id,
             }
 
-            # TODO: Fix in adcp python client - create_mcp_webhook_payload should accept
-            # any BaseModel for result (it handles model_dump internally), and return
-            # McpWebhookPayload instead of dict[str, Any]
-            mcp_payload_dict = create_mcp_webhook_payload(
-                task_id=media_buy.media_buy_id,  # TODO: @yusuf - double check if using media buy id is correct for media buy delivery???
-                task_type="media_buy_delivery",
-                result=delivery_response,  # type: ignore[arg-type]  # library handles BaseModel via hasattr(result, "model_dump")
+            # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
+            # Delivery reports are status updates on existing media buys,
+            # so we use update_media_buy as the canonical task type.
+            media_buy_delivery_payload = create_mcp_webhook_payload(
+                task_id=media_buy.media_buy_id,
+                task_type="update_media_buy",
+                result=delivery_response,
                 status=AdcpTaskStatus.completed,
             )
-            media_buy_delivery_payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
 
             # Send webhook notification OUTSIDE the session context
             # This ensures the session is closed before async webhook call

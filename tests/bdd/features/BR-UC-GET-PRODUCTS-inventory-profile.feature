@@ -59,11 +59,18 @@ Feature: Product discovery with inventory profile publisher_properties
     And the first product publisher_properties selection_type is "all"
 
   @inventory_profile @selection_type @requires_db
-  Scenario: Profile with extra metadata fields preserves them
+  Scenario: Profile with extra metadata fields drops non-spec fields
+    # AdCP 3.1 core/publisher-property-selector defines only publisher_domain(s),
+    # selection_type, property_ids and property_tags. property_name/property_type/
+    # identifiers are NOT spec fields (the schema permits them only as
+    # additionalProperties). salesagent does not surface non-spec fields on the
+    # AdCP get_products response, so legacy inventory-profile metadata is dropped.
     Given an inventory profile with property_ids "homepage" for domain "example.com" and legacy fields
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response contains at least one product
     And the first product publisher_properties selection_type is "by_id"
     And the first product publisher_properties property_ids contains "homepage"
-    And the first product publisher_properties preserves all legacy fields
+    And the first product publisher_properties does not have field "property_name"
+    And the first product publisher_properties does not have field "property_type"
+    And the first product publisher_properties does not have field "identifiers"

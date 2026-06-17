@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from src.core.helpers.creative_helpers import _convert_creative_to_adapter_asset
 from src.core.schemas import Creative, FormatId
+from tests.factories.creative_asset import make_legacy_asset_dict
 
 
 def test_convert_image_creative_from_assets():
@@ -20,12 +21,13 @@ def test_convert_image_creative_from_assets():
         name="Test Banner",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
         assets={
-            "banner_image": {
-                "url": "https://example.com/banner.jpg",
-                "width": 300,
-                "height": 250,
-            },
-            "click_url": {"url": "https://example.com/landing", "url_type": "clickthrough"},
+            **make_legacy_asset_dict(
+                "banner_image",
+                url="https://example.com/banner.jpg",
+                width=300,
+                height=250,
+            ),
+            **make_legacy_asset_dict("click_url", url="https://example.com/landing", url_type="clickthrough"),
         },
         principal_id="prin_123",
         created_date=datetime.now(UTC),
@@ -60,13 +62,14 @@ def test_convert_video_creative_from_assets():
         name="Test Video",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
         assets={
-            "video_file": {
-                "url": "https://example.com/video.mp4",
-                "width": 1280,
-                "height": 720,
-                "duration_ms": 30000,  # 30 seconds in milliseconds (spec field)
-            },
-            "clickthrough": {"url": "https://example.com/product", "url_type": "clickthrough"},
+            **make_legacy_asset_dict(
+                "video_file",
+                url="https://example.com/video.mp4",
+                width=1280,
+                height=720,
+                duration_ms=30000,  # 30 seconds in milliseconds (spec field)
+            ),
+            **make_legacy_asset_dict("clickthrough", url="https://example.com/product", url_type="clickthrough"),
         },
     )
 
@@ -95,9 +98,7 @@ def test_convert_html_creative_from_assets():
         name="HTML Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="html_300x250"),
         assets={
-            "main": {
-                "content": "<div>Ad content</div>",
-            }
+            **make_legacy_asset_dict("main", content="<div>Ad content</div>"),
         },
     )
 
@@ -124,15 +125,17 @@ def test_convert_creative_with_tracking_urls():
         name="Tracked Creative",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
         assets={
-            "banner_image": {"url": "https://example.com/banner.jpg"},
-            "impression_tracker_1": {
-                "url": "https://tracker.example.com/imp1",
-                "url_type": "tracker_pixel",  # Spec-compliant url_type
-            },
-            "impression_tracker_2": {
-                "url": "https://tracker.example.com/imp2",
-                "url_type": "tracker_script",  # Spec-compliant url_type
-            },
+            **make_legacy_asset_dict("banner_image", url="https://example.com/banner.jpg"),
+            **make_legacy_asset_dict(
+                "impression_tracker_1",
+                url="https://tracker.example.com/imp1",
+                url_type="tracker_pixel",  # Spec-compliant url_type
+            ),
+            **make_legacy_asset_dict(
+                "impression_tracker_2",
+                url="https://tracker.example.com/imp2",
+                url_type="tracker_script",  # Spec-compliant url_type
+            ),
         },
     )
 
@@ -162,10 +165,11 @@ def test_convert_javascript_creative_from_assets():
         name="JavaScript Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="js_widget"),
         assets={
-            "javascript_tag": {
-                "content": "(function() { console.log('Ad loaded'); })()",
-                "module_type": "iife",
-            }
+            **make_legacy_asset_dict(
+                "javascript_tag",
+                content="(function() { console.log('Ad loaded'); })()",
+                module_type="iife",
+            ),
         },
     )
 
@@ -192,11 +196,12 @@ def test_convert_vast_url_creative():
         name="VAST Video Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_vast"),
         assets={
-            "vast_tag": {
-                "url": "https://example.com/vast.xml",
-                "vast_version": "4.0",
-                "duration_ms": 15000,  # 15 seconds
-            }
+            **make_legacy_asset_dict(
+                "vast_tag",
+                url="https://example.com/vast.xml",
+                vast_version="4.0",
+                duration_ms=15000,  # 15 seconds
+            ),
         },
     )
 
@@ -225,11 +230,12 @@ def test_convert_vast_xml_creative():
         name="VAST XML Ad",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_vast"),
         assets={
-            "vast_xml": {
-                "content": vast_xml,
-                "vast_version": "4.0",
-                "duration_ms": 30000,  # 30 seconds
-            }
+            **make_legacy_asset_dict(
+                "vast_xml",
+                content=vast_xml,
+                vast_version="4.0",
+                duration_ms=30000,  # 30 seconds
+            ),
         },
     )
 
@@ -253,8 +259,8 @@ def test_convert_creative_without_url_type_fallback():
         name="Legacy Click URL Format",
         format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_468x60"),
         assets={
-            "banner_image": {"url": "https://example.com/banner.jpg"},
-            "click": {"url": "https://example.com/landing"},  # No url_type field
+            **make_legacy_asset_dict("banner_image", url="https://example.com/banner.jpg"),
+            **make_legacy_asset_dict("click", url="https://example.com/landing"),  # No url_type field
         },
     )
 

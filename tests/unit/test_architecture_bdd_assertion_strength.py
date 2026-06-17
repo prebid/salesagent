@@ -24,7 +24,11 @@ beads: salesagent-beq4
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
 from tests.unit._bdd_guard_helpers import iter_then_functions
 
 # ── Allowlists (ratcheting — may only shrink) ───────────────────────────
@@ -206,55 +210,18 @@ def _find_ctx_error_fallback(
     return False
 
 
-# ── Scan orchestrator ────────────────────────────────────────────────────
-
-
-def _scan_pattern(
-    detector: object,
-    allowlist: set[str],
-    pattern_label: str,
-) -> tuple[list[str], list[str]]:
-    """Run a detector across all Then steps.
-
-    Returns (new_violations, stale_allowlist_entries).
-    """
-    new_violations = []
-    seen_in_allowlist = set()
-
-    for key, func in iter_then_functions():
-        if detector(func):  # type: ignore[operator]
-            if key in allowlist:
-                seen_in_allowlist.add(key)
-            else:
-                new_violations.append(f"{key} [{pattern_label}]")
-
-    stale = sorted(allowlist - seen_in_allowlist)
-    return new_violations, stale
-
-
 # ── Assertion helper ──────────────────────────────────────────────────────
 
 
-def _assert_no_violations(
-    detector: object,
+def _assert_allowlist_matches(
+    detector: Callable[[ast.FunctionDef | ast.AsyncFunctionDef], bool],
     allowlist: set[str],
-    pattern_label: str,
-    allowlist_name: str,
+    *,
+    fix_hint: str,
 ) -> None:
-    """Run a pattern scan and assert no new violations / no stale allowlist entries."""
-    new_violations, stale = _scan_pattern(detector, allowlist, pattern_label)
-    errors = []
-    if new_violations:
-        errors.append(
-            f"Found {len(new_violations)} new {pattern_label} violation(s):\n"
-            + "\n".join(f"  {v}" for v in new_violations)
-        )
-    if stale:
-        errors.append(
-            f"Stale allowlist entries (violations were fixed — remove from "
-            f"{allowlist_name}):\n" + "\n".join(f"  {s}" for s in stale)
-        )
-    assert not errors, "\n\n".join(errors)
+    """Run a detector across all Then steps and compare against the ratcheting allowlist."""
+    found = {key for key, func in iter_then_functions() if detector(func)}
+    assert_violations_match_allowlist(found, allowlist, fix_hint=fix_hint)
 
 
 # ── Test class ───────────────────────────────────────────────────────────
@@ -267,48 +234,53 @@ class TestBddAssertionStrength:
     assertions in BDD Then steps.
     """
 
+    @pytest.mark.arch_guard
     def test_no_assert_hasattr(self) -> None:
         """``assert hasattr(obj, attr)`` is always True on Pydantic models.
 
         Use ``assert obj.field is not None`` to check population, or
         ``assert obj.field == expected`` to check correctness.
         """
-        _assert_no_violations(_find_assert_hasattr, _HASATTR_ALLOWLIST, "assert-hasattr", "_HASATTR_ALLOWLIST")
+        _assert_allowlist_matches(
+            _find_assert_hasattr,
+            _HASATTR_ALLOWLIST,
+            fix_hint="Use assert obj.field is not None or assert obj.field == expected.",
+        )
 
+    @pytest.mark.arch_guard
     def test_no_getattr_existence_only(self) -> None:
         """``assert getattr(obj, attr, None) is not None`` proves presence, not correctness.
 
         Replace with ``assert obj.field == expected_value``.
         """
-        _assert_no_violations(
+        _assert_allowlist_matches(
             _find_getattr_existence_only,
             _GETATTR_EXISTENCE_ALLOWLIST,
-            "getattr-existence-only",
-            "_GETATTR_EXISTENCE_ALLOWLIST",
+            fix_hint="Replace with assert obj.field == expected_value.",
         )
 
+    @pytest.mark.arch_guard
     def test_no_count_only_assertions(self) -> None:
         """``assert len(items) > 0`` proves existence, not correctness.
 
         Use element-level assertions (``assert items[0].id == expected``)
         or set comparisons (``assert {i.id for i in items} == expected_ids``).
         """
-        _assert_no_violations(
+        _assert_allowlist_matches(
             _find_count_only_assertion,
             _COUNT_ONLY_ALLOWLIST,
-            "count-only",
-            "_COUNT_ONLY_ALLOWLIST",
+            fix_hint="Use element-level assertions or set comparisons.",
         )
 
+    @pytest.mark.arch_guard
     def test_no_ctx_error_fallback(self) -> None:
         """``if ctx.get("error"): return`` checks test harness, not production code.
 
         Then steps must assert on the actual response payload, not bail
         out early when the test harness recorded an error.
         """
-        _assert_no_violations(
+        _assert_allowlist_matches(
             _find_ctx_error_fallback,
             _CTX_ERROR_FALLBACK_ALLOWLIST,
-            "ctx-error-fallback",
-            "_CTX_ERROR_FALLBACK_ALLOWLIST",
+            fix_hint="Then steps must assert on the production response, not ctx.get('error').",
         )

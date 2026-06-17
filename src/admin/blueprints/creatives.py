@@ -15,8 +15,6 @@ from adcp.types import (
     ContextObject,
     CreativeAction,
     McpWebhookPayload,
-    SyncCreativeResult,
-    SyncCreativesSuccessResponse,
 )
 from adcp.webhooks import GeneratedTaskStatus
 
@@ -24,6 +22,8 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
+from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -182,7 +182,7 @@ async def _call_webhook_for_creative_status(
             if context_data and isinstance(context_data, dict):
                 context_obj = ContextObject.model_construct(**context_data)
 
-            complete_result = SyncCreativesSuccessResponse(creatives=creatives, dry_run=False, context=context_obj)
+            complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False, context=context_obj)
 
             # build push notification config from step request data
             # this is because we don't store push notification config in the database when creating the creative
@@ -239,6 +239,11 @@ async def _call_webhook_for_creative_status(
             # Convert result to dict for webhook payload functions
             result_dict = complete_result.model_dump(mode="json")
 
+            # step_tool_name is untrusted (workflow_steps DB column). Validate a
+            # COPY for the SDK payload; keep the original label for metadata
+            # (salesagent-yi3s, salesagent-yk7o).
+            wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
+
             payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
             if protocol == "a2a":
                 payload = create_a2a_webhook_payload(
@@ -248,10 +253,13 @@ async def _call_webhook_for_creative_status(
                     context_id=step_context_id,
                 )
             else:
-                # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
-                # McpWebhookPayload instead of dict[str, Any] for proper type safety
-                mcp_payload_dict = create_mcp_webhook_payload(step_step_id, GeneratedTaskStatus.completed, result_dict)
-                payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
+                # SDK 5.7: returns McpWebhookPayload directly
+                payload = create_mcp_webhook_payload(
+                    task_id=step_step_id,
+                    status=GeneratedTaskStatus.completed,
+                    task_type=wire_task_type,
+                    result=result_dict,
+                )
 
             metadata = {
                 "task_type": step_tool_name

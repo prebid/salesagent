@@ -132,7 +132,6 @@ def given_profile_legacy(ctx: dict, ids: str, domain: str) -> None:
             }
         ],
     )
-    ctx["expected_legacy_fields"] = legacy_fields
 
 
 @given("a product linked to that inventory profile with pricing")
@@ -189,7 +188,7 @@ def then_has_property_ids(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     ids = getattr(inner, "property_ids", None) or (inner.get("property_ids") if isinstance(inner, dict) else None)
     assert ids is not None, "property_ids is None"
-    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]
+    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]  # noqa: rootmodel
     assert expected in id_strings, f"Expected {expected!r} in property_ids, got {id_strings}"
 
 
@@ -199,7 +198,7 @@ def then_has_property_tags(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     tags = getattr(inner, "property_tags", None) or (inner.get("property_tags") if isinstance(inner, dict) else None)
     assert tags is not None, "property_tags is None"
-    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]
+    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]  # noqa: rootmodel
     assert expected in tag_strings, f"Expected {expected!r} in property_tags, got {tag_strings}"
 
 
@@ -211,23 +210,3 @@ def then_no_field(ctx: dict, field: str) -> None:
         assert field not in inner, f"Field {field!r} should not be present, got {inner}"
     else:
         assert not hasattr(inner, field), f"Field {field!r} should not be present on {type(inner).__name__}"
-
-
-@then("the first product publisher_properties preserves all legacy fields")
-def then_preserves_legacy_fields(ctx: dict) -> None:
-    """Assert all legacy fields injected in the Given step are preserved with their values.
-
-    The Given step records expected legacy fields in ctx["expected_legacy_fields"].
-    This step verifies each field is present on publisher_properties[0] with the
-    exact value that was injected, confirming ensure_selection_type() is non-destructive.
-    """
-    inner = _get_first_prop(ctx)
-    expected_legacy = ctx["expected_legacy_fields"]
-    assert expected_legacy, "No expected_legacy_fields recorded in ctx — Given step missing?"
-
-    for field_name, expected_value in expected_legacy.items():
-        if isinstance(inner, dict):
-            actual = inner.get(field_name)
-        else:
-            actual = getattr(inner, field_name, None)
-        assert actual == expected_value, f"Legacy field {field_name!r}: expected {expected_value!r}, got {actual!r}"

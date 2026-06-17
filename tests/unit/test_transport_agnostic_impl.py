@@ -9,6 +9,8 @@ Ensures that _impl functions have zero knowledge of transport protocol:
 import ast
 from pathlib import Path
 
+import pytest
+
 TOOLS_DIR = Path(__file__).parent.parent.parent / "src" / "core" / "tools"
 
 # Banned imports inside _impl function bodies
@@ -57,6 +59,7 @@ def _get_function_calls(func_node: ast.FunctionDef) -> list[tuple[int, str]]:
 class TestNoTransportImportsInImpl:
     """No _impl function should import from transport-specific modules."""
 
+    @pytest.mark.arch_guard
     def test_no_fastmcp_imports_in_media_buy_create_impl(self):
         """_create_media_buy_impl must not import from fastmcp."""
         file_path = TOOLS_DIR / "media_buy_create.py"
@@ -69,6 +72,7 @@ class TestNoTransportImportsInImpl:
                     f"_impl functions must not import transport-specific modules."
                 )
 
+    @pytest.mark.arch_guard
     def test_no_fastmcp_imports_in_media_buy_update_impl(self):
         """_update_media_buy_impl must not import from fastmcp."""
         file_path = TOOLS_DIR / "media_buy_update.py"
@@ -81,6 +85,7 @@ class TestNoTransportImportsInImpl:
                     f"_impl functions must not import transport-specific modules."
                 )
 
+    @pytest.mark.arch_guard
     def test_no_transport_imports_in_any_impl(self):
         """Sweep: no _impl function in any tool file imports transport modules."""
         violations = []
@@ -103,6 +108,7 @@ class TestNoTransportImportsInImpl:
 class TestNoPresentationLogicInImpl:
     """No _impl function should use console.print or rich formatting."""
 
+    @pytest.mark.arch_guard
     def test_no_console_print_in_performance_impl(self):
         """_update_performance_index_impl must not use console.print()."""
         file_path = TOOLS_DIR / "performance.py"
@@ -114,6 +120,7 @@ class TestNoPresentationLogicInImpl:
                     f"_impl functions must use logger, not presentation logic."
                 )
 
+    @pytest.mark.arch_guard
     def test_no_console_print_in_any_impl(self):
         """Sweep: no _impl function in any tool file uses console.print()."""
         violations = []

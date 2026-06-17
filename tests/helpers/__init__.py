@@ -77,12 +77,23 @@ from tests.helpers.adcp_factories import (
     create_test_property_dict,
 )
 from tests.helpers.envelope_assertions import assert_envelope_shape
+from tests.helpers.idempotency_seeds import (
+    make_active_cached_success,
+    seed_cached_success,
+    seed_media_buy,
+    seed_principal,
+)
 
 __all__ = [
     # Auth helpers
     "assert_resolve_auth_dep_passes_token",
     # Envelope assertions
     "assert_envelope_shape",
+    # Idempotency cache seeding
+    "make_active_cached_success",
+    "seed_cached_success",
+    "seed_media_buy",
+    "seed_principal",
     # Product factories
     "create_test_product",
     "create_minimal_product",

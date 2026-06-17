@@ -22,6 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _ENTITY_MARKERS = frozenset(
@@ -98,6 +102,7 @@ def _collect_unmarked_tests() -> list[str]:
     return unmarked
 
 
+@pytest.mark.arch_guard
 def test_all_unit_tests_have_entity_markers():
     """Every unit test must have at least one entity marker for entity-scoped runs.
 
@@ -130,6 +135,7 @@ def test_all_unit_tests_have_entity_markers():
         raise AssertionError("\n".join(msg_lines))
 
 
+@pytest.mark.arch_guard
 def test_allowed_unmarked_entries_still_unmarked():
     """Every _ALLOWED_UNMARKED entry must still be unmarked (stale entry detection).
 
@@ -140,13 +146,8 @@ def test_allowed_unmarked_entries_still_unmarked():
         return  # Nothing to check
 
     unmarked = set(_collect_unmarked_tests())
-    stale = _ALLOWED_UNMARKED - unmarked
-
-    if stale:
-        msg_lines = [
-            "Stale _ALLOWED_UNMARKED entries (tests now have markers — remove from allowlist):",
-            "",
-        ]
-        for test_id in sorted(stale):
-            msg_lines.append(f"  {test_id!r},")
-        raise AssertionError("\n".join(msg_lines))
+    assert_violations_match_allowlist(
+        unmarked & _ALLOWED_UNMARKED,
+        _ALLOWED_UNMARKED,
+        fix_hint="Remove fixed entries from _ALLOWED_UNMARKED.",
+    )

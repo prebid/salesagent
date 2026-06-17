@@ -13,6 +13,7 @@ Updated for adcp 3.12:
 - buyer_refs removed from GetMediaBuyDeliveryRequest
 """
 
+import uuid
 from unittest.mock import Mock, patch
 
 import pytest
@@ -99,6 +100,7 @@ class TestMCPContractValidation:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             po_number="PO-12345",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
 
         assert request.po_number == "PO-12345"
@@ -122,6 +124,7 @@ class TestMCPContractValidation:
             ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         # Should return unique product IDs
         product_ids = request.get_product_ids()
@@ -241,6 +244,7 @@ class TestSchemaDefaultValues:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             po_number="test",
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         # Per AdCP spec, all fields are spec-compliant with library defaults
         assert req.po_number == "test"

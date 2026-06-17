@@ -10,6 +10,7 @@ through the A2A wrapper layer, including:
 """
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -164,6 +165,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -220,6 +222,7 @@ class TestA2AErrorPropagation:
         end = start - timedelta(days=1)  # end before start
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -266,6 +269,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -314,6 +318,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -417,6 +422,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -923,7 +929,9 @@ class TestA2AErrorResponseStructure:
 
             assert "tenant scope mismatch" in str(exc_info.value)
             assert exc_info.value.error_code == "AUTH_REQUIRED"
-            # AdCPAuthorizationError class default, preserved through the wrap (matches the docstring).
+            # AdCPAuthorizationError class default (hardcoded _default_recovery, not read from
+            # STANDARD_ERROR_CODES), preserved through the wrap. Terminal is intentional: the AdCP
+            # 3.1 storyboards grade the error code, not the recovery class — see the docstring.
             assert exc_info.value.recovery == "terminal"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 

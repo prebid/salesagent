@@ -4,40 +4,23 @@ Tests the new format validation logic that was added to sync_creatives
 to ensure consistent validation across all creative operations.
 """
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
-from adcp.types import CreativeAction
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
-from tests.harness import make_mock_uow
+from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers.creative_test_helpers import (
+    make_creative_dict,
+)
+from tests.helpers.creative_test_helpers import (
+    make_creative_uow as _make_creative_uow_shared,
+)
 
 
 def _make_creative_uow():
-    """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
-    mock_creative_repo = MagicMock()
-    mock_creative_repo.get_provenance_policies.return_value = []
-    mock_creative_repo.get_by_id.return_value = None
-    mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
-    mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
-
-    # create() must return a mock with proper string attributes (Pydantic validation)
-    def mock_create(**kwargs):
-        db_creative = MagicMock()
-        db_creative.creative_id = kwargs.get("creative_id", "c_unknown")
-        db_creative.status = kwargs.get("status", "approved")
-        return db_creative
-
-    mock_creative_repo.create.side_effect = mock_create
-
-    _, mock_uow = make_mock_uow(
-        repos={
-            "creatives": mock_creative_repo,
-            "assignments": MagicMock(),
-        }
-    )
-    return mock_uow, mock_creative_repo
+    return _make_creative_uow_shared(include_assignments=True)
 
 
 class TestSyncCreativesFormatValidation:
@@ -65,13 +48,7 @@ class TestSyncCreativesFormatValidation:
     @pytest.fixture
     def valid_creative_dict(self):
         """Valid creative dictionary for testing."""
-        return {
-            "creative_id": "creative_123",
-            "name": "Test Banner",
-            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-            "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
-            "variants": [],  # Required in adcp 3.6.0
-        }
+        return make_creative_dict(creative_id="creative_123")
 
     @pytest.fixture
     def mock_format_spec(self):
@@ -112,7 +89,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify format was validated
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.created
+            assert response.creatives[0].action == "created"
             assert response.creatives[0].creative_id == "creative_123"
 
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
@@ -145,7 +122,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify creative failed with appropriate error
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             assert response.creatives[0].creative_id == "creative_123"
             assert len(response.creatives[0].errors) == 1
 
@@ -184,7 +161,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify creative failed with network error message
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             assert len(response.creatives[0].errors) == 1
 
             error_msg = response.creatives[0].errors[0].message
@@ -196,11 +173,8 @@ class TestSyncCreativesFormatValidation:
         """Test that string format_ids are rejected (FormatId object required)."""
         # Creative with string format_id (legacy format - no longer supported)
         creative_dict = {
-            "creative_id": "creative_456",
-            "name": "Legacy Creative",
+            **make_creative_dict(creative_id="creative_456", name="Legacy Creative"),
             "format_id": "display_300x250_image",  # String instead of FormatId object
-            "assets": {"banner_image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
-            "variants": [],  # Required in adcp 3.6.0
         }
 
         mock_uow, mock_creative_repo = _make_creative_uow()
@@ -232,34 +206,19 @@ class TestSyncCreativesFormatValidation:
             # Verify creative failed validation (string format_id rejected by schema)
             # AdCP spec requires format_id to be a FormatId object with agent_url and id
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             assert response.creatives[0].creative_id == "creative_456"
             # Error message will be from Pydantic validation, not our format validation
 
     def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
         """Test that format validation works correctly with multiple creatives."""
         creatives = [
+            make_creative_dict(creative_id="creative_1", name="Valid Creative"),
             {
-                "creative_id": "creative_1",
-                "name": "Valid Creative",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                "assets": {"banner_image": {"url": "https://example.com/1.png"}},
-                "variants": [],
-            },
-            {
-                "creative_id": "creative_2",
-                "name": "Invalid Format",
+                **make_creative_dict(creative_id="creative_2", name="Invalid Format"),
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "unknown_format"},
-                "assets": {"banner_image": {"url": "https://example.com/2.png"}},
-                "variants": [],
             },
-            {
-                "creative_id": "creative_3",
-                "name": "Valid Creative 2",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                "assets": {"banner_image": {"url": "https://example.com/3.png"}},
-                "variants": [],
-            },
+            make_creative_dict(creative_id="creative_3", name="Valid Creative 2"),
         ]
 
         mock_uow, mock_creative_repo = _make_creative_uow()
@@ -296,16 +255,16 @@ class TestSyncCreativesFormatValidation:
 
             # First creative: success
             assert response.creatives[0].creative_id == "creative_1"
-            assert response.creatives[0].action == CreativeAction.created
+            assert response.creatives[0].action == "created"
 
             # Second creative: failed (unknown format)
             assert response.creatives[1].creative_id == "creative_2"
-            assert response.creatives[1].action == CreativeAction.failed
+            assert response.creatives[1].action == "failed"
             assert "Unknown format 'unknown_format'" in response.creatives[1].errors[0].message
 
             # Third creative: success
             assert response.creatives[2].creative_id == "creative_3"
-            assert response.creatives[2].action == CreativeAction.created
+            assert response.creatives[2].action == "created"
 
     def test_format_validation_caching(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation uses in-memory cache (doesn't call agent twice for same format)."""
@@ -344,8 +303,8 @@ class TestSyncCreativesFormatValidation:
 
             # Verify both creatives succeeded
             assert len(response.creatives) == 2
-            assert response.creatives[0].action == CreativeAction.created
-            assert response.creatives[1].action == CreativeAction.created
+            assert response.creatives[0].action == "created"
+            assert response.creatives[1].action == "created"
 
     def test_format_validation_missing_format_id(self, identity, mock_tenant):
         """Test that validation fails when format_id is missing."""
@@ -353,7 +312,7 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_no_format",
             "name": "Creative Without Format",
             # Missing format_id
-            "assets": {"banner_image": {"url": "https://example.com/banner.png"}},
+            "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
         }
 
         mock_uow, mock_creative_repo = _make_creative_uow()
@@ -380,7 +339,7 @@ class TestSyncCreativesFormatValidation:
 
             # Verify creative failed with format validation error
             assert len(response.creatives) == 1
-            assert response.creatives[0].action == CreativeAction.failed
+            assert response.creatives[0].action == "failed"
             # Error message comes from Pydantic schema validation
             assert "format_id" in response.creatives[0].errors[0].message
 
@@ -391,7 +350,7 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_unknown",
             "name": "Unknown Format",
             "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format"},
-            "assets": {"image": {"url": "https://example.com/1.png"}},
+            "assets": build_assets(image_spec("image", url="https://example.com/1.png")),
         }
 
         # Test 2: Agent unreachable (network error)
@@ -399,7 +358,7 @@ class TestSyncCreativesFormatValidation:
             "creative_id": "creative_unreachable",
             "name": "Unreachable Agent",
             "format_id": {"agent_url": "https://offline.example.com", "id": "display_300x250_image"},
-            "assets": {"image": {"url": "https://example.com/2.png"}},
+            "assets": build_assets(image_spec("image", url="https://example.com/2.png")),
         }
 
         mock_uow, mock_creative_repo = _make_creative_uow()

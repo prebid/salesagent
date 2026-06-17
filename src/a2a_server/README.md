@@ -104,7 +104,7 @@ Automatically fetches and parses Agent Cards to:
 ### AdCP Extension Support
 
 The agent card includes the AdCP extension in `capabilities.extensions`. The version is dynamically
-determined from the installed `adcp` library via `get_adcp_version()`:
+determined from the installed `adcp` library via `get_adcp_spec_version()`:
 
 ```json
 {

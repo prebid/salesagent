@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._ast_helpers import REPO_ROOT, safe_parse
+from tests.unit._architecture_helpers import REPO_ROOT, safe_parse
 
 # Adapter-raised typed errors with no raise-site ``pytest.raises`` test. MUST stay
 # empty — a new uncovered adapter raise fails the guard immediately. Do not add

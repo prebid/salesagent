@@ -83,6 +83,10 @@ jobs:
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/test_adcp_contract.py
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/integration/test_mcp_contract_validation.py
+          extra_args: -v --tb=short
 
   security-audit:
     name: Security Audit

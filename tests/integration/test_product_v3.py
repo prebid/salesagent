@@ -479,7 +479,7 @@ class TestMainFlow:
         result = await _call_get_products(brief="adapter test")
         for product in result.products:
             for po in product.pricing_options:
-                inner = po.root if hasattr(po, "root") else po
+                inner = po.root
                 # Mock adapter supports CPM, so should be annotated
                 assert hasattr(inner, "supported") or hasattr(inner, "pricing_model")
 
@@ -494,7 +494,7 @@ class TestMainFlow:
         for product in result.products:
             assert len(product.pricing_options) > 0
             for po in product.pricing_options:
-                inner = po.root if hasattr(po, "root") else po
+                inner = po.root
                 assert inner.pricing_option_id is not None
                 assert inner.currency is not None
 

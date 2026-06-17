@@ -304,6 +304,7 @@ class TestA2AResponseShape:
                 "packages": [{"product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm"}],
                 "start_time": "2026-03-01T00:00:00Z",
                 "end_time": "2026-03-31T00:00:00Z",
+                "idempotency_key": "unit-test-key-a2a-shape-0001",
             },
         )
         response = client.post("/a2a", json=payload, headers=auth_headers)

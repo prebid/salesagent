@@ -26,6 +26,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 # Per-file caps for inline ``ResolvedIdentity(...)`` constructions in
 # ``tests/`` (excluding ``test_a2a*.py`` files — those are zero-tolerance
 # under ``test_architecture_a2a_test_uses_factory``). Caps frozen at the
@@ -147,6 +149,7 @@ from tests.unit._per_file_cap_guard import (
 )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_inline_sites_within_caps() -> None:
     """Sister guard to ``test_architecture_a2a_test_uses_factory`` — the A2A guard
     enforces zero on A2A test files; this guard caps non-A2A test files at
@@ -163,6 +166,7 @@ def test_resolved_identity_inline_sites_within_caps() -> None:
     )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_capped_files_still_exist() -> None:
     """Stale-cap detection — every capped file path must still exist on disk."""
     assert_capped_files_still_exist(
@@ -172,6 +176,7 @@ def test_resolved_identity_capped_files_still_exist() -> None:
     )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_caps_only_shrink() -> None:
     """If a file has fewer inline sites than its cap, lower the cap to match."""
     assert_caps_only_shrink(

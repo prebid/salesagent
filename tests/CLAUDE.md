@@ -385,7 +385,7 @@ error verification.
 | Transport | `wire_error_envelope` source                                          | `synthesized_error_envelope`                                          | Catches a regression in...                                |
 |-----------|-----------------------------------------------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------|
 | REST      | HTTP response body (real wire)                                        | `None`                                                                | exception handler + envelope serialization + HTTP framing |
-| MCP       | JSON string in `ToolError` (real wire)                                | `None`                                                                | `_handle_tool_exception` + `build_two_layer_error_envelope` |
+| MCP       | JSON string in `ToolError`, else the real envelope stashed on the reconstructed error by `_envelope_to_adcp_error` — never synthesized | Built via `build_two_layer_error_envelope` against the caught error   | `_handle_tool_exception` + `build_two_layer_error_envelope` |
 | A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `None`                                                                | `on_message_send` + `_serialize_for_a2a` + envelope build |
 | IMPL      | `None` (no wire by definition)                                        | Built via `build_two_layer_error_envelope` against the caught error   | `build_two_layer_error_envelope` only                     |
 

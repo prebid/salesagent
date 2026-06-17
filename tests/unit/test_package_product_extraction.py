@@ -21,6 +21,7 @@ class TestPackageProductExtraction:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             packages=[PackageRequest(product_id="prod1", budget=1000.0, pricing_option_id="test_pricing")],
+            idempotency_key="unit-test-key-pkgextract-001",
         )
 
         product_ids = req.get_product_ids()
@@ -39,6 +40,7 @@ class TestPackageProductExtraction:
                 PackageRequest(product_id="prod2", budget=1000.0, pricing_option_id="test_pricing"),
                 PackageRequest(product_id="prod3", budget=1000.0, pricing_option_id="test_pricing"),
             ],
+            idempotency_key="unit-test-key-pkgextract-002",
         )
 
         product_ids = req.get_product_ids()
@@ -58,6 +60,7 @@ class TestPackageProductExtraction:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             packages=[PackageRequest(product_id="dummy", budget=1000.0, pricing_option_id="test_pricing")],
+            idempotency_key="unit-test-key-pkgextract-003",
         )
         # Manually set packages to mock for edge case testing
         req.packages = [mock_package]
@@ -82,6 +85,7 @@ class TestPackageProductExtraction:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             packages=[pkg1],
+            idempotency_key="unit-test-key-pkgextract-006",
         )
         # Manually set packages to include mock for edge case testing
         req.packages = [pkg1, mock_pkg2, pkg3]

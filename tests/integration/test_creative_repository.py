@@ -23,6 +23,7 @@ from tests.factories import (
     PrincipalFactory,
     TenantFactory,
 )
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -211,7 +212,7 @@ class TestCreativeRepoCreate:
                 agent_url="https://agent.example.com",
                 format="display_300x250",
                 principal_id="p1",
-                data={"assets": {"banner": {"url": "https://example.com/banner.png"}}},
+                data={"assets": build_assets(image_spec("banner"))},
             )
 
         assert result.creative_id == "c_new"
@@ -251,7 +252,7 @@ class TestCreativeRepoUpdateData:
             session = env.get_session()
             repo = CreativeRepository(session, "test_tenant")
             db_creative = repo.get_by_id("c_upd", "p1")
-            new_data = {"assets": {"banner": {"url": "https://new.example.com/banner.png"}}}
+            new_data = {"assets": build_assets(image_spec("banner"))}
             repo.update_data(db_creative, new_data)
             repo.flush()
 

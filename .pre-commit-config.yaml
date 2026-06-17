@@ -15,269 +15,101 @@
 # so they resolve dependencies from uv.lock, not from additional_dependencies.
 # This prevents version drift between what CI runs and what pre-commit runs.
 
+# D44: pre-push stage name requires pre-commit >= 3.2.0.
+minimum_pre_commit_version: 3.2.0
+
+# D31: auto-install pre-commit AND pre-push hooks on `pre-commit install`.
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: local
     hooks:
-
-      # Check for broken links in documentation
-      - id: check-docs-links
-        name: Check documentation links
-        entry: uv run python .pre-commit-hooks/check_docs_links.py
-        language: system
-        files: '^(docs/.*\.md|[^/]+\.md)$'
-        pass_filenames: false
-
-      # Check for tenant.config references
-      - id: no-tenant-config
-        name: No tenant.config references
-        entry: sh -c 'if grep -r "tenant\.config\|tenant\[.config.\]" --include="*.py" . | grep -v "test_migration\|postmortem\|pre-commit"; then echo "Found tenant.config references!"; exit 1; fi'
-        language: system
-        pass_filenames: false
-
-      # Enforce JSONType usage for all JSON columns
-      - id: enforce-jsontype
-        name: Enforce JSONType usage (not plain JSON)
-        entry: sh -c 'if grep -rE "Column\(JSON[,)]" --include="*.py" src/core/database/models.py; then echo "❌ Found Column(JSON) usage! Use Column(JSONType) instead. See CLAUDE.md for pattern."; exit 1; fi'
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Check for hardcoded URLs in JavaScript (must use scriptRoot)
+      # Layer 1 — commit stage (fast; target <=12 hooks)
       - id: no-hardcoded-urls
         name: Check for hardcoded URLs in JavaScript
         entry: uv run python .pre-commit-hooks/check_hardcoded_urls.py
         language: system
         files: '^(templates/.*\.html|static/.*\.js)$'
         pass_filenames: true
+        stages: [pre-push]
 
-      # Ensure GAM clients support both OAuth and service account auth
-      - id: check-gam-auth-support
-        name: Check GAM client supports both auth methods
-        entry: uv run python .pre-commit-hooks/check-gam-auth-support.py
+      - id: repo-invariants
+        name: Repo invariants (no-skip-tests, no-fn-calls)
+        entry: uv run python .pre-commit-hooks/check_repo_invariants.py
         language: system
-        files: '^src/.*\.py$'
+        types: [python]
+        pass_filenames: true
+
+      # Layer 2 — pre-push stage (medium cost; CI is authoritative for heavy checks)
+      - id: check-docs-links
+        name: Check documentation links
+        entry: uv run python .pre-commit-hooks/check_docs_links.py
+        language: system
+        files: '^(docs/.*\.md|[^/]+\.md)$'
         pass_filenames: false
+        stages: [pre-push]
 
-      # Enforce SQLAlchemy 2.0 patterns (no legacy session.query)
-      - id: enforce-sqlalchemy-2-0
-        name: Enforce SQLAlchemy 2.0 patterns (no session.query)
-        entry: uv run python .pre-commit-hooks/check_sqlalchemy_2_0.py
-        language: system
-        files: '^src/.*\.py$'
-        pass_filenames: true
-
-      # Flag defensive RootModel unwrapping (use direct .root or model_dump)
-      - id: check-rootmodel-access
-        name: Flag defensive hasattr(x, 'root') patterns
-        entry: uv run python .pre-commit-hooks/check_rootmodel_access.py
-        language: system
-        files: '^(src|tests)/.*\.py$'
-        pass_filenames: true
-
-      # Check for Flask route conflicts
       - id: check-route-conflicts
         name: Detect Flask route conflicts
         entry: uv run python .pre-commit-hooks/check_route_conflicts.py
         language: system
         files: '^(src/.*\.py)$'
         pass_filenames: false
-        always_run: false
+        stages: [pre-push]
 
-      # Check tenant context ordering in MCP tools
-      - id: check-tenant-context-order
-        name: Check tenant context auth before get_current_tenant()
-        entry: uv run python .pre-commit-hooks/check_tenant_context_order.py
-        language: system
-        files: '^src/core/tools/.*\.py$'
-        pass_filenames: true
-        always_run: false
-
-      # Prevent skipping tests (but allow skip_ci for CI-specific issues)
-      - id: no-skip-tests
-        name: No @pytest.mark.skip decorators allowed
-        entry: sh -c 'if grep -r "@pytest\.mark\.skip[^_]" --include="test_*.py" tests/ | grep -v skip_ci; then echo "❌ Found @pytest.mark.skip decorators! Tests must not be skipped."; exit 1; fi'
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # integration_v2 tests cannot be skipped at all (no skip, no skip_ci)
-      - id: no-skip-integration-v2
-        name: integration_v2 tests cannot be skipped (no skip or skip_ci)
-        entry: sh -c 'if grep -r "@pytest\.mark\.skip" --include="test_*.py" tests/integration_v2/; then echo "❌ integration_v2 tests cannot use @pytest.mark.skip or @pytest.mark.skip_ci! All v2 tests must run in CI."; exit 1; fi'
-        language: system
-        pass_filenames: false
-        always_run: true
-
-
-      # Check migration files have upgrade+downgrade and warn about Docker validation
-      - id: check-migration-completeness
-        name: Check migration completeness (upgrade + downgrade)
-        entry: uv run python .pre-commit-hooks/check_migration_completeness.py
-        language: system
-        files: '^alembic/versions/.*\.py$'
-        pass_filenames: true
-
-      # Check for missing imports (prevent NameError bugs)
-      - id: check-import-usage
-        name: Check for classes/functions used without imports
-        entry: uv run python .pre-commit-hooks/check_import_usage.py
-        language: system
-        files: '^src/.*\.py$'
-        pass_filenames: true
-
-      # Check for unsafe response attribute access (prevent AttributeError bugs)
-      - id: check-response-attribute-access
-        name: Detect unsafe response attribute access patterns
-        entry: uv run python scripts/hooks/check_response_attribute_access.py
-        language: system
-        files: '^src/.*\.py$'
-        pass_filenames: true
-
-
-      # Check roundtrip tests exist for all apply_testing_hooks calls
-      - id: check-roundtrip-tests
-        name: Verify roundtrip tests exist for apply_testing_hooks operations
-        entry: uv run python .pre-commit-hooks/check_roundtrip_tests.py
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Check MCP/A2A parameter alignment
-      - id: check-parameter-alignment
-        name: Check MCP/A2A parameter alignment with _impl functions
-        entry: sh -c 'uv run python .pre-commit-hooks/check_parameter_alignment.py || echo "⚠️  Parameter mismatches found (non-blocking for now)" >&2'
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Ensure smoke tests pass
-      - id: smoke-tests
-        name: Run smoke tests (critical paths)
-        entry: uv run pytest tests/smoke/ -v --tb=short -m smoke
-        language: system
-        pass_filenames: false
-        stages: [manual]  # Run with: pre-commit run smoke-tests
-
-      # Check for multiple Alembic migration heads
-      - id: check-migration-heads
-        name: Check for multiple Alembic migration heads
-        entry: uv run python scripts/ops/check_migration_heads.py --quiet
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Validate migrations can run
-      - id: test-migrations
-        name: Test database migrations
-        entry: sh -c 'cp adcp_local.db .test.db && DATABASE_URL=sqlite:///.test.db python migrate.py && rm .test.db'
-        language: system
-        pass_filenames: false
-        stages: [manual]  # Changed from commit to manual - run with: pre-commit run test-migrations
-
-      # Run quick unit tests before commit (optional - can be skipped with --no-verify)
-      - id: pytest-unit
-        name: Run unit tests (optional)
-        entry: sh -c 'uv run pytest tests/unit/ -x --tb=short -q || echo "⚠️  Tests failed but continuing (use --no-verify to skip)"'
-        language: system
-        pass_filenames: false
-        stages: [manual]  # Changed to manual - run with: pre-commit run pytest-unit
-        verbose: true
-
-      # Test AdCP contract compliance
-      - id: adcp-contract-tests
-        name: Verify AdCP protocol compliance
-        entry: uv run pytest tests/unit/test_adcp_contract.py -v --tb=short
-        language: system
-        pass_filenames: false
-        always_run: true
-
-      # Test MCP contract validation (prevent validation errors like 'brief' is required)
-      - id: mcp-contract-validation
-        name: MCP contract validation tests
-        entry: uv run pytest tests/integration/test_mcp_contract_validation.py -v --tb=short
-        language: system
-        files: '^(src/core/schemas\.py|src/core/main\.py)$'
-        pass_filenames: false
-
-
-      # Check AdCP schema sync - DISABLED: Sales agent now follows adcp library version
-      # - id: adcp-schema-sync
-      #   name: Verify AdCP schema sync
-      #   entry: uv run python scripts/check_schema_sync.py --ci
-      #   language: system
-      #   pass_filenames: false
-      #   always_run: true
-
-
-      # Prevent problematic function call patterns
-      - id: no-fn-calls
-        name: No .fn() call patterns
-        entry: sh -c 'if grep -r "\.fn(" src/ --include="*.py" | grep -v test; then echo "❌ Found .fn() calls - use direct function calls"; exit 1; fi'
-        language: system
-        files: ^src/
-        pass_filenames: false
-
-
-      # Validate MCP tool-schema parameter alignment (prevents datetime.combine bugs)
-      - id: mcp-schema-alignment
-        name: MCP tool-schema parameter alignment
-        entry: uv run python scripts/hooks/validate_mcp_schemas.py
-        language: system
-        files: '^(src/core/schemas\.py|src/core/main\.py)$'
-        pass_filenames: false
-
-      # Check generated schemas are in sync with JSON schemas
-      # NOTE: Removed this hook - script doesn't exist and check_schema_sync.py
-      # already validates schema alignment (runs on every commit via adcp-schema-sync)
-
-      # Test MCP endpoints (requires server running)
-      - id: mcp-endpoint-tests
-        name: Test MCP endpoints
-        entry: echo Run MCP tests with uv run pytest tests/integration/test_mcp_endpoints_comprehensive.py
-        language: system
-        pass_filenames: false
-        stages: [manual]  # Manual because it needs server running
-
-
-
-      # Check type: ignore count doesn't increase (ratcheting approach)
       - id: type-ignore-no-regression
         name: "Check type: ignore count (no regression)"
         entry: uv run python .pre-commit-hooks/check_type_ignore_count.py
         language: system
         files: '^src/.*\.py$'
         pass_filenames: false
-        always_run: false  # Only run when Python files in src/ changed
+        stages: [pre-push]
 
-      # Detect code duplication (ratcheting baseline — can only decrease)
-      - id: check-code-duplication
-        name: Check code duplication (pylint R0801)
-        entry: uv run python .pre-commit-hooks/check_code_duplication.py
+      - id: adcp-contract-tests
+        name: Verify AdCP protocol compliance
+        entry: uv run pytest tests/unit/test_adcp_contract.py -v --tb=short
         language: system
-        files: '^(src|tests)/.*\.py$'
         pass_filenames: false
-        always_run: true
+        stages: [pre-push]
 
-      # Suggest factory usage in test files (non-blocking)
-      - id: suggest-test-factories
-        name: Suggest factory usage in test files
-        entry: uv run python .pre-commit-hooks/check_test_factories.py
+      - id: mcp-schema-alignment
+        name: MCP tool-schema parameter alignment
+        entry: uv run python scripts/hooks/validate_mcp_schemas.py
         language: system
-        files: '^tests/.*\.py$'
+        files: '^(src/core/schemas\.py|src/core/main\.py)$'
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: check-tenant-context-order
+        name: Check tenant context auth before get_current_tenant()
+        entry: uv run python .pre-commit-hooks/check_tenant_context_order.py
+        language: system
+        files: '^src/core/tools/.*\.py$'
         pass_filenames: true
-        always_run: false  # Only run when test files change
+        stages: [pre-push]
 
-
-      # ast-grep BDD guards — scaffold only, no rules enforced yet.
-      # Real BDD structural patterns will be added in a follow-up PR.
-      # Uses sgconfig.yml at repo root to discover all rules under .ast-grep/rules/
-      # (--rule takes a single file, not a directory).
       - id: ast-grep-bdd-guards
         name: ast-grep BDD step guards (scaffold — no rules yet)
         entry: ast-grep scan
         language: system
         files: '^tests/bdd/steps/.*\.py$'
         pass_filenames: false
+        stages: [pre-push]
+
+      - id: check-migration-completeness
+        name: Check migration completeness (upgrade + downgrade)
+        entry: uv run python .pre-commit-hooks/check_migration_completeness.py
+        language: system
+        files: '^alembic/versions/.*\.py$'
+        pass_filenames: true
+        stages: [pre-push]
+
+      - id: smoke-tests
+        name: Run smoke tests (critical paths)
+        entry: uv run pytest tests/smoke/ -v --tb=short -m smoke
+        language: system
+        pass_filenames: false
+        stages: [manual]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
@@ -294,8 +126,6 @@ repos:
 
   # Per ADR-001: formatter runs via `uv run ruff format` from uv.lock — same
   # command as `make quality`. Replaces psf/black pre-commit repo (PR 2 #1234).
-  # black remains in dev deps for GHSA-3936-cmfr-pm3m pin only; the repo
-  # canonical style is ruff format (upstream/Makefile/CI).
   - repo: local
     hooks:
       - id: ruff-format
@@ -304,10 +134,7 @@ repos:
         language: system
         types: [python]
         require_serial: true
-        # Ruff ignores pyproject exclude when paths are passed explicitly (pre-commit does).
         exclude: ^alembic/versions/
-      # Per ADR-001: lint runs via `uv run ruff check` from uv.lock — same
-      # command as `make quality`. Replaces astral-sh/ruff-pre-commit (PR 2 #1234).
       - id: ruff-check
         name: ruff check
         entry: uv run ruff check
@@ -316,11 +143,8 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
         exclude: ^alembic/versions/
 
-  # Per ADR-001: mypy runs via `uv run` so it resolves from uv.lock.
-  # This replaced mirrors-mypy + additional_dependencies in PR 2 of issue #1234,
-  # eliminating the adcp/sqlalchemy/fastmcp version drift that was the root cause
-  # of the original bug (adcp 3.2→3.10 drift in mypy's isolated venv).
-  # pydantic.mypy plugin is active because pydantic is in [dependency-groups].dev.
+  # Per ADR-001: mypy runs via `uv run` from uv.lock (PR 2 #1234).
+  # Pre-push tier only; CI / Type Check + make quality-ci are authoritative.
   - repo: local
     hooks:
       - id: mypy
@@ -332,13 +156,9 @@ repos:
         exclude: '^src/adapters/google_ad_manager_original\.py$'
         pass_filenames: false
         require_serial: true
+        stages: [pre-push]
 
-  # Per D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
   - repo: https://github.com/gitleaks/gitleaks
     rev: 2ca41cc1372d1e939a6a879f18cdc19fc1cac1ce  # frozen: v8.30.0
     hooks:
       - id: gitleaks
-        # Scans staged files at commit time. .gitleaks.toml at repo root can
-        # add allowlist entries for test fixtures or custom patterns.
-        # TODO(#1234-pr3): add gitleaks as a CI job in security.yml to close
-        # the SKIP=gitleaks bypass gap (pre-commit hook can be bypassed locally).

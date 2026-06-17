@@ -34,6 +34,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [
     REPO_ROOT / "src" / "core" / "tools",
@@ -180,7 +182,8 @@ class TestNoHandrolledIdentityGuard:
 
     def test_known_violations_not_stale(self):
         actual = {(rel, func) for rel, func, _, _ in _find_violations()}
-        stale = KNOWN_VIOLATIONS - actual
-        assert not stale, "Stale allowlist entries (guard migrated or moved):\n" + "\n".join(
-            f"  {rel} :: {func}" for rel, func in sorted(stale)
+        assert_violations_match_allowlist(
+            actual,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
         )

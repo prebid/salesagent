@@ -42,7 +42,7 @@ Utility scripts for setup, deployment, and operations.
 ### Setting Up a New Environment
 ```bash
 # 1. Setup git hooks (from project root)
-./setup_hooks.sh
+pre-commit install
 
 # 2. Initialize database
 uv run python scripts/setup/init_database.py

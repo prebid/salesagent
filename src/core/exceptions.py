@@ -224,6 +224,7 @@ class AdCPError(Exception):
         recovery: RecoveryHint | None = None,
         field: str | None = None,
         suggestion: str | None = None,
+        retry_after: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
     ) -> None:
         # ``error_code`` and ``status_code`` kwargs are only used by the
@@ -235,6 +236,7 @@ class AdCPError(Exception):
         self.details = details
         self.field = field
         self.suggestion = suggestion
+        self.retry_after = retry_after
         self.context = context
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
@@ -337,6 +339,8 @@ class AdCPError(Exception):
             result["field"] = self.field
         if self.suggestion is not None:
             result["suggestion"] = self.suggestion
+        if self.retry_after is not None:
+            result["retry_after"] = self.retry_after
         serialized_context = _serialize_context(self.context)
         if serialized_context is not None:
             result["context"] = serialized_context
@@ -372,6 +376,7 @@ class AdCPError(Exception):
             recovery=self.recovery,
             field=self.field,
             suggestion=self.suggestion,
+            retry_after=self.retry_after,
             details=merged_details or None,
         )
 
@@ -399,14 +404,20 @@ class AdCPInvalidRequestError(AdCPValidationError):
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
-    Default error_code is AUTH_TOKEN_INVALID per AdCP spec; the wire passes
-    it through unchanged (AUTH_TOKEN_INVALID is a standard SDK code).
+    Default error_code is ``AUTH_TOKEN_INVALID``. This code is project-specific:
+    it is in neither the AdCP 3.1 error-code enum nor adcp 5.7
+    ``STANDARD_ERROR_CODES`` (both define only ``AUTH_REQUIRED``). It reaches the
+    wire by passthrough — it is deliberately absent from ``ERROR_CODE_MAPPING``,
+    so ``wire_error_code`` returns it unchanged on the sync transports
+    (REST/MCP/A2A). The async webhook path additionally enforces
+    ``STANDARD_ERROR_CODES`` and would downgrade it to ``SERVICE_UNAVAILABLE``.
 
-    Recovery defaults to ``terminal`` to match
-    ``STANDARD_ERROR_CODES["AUTH_REQUIRED"]["recovery"]`` in adcp 4.3 (the SDK
-    we run). That SDK table diverges from the spec's ``error-code.json``, which
-    classifies AUTH_REQUIRED as ``correctable`` (re-auth recovers); we keep
-    ``terminal`` so wire output matches the installed SDK's validator.
+    Recovery defaults to ``terminal`` (inherited from ``AdCPError``; this is a
+    hardcoded ``_default_recovery`` ClassVar, not read from
+    ``STANDARD_ERROR_CODES``). We keep ``terminal`` deliberately: the AdCP 3.1
+    storyboards grade the wire *error code*, not the recovery class, so the
+    recovery hint is ours to set. This intentionally diverges from how adcp 5.7
+    classifies its nearest neighbour ``AUTH_REQUIRED`` (``correctable``).
     """
 
     _default_status_code: ClassVar[int] = 401
@@ -417,7 +428,8 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     """No authentication context present (401, AUTH_TOKEN_INVALID).
 
     Raised when the request contains no auth token at all.
-    Uses same error_code as parent (AUTH_TOKEN_INVALID) per spec.
+    Uses same error_code as parent (AUTH_TOKEN_INVALID) — a project-specific
+    code; see parent docstring.
     """
 
     _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
@@ -426,8 +438,10 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
 class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
-    Same ``terminal`` default as ``AdCPAuthenticationError`` for the same
-    SDK-vs-spec mismatch reason — see that class's docstring.
+    Same ``terminal`` default as ``AdCPAuthenticationError``, for the same
+    reason: recovery is intentionally terminal because the AdCP 3.1 storyboards
+    grade the wire error code, not the recovery class — see that class's
+    docstring.
     """
 
     _default_status_code: ClassVar[int] = 403
@@ -718,6 +732,49 @@ class AdCPCapabilityNotSupportedError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPIdempotencyConflictError(AdCPConflictError):
+    """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
+
+    Recovery=correctable: the buyer can fix this and resend — either replay the
+    ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
+    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    conformance storyboard's stated expectation. The SDK's
+    ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
+    table is only a default applied when no recovery is supplied — an explicit
+    recovery always wins, and nothing in the SDK or the storyboard's machine
+    validations grades the value.
+    """
+
+    _default_error_code: ClassVar[str] = "IDEMPOTENCY_CONFLICT"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPIdempotencyExpiredError(AdCPConflictError):
+    """idempotency_key seen before, but its replay window has expired (409, IDEMPOTENCY_EXPIRED).
+
+    Raised when a same-key buy exists but outlived the advertised replay TTL
+    (``get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds``): per
+    security.mdx#idempotency rule 6, a request arriving after eviction with a
+    key the seller has seen SHOULD be rejected with ``IDEMPOTENCY_EXPIRED``
+    rather than silently treated as new or answered with another buy's data.
+
+    Recovery=correctable, matching the sibling ``IDEMPOTENCY_CONFLICT``: the
+    buyer agent recovers autonomously — a natural-key existence check (e.g.
+    ``get_media_buys`` by ``context.internal_campaign_id``) to learn whether the
+    original request succeeded, then either accept that result or mint a fresh
+    idempotency_key for a new attempt. The 3.0.1 ``error-code.json`` enum
+    description classifies the code ``correctable`` (that buyer-recovery path),
+    and the recovery taxonomy reserves ``terminal`` for conditions requiring
+    HUMAN action (account suspended, payment required) — not an agent-resolvable
+    retry. The SDK's ``STANDARD_ERROR_CODES`` default table lists it ``terminal``,
+    but that default applies only when no recovery is supplied; an explicit
+    recovery wins, exactly as for ``IDEMPOTENCY_CONFLICT``.
+    """
+
+    _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
 class AdCPCreativeRejectedError(AdCPError):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
@@ -877,6 +934,7 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
         recovery=exc.recovery,
         field=exc.field,
         suggestion=exc.suggestion,
+        retry_after=exc.retry_after,
         details=exc.details,
     )
     # Copy errors[0] for the envelope-level mirror so callers that mutate one

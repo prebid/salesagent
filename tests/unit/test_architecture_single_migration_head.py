@@ -25,6 +25,7 @@ from scripts.ci.migration_helpers import (
 class TestSingleMigrationHead:
     """The alembic migration graph must have exactly one head revision."""
 
+    @pytest.mark.arch_guard
     def test_single_migration_head(self):
         """Assert that the migration DAG has exactly one head.
 

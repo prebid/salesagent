@@ -75,8 +75,9 @@ class TestA2ASpecCompliance:
         ctx = {"user_id": "1234567890"}
         response = GetProductsResponse(**response_data, context=ctx)
 
-        # Check no extra fields
-        spec_fields = {"products", "errors", "status", "context"}
+        # Check no extra fields.
+        # SDK 5.7 adds cache_scope, replayed as protocol envelope defaults.
+        spec_fields = {"products", "errors", "status", "context", "cache_scope", "replayed"}
         response_fields = set(response.model_dump().keys())
         extra_fields = response_fields - spec_fields
 
@@ -123,7 +124,8 @@ class TestA2ASpecCompliance:
         ctx = {"user_id": "1234567890"}
         response = ListCreativesResponse(**response_data, context=ctx)
 
-        # Check no extra fields
+        # Check no extra fields.
+        # SDK 5.7 adds status, replayed as protocol envelope defaults.
         spec_fields = {
             "query_summary",
             "pagination",
@@ -132,6 +134,8 @@ class TestA2ASpecCompliance:
             "format_summary",
             "status_summary",
             "context",
+            "status",
+            "replayed",
         }
         response_fields = set(response.model_dump().keys())
         extra_fields = response_fields - spec_fields
@@ -151,8 +155,9 @@ class TestA2ASpecCompliance:
         ctx = {"user_id": "1234567890"}
         response = ListCreativeFormatsResponse(**response_data, context=ctx)
 
-        # Check no extra fields
-        spec_fields = {"formats", "creative_agents", "errors", "status", "context"}
+        # Check no extra fields.
+        # SDK 5.7 adds replayed as a protocol envelope default.
+        spec_fields = {"formats", "creative_agents", "errors", "status", "context", "replayed"}
         response_fields = set(response.model_dump().keys())
         extra_fields = response_fields - spec_fields
 

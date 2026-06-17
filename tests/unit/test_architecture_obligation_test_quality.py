@@ -30,6 +30,10 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
 _COVERS_RE = re.compile(r"Covers:\s+([\w-]+)")
 
@@ -183,6 +187,7 @@ def _function_body_has_src_call_in_body(func_node: ast.FunctionDef) -> bool:
 
     Handles the common xfail stub pattern::
 
+        @pytest.mark.arch_guard
         def test_something(self):
             from src.core.tools.property_list import _create_property_list_impl
             await _create_property_list_impl(req, identity)
@@ -241,6 +246,7 @@ def _function_has_src_import_in_body(func_node: ast.FunctionDef) -> bool:
 
     Some tests do late imports inside the function body::
 
+        @pytest.mark.arch_guard
         def test_something(self):
             from src.core.tools.products import _get_products_impl
             result = _get_products_impl(...)
@@ -397,6 +403,7 @@ def _load_allowlist() -> set[str]:
 class TestObligationTestQuality:
     """Structural guard: obligation-tagged tests must CALL production code."""
 
+    @pytest.mark.arch_guard
     def test_no_new_sham_tests(self):
         """Every obligation-tagged test must call production code or be allowlisted.
 
@@ -417,6 +424,7 @@ class TestObligationTestQuality:
             + "\n".join(f"  {t} (Covers: {oid}) — {reason}" for t, oid, reason in sorted(new_violations))
         )
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_violations(self):
         """Every allowlist entry must still be a violation.
 
@@ -426,14 +434,13 @@ class TestObligationTestQuality:
         violations = _scan_all_files()
         violation_ids = {t for t, _, _ in violations}
         allowlist = _load_allowlist()
-
-        stale = allowlist - violation_ids
-        assert not stale, (
-            f"Found {len(stale)} allowlist entries that are no longer violations.\n"
-            f"These tests now call production code — remove from "
-            f"obligation_test_quality_allowlist.json:\n" + "\n".join(f"  {t}" for t in sorted(stale))
+        assert_violations_match_allowlist(
+            violation_ids & allowlist,
+            allowlist,
+            fix_hint="Remove fixed entries from obligation_test_quality_allowlist.json.",
         )
 
+    @pytest.mark.arch_guard
     def test_violation_count_tracked(self):
         """Track the total violation count for monitoring."""
         violations = _scan_all_files()

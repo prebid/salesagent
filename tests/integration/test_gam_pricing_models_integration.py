@@ -9,6 +9,7 @@ tests will skip rather than fail, since external service availability is outside
 our control.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -381,6 +382,7 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
 
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpm_guaranteed",
@@ -428,6 +430,7 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
 
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpc",
@@ -476,6 +479,7 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
 
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_gam_vcpm",
@@ -525,6 +529,7 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
     # 10 day campaign: $5000 total = $500/day
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_gam_flatrate",
@@ -573,6 +578,7 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
 
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpm_guaranteed",
@@ -648,6 +654,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
 
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_gam_cpc",

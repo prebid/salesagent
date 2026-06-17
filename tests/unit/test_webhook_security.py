@@ -5,8 +5,41 @@ import hmac
 import json
 import time
 
+import pytest
+from adcp.types import TaskType
+
 from src.core.webhook_authenticator import WebhookAuthenticator
-from src.core.webhook_validator import WebhookURLValidator
+from src.core.webhook_validator import (
+    WEBHOOK_TASK_TYPE_FALLBACK,
+    WebhookURLValidator,
+    validate_webhook_task_type,
+)
+
+
+class TestValidateWebhookTaskType:
+    """Coercion of untrusted action labels to SDK-accepted TaskType values."""
+
+    @pytest.mark.parametrize("valid", [m.value for m in TaskType])
+    def test_valid_tasktype_returned_unchanged(self, valid):
+        """Every TaskType enum member passes through verbatim."""
+        assert validate_webhook_task_type(valid) == valid
+
+    @pytest.mark.parametrize(
+        "invalid",
+        ["delivery_report", "media_buy_delivery", "unknown", "", "not_a_task"],
+    )
+    def test_non_tasktype_coerced_to_fallback(self, invalid):
+        """Non-members are coerced to the default fallback."""
+        assert validate_webhook_task_type(invalid) == WEBHOOK_TASK_TYPE_FALLBACK
+        assert WEBHOOK_TASK_TYPE_FALLBACK == "update_media_buy"
+
+    def test_custom_fallback_honored(self):
+        """The fallback is overridable for callers with a different default."""
+        assert validate_webhook_task_type("bogus", fallback="sync_creatives") == "sync_creatives"
+
+    def test_fallback_must_be_valid_caller_choice(self):
+        """A valid label ignores the fallback entirely."""
+        assert validate_webhook_task_type("sync_creatives", fallback="update_media_buy") == "sync_creatives"
 
 
 class TestWebhookURLValidator:

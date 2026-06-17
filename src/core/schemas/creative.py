@@ -10,10 +10,8 @@ from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import (
-    CreativeAction,
-    CreativeStatus,
-)
+from adcp.types import ContextObject as LibraryContextObject
+from adcp.types import CreativeStatus
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -52,6 +50,7 @@ from pydantic import (
 )
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.enum_helpers import enum_value
 from src.core.schemas._base import (
     ApprovalStatus,
     FormatId,
@@ -213,7 +212,7 @@ class Creative(LibraryCreative):
         if self.principal_id is not None:
             data["principal_id"] = self.principal_id
         # Ensure status is always present as string value for DB storage
-        data["status"] = self.status.value if isinstance(self.status, CreativeStatus) else self.status
+        data["status"] = enum_value(self.status)
         return data
 
 
@@ -350,18 +349,46 @@ class SyncSummary(SalesAgentBaseModel):
 
 
 class SyncCreativeResult(LibrarySyncCreativeResult):
-    """Extends library SyncCreativeResult with internal-only fields.
+    """Extends library SyncCreativeResult with locally-owned fields.
 
-    Library provides: creative_id, action (CreativeAction enum), platform_id,
-    changes, errors, warnings, assigned_to, assignment_errors, account,
-    expires_at, preview_url.
+    Library (SDK 5.7) provides: creative_id, action, errors,
+    adcp_major_version, adcp_version.
 
-    Local overrides:
-    - status, review_feedback: Internal fields excluded from responses
-    - changes, errors, warnings: Override to default=[] (library defaults to None)
+    Locally owned (removed from SDK 5.7 but used by this codebase):
+    - assigned_to, assignment_errors: assignment reporting (UC-006)
+    - platform_id, status: internal tracking
+    - changes, warnings: sync operation details
+
+    Internal-only (not in AdCP spec):
+    - review_feedback: excluded from responses
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # SDK 5.7 (adcontextprotocol/adcp-client-python#913): parent declares action
+    # as CreativeAction|str and stores raw strings. CreativeAction is plain Enum
+    # (not StrEnum), so "created" == CreativeAction.created is False.
+    # Store as string; compare with strings everywhere until upstream ships StrEnum.
+    action: str = Field(description="Action taken for this creative")
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _normalize_action_to_str(cls, v: Any) -> str | None:
+        """Normalize CreativeAction enum to its string value.
+
+        Returns ``None`` only when ``v`` is ``None`` (delegated to ``enum_value``);
+        the required ``action: str`` field type then rejects it. Annotated
+        ``str | None`` to match ``enum_value``'s real return.
+        """
+        return enum_value(v)
+
+    # --- Fields removed from SDK 5.7 that we own locally ---
+    assigned_to: list[str] | None = Field(None, description="Package IDs this creative was assigned to during sync")
+    assignment_errors: dict[str, str] | None = Field(
+        None, description="Per-package assignment errors {package_id: error_message}"
+    )
+    platform_id: str | None = Field(None, description="Platform-assigned creative identifier")
+    status: str | None = Field(None, exclude=True, description="Internal creative status")
 
     # Internal-only fields (not in AdCP spec)
     review_feedback: str | None = Field(
@@ -375,21 +402,14 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
 
     def model_dump(self, **kwargs):
-        """Override to exclude non-AdCP fields for spec compliance.
+        """Override to strip empty lists for AdCP spec compliance.
 
-        The AdCP spec (sync-creatives-response.json) only allows specific fields
-        with "additionalProperties": false. We exclude internal fields:
-        - status: Internal approval status tracking
-        - review_feedback: Internal review process feedback
-
-        Also excludes None values and empty lists to match AdCP spec where optional
-        fields should be omitted rather than set to null/empty.
+        Internal fields (status, review_feedback) are excluded via Field(exclude=True).
+        This override handles empty-list stripping: changes, errors, warnings are
+        optional in the AdCP spec, so omit them when empty rather than serializing [].
         """
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Exclude internal fields that aren't in AdCP spec
-            exclude.update({"status", "review_feedback"})
-            kwargs["exclude"] = exclude
+        exclude = set(kwargs.get("exclude") or ())
+        kwargs["exclude"] = exclude
 
         # Exclude None values by default for AdCP compliance
         if "exclude_none" not in kwargs:
@@ -398,14 +418,10 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         # Call parent model_dump
         result = super().model_dump(**kwargs)
 
-        # Also exclude empty lists for cleaner responses (only include fields with data)
-        # Per AdCP spec: changes, errors, warnings are optional, so omit if empty
-        if "changes" in result and not result["changes"]:
-            result.pop("changes", None)
-        if "errors" in result and not result["errors"]:
-            result.pop("errors", None)
-        if "warnings" in result and not result["warnings"]:
-            result.pop("warnings", None)
+        # Strip empty lists for cleaner responses (AdCP spec: optional, omit if empty)
+        for key in ("changes", "errors", "warnings"):
+            if key in result and not result[key]:
+                result.pop(key, None)
 
         return result
 
@@ -446,11 +462,25 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
     Since the error variant is never constructed (ToolError handles failures),
-    we subclass the success variant directly. Fields (creatives, dry_run,
-    context, ext, sandbox) are inherited.
+    we subclass the success variant directly.
+
+    SDK 5.7 collapsed the success envelope — dry_run, sandbox, context, ext
+    removed from parent. Declared locally where needed.
 
     Design decision (salesagent-g3c): error variant never constructed.
     """
+
+    # SDK 5.7 removed these from the parent — declare locally
+    dry_run: bool | None = None
+    context: LibraryContextObject | dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
+
+    # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
+    # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
+    # Required (no default): pinned 3.1 SyncCreativesSuccess.required=['creatives'] — a
+    # synchronously-processed sync always carries a creatives array, even all-failed
+    # (#1399 R3-F2).
+    creatives: list[SyncCreativeResult]  # type: ignore[assignment]
 
     def model_dump(self, **kwargs):
         """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
@@ -461,11 +491,12 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        # Count actions from creatives list
-        created = sum(1 for c in self.creatives if c.action == CreativeAction.created)
-        updated = sum(1 for c in self.creatives if c.action == CreativeAction.updated)
-        deleted = sum(1 for c in self.creatives if c.action == CreativeAction.deleted)
-        failed = sum(1 for c in self.creatives if c.action == CreativeAction.failed)
+
+        # action is always str: our field_validator normalizes enum→str on construction.
+        created = sum(1 for c in self.creatives if c.action == "created")
+        updated = sum(1 for c in self.creatives if c.action == "updated")
+        deleted = sum(1 for c in self.creatives if c.action == "deleted")
+        failed = sum(1 for c in self.creatives if c.action == "failed")
 
         parts = []
         if created:
@@ -589,7 +620,7 @@ class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResp
     # Override with local subtypes (each extends its library counterpart)
     query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")  # type: ignore[assignment]
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
-    creatives: list[Creative] = Field(..., description="Array of creative assets")  # type: ignore[assignment]
+    creatives: list[Creative] = Field(..., description="Array of creative assets")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

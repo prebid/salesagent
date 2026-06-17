@@ -13,6 +13,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _INSPECT_SCRIPT = Path(__file__).resolve().parents[2] / ".claude" / "scripts" / "inspect_bdd_steps.py"
 
@@ -66,6 +68,7 @@ def _field_names_referenced(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set
 class TestBddStepTextAlignment:
     """Structural guard: literal field names in Then steps must be referenced in code."""
 
+    @pytest.mark.arch_guard
     def test_account_id_steps_reference_account_id(self):
         """Then steps mentioning account_id must inspect account_id somewhere in the body."""
         violations = []
@@ -83,6 +86,7 @@ class TestBddStepTextAlignment:
             + "\n".join(f"  {v}" for v in violations)
         )
 
+    @pytest.mark.arch_guard
     def test_literal_response_field_steps_reference_the_named_field(self):
         """Then steps about literal response fields must reference those field names in code."""
         violations = []
