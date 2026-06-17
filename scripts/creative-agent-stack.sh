@@ -10,9 +10,10 @@
 # .github/workflows/ci.yml calls this same script (single source of the pin).
 #
 # Usage:
-#   scripts/creative-agent-stack.sh up     # idempotent: build+run if needed, wait healthy
-#   scripts/creative-agent-stack.sh down   # stop+rm containers+network (keeps image/tarball cache)
-#   scripts/creative-agent-stack.sh url    # print CREATIVE_AGENT_URL
+#   scripts/creative-agent-stack.sh up      # idempotent: build+run if needed, wait healthy
+#   scripts/creative-agent-stack.sh down    # stop+rm containers+network (keeps image/tarball cache)
+#   scripts/creative-agent-stack.sh url     # print CREATIVE_AGENT_URL
+#   scripts/creative-agent-stack.sh publish # build+push pin-keyed image to ghcr.io (CI publish workflow)
 set -euo pipefail
 
 # Pin to a known-good commit — upstream HEAD has broken migrations
@@ -99,19 +100,26 @@ _ensure_image() {
         return 0
     fi
 
-    if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ]; then
-        if _ghcr_image_exists; then
-            _retry 3 _pull_from_ghcr
-        else
-            _ensure_tarball
-            _retry 3 _build_for_ghcr
-            _retry 3 _push_to_ghcr || \
-                echo "[creative-agent] WARN: ghcr.io push skipped; using local image" >&2
+    if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ] && _ghcr_image_exists; then
+        if _retry 3 _pull_from_ghcr; then
+            return 0
         fi
-    else
-        _ensure_tarball
-        _retry 3 _build_image_local
+        echo "[creative-agent] WARN: ghcr pull failed; building locally" >&2
     fi
+
+    _ensure_tarball
+    _retry 3 _build_image_local
+}
+
+cmd_publish() {
+    [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ] || { echo "CREATIVE_AGENT_GHCR_IMAGE required" >&2; return 1; }
+    if _ghcr_image_exists; then
+        echo "[creative-agent] $(_ghcr_ref) already published; nothing to do"
+        return 0
+    fi
+    _ensure_tarball
+    _retry 3 _build_for_ghcr
+    _retry 3 _push_to_ghcr
 }
 
 cmd_url() { echo "$CREATIVE_AGENT_URL"; }
@@ -167,5 +175,6 @@ case "${1:-}" in
     up) cmd_up ;;
     down) cmd_down ;;
     url) cmd_url ;;
-    *) echo "usage: $0 {up|down|url}" >&2; exit 2 ;;
+    publish) cmd_publish ;;
+    *) echo "usage: $0 {up|down|url|publish}" >&2; exit 2 ;;
 esac

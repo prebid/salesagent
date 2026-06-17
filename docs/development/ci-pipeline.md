@@ -134,26 +134,50 @@ The pin lives only in [`scripts/creative-agent-stack.sh`](../../scripts/creative
 ### CI image cache (ghcr.io) and retries
 
 On ephemeral GitHub Actions runners, local `/tmp` tarball reuse and `docker image
-inspect` guards do not survive between runs. The creative shard therefore:
+inspect` guards do not survive between runs. Pin-keyed images in GHCR avoid a
+full monolith compile on warm CI runs.
 
-1. Logs in to `ghcr.io` via `docker/login-action` (creative matrix leg only) and
-   sets `CREATIVE_AGENT_GHCR_IMAGE=ghcr.io/<repo>/adcp-creative-agent` before
-   `creative-agent-stack.sh up`.
-2. Inside the script, when `CREATIVE_AGENT_GHCR_IMAGE` is set:
-   - **Warm run** (image tag `${ADCP_PIN}` already in ghcr.io): `docker pull` +
-     retag to local `adcp-creative-agent` — no compile, no buildx `--load`.
-   - **Cold run** (pin bump or first publish): fetch tarball, `docker build`,
-     `docker push` to `ghcr.io/...:${ADCP_PIN}`.
-3. Falls back to plain `docker build` locally — no CI-only env required for
-   `run_all_tests.sh`.
+**Publish (trusted `main` context only).** The
+[`publish-creative-agent.yml`](../../.github/workflows/publish-creative-agent.yml)
+workflow runs on `push` to `main` and `workflow_dispatch`. It logs in to
+`ghcr.io` and calls `creative-agent-stack.sh publish`, which builds from the
+pinned tarball and pushes `ghcr.io/<repo>/adcp-creative-agent:${ADCP_PIN}`.
+If the tag already exists, publish is a no-op. Publish failures fail the
+workflow loudly (unlike the test shard, which degrades gracefully).
 
-Tarball fetch (`curl -f`), `docker pull`, `docker build`, and `docker push` each
-retry up to 3 times with exponential backoff to absorb transient `ECONNRESET`
-flakes.
+**CI test shard (pull-only).** The creative matrix leg logs in to `ghcr.io`
+(authenticated pulls dodge anonymous rate limits and work for public images
+from fork PRs), sets `CREATIVE_AGENT_GHCR_IMAGE`, and calls
+`creative-agent-stack.sh up`:
 
-The `integration-tests` job grants `packages: write` so the creative shard can
-publish the pre-built image (same registry pattern as
-[`release-please.yml`](../../.github/workflows/release-please.yml)).
+- **Warm run** (public image tag `${ADCP_PIN}` in ghcr.io): `docker pull` +
+  retag to local `adcp-creative-agent` — no compile.
+- **Cold / degraded** (package absent, private, or pull blip): fetch tarball and
+  `docker build` locally. The shard never pushes.
+
+**Local.** `run_all_tests.sh` calls `up` without `CREATIVE_AGENT_GHCR_IMAGE` —
+plain `docker build`, same pin source.
+
+Tarball fetch (`curl -f`), `docker pull`, and `docker build` each retry up to
+3 times with exponential backoff to absorb transient `ECONNRESET` flakes.
+Publish also retries `docker push`.
+
+The `integration-tests` job grants `packages: read` for GHCR pulls. Publishing
+uses `packages: write` only in `publish-creative-agent.yml` on `main`.
+
+**Maintainer prerequisites (org/repo — one-time):**
+
+1. After merge, trigger `Publish creative agent image` via `workflow_dispatch`
+   and confirm it creates `adcp-creative-agent` (not `denied: Create
+   organization package`). If denied, enable Actions package creation in Org →
+   Packages or have an admin pre-create the empty package, then re-run.
+2. Set the GHCR package **Public** so fork PRs can pull. Until then, the
+   creative shard builds locally everywhere (green, no speedup).
+
+**Fork PR caveat:** warm-cache pull is not verifiable on a fork PR until the
+public package exists. Measure the real pull time on `main` before claiming
+#1189's <30s warm step — a large image may still exceed 30s; slimming the
+image is a sensible follow-up if needed.
 
 ### Creative agent infrastructure
 

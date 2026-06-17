@@ -175,7 +175,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # push adcp-creative-agent to ghcr.io (creative shard step only)
+      packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
     timeout-minutes: 15
     strategy:
       fail-fast: false
