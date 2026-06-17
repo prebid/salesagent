@@ -14,6 +14,8 @@ Both share a single module-level cache so a typed lookup populates the cache
 for the other mode's subsequent lookups.
 """
 
+import hashlib
+import hmac
 import json
 import logging
 from collections.abc import Iterable, Iterator
@@ -40,12 +42,14 @@ _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 # bounded by ThreadSafeTTLCache's maxsize; this bounds per-entry lifetime).
 _MAX_CACHE_TTL_SECONDS = 3600  # 1 hour
 
-# Cache: (agent_url, list_id) -> typed Identifier objects, so both .value (for
-# products discovery) and .type (for adapter compilation) are available without
-# re-fetching. The async and sync resolver paths plus the create-media-buy
-# advisory share this module-level cache from different threads/event loops;
-# the locking/expiry contract lives in ThreadSafeTTLCache.
-_cache: ThreadSafeTTLCache[tuple[str, str], list[Identifier]] = ThreadSafeTTLCache()
+# Cache: (agent_url, list_id, auth_partition) -> typed Identifier objects, so both
+# .value (for products discovery) and .type (for adapter compilation) are available
+# without re-fetching. The auth_partition (an HMAC of the buyer's auth_token) keeps
+# one principal from reading another's access-gated list out of this process-global
+# cache. The async and sync resolver paths plus the create-media-buy advisory share
+# this module-level cache from different threads/event loops; the locking/expiry
+# contract lives in ThreadSafeTTLCache.
+_cache: ThreadSafeTTLCache[tuple[str, str, str], list[Identifier]] = ThreadSafeTTLCache()
 
 
 def loggable_list_id(list_id: str) -> str:
@@ -67,19 +71,41 @@ def package_property_list_ref(package: Any) -> PropertyListReference | None:
     return getattr(overlay, "property_list", None) if overlay else None
 
 
-def property_list_cache_key(ref: PropertyListReference) -> tuple[str, str]:
-    """The canonical ``(agent_url, list_id)`` dedup/cache key for a property-list ref.
+# Constant purpose label binding the auth HMAC to this cache (domain separation).
+_CACHE_PARTITION_LABEL = b"property-list-cache-partition"
+
+
+def _auth_partition(auth_token: str | None) -> str:
+    """Non-reversible cache partition for a buyer credential.
+
+    The bearer token is used as the HMAC KEY over a constant purpose label (a
+    keyed PRF, HKDF-extract shape) so the plaintext token never persists as a
+    process-global cache key, while two principals with different tokens for the
+    same ``(agent_url, list_id)`` partition into separate cache entries. Without
+    this the second principal reads the first's access-gated identifiers from the
+    shared cache before the list service can reject its token. Mirrors
+    ``KevelSiteResolver._cache_partition``. A missing token maps to a stable
+    sentinel so unauthenticated lists still share a single partition.
+    """
+    return hmac.new((auth_token or "").encode(), _CACHE_PARTITION_LABEL, hashlib.sha256).hexdigest()[:16]
+
+
+def property_list_cache_key(ref: PropertyListReference) -> tuple[str, str, str]:
+    """The canonical ``(agent_url, list_id, auth_partition)`` dedup/cache key for a property-list ref.
 
     Single source of the key so the create-side prefetch, the zero-overlap
-    advisory builder, and the Kevel compile cache index identically. ``agent_url``
-    is an ``AnyUrl`` so it is stringified; ``list_id`` is already ``str``.
+    advisory builder, the Kevel compile cache, and the resolver fetch cache index
+    identically. ``agent_url`` is an ``AnyUrl`` so it is stringified; ``list_id``
+    is already ``str``; ``auth_partition`` is a non-reversible HMAC of the buyer's
+    ``auth_token`` so one principal cannot read another's access-gated list out of
+    the shared cache.
     """
-    return (str(ref.agent_url), ref.list_id)
+    return (str(ref.agent_url), ref.list_id, _auth_partition(ref.auth_token))
 
 
 def iter_package_property_list_refs(
     packages: Iterable[Any],
-) -> Iterator[tuple[int, Any, PropertyListReference, tuple[str, str]]]:
+) -> Iterator[tuple[int, Any, PropertyListReference, tuple[str, str, str]]]:
     """Yield ``(index, package, ref, key)`` for each package carrying a property_list ref.
 
     Single home for the "walk packages → pluck ref → key it" skeleton shared by
@@ -110,27 +136,31 @@ def _validate_agent_url(agent_url: str) -> None:
         raise AdCPAdapterError(f"Property list agent_url rejected: {error}")
 
 
-def _build_request(ref: PropertyListReference) -> tuple[str, str, dict[str, str]]:
-    """Build (cache_key_agent_url, request_url, headers) for the property list fetch."""
+def _build_request(ref: PropertyListReference) -> tuple[str, dict[str, str]]:
+    """Build (request_url, headers) for the property list fetch (validates agent_url for SSRF)."""
     agent_url_str = str(ref.agent_url)
     _validate_agent_url(agent_url_str)
     request_url = agent_url_str.rstrip("/") + "/lists/" + ref.list_id
     headers: dict[str, str] = {}
     if ref.auth_token:
         headers["Authorization"] = f"Bearer {ref.auth_token}"
-    return agent_url_str, request_url, headers
+    return request_url, headers
 
 
-def _check_cache(agent_url: str, list_id: str) -> list[Identifier] | None:
-    """Return cached identifiers if present and not expired."""
-    identifiers = _cache.get((agent_url, list_id))
+def _check_cache(ref: PropertyListReference) -> list[Identifier] | None:
+    """Return cached identifiers if present and not expired.
+
+    Keyed via ``property_list_cache_key`` so the lookup is partitioned by the
+    buyer's auth_token — a different principal's token misses this entry.
+    """
+    identifiers = _cache.get(property_list_cache_key(ref))
     if identifiers is None:
         return None
-    logger.debug("Cache hit for property list %s/%s", agent_url, loggable_list_id(list_id))
+    logger.debug("Cache hit for property list %s/%s", ref.agent_url, loggable_list_id(ref.list_id))
     return identifiers
 
 
-def _store_in_cache(agent_url: str, list_id: str, response_data: dict) -> list[Identifier]:
+def _store_in_cache(ref: PropertyListReference, response_data: dict) -> list[Identifier]:
     """Parse the fetched payload, cache it with the right TTL, return the typed identifiers."""
     parsed = GetPropertyListResponse.model_validate(response_data)
     identifiers = parsed.identifiers or []
@@ -142,11 +172,11 @@ def _store_in_cache(agent_url: str, list_id: str, response_data: dict) -> list[I
         parsed.cache_valid_until or (now + timedelta(seconds=_DEFAULT_CACHE_TTL_SECONDS)),
         now + timedelta(seconds=_MAX_CACHE_TTL_SECONDS),
     )
-    _cache.store((agent_url, list_id), identifiers, expires_at)
+    _cache.store(property_list_cache_key(ref), identifiers, expires_at)
     logger.debug(
         "Resolved property list %s/%s: %d identifiers (cached until %s)",
-        agent_url,
-        loggable_list_id(list_id),
+        ref.agent_url,
+        loggable_list_id(ref.list_id),
         len(identifiers),
         expires_at.isoformat(),
     )
@@ -196,8 +226,8 @@ async def resolve_property_list_typed(ref: PropertyListReference) -> list[Identi
     Async path. Use the sync variant from synchronous code (e.g. ad-server
     adapters whose ``create_media_buy`` API is sync).
     """
-    agent_url, request_url, headers = _build_request(ref)
-    cached = _check_cache(agent_url, ref.list_id)
+    request_url, headers = _build_request(ref)
+    cached = _check_cache(ref)
     if cached is not None:
         return cached
 
@@ -208,7 +238,7 @@ async def resolve_property_list_typed(ref: PropertyListReference) -> list[Identi
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
         _raise_fetch_error(ref, request_url, exc)
 
-    return _store_in_cache(agent_url, ref.list_id, _payload_or_raise(response, request_url))
+    return _store_in_cache(ref, _payload_or_raise(response, request_url))
 
 
 def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identifier]:
@@ -219,8 +249,8 @@ def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identif
     the module-level cache with the async variant, so back-to-back async and
     sync lookups for the same list reference only fetch once.
     """
-    agent_url, request_url, headers = _build_request(ref)
-    cached = _check_cache(agent_url, ref.list_id)
+    request_url, headers = _build_request(ref)
+    cached = _check_cache(ref)
     if cached is not None:
         return cached
 
@@ -231,7 +261,7 @@ def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identif
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
         _raise_fetch_error(ref, request_url, exc)
 
-    return _store_in_cache(agent_url, ref.list_id, _payload_or_raise(response, request_url))
+    return _store_in_cache(ref, _payload_or_raise(response, request_url))
 
 
 def clear_cache() -> None:

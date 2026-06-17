@@ -56,10 +56,14 @@ def _package(product_id: str, *, with_property_list: bool = True) -> MagicMock:
     return pkg
 
 
-def _allowed_key(pkg: MagicMock) -> tuple[str, str]:
-    """The (agent_url, list_id) key the advisory uses, computed from a package's ref."""
-    ref = pkg.targeting_overlay.property_list
-    return (str(ref.agent_url), ref.list_id)
+def _allowed_key(pkg: MagicMock) -> tuple[str, str, str]:
+    """The cache/dedup key the advisory uses, computed from a package's ref.
+
+    Delegates to the production ``property_list_cache_key`` so this test can never
+    drift from the resolver's partitioning (e.g. the auth_token dimension)."""
+    from src.core.property_list_resolver import property_list_cache_key
+
+    return property_list_cache_key(pkg.targeting_overlay.property_list)
 
 
 class TestEmitPropertyListAdvisories:

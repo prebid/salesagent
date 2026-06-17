@@ -727,21 +727,103 @@ def _package_with(ref: PropertyListReference | None):
 
 
 class TestPropertyListCacheKey:
-    """The canonical (agent_url, list_id) key — one source for every consumer."""
+    """The canonical (agent_url, list_id, auth_partition) key — one source for every consumer."""
 
     def test_stringifies_agent_url_and_keeps_list_id(self):
         from src.core.property_list_resolver import property_list_cache_key
 
-        ref = _make_ref(agent_url="https://lists.example.com", list_id="cb_v1")
+        ref = _make_ref(agent_url="https://lists.example.com", list_id="cb_v1", auth_token="tok")
         key = property_list_cache_key(ref)
-        assert key == ("https://lists.example.com/", "cb_v1")
+        assert key[0] == "https://lists.example.com/"
+        assert key[1] == "cb_v1"
         # AnyUrl str() must be used so the key is hashable/comparable across sites.
         assert all(isinstance(part, str) for part in key)
+        # Third element partitions by auth_token via a non-reversible HMAC (not the
+        # plaintext token).
+        assert len(key) == 3
+        assert key[2] and "tok" not in key[2]
 
     def test_same_ref_yields_equal_keys(self):
         from src.core.property_list_resolver import property_list_cache_key
 
         assert property_list_cache_key(_make_ref()) == property_list_cache_key(_make_ref())
+
+    def test_different_auth_token_partitions_same_list(self):
+        # Two principals reference the SAME (agent_url, list_id) with different
+        # bearer tokens -> different cache keys, so one cannot read another's
+        # access-gated list from the shared cache. Same token -> same key (a
+        # principal still shares its own cache entry).
+        from src.core.property_list_resolver import property_list_cache_key
+
+        common = {"agent_url": "https://lists.example.com", "list_id": "cb_v1"}
+        key_a = property_list_cache_key(_make_ref(**common, auth_token="token-A"))
+        key_b = property_list_cache_key(_make_ref(**common, auth_token="token-B"))
+        assert key_a != key_b
+        assert key_a == property_list_cache_key(_make_ref(**common, auth_token="token-A"))
+
+    def test_missing_auth_token_partitions_consistently(self):
+        # A None token maps to a stable sentinel partition (unauthenticated lists
+        # still share one entry) distinct from any real token's partition.
+        from src.core.property_list_resolver import property_list_cache_key
+
+        common = {"agent_url": "https://lists.example.com", "list_id": "cb_v1"}
+        key_none = property_list_cache_key(_make_ref(**common, auth_token=None))
+        assert key_none == property_list_cache_key(_make_ref(**common, auth_token=None))
+        assert key_none != property_list_cache_key(_make_ref(**common, auth_token="token-A"))
+
+
+class TestCacheAuthPartitioning:
+    """The shared process-global cache must not leak one principal's access-gated
+    list to another principal that references the same (agent_url, list_id)."""
+
+    def test_sync_resolver_does_not_serve_cross_principal_cache_hit(self):
+        from src.core.property_list_resolver import resolve_property_list_typed_sync
+
+        common = {"agent_url": "https://lists.example.com", "list_id": "shared-list"}
+        ref_a = _make_ref(**common, auth_token="token-A")
+        ref_b = _make_ref(**common, auth_token="token-B")
+
+        # Principal A resolves and populates the cache.
+        resp_a = _make_mock_response(_make_response_json(identifiers=[{"type": "domain", "value": "a-only.example"}]))
+        with patch("src.core.property_list_resolver.httpx.Client") as client_cls_a:
+            client_cls_a.return_value.__enter__.return_value.get.return_value = resp_a
+            ids_a = resolve_property_list_typed_sync(ref_a)
+
+        # Principal B references the SAME list with a different token. The list
+        # service would 401/403 B, so the cache must NOT serve A's identifiers —
+        # B must fetch fresh.
+        resp_b = _make_mock_response(_make_response_json(identifiers=[{"type": "domain", "value": "b-only.example"}]))
+        with patch("src.core.property_list_resolver.httpx.Client") as client_cls_b:
+            client_b = client_cls_b.return_value.__enter__.return_value
+            client_b.get.return_value = resp_b
+            ids_b = resolve_property_list_typed_sync(ref_b)
+            # B fetched fresh with ITS OWN token (0 calls would mean a
+            # cross-principal cache hit serving A's entry).
+            client_b.get.assert_called_once_with(
+                "https://lists.example.com/lists/shared-list",
+                headers={"Authorization": "Bearer token-B"},
+            )
+
+        assert [i.value for i in ids_a] == ["a-only.example"]
+        assert [i.value for i in ids_b] == ["b-only.example"]
+
+    def test_same_principal_reuses_cache_entry(self):
+        # Control: the SAME token still shares the cache, so auth-partitioning does
+        # not break legitimate same-principal reuse (only one HTTP fetch).
+        from src.core.property_list_resolver import resolve_property_list_typed_sync
+
+        ref = _make_ref(agent_url="https://lists.example.com", list_id="shared-list", auth_token="token-A")
+        resp = _make_mock_response(_make_response_json(identifiers=[{"type": "domain", "value": "a.example"}]))
+        with patch("src.core.property_list_resolver.httpx.Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            client.get.return_value = resp
+            resolve_property_list_typed_sync(ref)
+            resolve_property_list_typed_sync(ref)
+            # Cached after the first fetch: the second call is served from cache.
+            client.get.assert_called_once_with(
+                "https://lists.example.com/lists/shared-list",
+                headers={"Authorization": "Bearer token-A"},
+            )
 
 
 class TestIterPackagePropertyListRefs:

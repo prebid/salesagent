@@ -27,7 +27,7 @@ from adcp.types import PropertyListReference
 
 from src.adapters.base import AdServerAdapter
 from src.adapters.kevel import Kevel
-from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError
+from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError, AdCPPackageNotFoundError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest, MediaPackage, Principal, Targeting
 from src.services.kevel_site_resolver import ResolvedSiteIds
 from tests.helpers.adcp_factories import create_test_identifier
@@ -438,21 +438,51 @@ class TestUpdateTargetingRecompile:
         assert "PUT" in logged and "flight_9" in logged
         assert "42" in logged and "99" in logged
 
-    def test_real_mode_puts_recompiled_targeting(self):
+    def test_real_mode_puts_recompiled_targeting_to_resolved_flight_id(self):
+        # The AdCP package id ("flight_9") is the Kevel flight *Name*, not its
+        # numeric *Id* (555). The recompiled overlay must land on /flight/555 —
+        # PUTting /flight/flight_9 404s and the flight keeps serving stale siteIds.
         adapter = _kevel()
         overlay = Targeting(property_list=_ref())
         with patch.object(adapter, "_site_resolver") as mock_resolver:
             mock_resolver.resolve.return_value = ResolvedSiteIds(
                 site_ids={42, 99}, unsupported_types=set(), unresolvable_values=[]
             )
-            with patch("src.adapters.kevel.requests.put") as mock_put:
-                mock_put.return_value.raise_for_status = MagicMock()
-                adapter.update_package_targeting("kevel_77", "flight_9", overlay, datetime.now(UTC))
+            with patch("src.adapters.kevel.requests.get") as mock_get:
+                mock_get.return_value.raise_for_status = MagicMock()
+                mock_get.return_value.json.return_value = {"items": [{"Name": "flight_9", "Id": 555}]}
+                with patch("src.adapters.kevel.requests.put") as mock_put:
+                    mock_put.return_value.raise_for_status = MagicMock()
+                    adapter.update_package_targeting("kevel_77", "flight_9", overlay, datetime.now(UTC))
+        # Resolve uses the campaign id (kevel_ prefix stripped), not the media_buy_id.
+        mock_get.assert_called_once_with(
+            f"{adapter.base_url}/flight",
+            headers=adapter.headers,
+            params={"campaignId": "77"},
+        )
+        # PUT targets the numeric flight Id, NOT the AdCP package id / Name.
         mock_put.assert_called_once_with(
-            f"{adapter.base_url}/flight/flight_9",
+            f"{adapter.base_url}/flight/555",
             headers=adapter.headers,
             json={"siteIds": [42, 99]},
         )
+
+    def test_real_mode_raises_when_flight_name_absent(self):
+        # No flight whose Name matches the package id -> resolve raises instead of
+        # PUTting to a bogus URL (the recompiled siteIds must not silently vanish).
+        adapter = _kevel()
+        overlay = Targeting(property_list=_ref())
+        with patch.object(adapter, "_site_resolver") as mock_resolver:
+            mock_resolver.resolve.return_value = ResolvedSiteIds(
+                site_ids={42, 99}, unsupported_types=set(), unresolvable_values=[]
+            )
+            with patch("src.adapters.kevel.requests.get") as mock_get:
+                mock_get.return_value.raise_for_status = MagicMock()
+                mock_get.return_value.json.return_value = {"items": [{"Name": "other_flight", "Id": 555}]}
+                with patch("src.adapters.kevel.requests.put") as mock_put:
+                    with pytest.raises(AdCPPackageNotFoundError):
+                        adapter.update_package_targeting("kevel_77", "flight_9", overlay, datetime.now(UTC))
+        mock_put.assert_not_called()
 
 
 class TestBaseAdapterUpdateTargetingContract:

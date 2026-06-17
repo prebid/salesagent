@@ -93,7 +93,7 @@ class Kevel(AdServerAdapter):
         # ``_raise_if_property_list_uncompilable`` and ``_build_targeting`` both
         # need the same ``ResolvedSiteIds`` per package; memoizing here keeps
         # the resolver call count at 1 per (agent_url, list_id) per request.
-        self._property_list_cache: dict[tuple[str, str], ResolvedSiteIds] = {}
+        self._property_list_cache: dict[tuple[str, str, str], ResolvedSiteIds] = {}
 
     # Supported device types (Kevel doesn't support CTV)
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet"}
@@ -104,9 +104,9 @@ class Kevel(AdServerAdapter):
     def _resolve_property_list(self, ref: PropertyListReference) -> ResolvedSiteIds:
         """Resolve a ``PropertyListReference`` once per request, with dry-run support.
 
-        Memoizes by ``(agent_url, list_id)`` so ``_raise_if_property_list_uncompilable``
-        and ``_build_targeting`` share a single resolution per package per
-        request.
+        Memoizes by ``(agent_url, list_id, auth_partition)`` so
+        ``_raise_if_property_list_uncompilable`` and ``_build_targeting`` share a
+        single resolution per package per request.
 
         Dry-run path (``_site_resolver is None``): still inspect identifier
         types (no Kevel HTTP needed — types come from the property-list agent
@@ -220,6 +220,34 @@ class Kevel(AdServerAdapter):
         """
         self._raise_if_property_list_uncompilable(packages)
 
+    def _fetch_campaign_flights(self, campaign_id: str) -> list[dict[str, Any]]:
+        """GET every Kevel flight for a campaign.
+
+        ``campaign_id`` is the numeric Kevel campaign id (the ``kevel_`` prefix on
+        ``media_buy_id`` already stripped). A transport failure surfaces as a typed
+        transient ``AdCPAdapterError`` via the shared mapping.
+        """
+        with wrap_request_errors():
+            response = requests.get(f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id})
+            response.raise_for_status()
+        return response.json().get("items", [])
+
+    def _resolve_flight_by_name(self, campaign_id: str, package_id: str) -> dict[str, Any]:
+        """Resolve an AdCP ``package_id`` to its live Kevel flight within ``campaign_id``.
+
+        Kevel keys flights by numeric ``Id``; ``create_media_buy`` stores the AdCP
+        package id as the flight ``Name``. Every flight mutation must resolve
+        Name->Id before addressing ``/flight/{Id}`` — PUTting ``/flight/{Name}``
+        404s and the live flight keeps serving the stale configuration.
+        """
+        flight = next(
+            (f for f in self._fetch_campaign_flights(campaign_id) if f["Name"] == package_id),
+            None,
+        )
+        if not flight:
+            raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+        return flight
+
     def update_package_targeting(
         self,
         media_buy_id: str,
@@ -243,8 +271,9 @@ class Kevel(AdServerAdapter):
             if targeting:
                 self.log(f"  Payload: {json.dumps(targeting, default=list)}")
             return
+        flight = self._resolve_flight_by_name(media_buy_id.replace("kevel_", ""), package_id)
         with wrap_request_errors():
-            response = requests.put(f"{self.base_url}/flight/{package_id}", headers=self.headers, json=targeting)
+            response = requests.put(f"{self.base_url}/flight/{flight['Id']}", headers=self.headers, json=targeting)
             response.raise_for_status()
         self.audit_logger.log_success(f"Updated Kevel flight {package_id} targeting for {media_buy_id}")
 
@@ -907,16 +936,7 @@ class Kevel(AdServerAdapter):
                     update_response.raise_for_status()
 
                 elif action in ["pause_package", "resume_package"] and package_id:
-                    # Get flight ID by name
-                    flights_response = requests.get(
-                        f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id}
-                    )
-                    flights_response.raise_for_status()
-                    flights = flights_response.json().get("items", [])
-
-                    flight = next((f for f in flights if f["Name"] == package_id), None)
-                    if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+                    flight = self._resolve_flight_by_name(campaign_id, package_id)
 
                     # Update flight status
                     is_resume = action == "resume_package"
@@ -945,16 +965,7 @@ class Kevel(AdServerAdapter):
                     and package_id
                     and budget is not None
                 ):
-                    # Get flight ID by name
-                    flights_response = requests.get(
-                        f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id}
-                    )
-                    flights_response.raise_for_status()
-                    flights = flights_response.json().get("items", [])
-
-                    flight = next((f for f in flights if f["Name"] == package_id), None)
-                    if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+                    flight = self._resolve_flight_by_name(campaign_id, package_id)
 
                     # Calculate impressions based on action
                     if action == "update_package_budget":

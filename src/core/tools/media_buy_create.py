@@ -1490,7 +1490,7 @@ from src.services.slack_notifier import get_slack_notifier
 _IDEMPOTENCY_TOOL_NAME = "create_media_buy"
 
 
-async def _resolve_property_list_identifiers(packages: list | None) -> dict[tuple[str, str], list[Identifier]]:
+async def _resolve_property_list_identifiers(packages: list | None) -> dict[tuple[str, str, str], list[Identifier]]:
     """Resolve each package's buyer ``property_list`` to its typed identifiers.
 
     Runs BEFORE the create validation transaction opens, so the external HTTP
@@ -1498,8 +1498,8 @@ async def _resolve_property_list_identifiers(packages: list | None) -> dict[tupl
     loop is not blocked. Identifiers stay TYPED — ``.type`` participates in the
     intersection's matching. Best-effort: a resolution failure is logged and
     that list is omitted (the advisory then skips packages whose list didn't
-    resolve). Keyed by ``(agent_url, list_id)`` so a list referenced by several
-    packages is fetched once.
+    resolve). Keyed by ``property_list_cache_key`` so a list referenced by several
+    packages (same principal) is fetched once.
     """
     # Lazy import: the prefetch unit tests patch ``resolve_property_list_typed``
     # at its source module, so it must resolve at call time (a module-top import
@@ -1510,7 +1510,7 @@ async def _resolve_property_list_identifiers(packages: list | None) -> dict[tupl
         resolve_property_list_typed,
     )
 
-    resolved: dict[tuple[str, str], list[Identifier]] = {}
+    resolved: dict[tuple[str, str, str], list[Identifier]] = {}
     for _index, _package, ref, key in iter_package_property_list_refs(packages or []):
         if key in resolved:
             continue
@@ -1533,7 +1533,7 @@ def _build_property_list_advisories(
     packages: list,
     product_map: dict,
     authorized_property_repo: "AuthorizedPropertyRepository",
-    resolved_identifiers: dict[tuple[str, str], list[Identifier]],
+    resolved_identifiers: dict[tuple[str, str, str], list[Identifier]],
 ) -> list[Error]:
     """Buyer-visible advisories when a package's property_list has zero overlap.
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from adcp.types import PropertyListReference
 
 from src.adapters.base import AdServerAdapter
 from src.adapters.kevel import Kevel
@@ -95,7 +96,9 @@ def test_mock_adapter_declares_property_list_targeting_support() -> None:
 def _pkg(*, property_list: bool) -> MagicMock:
     pkg = MagicMock()
     pkg.targeting_overlay = MagicMock()
-    pkg.targeting_overlay.property_list = MagicMock() if property_list else None
+    pkg.targeting_overlay.property_list = (
+        PropertyListReference(agent_url="https://lists.example.com", list_id="L1") if property_list else None
+    )
     return pkg
 
 

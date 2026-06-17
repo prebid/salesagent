@@ -74,11 +74,14 @@ class TestKevelUpdateTargetingOutage:
 
     def test_update_package_targeting_outage_is_transient(self):
         adapter = _kevel()
-        with patch(
-            "src.adapters.kevel.requests.put",
-            side_effect=requests.exceptions.ConnectionError("flight PUT failed"),
-        ):
-            with pytest.raises(AdCPAdapterError) as exc_info:
-                adapter.update_package_targeting("kevel_42", "flight_9", Targeting(), datetime.now(UTC).date())
+        # The flight Name->Id resolve GET succeeds; the targeting PUT is the outage.
+        with patch("src.adapters.kevel.requests.get") as mock_get:
+            mock_get.return_value.json.return_value = {"items": [{"Name": "flight_9", "Id": 555}]}
+            with patch(
+                "src.adapters.kevel.requests.put",
+                side_effect=requests.exceptions.ConnectionError("flight PUT failed"),
+            ):
+                with pytest.raises(AdCPAdapterError) as exc_info:
+                    adapter.update_package_targeting("kevel_42", "flight_9", Targeting(), datetime.now(UTC).date())
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
         assert exc_info.value.recovery == "transient"

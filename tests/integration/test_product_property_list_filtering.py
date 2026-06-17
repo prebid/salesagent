@@ -564,8 +564,12 @@ class TestCreateAdvisoryRealProduct:
         package.targeting_overlay = MagicMock()
         package.targeting_overlay.property_list = ref
 
+        from src.core.property_list_resolver import property_list_cache_key
+
         repo = AuthorizedPropertyRepository(env._session, tenant.tenant_id)
-        resolved = {(str(ref.agent_url), ref.list_id): create_test_identifiers(buyer_domain)}
+        # Delegate to the production key so this fixture can't drift from the
+        # resolver's partitioning (e.g. the auth_token dimension).
+        resolved = {property_list_cache_key(ref): create_test_identifiers(buyer_domain)}
         return [package], {"adv_prod": product}, repo, resolved
 
     @pytest.mark.asyncio
