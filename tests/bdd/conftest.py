@@ -1586,12 +1586,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
         # attribution_window REFERENCE (clean scenario->step->harness path): the Examples
-        # name the exact error code (error "INVALID_REQUEST"), the step asserts it on the
-        # harness wire envelope. interval=0 / unit=weeks / model=last_click now PASS on
-        # a2a/mcp/rest (RequestValidationError handler emits INVALID_REQUEST). The one
-        # remaining gap is "campaign with interval=2": INV-5 can't fire because the
-        # in-process request path drops attribution_window.post_click (#1462). e2e_rest
-        # parses the body server-side, so it is NOT marked here (it asserts for real).
+        # name the exact error code (error "VALIDATION_ERROR" — the schema-canonical code
+        # for value/enum/range/business-rule violations; reconciled from the earlier
+        # INVALID_REQUEST mis-pin per the AdCP graded error-compliance storyboard), the
+        # step asserts it on the harness wire envelope. interval=0 / unit=weeks /
+        # model=last_click PASS on a2a/mcp/rest (VALIDATION_ERROR). The one remaining gap
+        # is "campaign with interval=2": INV-5 can't fire because the in-process request
+        # path drops attribution_window.post_click (#1462). e2e_rest parses the body
+        # server-side, so it is NOT marked here (it asserts for real).
         _aw_campaign_invalid = (
             "T-UC-004-boundary-attribution" in marker_names and "unit=campaign with interval=2" in nodeid
         )

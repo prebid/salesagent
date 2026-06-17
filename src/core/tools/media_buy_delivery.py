@@ -20,7 +20,6 @@ from rich.console import Console
 
 from src.core.exceptions import (
     AdCPError,
-    AdCPInvalidRequestError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -34,8 +33,12 @@ def _validate_attribution_window(attribution_window) -> None:
     (the window spans the full campaign flight) in its description only — it is a
     cross-field constraint JSON Schema cannot express, so neither the SDK model nor
     FastAPI's request validation rejects ``interval != 1``. Enforce it here so a
-    malformed campaign window is rejected with the spec ``INVALID_REQUEST`` code
-    instead of being silently accepted.
+    malformed campaign window is rejected with ``VALIDATION_ERROR`` — the canonical
+    code for a business-rule violation on a well-formed payload (interval and unit
+    are individually valid; only their relationship is not), per the AdCP graded
+    error-compliance storyboard. The AdCP schema defines unit/model as plain enums
+    with no per-field error-code, so this aligns with the other value/enum
+    validations (UC-006/UC-018) rather than the earlier INVALID_REQUEST mis-pin.
     """
     if attribution_window is None:
         return
@@ -44,7 +47,7 @@ def _validate_attribution_window(attribution_window) -> None:
             continue
         unit = getattr(window.unit, "value", window.unit)
         if unit == "campaign" and window.interval != 1:
-            raise AdCPInvalidRequestError(
+            raise AdCPValidationError(
                 "attribution_window: interval must be 1 when unit is 'campaign' "
                 "(the window spans the full campaign flight)",
                 field="attribution_window",
