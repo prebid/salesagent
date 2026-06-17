@@ -127,7 +127,14 @@ class A2ADispatcher:
                 error=exc,
                 wire_error_envelope=_wire_envelope_from_exception(exc),
             )
-        return TransportResult(payload=payload, envelope={"transport": "a2a"})
+        # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
+        # (declared on BaseTestEnv, reset per call_via — read directly so a
+        # missed capture surfaces as None against a known attribute, not getattr).
+        return TransportResult(
+            payload=payload,
+            envelope={"transport": "a2a"},
+            wire_response=env._last_wire_response,
+        )
 
 
 class RestDispatcher:
@@ -161,8 +168,10 @@ class RestDispatcher:
                     wire_error_envelope=body,
                 )
 
-            payload = env.parse_rest_response(response.json())
-            return TransportResult(payload=payload, envelope=envelope, raw_response=response)
+            body = response.json()
+            payload = env.parse_rest_response(body)
+            # Real REST wire: the HTTP JSON body dict.
+            return TransportResult(payload=payload, envelope=envelope, raw_response=response, wire_response=body)
         except Exception as exc:
             return TransportResult(error=exc)
 
@@ -191,7 +200,13 @@ class McpDispatcher:
                 # ImplDispatcher caveat; never a substitute for the wire field.
                 synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
-        return TransportResult(payload=payload, envelope={"transport": "mcp"})
+        # Real MCP wire: the structured_content dict stashed by _run_mcp_client
+        # (declared on BaseTestEnv, reset per call_via — read directly).
+        return TransportResult(
+            payload=payload,
+            envelope={"transport": "mcp"},
+            wire_response=env._last_wire_response,
+        )
 
 
 DISPATCHERS: dict[Transport, ImplDispatcher | A2ADispatcher | RestDispatcher | McpDispatcher] = {

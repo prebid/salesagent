@@ -66,6 +66,11 @@ class TransportResult:
         envelope: Transport-specific metadata (HTTP status, ToolResult, etc.).
         error: Exception raised during dispatch, if any.
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
+        wire_response: Serialized success-path response body as a dict, captured
+            from the real wire (REST HTTP JSON body, MCP structured_content, A2A
+            artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
+            the typed ``payload`` instead). Lets success-path tests assert the
+            actual serialized shape (e.g. the v3.1 format_id federation contract).
         wire_error_envelope: Raw two-layer error envelope dict captured from
             the actual wire bytes (REST HTTP body, MCP ToolError content text,
             A2A failed-Task artifact DataPart). ``None`` on success or on the
@@ -86,6 +91,7 @@ class TransportResult:
     envelope: dict[str, Any] = field(default_factory=dict)
     error: Exception | None = None
     raw_response: Any = None
+    wire_response: dict[str, Any] | None = None
     wire_error_envelope: dict[str, Any] | None = None
     synthesized_error_envelope: dict[str, Any] | None = None
 
