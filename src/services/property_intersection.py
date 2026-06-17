@@ -37,6 +37,7 @@ plan's accept-with-context decision).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -47,6 +48,8 @@ from src.core.database.models import AuthorizedProperty
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.schemas import Error
 from src.services.identifier_matching import identifier_dicts, property_matches_buyer_list
+
+logger = logging.getLogger(__name__)
 
 
 class DropReason(StrEnum):
@@ -117,6 +120,14 @@ class PropertyIntersection:
                 kept.append(product)
             else:
                 dropped.append(DroppedProduct(product=product, reason=outcome))
+                # Single source of the [INTERSECTION-ADVISORY] operator marker: emitting it
+                # here means both get_products and the create-side advisory builder inherit
+                # consistent observability for a buyer property_list drop.
+                logger.warning(
+                    "[INTERSECTION-ADVISORY] product %s excluded by buyer property_list (reason=%s)",
+                    getattr(product, "product_id", "?"),
+                    outcome.value,
+                )
         return IntersectionResult(kept_products=tuple(kept), dropped_products=tuple(dropped))
 
     def _evaluate(self, product: Any, buyer_dicts: list[dict[str, str]]) -> DropReason | None:

@@ -1570,7 +1570,7 @@ def _build_property_list_advisories(
     # module by the advisory unit/integration tests, so it must resolve at call
     # time (a module-top import would bind a ref the patch can't reach).
     from src.core.product_conversion import convert_product_model_to_schema
-    from src.core.property_list_resolver import iter_package_property_list_refs, loggable_list_id
+    from src.core.property_list_resolver import iter_package_property_list_refs
 
     intersection = PropertyIntersection(authorized_property_repo)
     advisories: list[Error] = []
@@ -1599,15 +1599,8 @@ def _build_property_list_advisories(
             continue
         if result.zero_match:
             reason = enum_value(result.dropped_products[0].reason) if result.dropped_products else "zero_match"
-            logger.warning(
-                "[INTERSECTION-ADVISORY] Buyer's property_list has zero overlap with product %s "
-                "for packages[%d] (reason=%s, list=%s/%s). Buy proceeds per accept-with-context.",
-                product.product_id,
-                index,
-                reason,
-                ref.agent_url,
-                loggable_list_id(ref.list_id),
-            )
+            # The operator [INTERSECTION-ADVISORY] marker is emitted once, inside
+            # PropertyIntersection.filter_products (shared by get_products + create).
             advisories.append(
                 property_list_drop_advisory(
                     message=(

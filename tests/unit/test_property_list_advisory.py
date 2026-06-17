@@ -67,10 +67,11 @@ def _allowed_key(pkg: MagicMock) -> tuple[str, str, str]:
 
 
 class TestEmitPropertyListAdvisories:
-    def test_zero_overlap_returns_buyer_advisory_and_logs(self, caplog):
+    def test_zero_overlap_returns_buyer_advisory(self):
         """Zero-overlap is accept-with-CONTEXT: a buyer-visible Error advisory is
-        returned (the caller attaches it to the success envelope's errors[]) and
-        the operator WARNING is still logged. Never a raise."""
+        returned (the caller attaches it to the success envelope's errors[]). Never a
+        raise. The operator [INTERSECTION-ADVISORY] marker is emitted by
+        PropertyIntersection (pinned in test_property_intersection)."""
         product = MagicMock()
         product.product_id = "p1"
         pkg = _package("p1")
@@ -81,7 +82,6 @@ class TestEmitPropertyListAdvisories:
         with (
             patch(_CONVERT, side_effect=lambda p: p),
             patch(_FILTER, return_value=zero),
-            caplog.at_level(logging.WARNING, logger=_LOGGER),
         ):
             advisories = _build_property_list_advisories(
                 [pkg], {"p1": product}, MagicMock(), {_allowed_key(pkg): _buyers("nomatch.example")}
@@ -101,11 +101,6 @@ class TestEmitPropertyListAdvisories:
             "reason": "no_property_overlap",
             "list_id": "L1",
         }
-
-        messages = [r.getMessage() for r in caplog.records]
-        assert any(
-            "INTERSECTION-ADVISORY" in m and "zero overlap" in m and "no_property_overlap" in m for m in messages
-        ), f"expected a zero-overlap advisory WARNING; got {messages}"
 
     def test_intersection_exception_is_swallowed(self, caplog):
         """An intersection failure must be swallowed so the buy proceeds — never raised."""

@@ -21,6 +21,7 @@ EVERY covered property to match the buyer's list.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -198,6 +199,23 @@ class TestByIdSelectorResolvesToRows:
         assert result.kept_products == ()
         assert len(result.dropped_products) == 1
         assert result.dropped_products[0].reason is DropReason.NO_PROPERTY_OVERLAP
+
+    def test_drop_logs_intersection_advisory_marker(self, caplog):
+        # The [INTERSECTION-ADVISORY] operator marker is emitted from INSIDE the
+        # intersection, so get_products and the create-side advisory builder both
+        # inherit consistent observability for a buyer property_list drop.
+        repo = _repo(by_id={("example.com", "prop_a"): ["espn.com"]})
+        intersection = PropertyIntersection(repo)
+        product = _product("p1", [_sel_by_id(["prop_a"])])
+
+        with caplog.at_level(logging.WARNING, logger="src.services.property_intersection"):
+            result = intersection.filter_products([product], _buyers("nytimes.com"))
+
+        assert len(result.dropped_products) == 1
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("INTERSECTION-ADVISORY" in m and "p1" in m and "no_property_overlap" in m for m in messages), (
+            f"expected the intersection drop marker; got {messages}"
+        )
 
     def test_unknown_id_drops_with_no_resolvable_properties(self):
         """by_id IDs that resolve to no AuthorizedProperty row → NO_RESOLVABLE_PROPERTIES.
