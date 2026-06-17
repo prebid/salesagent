@@ -178,6 +178,27 @@ class TestResolveSupportedTypes:
         assert result.site_ids == {7}
         assert result.unsupported_types == set()
 
+    def test_multiple_sites_at_one_host_all_resolve(self):
+        # Two Kevel sites share host www.espn.com (different sections/zones at one
+        # domain). A buyer targeting espn.com must resolve to BOTH siteIds — the old
+        # dict[str,int] index collapsed a shared host last-write-wins, so the buyer
+        # silently targeted only the last-seen site.
+        resolver = _resolver()
+        with (
+            _patched_list([_identifier("espn.com")]),
+            patch.object(
+                resolver,
+                "_fetch_all_sites",
+                return_value=[
+                    _kevel_site(42, "https://www.espn.com"),
+                    _kevel_site(99, "https://www.espn.com"),
+                ],
+            ),
+        ):
+            result = resolver.resolve(_ref())
+
+        assert result.site_ids == {42, 99}
+
 
 class TestResolveUnsupportedTypes:
     """ios_bundle, podcast_guid, etc. don't map to Kevel Site — surface as unsupported."""
@@ -347,7 +368,7 @@ class TestSiteIndexCache:
         cache_key = _site_cache_key(resolver)
         cached_lookup = KevelSiteResolver._site_cache.get(cache_key)
         assert cached_lookup is not None
-        assert cached_lookup == {"www.espn.com": 42}, f"Cache state torn after concurrent writes: {cached_lookup!r}"
+        assert cached_lookup == {"www.espn.com": {42}}, f"Cache state torn after concurrent writes: {cached_lookup!r}"
 
     def test_sequential_expired_cache_redrop_does_not_raise(self):
         """The expiry-drop branch uses ``pop(key, None)`` not ``del``, so
@@ -363,7 +384,7 @@ class TestSiteIndexCache:
         cache_key = _site_cache_key(resolver)
 
         # Pre-populate cache with an expired entry to force the pop branch.
-        KevelSiteResolver._site_cache.store(cache_key, {"old.com": 1}, datetime.now(UTC) - timedelta(seconds=1))
+        KevelSiteResolver._site_cache.store(cache_key, {"old.com": {1}}, datetime.now(UTC) - timedelta(seconds=1))
 
         fetch_mock = MagicMock(return_value=[_kevel_site(42, "https://www.espn.com")])
         with (

@@ -85,3 +85,58 @@ class TestKevelUpdateTargetingOutage:
                     adapter.update_package_targeting("kevel_42", "flight_9", Targeting(), datetime.now(UTC).date())
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
         assert exc_info.value.recovery == "transient"
+
+
+class TestStatusRecoveryTable:
+    """The single status->recovery table (``adcp_error_for_http_status``) every HTTP
+    boundary routes through, so one status yields one recovery verdict everywhere."""
+
+    @pytest.mark.parametrize(
+        "status, error_code, recovery",
+        [
+            (400, "VALIDATION_ERROR", "correctable"),
+            (401, "VALIDATION_ERROR", "correctable"),
+            (403, "VALIDATION_ERROR", "correctable"),
+            (404, "VALIDATION_ERROR", "correctable"),
+            (422, "VALIDATION_ERROR", "correctable"),
+            (429, "RATE_LIMITED", "transient"),
+            (500, "SERVICE_UNAVAILABLE", "transient"),
+            (503, "SERVICE_UNAVAILABLE", "transient"),
+        ],
+    )
+    def test_status_maps_to_recovery(self, status, error_code, recovery):
+        from src.core.exceptions import adcp_error_for_http_status
+
+        err = adcp_error_for_http_status(status, f"HTTP {status}")
+        assert err.error_code == error_code
+        assert err.recovery == recovery
+
+
+class TestWrapRequestErrorsStatusAware:
+    """A response-bearing ``requests`` failure (a raise_for_status HTTPError) maps by
+    status; a response-less failure (timeout/connection) stays transient."""
+
+    @staticmethod
+    def _http_error(status: int) -> requests.exceptions.HTTPError:
+        resp = requests.Response()
+        resp.status_code = status
+        return requests.exceptions.HTTPError(f"HTTP {status}", response=resp)
+
+    def test_4xx_write_is_correctable(self):
+        from src.core.exceptions import AdCPValidationError
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _raise_in_wrap(self._http_error(400))
+        assert exc_info.value.recovery == "correctable"
+
+    def test_429_write_is_transient(self):
+        from src.core.exceptions import AdCPRateLimitError
+
+        with pytest.raises(AdCPRateLimitError) as exc_info:
+            _raise_in_wrap(self._http_error(429))
+        assert exc_info.value.recovery == "transient"
+
+    def test_5xx_write_is_transient(self):
+        with pytest.raises(AdCPAdapterError) as exc_info:
+            _raise_in_wrap(self._http_error(503))
+        assert exc_info.value.recovery == "transient"

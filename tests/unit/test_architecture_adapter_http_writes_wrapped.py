@@ -39,7 +39,20 @@ from tests.unit._architecture_helpers import REPO_ROOT, rel, safe_parse
 # MUST stay empty — wrap the write instead of allowlisting it.
 ALLOWLIST: frozenset[str] = frozenset()
 
+# Hand-rolled ``except <RequestException>: raise AdCPAdapterError(str(e))`` re-wraps that
+# bypass ``wrap_request_errors`` (and so miss its shared status->recovery mapping, e.g. a
+# 4xx wrongly reported transient). MUST stay empty — route the write through
+# ``with wrap_request_errors():`` instead. A re-raise that ADDS context (an f-string
+# message, e.g. gam_reporting's "Failed to download GAM report") is legitimately enriching
+# and is NOT flagged; a handler that swallows (no AdCPAdapterError raise) is graceful
+# degradation and is NOT flagged.
+HAND_ROLLED_REWRAP_ALLOWLIST: frozenset[str] = frozenset()
+
 _ADAPTERS_DIR = REPO_ROOT / "src/adapters"
+
+# The canonical home of the RequestException -> AdCPAdapterError mapping; its bare
+# ``AdCPAdapterError(str(e))`` is the SOURCE, not a hand-rolled copy.
+_WRAP_HELPER_FILE = "http_errors.py"
 
 _WRAPPER_NAME = "wrap_request_errors"
 
@@ -126,6 +139,58 @@ def collect_unwrapped_http_writes() -> list[str]:
     return unwrapped
 
 
+def _handler_catches_request_exception(handler: ast.ExceptHandler) -> bool:
+    """True if the ``except`` catches ``requests`` ``RequestException`` (alone or in a tuple)."""
+    exc_type = handler.type
+    if exc_type is None:
+        return False
+    candidates = exc_type.elts if isinstance(exc_type, ast.Tuple) else [exc_type]
+    for c in candidates:
+        name = c.attr if isinstance(c, ast.Attribute) else (c.id if isinstance(c, ast.Name) else None)
+        if name == "RequestException":
+            return True
+    return False
+
+
+def _handler_raises_bare_adapter_error(handler: ast.ExceptHandler) -> bool:
+    """True if the handler raises ``AdCPAdapterError(str(...))`` — the byte-identical
+    ``wrap_request_errors`` body (a bare conversion of the caught exception). A re-raise
+    that ADDS context (an f-string / literal message) is legitimately enriching and is
+    not flagged."""
+    for node in ast.walk(handler):
+        if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+            continue
+        fn = node.exc.func
+        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        if name != "AdCPAdapterError" or not node.exc.args:
+            continue
+        arg0 = node.exc.args[0]
+        if isinstance(arg0, ast.Call) and isinstance(arg0.func, ast.Name) and arg0.func.id == "str":
+            return True
+    return False
+
+
+def collect_hand_rolled_request_exception_rewraps() -> list[str]:
+    """Return ``path:line`` for every adapter ``except <RequestException>`` handler that
+    re-raises ``AdCPAdapterError(str(...))`` — the hand-rolled copy of ``wrap_request_errors``.
+    Excludes the canonical helper file itself."""
+    out: list[str] = []
+    for filepath in sorted(_ADAPTERS_DIR.rglob("*.py")):
+        if filepath.name == _WRAP_HELPER_FILE:
+            continue
+        tree = safe_parse(filepath)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ExceptHandler)
+                and _handler_catches_request_exception(node)
+                and _handler_raises_bare_adapter_error(node)
+            ):
+                out.append(f"{rel(filepath)}:{node.lineno}")
+    return out
+
+
 class TestAdapterHttpWritesWrapped:
     """Every adapter HTTP write must surface a typed AdCPError, never a raw transport exception."""
 
@@ -158,3 +223,65 @@ class TestAdapterHttpWritesWrapped:
             f"ALLOWLIST must be empty but contains {sorted(ALLOWLIST)}. "
             "Wrapping adapter HTTP writes is mandatory: wrap the write instead of allowlisting it."
         )
+
+    def test_no_hand_rolled_request_exception_rewrap(self):
+        # A future ``except RequestException: raise AdCPAdapterError(str(e))`` bypasses
+        # wrap_request_errors and its status->recovery mapping (a 4xx wrongly reported
+        # transient). Route the write through ``with wrap_request_errors():`` instead.
+        offenders = sorted(set(collect_hand_rolled_request_exception_rewraps()) - HAND_ROLLED_REWRAP_ALLOWLIST)
+        if offenders:
+            detail = "\n".join(f"  - {site}" for site in offenders)
+            raise AssertionError(
+                "Hand-rolled RequestException->AdCPAdapterError(str(e)) re-wrap bypasses "
+                f"wrap_request_errors:\n{detail}\n\n"
+                "Wrap the call in `with wrap_request_errors():` (src/adapters/utils/http_errors.py) "
+                "instead. Do NOT add to HAND_ROLLED_REWRAP_ALLOWLIST."
+            )
+
+    def test_hand_rolled_rewrap_allowlist_is_empty(self):
+        assert HAND_ROLLED_REWRAP_ALLOWLIST == frozenset(), (
+            f"HAND_ROLLED_REWRAP_ALLOWLIST must be empty but contains {sorted(HAND_ROLLED_REWRAP_ALLOWLIST)}. "
+            "Route the write through wrap_request_errors instead of allowlisting it."
+        )
+
+    def test_rewrap_matcher_detects_antipattern_and_ignores_legitimate(self):
+        # Positive + negative self-tests so the scan cannot pass vacuously: the matcher
+        # must flag the bare re-wrap, and must NOT flag a swallowing handler or a
+        # context-adding (f-string) re-raise.
+        bare_rewrap = ast.parse(
+            "import requests\n"
+            "def f():\n"
+            "    try:\n"
+            "        requests.get('x').raise_for_status()\n"
+            "    except requests.exceptions.RequestException as e:\n"
+            "        raise AdCPAdapterError(str(e)) from e\n"
+        )
+        swallow = ast.parse(
+            "import requests\n"
+            "def f():\n"
+            "    try:\n"
+            "        requests.get('x').raise_for_status()\n"
+            "    except requests.exceptions.RequestException as e:\n"
+            "        log(e)\n"
+        )
+        context_rewrap = ast.parse(
+            "import requests\n"
+            "def f():\n"
+            "    try:\n"
+            "        requests.get('x').raise_for_status()\n"
+            "    except requests.exceptions.RequestException as e:\n"
+            "        raise AdCPAdapterError(f'download failed: {str(e)}') from e\n"
+        )
+
+        def _hits(tree: ast.AST) -> int:
+            return sum(
+                1
+                for n in ast.walk(tree)
+                if isinstance(n, ast.ExceptHandler)
+                and _handler_catches_request_exception(n)
+                and _handler_raises_bare_adapter_error(n)
+            )
+
+        assert _hits(bare_rewrap) == 1, "matcher failed to detect the bare hand-rolled re-wrap"
+        assert _hits(swallow) == 0, "matcher wrongly flagged a swallowing handler"
+        assert _hits(context_rewrap) == 0, "matcher wrongly flagged a context-adding re-raise"

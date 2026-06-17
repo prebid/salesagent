@@ -684,6 +684,21 @@ class TestFetchErrorTaxonomy:
                 resolve_property_list_typed_sync(ref)
         assert excinfo.value.recovery == "transient"
 
+    def test_sync_429_is_transient_rate_limit(self):
+        # 429 is a rate limit (the spec's transient example), NOT a buyer-correctable
+        # 4xx — classifying it correctable would wrongly tell the buyer to fix the request
+        # instead of backing off and retrying.
+        from src.core.exceptions import AdCPRateLimitError
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed_sync
+
+        clear_cache()
+        ref = _make_ref()
+        with patch("src.core.property_list_resolver.httpx.Client", return_value=self._sync_client_raising(429)):
+            with pytest.raises(AdCPRateLimitError) as excinfo:
+                resolve_property_list_typed_sync(ref)
+        assert excinfo.value.error_code == "RATE_LIMITED"
+        assert excinfo.value.recovery == "transient"
+
     @pytest.mark.asyncio
     async def test_async_403_is_correctable_validation_error(self):
         from src.core.exceptions import AdCPValidationError
@@ -824,6 +839,40 @@ class TestCacheAuthPartitioning:
                 "https://lists.example.com/lists/shared-list",
                 headers={"Authorization": "Bearer token-A"},
             )
+
+
+class TestMalformedResponseRecovery:
+    """A schema-invalid (valid-JSON) list-service response is the SERVICE
+    misbehaving — surfaced as a transient AdCPAdapterError consistently across both
+    resolver paths, never a raw ValidationError that the Kevel path normalizes to
+    terminal INTERNAL_ERROR (and the async advisory path silently swallows)."""
+
+    def test_sync_malformed_response_is_transient(self):
+        from src.core.exceptions import AdCPAdapterError
+        from src.core.property_list_resolver import resolve_property_list_typed_sync
+
+        bad = _make_response_json()
+        bad["identifiers"] = "not-a-list"  # valid JSON, schema-invalid (expects a list)
+        resp = _make_mock_response(bad)
+        with patch("src.core.property_list_resolver.httpx.Client") as client_cls:
+            client_cls.return_value.__enter__.return_value.get.return_value = resp
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                resolve_property_list_typed_sync(_make_ref())
+        assert exc_info.value.recovery == "transient"
+
+    @pytest.mark.asyncio
+    async def test_async_malformed_response_is_transient(self):
+        from src.core.exceptions import AdCPAdapterError
+        from src.core.property_list_resolver import resolve_property_list_typed
+
+        bad = _make_response_json()
+        bad["identifiers"] = "not-a-list"
+        resp = _make_mock_response(bad)
+        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
+            mock_client_cls.return_value = _make_mock_client(get_return_value=resp)
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                await resolve_property_list_typed(_make_ref())
+        assert exc_info.value.recovery == "transient"
 
 
 class TestIterPackagePropertyListRefs:

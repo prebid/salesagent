@@ -13,7 +13,7 @@ from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
 from src.adapters.utils import wrap_request_errors
-from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError
+from src.core.exceptions import AdCPConfigurationError
 from src.core.retry_utils import api_retry
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -271,7 +271,7 @@ class XandrAdapter(AdServerAdapter):
 
         url = f"{self.api_endpoint}{endpoint}"
 
-        try:
+        with wrap_request_errors():
             if method == "GET":
                 response = requests.get(url, headers=headers, params=data)
             elif method == "POST":
@@ -285,10 +285,6 @@ class XandrAdapter(AdServerAdapter):
 
             response.raise_for_status()
             return response.json()
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Xandr API request failed: {e}")
-            raise AdCPAdapterError(str(e)) from e
 
     def _requires_manual_approval(self, operation: str) -> bool:
         """Check if an operation requires manual approval."""

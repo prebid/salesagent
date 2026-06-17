@@ -893,6 +893,30 @@ class AdCPInventoryUnavailableError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+def adcp_error_for_http_status(
+    status: int, message: str, *, field: str | None = None, suggestion: str | None = None
+) -> AdCPError:
+    """Map an outbound HTTP status to its AdCP recovery class — the single status->recovery table.
+
+    Shared by every adapter/service HTTP boundary (``wrap_request_errors`` for the
+    ``requests``-based ad-server writes; ``_raise_fetch_error`` for the ``httpx``-based
+    property-list fetch) so one underlying status yields ONE recovery verdict
+    (AdCP 3.1.0-beta.3 recovery taxonomy):
+
+    - ``429`` -> transient (rate limit; retry with backoff) — ``AdCPRateLimitError``
+    - other ``4xx`` -> correctable (the request was rejected; fix and resend) — ``AdCPValidationError``
+    - ``5xx`` (and any non-4xx) -> transient (service misbehaving; retry) — ``AdCPAdapterError``
+
+    ``field``/``suggestion`` enrich the correctable (4xx) case for buyer-facing paths;
+    they are ignored for the transient classes (a 429/5xx is not fixed by editing the request).
+    """
+    if status == 429:
+        return AdCPRateLimitError(message)
+    if 400 <= status < 500:
+        return AdCPValidationError(message, field=field, suggestion=suggestion)
+    return AdCPAdapterError(message)
+
+
 # ---------------------------------------------------------------------------
 # Two-layer envelope serializer — single source of truth for wire shape.
 # ---------------------------------------------------------------------------

@@ -8,7 +8,6 @@ from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
 )
@@ -466,7 +465,7 @@ class TritonDigital(AdServerAdapter):
                 "columns": ["flightName", "impressions", "totalRevenue"],
             }
 
-            try:
+            with wrap_request_errors():
                 response = requests.post(f"{self.base_url}/reports", headers=self.headers, json=report_payload)
                 response.raise_for_status()
                 report_job = response.json()
@@ -525,10 +524,6 @@ class TritonDigital(AdServerAdapter):
                     by_package=by_package,
                     currency="USD",
                 )
-
-            except requests.exceptions.RequestException as e:
-                self.log(f"Error getting delivery report from Triton: {e}")
-                raise AdCPAdapterError(str(e)) from e
 
     def update_media_buy_performance_index(
         self, media_buy_id: str, package_performance: list[PackagePerformance]
@@ -628,7 +623,7 @@ class TritonDigital(AdServerAdapter):
                 implementation_date=today,
             )
         else:
-            try:
+            with wrap_request_errors():
                 campaign_id = media_buy_id.replace("triton_", "")
 
                 if action in ["pause_media_buy", "resume_media_buy"]:
@@ -708,7 +703,3 @@ class TritonDigital(AdServerAdapter):
                     affected_packages=[],  # List of package_ids affected by update
                     implementation_date=today,
                 )
-
-            except requests.exceptions.RequestException as e:
-                self.log(f"Error updating Triton campaign/flight: {e}")
-                raise AdCPAdapterError(str(e)) from e

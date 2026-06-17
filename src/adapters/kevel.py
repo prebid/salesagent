@@ -10,7 +10,6 @@ from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
@@ -923,7 +922,7 @@ class Kevel(AdServerAdapter):
                 implementation_date=today,
             )
         else:
-            try:
+            with wrap_request_errors():
                 # Extract campaign ID
                 campaign_id = media_buy_id.replace("kevel_", "")
 
@@ -987,7 +986,3 @@ class Kevel(AdServerAdapter):
                     affected_packages=[],
                     implementation_date=today,
                 )
-
-            except requests.exceptions.RequestException as e:
-                self.log(f"Error updating Kevel flight: {e}")
-                raise AdCPAdapterError(str(e)) from e

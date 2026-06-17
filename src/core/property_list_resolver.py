@@ -24,8 +24,9 @@ from typing import Any, NoReturn
 
 import httpx
 from adcp.types import GetPropertyListResponse, Identifier, PropertyListReference
+from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPValidationError
+from src.core.exceptions import AdCPAdapterError, adcp_error_for_http_status
 from src.core.security.url_validator import check_url_ssrf
 from src.core.ttl_cache import ThreadSafeTTLCache
 
@@ -161,8 +162,19 @@ def _check_cache(ref: PropertyListReference) -> list[Identifier] | None:
 
 
 def _store_in_cache(ref: PropertyListReference, response_data: dict) -> list[Identifier]:
-    """Parse the fetched payload, cache it with the right TTL, return the typed identifiers."""
-    parsed = GetPropertyListResponse.model_validate(response_data)
+    """Parse the fetched payload, cache it with the right TTL, return the typed identifiers.
+
+    A schema-invalid (but valid-JSON) 2xx body is the list SERVICE misbehaving, not a
+    buyer mistake: map the pydantic ``ValidationError`` to a transient
+    ``AdCPAdapterError`` at this shared chokepoint so BOTH resolver paths surface the
+    same recovery class (mirroring ``_payload_or_raise``'s non-JSON handling) instead
+    of a raw ``ValidationError`` that the Kevel sync path normalizes to terminal
+    ``INTERNAL_ERROR`` while the async path silently swallows it.
+    """
+    try:
+        parsed = GetPropertyListResponse.model_validate(response_data)
+    except ValidationError as exc:
+        raise AdCPAdapterError(f"Property list service returned a malformed response: {ref.agent_url}") from exc
     identifiers = parsed.identifiers or []
     now = datetime.now(UTC)
     # Clamp a buyer/list-service-supplied cache_valid_until to a max lifetime so it
@@ -197,24 +209,23 @@ def _payload_or_raise(response: httpx.Response, request_url: str) -> dict:
 
 
 def _raise_fetch_error(ref: PropertyListReference, url: str, exc: Exception) -> NoReturn:
-    """Map an HTTP fetch failure to the typed error class, shared by both paths.
+    """Map an HTTP fetch failure to the typed error class, shared by both resolver paths.
 
-    The split is the recovery taxonomy: a 4xx is the list service rejecting
-    the BUYER's reference (unknown/forbidden/expired list_id) — correctable,
-    so the buyer fixes the reference instead of retrying forever. 5xx,
-    timeouts, and connection failures are the service misbehaving — transient.
+    The status case routes through ``adcp_error_for_http_status`` (the single
+    status->recovery table: 429/5xx -> transient, other 4xx -> correctable) so the
+    property-list fetch and the adapter writes report the SAME recovery for the same
+    status. A 4xx names the buyer's reference (unknown/forbidden/expired list_id) and
+    carries the field/suggestion so the buyer fixes it; 429 and 5xx are the service
+    misbehaving (transient). Timeouts and connection failures have no status — transient.
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        if 400 <= status < 500:
-            raise AdCPValidationError(
-                f"The property list service rejected list_id '{ref.list_id}' "
-                f"(HTTP {status} from {ref.agent_url}). The list may not exist or "
-                "may not be accessible to this agent.",
-                field="property_list",
-                suggestion="Check the property list reference (agent_url and list_id), or pick a different list.",
-            ) from exc
-        raise AdCPAdapterError(f"Failed to fetch property list from {url}: HTTP {status}") from exc
+        raise adcp_error_for_http_status(
+            status,
+            f"The property list service at {ref.agent_url} returned HTTP {status} for list_id '{ref.list_id}'.",
+            field="property_list",
+            suggestion="Check the property list reference (agent_url and list_id), or pick a different list.",
+        ) from exc
     if isinstance(exc, httpx.TimeoutException):
         raise AdCPAdapterError(f"Request to property list service timed out: {url}") from exc
     raise AdCPAdapterError(f"Failed to connect to property list service: {url} — {exc}") from exc

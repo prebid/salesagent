@@ -102,11 +102,12 @@ class KevelSiteResolver:
     """
 
     # Module-level cache across resolver instances:
-    # (base_url, network_id, hmac(api_key, purpose)[:16]) -> ({host: site_id}, expires_at).
+    # (base_url, network_id, hmac(api_key, purpose)[:16]) -> ({host: {site_ids}}, expires_at).
+    # A host maps to a SET of site ids — multiple Kevel sites can share a host.
     # Concurrent ``create_media_buy`` calls on the same network share this
     # index; the locking/expiry/last-write-wins contract lives in
     # ThreadSafeTTLCache.
-    _site_cache: ClassVar[ThreadSafeTTLCache[tuple[str, str, str], dict[str, int]]] = ThreadSafeTTLCache()
+    _site_cache: ClassVar[ThreadSafeTTLCache[tuple[str, str, str], dict[str, set[int]]]] = ThreadSafeTTLCache()
 
     def __init__(
         self,
@@ -162,7 +163,12 @@ class KevelSiteResolver:
             # multiple sites (``*.espn.com``) or none. A linear scan over the
             # cached index is fine — identifiers are dozens, sites are at most
             # a few thousand, and the index fetch is the amortized cost.
-            matched = {site_id for host, site_id in site_lookup.items() if buyer_identifier_matches_host(ident, host)}
+            matched = {
+                site_id
+                for host, site_ids in site_lookup.items()
+                if buyer_identifier_matches_host(ident, host)
+                for site_id in site_ids
+            }
             if matched:
                 site_ids.update(matched)
             else:
@@ -182,8 +188,8 @@ class KevelSiteResolver:
             unresolvable_values=unresolvable_values,
         )
 
-    def _get_site_lookup(self) -> dict[str, int]:
-        """Return the cached ``{host: site_id}`` index, fetching if needed.
+    def _get_site_lookup(self) -> dict[str, set[int]]:
+        """Return the cached ``{host: {site_ids}}`` index, fetching if needed.
 
         Threading: the cache read + expiry-drop runs under ``_cache_lock`` so
         concurrent callers see a consistent view and the expiry ``pop`` cannot
@@ -201,7 +207,7 @@ class KevelSiteResolver:
         # HTTP fetch outside the cache lock — Kevel pagination can take
         # seconds and holding it that long would serialize unrelated networks.
         sites = self._fetch_all_sites()
-        lookup: dict[str, int] = {}
+        lookup: dict[str, set[int]] = {}
         for site in sites:
             site_id = site.get("Id")
             url = site.get("Url")
@@ -209,10 +215,13 @@ class KevelSiteResolver:
                 continue
             # Index by the TRUE host — ``www.espn.com`` and ``espn.com`` are
             # distinct sites; the spec grammar (not prefix-stripping) decides
-            # which buyer patterns select which hosts.
+            # which buyer patterns select which hosts. Multiple Kevel sites can
+            # share a host (different sections/zones at one domain), so accumulate
+            # into a SET rather than last-write-wins — otherwise a buyer silently
+            # targets only the last-seen site of the matching host.
             host = host_from_url_or_host(url)
             if host:
-                lookup[host] = int(site_id)
+                lookup.setdefault(host, set()).add(int(site_id))
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self.cache_ttl_seconds)
         self._site_cache.store(cache_key, lookup, expires_at)
