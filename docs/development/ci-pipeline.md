@@ -242,7 +242,8 @@ required (or stay blocked on stale `Test Suite / …` names).
 Requires pre-commit ≥3.2.0. Run `pre-commit install` once per clone (installs both commit and pre-push hooks).
 
 CI-only checks absorbed into `make quality-ci` (not re-run via `pre-commit run --all-files` in Quality Gate):
-`check_code_duplication`, `check-gam-auth-support`, `check_response_attribute_access`, `check_roundtrip_tests`.
+`check_code_duplication`, `check-gam-auth-support`, `check_response_attribute_access`, `check_roundtrip_tests`,
+`check_route_conflicts`, `check_type_ignore_count`, `check_docs_links`, `check_hardcoded_urls`.
 
 See [`.pre-commit-coverage-map.yml`](../../.pre-commit-coverage-map.yml) for hook migration mapping.
 

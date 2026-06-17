@@ -39,14 +39,17 @@ mcp-contract-validation:
   enforced_by: ci
   location: .github/workflows/ci.yml::schema-contract
 check-docs-links:
-  enforced_by: pre-push
-  location: stages_prepush
+  enforced_by: pre-push + ci-step
+  location: stages_prepush + Makefile::quality-ci
 check-route-conflicts:
-  enforced_by: pre-push
-  location: stages_prepush
+  enforced_by: pre-push + ci-step
+  location: stages_prepush + Makefile::quality-ci
 type-ignore-no-regression:
-  enforced_by: pre-push
-  location: stages_prepush
+  enforced_by: pre-push + ci-step
+  location: stages_prepush + Makefile::quality-ci
+no-hardcoded-urls:
+  enforced_by: pre-push + ci-step
+  location: stages_prepush + Makefile::quality-ci
 no-skip-integration-v2:
   enforced_by: deleted
   location: dead-code (tests/integration_v2/ does not exist)

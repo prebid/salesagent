@@ -13,6 +13,10 @@ quality-ci:
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
 	uv run python .pre-commit-hooks/check_roundtrip_tests.py
+	uv run python .pre-commit-hooks/check_route_conflicts.py
+	uv run python .pre-commit-hooks/check_type_ignore_count.py
+	uv run python .pre-commit-hooks/check_docs_links.py
+	uv run python .pre-commit-hooks/check_hardcoded_urls.py $$(find templates static -type f \( -name '*.html' -o -name '*.js' \) 2>/dev/null)
 
 quality:
 	$(MAKE) quality-ci
