@@ -13,7 +13,7 @@ from pathlib import Path
 
 def check_no_skip_tests(files: list[Path]) -> list[str]:
     """Forbid @pytest.mark.skip without skip_ci justification."""
-    pattern = re.compile(r"@pytest\.mark\.skip(?!_ci)")
+    pattern = re.compile(r"@pytest\.mark\.skip(?!if|_ci)")
     out: list[str] = []
     for filepath in files:
         if "tests/" not in str(filepath) or not filepath.name.startswith("test_"):
