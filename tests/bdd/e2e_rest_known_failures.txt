@@ -24,7 +24,7 @@
 # means "inspect why", never "stale, remove".
 
 # --- get_products_inventory_profile (6) ---
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_preserves_them[e2e_rest]
+tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_drops_nonspec_fields[e2e_rest]
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_invalid_property_ids_falls_back_to_selection_type_all[e2e_rest]
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_only_publisher_domain_infers_selection_type_all[e2e_rest]
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_ids_infers_selection_type_by_id[e2e_rest]
