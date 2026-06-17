@@ -8,6 +8,10 @@ from adcp.types import PropertyListReference
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.kevel_site_resolver import (
+    KevelSiteResolver,
+    ResolvedSiteIds,
+)
 from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
@@ -21,10 +25,6 @@ from src.core.property_list_resolver import (
 )
 from src.core.schemas import *
 from src.core.validation_helpers import package_field_path
-from src.services.kevel_site_resolver import (
-    KevelSiteResolver,
-    ResolvedSiteIds,
-)
 
 
 class Kevel(AdServerAdapter):
@@ -35,7 +35,7 @@ class Kevel(AdServerAdapter):
     adapter_name = "kevel"
 
     # Kevel has a native property_list compilation path via Site.Id → siteIds
-    # targeting. See src/services/kevel_site_resolver.py.
+    # targeting. See src/adapters/kevel_site_resolver.py.
     supports_property_list_targeting: ClassVar[bool] = True
 
     # Kevel specializes in social and retail_media

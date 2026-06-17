@@ -27,9 +27,9 @@ from adcp.types import PropertyListReference
 
 from src.adapters.base import AdServerAdapter
 from src.adapters.kevel import Kevel
+from src.adapters.kevel_site_resolver import ResolvedSiteIds
 from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError, AdCPPackageNotFoundError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest, MediaPackage, Principal, Targeting
-from src.services.kevel_site_resolver import ResolvedSiteIds
 from tests.helpers.adcp_factories import create_test_identifier
 
 pytestmark = pytest.mark.unit

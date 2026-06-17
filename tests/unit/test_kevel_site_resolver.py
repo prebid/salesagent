@@ -21,9 +21,9 @@ import httpx
 import pytest
 from adcp.types import Identifier, PropertyListReference
 
+from src.adapters.kevel_site_resolver import KevelSiteResolver, ResolvedSiteIds
 from src.core.exceptions import AdCPAdapterError
 from src.core.property_list_resolver import clear_cache as clear_property_list_cache
-from src.services.kevel_site_resolver import KevelSiteResolver, ResolvedSiteIds
 from tests.helpers.adcp_factories import create_test_identifier as _identifier
 
 pytestmark = pytest.mark.unit
@@ -58,7 +58,7 @@ def _ref() -> PropertyListReference:
 def _patched_list(identifiers: list[Identifier]):
     """Patch the property-list fetch the resolver performs, returning ``identifiers``."""
     return patch(
-        "src.services.kevel_site_resolver.resolve_property_list_typed_sync",
+        "src.adapters.kevel_site_resolver.resolve_property_list_typed_sync",
         return_value=identifiers,
     )
 
@@ -420,7 +420,7 @@ class TestPaginationAndFetch:
         mock_client.__exit__ = MagicMock(return_value=None)
         mock_client.get = MagicMock(side_effect=responses)
 
-        with patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client):
+        with patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client):
             sites = resolver._fetch_all_sites()
 
         assert [s["Id"] for s in sites] == [1, 2]
@@ -440,8 +440,8 @@ class TestPaginationAndFetch:
         mock_client.get = MagicMock(return_value=page)  # always "more pages"
 
         with (
-            patch("src.services.kevel_site_resolver._KEVEL_SITE_MAX_PAGES", 3),
-            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            patch("src.adapters.kevel_site_resolver._KEVEL_SITE_MAX_PAGES", 3),
+            patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client),
         ):
             with pytest.raises(AdCPAdapterError, match="page cap"):
                 resolver._fetch_all_sites()
@@ -456,8 +456,8 @@ class TestPaginationAndFetch:
         mock_client.__exit__ = MagicMock(return_value=None)
 
         with (
-            patch("src.services.kevel_site_resolver._KEVEL_SITE_FETCH_DEADLINE_SECONDS", -1.0),
-            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            patch("src.adapters.kevel_site_resolver._KEVEL_SITE_FETCH_DEADLINE_SECONDS", -1.0),
+            patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client),
         ):
             with pytest.raises(AdCPAdapterError, match="deadline"):
                 resolver._fetch_all_sites()
@@ -475,7 +475,7 @@ class TestPaginationAndFetch:
         mock_client.get = MagicMock(return_value=mock_response)
 
         with (
-            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client),
             pytest.raises(AdCPAdapterError, match="Failed to fetch Kevel site list"),
         ):
             resolver._fetch_all_sites()
@@ -497,7 +497,7 @@ class TestPaginationAndFetch:
         mock_client.get = MagicMock(return_value=mock_response)
 
         with (
-            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client),
             pytest.raises(AdCPAdapterError, match="Malformed Kevel site list"),
         ):
             resolver._fetch_all_sites()
@@ -516,7 +516,7 @@ class TestPaginationAndFetch:
         mock_client.get = MagicMock(return_value=mock_response)
 
         with (
-            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client),
             pytest.raises(AdCPAdapterError, match="non-JSON response"),
         ):
             resolver._fetch_all_sites()
@@ -532,7 +532,7 @@ class TestPaginationAndFetch:
         mock_client.get = MagicMock(return_value=mock_response)
 
         with (
-            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+            patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client),
             pytest.raises(AdCPAdapterError, match="expected an object"),
         ):
             resolver._fetch_all_sites()
@@ -551,7 +551,7 @@ class TestPaginationAndFetch:
         mock_response.raise_for_status = MagicMock()
         mock_client.get = MagicMock(return_value=mock_response)
 
-        with patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client):
+        with patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client):
             sites = resolver._fetch_all_sites()
 
         assert sites == []
