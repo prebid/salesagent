@@ -26,7 +26,7 @@ from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 
-def _validate_attribution_window(attribution_window) -> None:
+def _validate_attribution_window(attribution_window: "AttributionWindow | None") -> None:
     """Enforce BR-RULE-092 INV-5: a 'campaign'-unit Duration must have interval == 1.
 
     The AdCP Duration schema documents "interval must be 1 when unit is campaign"
@@ -45,7 +45,7 @@ def _validate_attribution_window(attribution_window) -> None:
     for window in (attribution_window.post_click, attribution_window.post_view):
         if window is None:
             continue
-        unit = getattr(window.unit, "value", window.unit)
+        unit = enum_value(window.unit)
         if unit == "campaign" and window.interval != 1:
             raise AdCPValidationError(
                 "attribution_window: interval must be 1 when unit is 'campaign' "

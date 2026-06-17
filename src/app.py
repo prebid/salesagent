@@ -227,9 +227,12 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     """
     errors = exc.errors()
     first = errors[0] if errors else {}
-    # Drop the leading "body"/"query" location segment; join the rest into the
-    # JSONPath-lite ``field`` the envelope already uses (e.g. attribution_window.post_click.interval).
-    loc = [str(p) for p in first.get("loc", ()) if p not in ("body", "query", "path")]
+    # Drop ONLY the leading "body"/"query"/"path" location segment (the FastAPI
+    # location prefix); join the rest into the JSONPath-lite ``field`` the envelope
+    # already uses (e.g. attribution_window.post_click.interval). Stripping at any
+    # position would erase a body field literally named "query"/"body"/"path".
+    raw_loc = [str(p) for p in first.get("loc", ())]
+    loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
     field = ".".join(loc) or None
     message = first.get("msg") or "Request failed schema validation"
     # Code selection by failure semantics, grounded in the AdCP graded
