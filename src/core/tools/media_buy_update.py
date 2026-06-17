@@ -76,6 +76,7 @@ from src.core.schemas import (
     Budget,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
+    UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -162,7 +163,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
+) -> UpdateMediaBuySuccess | UpdateMediaBuySubmitted | UpdateMediaBuyError:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
     Callers construct the validated UpdateMediaBuyRequest at their boundary
@@ -406,12 +407,12 @@ def _update_media_buy_impl(
                 # Store the original request alongside the response so the approval
                 # execution path can re-execute the update after human approval.
                 # This mirrors create_media_buy's raw_request pattern.
-                _approval_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                _approval_status = _approval_mb.status if _approval_mb else ""
-                approval_response = UpdateMediaBuySuccess(
-                    media_buy_id=req.media_buy_id or "",
-                    affected_packages=[],  # Not yet applied — pending approval
-                    valid_actions=valid_actions_for_status(_approval_status),
+                # Spec ``submitted`` variant: task_id is the buyer's tracking
+                # handle; media_buy_id/affected_packages are forbidden here (they
+                # arrive on the completion artifact once approval resolves).
+                approval_response = UpdateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message="Awaiting publisher approval for the media buy update.",
                     context=req.context,
                 )
                 ctx_manager.audit_workflow_step_result(

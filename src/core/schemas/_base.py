@@ -274,6 +274,11 @@ class CreateMediaBuySuccess(_ForbidsErrorsExtra, AdCPCreateMediaBuySuccess):
     # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
     valid_actions: list[MediaBuyValidAction] | None = None
     context: ContextObject | None = None
+    # SDK 5.7 dropped ext from the parent, but __str__ reads it (the property_list
+    # zero-overlap advisory rides ext.prebid) and production emits it. Without a
+    # local declaration ``self.ext`` AttributeErrors when ext is unset (it rode on
+    # extra='allow'). Declare it typed.
+    ext: dict[str, Any] | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -458,9 +463,8 @@ class UpdateMediaBuySuccess(_ForbidsErrorsExtra, AdCPUpdateMediaBuySuccess):  # 
     FORBIDS an ``errors`` key (``not: {required: ["errors"]}`` — the
     success/error discriminator), so this class deliberately has no errors
     field; a populated one would match no oneOf variant on the wire. The
-    update-side zero-overlap advisory (message-channel, since update has no
-    submitted variant) arrives with the verbatim success-cache reconciliation
-    (see ``_build_idempotency_hit_result``).
+    approval-pending update response is the spec ``submitted`` variant
+    (``UpdateMediaBuySubmitted``), which carries the advisory ``errors`` slot.
     """
 
     # Override affected_packages to use our extended AffectedPackage type
@@ -468,6 +472,12 @@ class UpdateMediaBuySuccess(_ForbidsErrorsExtra, AdCPUpdateMediaBuySuccess):  # 
     # while still being AdCP-compliant (those fields are excluded via exclude=True)
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
+
+    # SDK 5.7 dropped valid_actions/context from the parent, but production emits
+    # both (media_buy_update.py success paths). Declare them typed so the wire
+    # contract is deliberate and round-trip-safe, mirroring CreateMediaBuySuccess.
+    valid_actions: list[MediaBuyValidAction] | None = None
+    context: ContextObject | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -530,6 +540,34 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
             return f"Media buy update encountered {len(self.errors)} error(s)."
         else:
             return "Media buy update failed."
+
+
+class UpdateMediaBuySubmitted(SalesAgentBaseModel):
+    """Approval-pending update_media_buy response (the spec's ``submitted`` variant).
+
+    adcp 5.7's ``update_media_buy_response`` codegen emitted only the success and
+    error variants, NOT the spec's ``submitted`` variant — an SDK-vs-spec gap
+    (3.1.0-beta.3 update-media-buy-response.json defines it with ``task_id`` and a
+    ``submitted`` status const). So this is a codebase-owned model with adcp-typed
+    fields, mirroring ``SyncResponseAccount`` (also owned for an SDK gap).
+
+    Carries the REQUIRED ``task_id`` (the workflow step id), the ``submitted``
+    task-status discriminator the transports key on, an optional ``message`` (spec
+    cap 2000), and the non-blocking advisory ``errors`` slot. ``media_buy_id`` /
+    ``affected_packages`` are FORBIDDEN here per the variant schema — buyers track
+    the task, not the buy.
+    """
+
+    status: Literal["submitted"] = "submitted"
+    task_id: str
+    message: str | None = Field(default=None, max_length=2000)
+    errors: list[Error] | None = None
+    context: ContextObject | None = None
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope."""
+        base = f"Media buy update submitted for approval; track task {self.task_id}."
+        return f"{base} {self.message}" if self.message else base
 
 
 # Union type for update_media_buy operation

@@ -1489,6 +1489,7 @@ from src.services.slack_notifier import get_slack_notifier
 # Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name).
 _IDEMPOTENCY_TOOL_NAME = "create_media_buy"
 
+
 async def _resolve_property_list_identifiers(packages: list | None) -> dict[tuple[str, str], list[Identifier]]:
     """Resolve each package's buyer ``property_list`` to its typed identifiers.
 
@@ -1597,7 +1598,7 @@ def _build_property_list_advisories(
             )
             continue
         if result.zero_match:
-            reason = result.dropped_products[0].reason.value if result.dropped_products else "zero_match"
+            reason = enum_value(result.dropped_products[0].reason) if result.dropped_products else "zero_match"
             logger.warning(
                 "[INTERSECTION-ADVISORY] Buyer's property_list has zero overlap with product %s "
                 "for packages[%d] (reason=%s, list=%s/%s). Buy proceeds per accept-with-context.",
@@ -1752,7 +1753,6 @@ def _raise_degraded_replay_outcome(
         "the original response is still being committed; retry shortly",
         retry_after=1,
     )
-
 
 
 def _raise_on_payload_conflict(stored_hash: str | None, request_hash: str | None) -> None:
