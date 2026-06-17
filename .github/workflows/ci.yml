@@ -175,6 +175,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -215,8 +216,17 @@ jobs:
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
+      - name: Log in to GitHub Container Registry
+        if: matrix.group == 'creative'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Start pinned creative agent
         if: matrix.group == 'creative'
+        env:
+          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
         run: ./scripts/creative-agent-stack.sh up
       - uses: ./.github/actions/_pytest
         with:
