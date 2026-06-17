@@ -12,6 +12,7 @@ import pytest
 from tests.unit._architecture_helpers import (
     anchor_consistency_detects_drift,
     assert_anchor_consistency,
+    extract_postgres_image_refs,
     iter_postgres_image_refs,
     postgres_image_ref,
     postgres_tag_pattern_map,
@@ -29,6 +30,8 @@ _KNOWN_BAD_POSTGRES_INTRA_FILE_SOURCES = [
         f"services:\n  db1:\n    image: {postgres_image_ref('17-alpine')}\n  db2:\n    image: {postgres_image_ref('15-alpine')}\n",
     ),
 ]
+
+_KNOWN_BAD_POSTGRES_PROSE = "Review note: migrate from postgres:15 to postgres:17-alpine when convenient.\n"
 
 
 @pytest.mark.arch_guard
@@ -64,6 +67,12 @@ def test_postgres_anchor_detector_catches_known_bad_drift() -> None:
         postgres_tag_pattern_map(),
         label="postgres image",
     ), "Detector must flag drift between postgres image tags"
+
+
+@pytest.mark.arch_guard
+def test_postgres_scan_ignores_unanchored_prose() -> None:
+    """Mutation self-test: bare postgres:NN prose must not pollute the anchored scan."""
+    assert extract_postgres_image_refs(Path("notes.md"), _KNOWN_BAD_POSTGRES_PROSE) == []
 
 
 @pytest.mark.arch_guard

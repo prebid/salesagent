@@ -379,18 +379,24 @@ def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str, str]]:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for pattern, suffix_hint, anchor_kind in _PY_VERSION_PATTERNS:
-            if not str(path).endswith(suffix_hint):
-                continue
-            for m in re.finditer(pattern, text, flags=re.MULTILINE):
-                version = m.group(1)
-                if anchor_kind == "target-version":
-                    version = _normalize_py_target_version(version)
-                yield path, version, anchor_kind
+        for version, anchor_kind in extract_python_version_anchors(path, text):
+            yield path, version, anchor_kind
 
 
-_PG_IMAGE_LITERAL = re.compile(r"postgres:([0-9]{1,2}(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)(?![0-9])")
-_PG_TAG_PATTERN = _PG_IMAGE_LITERAL.pattern
+# Anchored postgres image refs only — must not match bare prose image refs in sentences.
+_PG_IMAGE_REF_PREFIXES: tuple[str, ...] = (
+    r"^\s*FROM\s+postgres:",
+    r"^\s+image:\s+postgres:",
+    r"^\s+postgres:",  # docker run image argument (e.g. creative-agent-stack.sh)
+    r'PG_IMAGE=["\']postgres:',
+    r"`postgres:",
+    r'["\']postgres:',
+)
+_PG_IMAGE_REF_PATTERN = (
+    r"(?:" + "|".join(_PG_IMAGE_REF_PREFIXES) + r")([0-9]{1,2}(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)(?![0-9])"
+)
+_PG_IMAGE_LITERAL = re.compile(_PG_IMAGE_REF_PATTERN, re.MULTILINE)
+_PG_TAG_PATTERN = _PG_IMAGE_REF_PATTERN
 
 # ADR-008: ruff target-version stays py311 until post-#1234 follow-up PR.
 ADR_008_DEFERRED_TARGET_VERSION = "3.11"
@@ -537,6 +543,11 @@ def assert_dockerfile_digest_args_present(text: str) -> None:
         raise AssertionError("Dockerfile missing digest ARG pins:\n" + "\n".join(f"  {item}" for item in missing))
 
 
+def extract_postgres_image_refs(path: Path, text: str) -> list[str]:
+    """Extract postgres image tags from *text* using the live anchored detector."""
+    return [m.group(1) for m in _PG_IMAGE_LITERAL.finditer(text)]
+
+
 def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
     """Yield (file_path, image_tag) for every ``postgres:`` literal in git-tracked text surfaces.
 
@@ -550,8 +561,8 @@ def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for m in _PG_IMAGE_LITERAL.finditer(text):
-            yield path, m.group(1)
+        for tag in extract_postgres_image_refs(path, text):
+            yield path, tag
 
 
 # ---------------------------------------------------------------------------
