@@ -426,6 +426,43 @@ class TestPaginationAndFetch:
         assert [s["Id"] for s in sites] == [1, 2]
         assert mock_client.get.call_count == 2
 
+    def test_page_cap_raises_instead_of_paging_unboundedly(self):
+        # A degraded Kevel that keeps reporting more pages must hit the page cap and
+        # RAISE a typed transient error — not page forever. (Untested backstop.)
+        resolver = _resolver()
+        page = MagicMock(
+            json=MagicMock(return_value={"items": [_kevel_site(1, "https://a.example")], "totalPages": 99})
+        )
+        page.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_client.get = MagicMock(return_value=page)  # always "more pages"
+
+        with (
+            patch("src.services.kevel_site_resolver._KEVEL_SITE_MAX_PAGES", 3),
+            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+        ):
+            with pytest.raises(AdCPAdapterError, match="page cap"):
+                resolver._fetch_all_sites()
+
+    def test_fetch_deadline_raises_when_exceeded(self):
+        # A degraded Kevel that never finishes paging must hit the overall deadline and
+        # RAISE — not hang. Patch the deadline into the past so the guard trips on the
+        # first iteration, before any HTTP. (Untested backstop.)
+        resolver = _resolver()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+
+        with (
+            patch("src.services.kevel_site_resolver._KEVEL_SITE_FETCH_DEADLINE_SECONDS", -1.0),
+            patch("src.services.kevel_site_resolver.httpx.Client", return_value=mock_client),
+        ):
+            with pytest.raises(AdCPAdapterError, match="deadline"):
+                resolver._fetch_all_sites()
+        mock_client.get.assert_not_called()  # tripped before any fetch
+
     def test_http_error_raises_adcp_adapter_error(self):
         resolver = _resolver()
         mock_client = MagicMock()
