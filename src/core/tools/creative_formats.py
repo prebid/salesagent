@@ -2,6 +2,11 @@
 
 This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [valid-type] on lines ~98, ~236: SDK asset class unions (ImageFormatAsset |
+  VideoFormatAsset | ...) are dynamically resolved type factories; mypy cannot
+  validate the union. Permanent until upstream ships StrEnum.
 """
 
 import asyncio
@@ -11,6 +16,7 @@ import time
 from collections.abc import Sequence
 from typing import Annotated, TypeVar
 
+# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
 from adcp.types import (
     AssetContentType,
@@ -34,6 +40,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -99,7 +106,7 @@ _ASSET_TYPE_TO_CLASS: dict[str, type] = {
 
 def _make_asset(
     asset_id: str, asset_type: str, required: bool
-) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:
+) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:  # type: ignore[valid-type]
     """Build the correct Assets variant for a given asset type string."""
     cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
     return cls(
@@ -126,9 +133,7 @@ def build_list_creative_formats_request(
     context: ContextObject | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
-    asset_types_strs = (
-        [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
-    )
+    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
     return ListCreativeFormatsRequest(
         format_ids=format_ids,
         output_format_ids=output_format_ids,
@@ -223,7 +228,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[
+                        assets_list: list[  # type: ignore[valid-type]
                             ImageFormatAsset
                             | VideoFormatAsset
                             | AudioFormatAsset
@@ -332,7 +337,7 @@ def _list_creative_formats_impl(
         # Normalize requested asset types to string values for comparison.
         # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
         # Format assets now use plain string literals, so must compare using .value not str(enum).
-        requested_types = {at.value if hasattr(at, "value") else str(at) for at in req.asset_types}
+        requested_types = {enum_value(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
 
     # Filter by dimension constraints

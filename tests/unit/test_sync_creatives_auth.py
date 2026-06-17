@@ -4,6 +4,7 @@ import pytest
 
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.tools.creatives import _sync_creatives_impl
+from tests.factories.creative_asset import build_assets, image_spec
 
 
 def test_sync_creatives_requires_authentication():
@@ -14,14 +15,9 @@ def test_sync_creatives_requires_authentication():
             "creative_id": "test_creative",
             "name": "Test Creative",
             "format_id": "display_728x90_image",
-            "assets": {
-                "banner_image": {
-                    "asset_type": "image",
-                    "url": "https://example.com/banner.png",
-                    "width": 728,
-                    "height": 90,
-                }
-            },
+            "assets": build_assets(
+                image_spec("banner_image", url="https://example.com/banner.png", width=728, height=90)
+            ),
         }
     ]
 
@@ -52,14 +48,9 @@ def test_sync_creatives_with_invalid_auth():
             "creative_id": "test_creative",
             "name": "Test Creative",
             "format_id": "display_728x90_image",
-            "assets": {
-                "banner_image": {
-                    "asset_type": "image",
-                    "url": "https://example.com/banner.png",
-                    "width": 728,
-                    "height": 90,
-                }
-            },
+            "assets": build_assets(
+                image_spec("banner_image", url="https://example.com/banner.png", width=728, height=90)
+            ),
         }
     ]
 

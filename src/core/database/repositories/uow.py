@@ -38,6 +38,7 @@ from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
@@ -134,6 +135,7 @@ class MediaBuyUoW(BaseUoW):
     products: ProductRepository | None
     currency_limits: CurrencyLimitRepository | None
     authorized_properties: AuthorizedPropertyRepository | None
+    idempotency_attempts: IdempotencyAttemptRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -141,12 +143,14 @@ class MediaBuyUoW(BaseUoW):
         self.products = ProductRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
         self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
+        self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.products = None
         self.currency_limits = None
         self.authorized_properties = None
+        self.idempotency_attempts = None
 
 
 class ProductUoW(BaseUoW):

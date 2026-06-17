@@ -13,7 +13,12 @@ continue to work.
 
 from src.core.helpers import log_tool_activity
 
-from ._assets import _build_creative_data, _extract_url_from_assets
+from ._assets import (
+    _build_creative_data,
+    _extract_message_from_assets,
+    _extract_text_from_asset_value,
+    _extract_url_from_assets,
+)
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _update_existing_creative
 from ._sync import _sync_creatives_impl
@@ -39,6 +44,8 @@ __all__ = [
     "_validate_creative_input",
     # Assets
     "_extract_url_from_assets",
+    "_extract_text_from_asset_value",
+    "_extract_message_from_assets",
     "_build_creative_data",
     # Processing
     "_update_existing_creative",

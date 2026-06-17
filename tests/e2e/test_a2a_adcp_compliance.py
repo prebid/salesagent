@@ -25,6 +25,7 @@ import httpx
 import pytest
 
 from tests.e2e.utils import build_jsonrpc_message_send
+from tests.factories.creative_asset import build_assets, image_spec
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
@@ -357,7 +358,7 @@ class TestA2AAdCPCompliance:
                 "add_creative_assets",
                 {
                     "media_buy_id": "mb_test_123",
-                    "assets": {"main": {"asset_type": "image", "url": "https://example.com/creative.jpg"}},
+                    "assets": build_assets(image_spec("main", url="https://example.com/creative.jpg")),
                 },
             ),
         ]

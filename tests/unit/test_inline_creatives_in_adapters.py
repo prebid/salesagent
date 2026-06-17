@@ -21,6 +21,7 @@ from src.core.schemas import (
     MediaPackage,
     PackageRequest,
 )
+from tests.factories.creative_asset import build_assets, image_spec
 
 
 class TestInlineCreativesInAdapters:
@@ -47,6 +48,7 @@ class TestInlineCreativesInAdapters:
         # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         return CreateMediaBuyRequest(
             brand={"domain": "example.com"},
+            idempotency_key="unit-test-key-inline-creatives-0001",
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
             packages=[
@@ -61,7 +63,9 @@ class TestInlineCreativesInAdapters:
                             variants=[],
                             name="Test Creative 1",
                             format_id=FormatId(agent_url="https://creative.test", id="display_300x250"),
-                            assets={"main": {"url": "https://example.com/ad1.png", "width": 300, "height": 250}},
+                            assets=build_assets(
+                                image_spec("main", url="https://example.com/ad1.png", width=300, height=250)
+                            ),
                             principal_id="principal_123",
                             created_date=datetime.now(UTC),
                             updated_date=datetime.now(UTC),

@@ -100,6 +100,63 @@ class TestExceptionHierarchy:
         assert exc.status_code == 410
         assert exc.error_code == "INVALID_STATE"
 
+    def test_idempotency_conflict_error(self):
+        """AdCPIdempotencyConflictError must be a 409 conflict with code IDEMPOTENCY_CONFLICT."""
+        from src.core.exceptions import AdCPConflictError, AdCPError, AdCPIdempotencyConflictError
+
+        exc = AdCPIdempotencyConflictError("idempotency_key reused with a different payload")
+        assert isinstance(exc, AdCPConflictError)
+        assert isinstance(exc, AdCPError)
+        assert exc.status_code == 409
+        assert exc.error_code == "IDEMPOTENCY_CONFLICT"
+
+    def test_idempotency_conflict_wire_envelope(self):
+        """The two-layer envelope carries IDEMPOTENCY_CONFLICT + correctable in both layers.
+
+        Correctable per the AdCP 3.0.1 prose example and storyboard expectation:
+        the buyer can resend the original bytes or mint a fresh key.
+        """
+        from src.core.exceptions import AdCPIdempotencyConflictError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPIdempotencyConflictError("dup key"))
+        assert env["adcp_error"]["code"] == "IDEMPOTENCY_CONFLICT"
+        assert env["adcp_error"]["recovery"] == "correctable"
+        assert env["errors"][0]["code"] == "IDEMPOTENCY_CONFLICT"
+
+    def test_idempotency_expired_error(self):
+        """AdCPIdempotencyExpiredError must be a 409 conflict with code IDEMPOTENCY_EXPIRED."""
+        from src.core.exceptions import AdCPConflictError, AdCPError, AdCPIdempotencyExpiredError
+
+        exc = AdCPIdempotencyExpiredError("replay window has expired")
+        assert isinstance(exc, AdCPConflictError)
+        assert isinstance(exc, AdCPError)
+        assert exc.status_code == 409
+        assert exc.error_code == "IDEMPOTENCY_EXPIRED"
+
+    def test_idempotency_expired_wire_envelope(self):
+        """The two-layer envelope carries IDEMPOTENCY_EXPIRED + correctable in both layers.
+
+        Correctable, matching the sibling IDEMPOTENCY_CONFLICT and the 3.0.1
+        error-code.json enum description: the buyer agent recovers autonomously
+        (a natural-key existence check, then accept the prior result or mint a
+        fresh key). ``terminal`` is reserved for conditions needing human action.
+        """
+        from src.core.exceptions import AdCPIdempotencyExpiredError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPIdempotencyExpiredError("stale key"))
+        assert env["adcp_error"]["code"] == "IDEMPOTENCY_EXPIRED"
+        assert env["adcp_error"]["recovery"] == "correctable"
+        assert env["errors"][0]["code"] == "IDEMPOTENCY_EXPIRED"
+
+    def test_rate_limit_retry_after_rides_both_envelope_layers(self):
+        """retry_after is a first-class Error field — both layers carry it."""
+        from src.core.exceptions import AdCPRateLimitError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPRateLimitError("slow down", retry_after=42))
+        assert env["adcp_error"]["code"] == "RATE_LIMITED"
+        assert env["adcp_error"]["retry_after"] == 42
+        assert env["errors"][0]["retry_after"] == 42
+
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
         from src.core.exceptions import AdCPBudgetExhaustedError, AdCPError
@@ -232,6 +289,18 @@ class TestRecoveryClassification:
         from src.core.exceptions import AdCPConflictError
 
         exc = AdCPConflictError("duplicate idempotency key")
+        assert exc.recovery == "correctable"
+
+    def test_idempotency_conflict_defaults_to_correctable(self):
+        """AdCPIdempotencyConflictError is recovery='correctable'.
+
+        The buyer can fix the conflict — resend the original bytes under the
+        same key, or mint a fresh key for the new payload (AdCP 3.0.1 prose
+        example + storyboard expectation).
+        """
+        from src.core.exceptions import AdCPIdempotencyConflictError
+
+        exc = AdCPIdempotencyConflictError("dup key, different payload")
         assert exc.recovery == "correctable"
 
     def test_gone_error_defaults_to_correctable(self):
@@ -745,3 +814,38 @@ class TestIterConcreteSubclasses:
 
         assert _Concrete in result  # concrete descendant of an abstract base is yielded
         assert _AbstractMid not in result  # the abstract base itself is skipped
+
+
+class TestRetryAfterSerializerParity:
+    """retry_after rides every serializer the docstring claims is in sync.
+
+    The two-layer envelope builder already emitted it; the flat ``to_dict``
+    and SDK ``to_adcp_error`` shapes dropped it — a future flat-serializer
+    caller would silently lose the client's backoff hint.
+    """
+
+    def test_to_dict_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        assert exc.to_dict()["retry_after"] == 7
+
+    def test_to_dict_omits_absent_retry_after(self):
+        from src.core.exceptions import AdCPValidationError
+
+        exc = AdCPValidationError("bad input")
+        assert "retry_after" not in exc.to_dict()
+
+    def test_to_adcp_error_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        payload = exc.to_adcp_error()
+        assert payload["errors"][0]["retry_after"] == 7
+
+    def test_envelope_builder_still_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError, build_two_layer_error_envelope
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["retry_after"] == 7

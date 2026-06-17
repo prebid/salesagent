@@ -9,6 +9,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Annotated, cast
 
+# FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
@@ -31,6 +32,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
+from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
@@ -626,9 +628,7 @@ async def _get_products_impl(
         filtered_products = []
         for product in eligible_products:
             # For guaranteed products, check estimated_exposures
-            delivery_type_value = (
-                product.delivery_type.value if hasattr(product.delivery_type, "value") else product.delivery_type
-            )
+            delivery_type_value = enum_value(product.delivery_type)
             if delivery_type_value == "guaranteed":
                 estimated = getattr(product, "estimated_exposures", None)
                 if estimated is not None and estimated >= min_exposures:

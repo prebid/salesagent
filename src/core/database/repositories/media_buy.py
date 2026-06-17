@@ -81,25 +81,39 @@ class MediaBuyRepository:
             raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found", context=context)
         return media_buy
 
-    def find_by_idempotency_key(self, idempotency_key: str, principal_id: str) -> MediaBuy | None:
-        """Find an existing media buy by idempotency_key within (tenant, principal).
+    def find_by_idempotency_key(
+        self, idempotency_key: str, principal_id: str, account_id: str | None = None
+    ) -> MediaBuy | None:
+        """Find an existing media buy by idempotency_key within (tenant, principal, account).
 
-        Per adcp 3.12 spec: if a request with the same idempotency_key and account
-        has already been processed, return the existing media buy.
+        The AdCP idempotency scope is (agent, account, key): the same key under a
+        different account is an independent request, never a hit. ``account_id is
+        None`` matches rows stored with no account (``IS NULL``), mirroring the
+        NULLS NOT DISTINCT unique backstop index.
         """
         return self._session.scalars(
             select(MediaBuy).where(
                 MediaBuy.tenant_id == self._tenant_id,
                 MediaBuy.principal_id == principal_id,
+                # SQLAlchemy renders ``== None`` as ``IS NULL`` — matches no-account rows.
+                MediaBuy.account_id == account_id,
                 MediaBuy.idempotency_key == idempotency_key,
             )
         ).first()
 
-    def get_by_id_or_idempotency_key(self, identifier: str, principal_id: str) -> MediaBuy | None:
-        """Get a media buy by ID first, then fall back to idempotency_key."""
+    def get_by_id_or_idempotency_key(
+        self, identifier: str, principal_id: str, account_id: str | None = None
+    ) -> MediaBuy | None:
+        """Get a media buy by ID first, then fall back to idempotency_key.
+
+        ``account_id`` scopes the idempotency-key fallback to the spec's
+        (agent, account, key) tuple. It is threaded through to
+        ``find_by_idempotency_key`` rather than dropped — otherwise the
+        fallback would silently match only no-account (``IS NULL``) rows.
+        """
         result = self.get_by_id(identifier)
         if result is None:
-            result = self.find_by_idempotency_key(identifier, principal_id)
+            result = self.find_by_idempotency_key(identifier, principal_id, account_id=account_id)
         return result
 
     # ------------------------------------------------------------------
@@ -320,6 +334,7 @@ class MediaBuyRepository:
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
         account_id: str | None = None,
+        payload_hash: str | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
 
@@ -343,6 +358,9 @@ class MediaBuyRepository:
             package_id_map: Map of package index → package_id to inject into serialized packages.
             by_alias: Whether to serialize with field aliases (e.g., content_uri).
             created_at: Optional explicit created_at timestamp.
+            account_id: Resolved account scope (AdCP idempotency scope is agent+account+key).
+            payload_hash: Canonical request hash from the idempotency probe; the
+                degraded fallback's IDEMPOTENCY_CONFLICT signal.
 
         Returns:
             The created MediaBuy ORM object (added to session, not committed).
@@ -369,6 +387,11 @@ class MediaBuyRepository:
             "end_time": end_time,
             "status": status,
             "raw_request": raw,
+            # Canonical request hash as computed by the idempotency probe —
+            # raw_request is not canonicalizable (injected package_ids,
+            # alias-dependent names), so the degraded idempotency fallback
+            # conflict-checks against this stored hash.
+            "payload_hash": payload_hash,
         }
         if campaign_objective is not None:
             kwargs["campaign_objective"] = campaign_objective

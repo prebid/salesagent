@@ -1,0 +1,25 @@
+"""merge idempotency replay table with main heads
+
+Revision ID: ee84c805a0b1
+Revises: 097b909c7b5f, 597485e1799a
+Create Date: 2026-05-28 18:55:55.023046
+
+"""
+
+from collections.abc import Sequence
+
+# revision identifiers, used by Alembic.
+revision: str = "ee84c805a0b1"
+down_revision: str | Sequence[str] | None = ("097b909c7b5f", "597485e1799a")
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    """Upgrade schema."""
+    pass
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+    pass

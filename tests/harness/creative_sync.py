@@ -33,7 +33,9 @@ Generative creative usage::
             "creative_id": "c1",
             "name": "Gen Creative",
             "format_id": fmt,
-            "assets": {"message": {"content": "Build me a banner"}},
+            "assets": build_assets(
+                text_spec("message", content="Build me a banner")
+            ),
         }])
 
 Available mocks via env.mock:

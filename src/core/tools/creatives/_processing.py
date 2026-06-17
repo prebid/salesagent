@@ -1,4 +1,10 @@
-"""Creative create/update logic: DB persistence, agent validation, preview extraction."""
+"""Creative create/update logic: DB persistence, agent validation, preview extraction.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [attr-defined] on line ~769: CreativeAsset is a RootModel proxy; .creative_id
+  assignment exists at runtime but mypy cannot see through __setattr__. Fixable
+  when the SDK ships typed accessors or a shared unwrapper helper.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.validation_helpers import run_async_in_sync_context
 
-from ._assets import _build_creative_data, _extract_url_from_assets
+from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
@@ -211,25 +217,7 @@ def _update_existing_creative(
                         raise AdCPConfigurationError(error_msg)
 
                     # Extract message/brief from assets or inputs
-                    message = None
-                    if creative.assets:
-                        for role, asset in creative.assets.items():
-                            if role in ["message", "brief", "prompt"]:
-                                if isinstance(asset, dict):
-                                    message = asset.get("content") or asset.get("text")
-                                else:
-                                    message = getattr(asset, "content", None) or getattr(asset, "text", None)
-                                if message:
-                                    break
-
-                    if not message and creative.inputs:
-                        inputs = creative.inputs or []
-                        if inputs:
-                            first_input = inputs[0]
-                            if isinstance(first_input, dict):
-                                message = first_input.get("context_description")
-                            else:
-                                message = getattr(first_input, "context_description", None)
+                    message = _extract_message_from_assets(creative)
 
                     # Extract promoted_offerings from assets if available
                     promoted_offerings = None
@@ -547,25 +535,7 @@ def _create_new_creative(
                         raise AdCPConfigurationError(error_msg)
 
                     # Extract message/brief from assets or inputs
-                    message = None
-                    if creative.assets:
-                        for role, asset in creative.assets.items():
-                            if role in ["message", "brief", "prompt"]:
-                                if isinstance(asset, dict):
-                                    message = asset.get("content") or asset.get("text")
-                                else:
-                                    message = getattr(asset, "content", None) or getattr(asset, "text", None)
-                                if message:
-                                    break
-
-                    if not message and creative.inputs:
-                        inputs = creative.inputs or []
-                        if inputs:
-                            first_input = inputs[0]
-                            if isinstance(first_input, dict):
-                                message = first_input.get("context_description")
-                            else:
-                                message = getattr(first_input, "context_description", None)
+                    message = _extract_message_from_assets(creative)
 
                     if not message:
                         message = f"Create a creative for: {creative.name}"
@@ -778,8 +748,9 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (i6k: model attribute assignment)
+    # SDK 5.7: CreativeAsset is now a RootModel; __getattr__ proxies to .root
     if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id
+        creative.creative_id = db_creative.creative_id  # type: ignore[attr-defined]
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":

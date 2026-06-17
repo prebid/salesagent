@@ -75,6 +75,10 @@ class TestSchemaFieldMapping:
             "measurement_terms",  # Measurement terms from adcp 4.3 spec
             "cancellation_policy",  # Cancellation policy from adcp 4.3 spec
             "performance_standards",  # Performance standards from adcp 4.3 spec
+            # AdCP 5.7+ fields - inherited from library Product, not yet stored in database
+            "format_options",  # Format option config from adcp 5.7 spec
+            "vendor_metric_optimization",  # Vendor metric optimization from adcp 5.7 spec
+            "allowed_actions",  # Allowed buyer actions from adcp 5.7 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

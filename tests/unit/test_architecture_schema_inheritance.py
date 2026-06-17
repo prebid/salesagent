@@ -197,9 +197,8 @@ class TestSchemaInheritance:
             ("QuerySummary", "filters_applied"),
             ("Signal", "signal_type"),
             ("Signal", "deployments"),
-            ("SyncCreativeResult", "warnings"),
-            ("SyncCreativeResult", "errors"),
-            ("SyncCreativeResult", "changes"),
+            ("SyncCreativeResult", "action"),  # Coerce str→CreativeAction (adcontextprotocol/adcp-client-python#913)
+            ("SyncCreativeResult", "errors"),  # SDK 5.7 still has errors; warnings/changes removed
             ("SyncCreativesRequest", "creatives"),
             ("SyncCreativesRequest", "push_notification_config"),
             # Creative overrides — listing base requires these fields, but we add
@@ -215,25 +214,29 @@ class TestSchemaInheritance:
             # with wider types (optional vs required) or salesagent-specific semantics
             ("CreateMediaBuyRequest", "account"),  # optional override (library requires it)
             ("CreativePolicy", "provenance_required"),  # custom description/default
-            ("GetMediaBuyDeliveryRequest", "account"),  # dict override (library uses AccountReference)
-            ("GetMediaBuyDeliveryRequest", "attribution_window"),  # dict override (salesagent extension)
-            ("GetMediaBuyDeliveryRequest", "include_package_daily_breakdown"),  # salesagent extension
-            ("GetMediaBuyDeliveryRequest", "reporting_dimensions"),  # dict override (salesagent extension)
+            # GetMediaBuyDeliveryRequest: SDK 5.7 provides all fields; no local
+            # redeclarations remain. Removed: account, attribution_window,
+            # include_package_daily_breakdown, reporting_dimensions.
             ("GetProductsRequest", "buying_mode"),  # str|None override (library uses Literal discriminator)
             ("SyncCreativesRequest", "account"),  # optional override (library requires it)
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "packages"),  # list[AdCPPackageUpdate] (local subclass type)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
             # adcp 4.3 field overrides — library made these required; we keep them
-            # optional because identity/idempotency is resolved at the transport boundary
-            ("CreateMediaBuyRequest", "idempotency_key"),  # optional override (generated at boundary)
+            # optional because identity is resolved at the transport boundary, and
+            # required-key enforcement rolls out create_media_buy-first
+            # (CreateMediaBuyRequest.idempotency_key now inherits the required field)
             ("Product", "reporting_capabilities"),  # optional override (not all products have it)
-            ("SyncAccountsRequest", "idempotency_key"),  # optional override (generated at boundary)
-            ("SyncCreativesRequest", "idempotency_key"),  # optional override (generated at boundary)
+            ("SyncAccountsRequest", "idempotency_key"),  # optional override (required-key fast-follow)
+            ("SyncCreativesRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             ("UpdateMediaBuyRequest", "account"),  # optional override (resolved from identity)
-            ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (generated at boundary)
+            ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
+            # Required-field tightening (#1399 Plan-B): pinned 3.1 marks these
+            # success-arm fields required; the SDK base declares them optional, so
+            # we redeclare required to match the spec.
+            ("GetProductsResponse", "products"),
         }
 
         violations = []

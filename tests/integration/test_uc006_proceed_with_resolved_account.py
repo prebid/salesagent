@@ -18,9 +18,9 @@ beads: salesagent-txo1
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.creative.sync_creatives_response import Creative as SyncCreativeResult
 
 from src.core.schemas import SyncCreativesResponse
+from src.core.schemas.creative import SyncCreativeResult
 from tests.bdd.steps.domain.uc006_sync_creatives import then_proceed_with_resolved_account
 from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
 from tests.harness import CreativeSyncEnv, make_identity

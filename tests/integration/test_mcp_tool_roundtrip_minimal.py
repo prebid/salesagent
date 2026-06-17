@@ -7,12 +7,14 @@ and caused errors.
 Focus: Test parameter-to-schema mapping, not business logic.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers import assert_envelope_shape
 
 
@@ -63,6 +65,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
@@ -100,6 +103,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
@@ -185,14 +189,7 @@ class TestMCPToolRoundtripMinimal:
                             "width": 300,
                             "height": 250,
                         },
-                        "assets": {
-                            "image": {
-                                "url": "https://example.com/preview.jpg",
-                                "width": 300,
-                                "height": 250,
-                            },
-                            "click_url": {"url": "https://example.com"},
-                        },
+                        "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
                     }
                 ]
             },
@@ -243,6 +240,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,

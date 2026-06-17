@@ -14,12 +14,14 @@ If these services are unavailable (HTTP 5xx, connection errors), tests will skip
 rather than fail, since external service availability is outside our control.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.a2a_response_validator import assert_valid_skill_response
 from tests.helpers.external_service import is_external_service_exception
@@ -93,6 +95,7 @@ class TestA2AMessageFieldValidation:
             # CreateMediaBuyRequest validates strictly.
             params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],
@@ -127,14 +130,7 @@ class TestA2AMessageFieldValidation:
                         "creative_id": "creative_test_001",  # Changed from buyer_ref to creative_id per adcp library
                         "format_id": "display_300x250",
                         "name": "Test Creative",
-                        "assets": {
-                            "main_image": {
-                                "asset_type": "image",
-                                "url": "https://example.com/image.jpg",
-                                "width": 300,
-                                "height": 250,
-                            }
-                        },
+                        "assets": build_assets(image_spec("main_image", url="https://example.com/image.jpg")),
                     }
                 ],
                 "validation_mode": "strict",

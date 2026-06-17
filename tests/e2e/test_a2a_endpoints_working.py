@@ -14,7 +14,7 @@ import sys
 
 import pytest
 import requests
-from adcp import get_adcp_version
+from adcp import get_adcp_spec_version
 
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -77,7 +77,7 @@ class TestA2AEndpointsActual:
                         break
 
                 assert adcp_ext is not None, "AdCP extension not found in live agent card"
-                assert adcp_ext["params"]["adcp_version"] == get_adcp_version()
+                assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
                 assert "media_buy" in adcp_ext["params"]["protocols_supported"]
 
         except (requests.ConnectionError, requests.Timeout):
@@ -208,7 +208,7 @@ class TestA2AAgentCardCreation:
         assert adcp_ext is not None, "AdCP extension not found in capabilities.extensions"
 
         # Validate AdCP extension structure
-        adcp_version = get_adcp_version()
+        adcp_version = get_adcp_spec_version()
         assert adcp_ext.uri == f"https://adcontextprotocol.org/schemas/{adcp_version}/protocols/adcp-extension.json"
         assert adcp_ext.params is not None
         # protobuf Struct: access fields dict-like

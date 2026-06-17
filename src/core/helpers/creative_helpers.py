@@ -1,4 +1,11 @@
-"""Creative format parsing and asset conversion helpers."""
+"""Creative format parsing and asset conversion helpers.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [attr-defined] on lines ~694, ~696, ~816, ~826, ~884, ~896:
+  AssetSpec (ImageFormatAsset) is a RootModel proxy; .asset_type and .asset_id
+  exist at runtime but mypy cannot see through __getattr__. Fixable when the SDK
+  ships typed accessors or a shared unwrapper helper.
+"""
 
 import logging
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -693,9 +700,9 @@ def extract_media_url_and_dimensions(
             # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
             if not isinstance(asset_spec, Assets):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()
+            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
             if asset_type in MEDIA_ASSET_TYPES:
-                asset_id = asset_spec.asset_id
+                asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
                 if asset_id in creative_data["assets"]:
                     asset_obj = creative_data["assets"][asset_id]
                     if isinstance(asset_obj, dict):
@@ -815,7 +822,7 @@ def extract_click_url(
         for asset_spec in get_individual_assets(format_spec):
             if not isinstance(asset_spec, Assets):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()
+            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
             if asset_type == "url":
                 requirements = getattr(asset_spec, "requirements", None)
                 if requirements:
@@ -825,7 +832,7 @@ def extract_click_url(
                     elif hasattr(requirements, "url_type"):
                         req_url_type = requirements.url_type
                     if req_url_type == "clickthrough":
-                        asset_id = asset_spec.asset_id
+                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
                         if asset_id in creative_data["assets"]:
                             asset_obj = creative_data["assets"][asset_id]
                             if isinstance(asset_obj, dict) and asset_obj.get("url"):
@@ -883,7 +890,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
         for asset_spec in get_individual_assets(format_spec):
             if not isinstance(asset_spec, Assets):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()
+            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
             if asset_type == "url":
                 # Check if this is a tracker_pixel by looking at requirements.url_type
                 requirements = getattr(asset_spec, "requirements", None)
@@ -895,7 +902,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
                         req_url_type = requirements.url_type
                     # Only match tracker_pixel type
                     if req_url_type == "tracker_pixel":
-                        asset_id = asset_spec.asset_id
+                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
                         if asset_id in creative_data["assets"]:
                             asset_obj = creative_data["assets"][asset_id]
                             if isinstance(asset_obj, dict) and asset_obj.get("url"):

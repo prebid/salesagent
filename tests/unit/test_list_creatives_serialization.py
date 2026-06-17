@@ -10,9 +10,12 @@ Related:
 - Pattern: All response models with nested Pydantic models need explicit serialization
 """
 
-from datetime import UTC, datetime
-
-from src.core.schemas import Creative, ListCreativesResponse, Pagination, QuerySummary
+from src.core.schemas import ListCreativesResponse, Pagination, QuerySummary
+from tests.helpers.creative_test_helpers import (
+    assert_listing_creative_fields,
+    make_test_creative,
+    make_test_creative_list,
+)
 
 
 def test_list_creatives_response_excludes_internal_fields_from_nested_creatives():
@@ -22,41 +25,17 @@ def test_list_creatives_response_excludes_internal_fields_from_nested_creatives(
     model_dump() only returns: creative_id, format_id, variants.
     principal_id is always excluded (internal advertiser tracking).
     """
-    # Create Creative with internal fields populated
-    creative = Creative(
-        creative_id="test_123",
-        variants=[],
-        name="Test Banner",
-        format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-        assets={"banner": {"asset_type": "image", "url": "https://example.com/banner.jpg"}},
-        # Internal fields - should be excluded from response
-        principal_id="principal_456",
-        created_date=datetime.now(UTC),
-        updated_date=datetime.now(UTC),
-        status="approved",
-    )
+    creative = make_test_creative()
 
-    # Create response with the creative
     response = ListCreativesResponse(
         creatives=[creative],
         query_summary=QuerySummary(total_matching=1, returned=1, filters_applied=["format: display_300x250"]),
         pagination=Pagination(has_more=False),
     )
 
-    # Dump to dict (what clients receive)
     result = response.model_dump()
-
-    # Verify internal fields are excluded from nested creative
     creative_in_response = result["creatives"][0]
-
-    assert "principal_id" not in creative_in_response, "Internal field 'principal_id' should be excluded"
-
-    # Listing Creative: public fields in model_dump()
-    assert "creative_id" in creative_in_response
-    assert creative_in_response["creative_id"] == "test_123"
-    assert "format_id" in creative_in_response, "Spec field format_id should be present"
-    assert "name" in creative_in_response, "Listing Creative: name is a public field"
-    assert "status" in creative_in_response, "Listing Creative: status is a public field"
+    assert_listing_creative_fields(creative_in_response, "test_123")
     assert "created_date" in creative_in_response, "Listing Creative: created_date is a public field"
     assert "updated_date" in creative_in_response, "Listing Creative: updated_date is a public field"
 
@@ -66,21 +45,7 @@ def test_list_creatives_response_excludes_internal_fields_from_nested_creatives(
 
 def test_list_creatives_response_with_multiple_creatives():
     """Test that internal fields are excluded from all creatives in the list."""
-    # Create multiple creatives with internal fields
-    creatives = [
-        Creative(
-            creative_id=f"creative_{i}",
-            variants=[],
-            name=f"Test Creative {i}",
-            format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-            assets={"banner": {"asset_type": "image", "url": f"https://example.com/banner{i}.jpg"}},
-            principal_id=f"principal_{i}",
-            created_date=datetime.now(UTC),
-            updated_date=datetime.now(UTC),
-            status="approved" if i % 2 == 0 else "pending_review",
-        )
-        for i in range(3)
-    ]
+    creatives = make_test_creative_list(3)
 
     response = ListCreativesResponse(
         creatives=creatives,
@@ -90,31 +55,19 @@ def test_list_creatives_response_with_multiple_creatives():
 
     result = response.model_dump()
 
-    # Verify internal fields excluded from all creatives
     for i, creative_data in enumerate(result["creatives"]):
-        assert "principal_id" not in creative_data, f"Creative {i}: principal_id should be excluded"
-
-        # Listing Creative: public fields in model_dump()
-        assert creative_data["creative_id"] == f"creative_{i}"
-        assert "format_id" in creative_data, f"Creative {i}: format_id should be present"
-        assert "name" in creative_data, f"Creative {i}: name is a public listing field"
-        assert "status" in creative_data, f"Creative {i}: status is a public listing field"
+        assert_listing_creative_fields(creative_data, f"creative_{i}", prefix=f"Creative {i}")
         assert "created_date" in creative_data, f"Creative {i}: created_date is a public listing field"
         assert "updated_date" in creative_data, f"Creative {i}: updated_date is a public listing field"
 
 
 def test_list_creatives_response_with_optional_fields():
     """Test that internal fields are accessible via model_dump_internal()."""
-    creative = Creative(
+    creative = make_test_creative(
         creative_id="test_with_optional",
-        variants=[],
         name="Test Creative",
-        format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-        assets={"banner": {"asset_type": "image", "url": "https://example.com/banner.jpg"}},
-        tags=["sports", "premium"],  # Internal field in adcp 3.6.0
-        # Internal fields
         principal_id="principal_123",
-        status="approved",
+        tags=["sports", "premium"],
     )
 
     response = ListCreativesResponse(

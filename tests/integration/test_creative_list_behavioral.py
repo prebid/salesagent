@@ -26,6 +26,7 @@ from tests.factories import (
     PrincipalFactory,
     TenantFactory,
 )
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import CreativeListEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -483,7 +484,7 @@ class TestListSorting:
 
             response = env.call_impl(sort_by="status", sort_order="asc")
 
-        statuses = [c.status.value for c in response.creatives]
+        statuses = [str(c.status) for c in response.creatives]
         assert statuses == sorted(statuses)
 
     def test_sort_applied_in_response(self, integration_db):
@@ -601,7 +602,7 @@ class TestListResponseShape:
                 principal=principal,
                 creative_id="c_snippet",
                 data={
-                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "assets": build_assets(image_spec("banner")),
                     "snippet": "<script>/* ad tag */</script>",
                 },
             )
@@ -746,7 +747,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_snippet",
                 data={
-                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "assets": build_assets(image_spec("banner")),
                     "snippet": "<script>var ad = 1;</script>",
                     "url": "https://cdn.example.com/ad.html",
                 },
@@ -767,7 +768,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_snippet_no_url",
                 data={
-                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "assets": build_assets(image_spec("banner")),
                     "snippet": "<script>var ad = 1;</script>",
                 },
             )
@@ -786,7 +787,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_normal",
                 data={
-                    "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                    "assets": build_assets(image_spec("banner")),
                     "url": "https://cdn.example.com/creative.jpg",
                 },
             )
@@ -846,7 +847,10 @@ class TestListCreativeObjectConstruction:
             response = env.call_impl()
 
         assert len(response.creatives) == 1
-        assert response.creatives[0].status.value == "pending_review"
+        # SDK 5.7: CreativeStatus is plain Enum, not StrEnum; compare via .value
+        status = response.creatives[0].status
+        status_str = status.value if hasattr(status, "value") else str(status)
+        assert status_str == "pending_review"
 
     def test_creative_with_tags(self, integration_db):
         """Spec: creative tags from data dict are included in response."""
@@ -858,7 +862,7 @@ class TestListCreativeObjectConstruction:
                 principal=principal,
                 creative_id="c_with_tags",
                 data={
-                    "assets": {"banner": {"url": "https://example.com/b.png"}},
+                    "assets": build_assets(image_spec("banner")),
                     "tags": ["brand_safe", "premium"],
                 },
             )
@@ -876,7 +880,7 @@ class TestListCreativeObjectConstruction:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_no_tags",
-                data={"assets": {"banner": {"url": "https://example.com/b.png"}}},
+                data={"assets": build_assets(image_spec("banner"))},
             )
             response = env.call_impl()
 

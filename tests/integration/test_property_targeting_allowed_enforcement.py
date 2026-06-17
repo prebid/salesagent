@@ -10,6 +10,8 @@ Covers: UC-002-MAIN-14b
 Covers: UC-003-MAIN-14
 """
 
+import uuid
+
 import pytest
 
 from src.core.database.database_session import get_db_session
@@ -104,6 +106,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
         ],
         start_time=start,
         end_time=end,
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
     with pytest.raises(AdCPValidationError) as excinfo:
@@ -147,6 +150,7 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
         ],
         start_time=start,
         end_time=end,
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
@@ -187,6 +191,7 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
         ],
         start_time=start,
         end_time=end,
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())

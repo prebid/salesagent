@@ -39,22 +39,21 @@ class TestResponseSchemas:
         # Verify domain fields are present
         assert response.media_buy_id == "buy_123"
 
-    def test_get_products_response_no_context_id(self):
-        """Verify GetProductsResponse doesn't have context_id."""
+    def test_get_products_response_protocol_envelope(self):
+        """Verify GetProductsResponse has protocol envelope fields (SDK 5.7)."""
         response = GetProductsResponse(products=[])
 
-        # Verify context_id is not in the schema
-        assert not hasattr(response, "context_id")
+        # SDK 5.7: protocol envelope includes context_id, status, etc.
+        assert hasattr(response, "context_id")
 
         # Verify AdCP-compliant fields are present
         assert response.products == []
 
         # Verify message is provided via __str__() not as schema field
-        assert not hasattr(response, "message")
         assert str(response) == "No products matched your requirements."
 
-    def test_list_creative_formats_response_no_context_id(self):
-        """Verify ListCreativeFormatsResponse doesn't have context_id."""
+    def test_list_creative_formats_response_protocol_envelope(self):
+        """Verify ListCreativeFormatsResponse has protocol envelope fields (SDK 5.7)."""
         from src.core.schemas import Format
 
         test_formats = [
@@ -63,16 +62,15 @@ class TestResponseSchemas:
         ]
         response = ListCreativeFormatsResponse(formats=test_formats)
 
-        # Verify context_id is not in the schema
-        assert not hasattr(response, "context_id")
+        # SDK 5.7: protocol envelope includes context_id
+        assert hasattr(response, "context_id")
 
         # Verify AdCP-compliant fields
         assert len(response.formats) == 2
         assert response.formats[0].format_id.id == "display_300x250"
         assert response.formats[1].format_id.id == "video_16x9"
 
-        # Verify message is provided via __str__() not as schema field
-        assert not hasattr(response, "message")
+        # SDK 5.7 protocol envelope includes message; __str__ still works
         assert str(response) == "Found 2 creative formats."
 
     def test_error_reporting_in_responses(self):

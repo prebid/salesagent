@@ -77,6 +77,7 @@ class TestMCPForwardsPushNotificationConfig:
                     packages=req_dict["packages"],
                     start_time=req_dict["start_time"],
                     end_time=req_dict["end_time"],
+                    idempotency_key=req_dict["idempotency_key"],
                     push_notification_config=pnc,
                     ctx=mock_ctx,
                 )
@@ -122,6 +123,7 @@ class TestA2AForwardsPushNotificationConfig:
                 packages=req_dict["packages"],
                 start_time=req_dict["start_time"],
                 end_time=req_dict["end_time"],
+                idempotency_key=req_dict["idempotency_key"],
                 push_notification_config=pnc_dict,
                 identity=mock_identity,
             )

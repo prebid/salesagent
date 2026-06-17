@@ -689,10 +689,10 @@ class TestGetMediaBuysResponseFields:
     @pytest.mark.parametrize(
         ("persisted_status", "expected"),
         [
-            ("completed", MediaBuyStatus.completed),
-            ("paused", MediaBuyStatus.paused),
-            ("rejected", MediaBuyStatus.rejected),
-            ("canceled", MediaBuyStatus.canceled),
+            ("completed", "completed"),
+            ("paused", "paused"),
+            ("rejected", "rejected"),
+            ("canceled", "canceled"),
         ],
     )
     @pytest.mark.asyncio
@@ -765,7 +765,9 @@ class TestGetMediaBuysResponseFields:
         )
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
-        assert mb_response.status == expected, (
+        # SDK 5.7: MediaBuyStatus is plain Enum, not StrEnum; normalize for comparison
+        actual_status = mb_response.status.value if hasattr(mb_response.status, "value") else str(mb_response.status)
+        assert actual_status == expected, (
             f"Persisted status {persisted_status!r} must be authoritative; "
             f"got {mb_response.status} for a buy whose flight window covers today"
         )
