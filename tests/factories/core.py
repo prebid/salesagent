@@ -13,6 +13,7 @@ from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
 from src.core.database.models import (
     AdapterConfig,
+    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     PropertyTag,
@@ -99,6 +100,29 @@ class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
     display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
     is_verified = True
     sync_status = "success"
+
+
+class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """A verified authorized property — satisfies the create_media_buy setup
+    checklist's "Authorized Properties" gate (SetupChecklistService counts
+    AuthorizedProperty rows for the tenant). The in-process transports skip the
+    gate via the testing context; the live e2e_rest server enforces it, so a
+    fully-set-up tenant needs at least one of these.
+    """
+
+    class Meta:
+        model = AuthorizedProperty
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    property_id = Sequence(lambda n: f"prop_{n:04d}")
+    property_type = "website"
+    name = LazyAttribute(lambda o: f"Authorized Property {o.property_id}")
+    publisher_domain = Sequence(lambda n: f"authorized-{n:04d}.example.com")
+    identifiers = LazyAttribute(lambda o: [{"type": "domain", "value": o.publisher_domain}])
+    verification_status = "verified"
 
 
 class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
