@@ -355,6 +355,11 @@ class BaseTestEnv:
         self._session: Session | None = None
         self._identity_cache: dict[str, ResolvedIdentity] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
+        # Real serialized success-path wire, stashed by _run_a2a_handler /
+        # _run_mcp_client (the only paths that capture it) and read by the
+        # A2A/MCP dispatchers. None unless such a path ran — REST builds its
+        # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
+        self._last_wire_response: dict[str, Any] | None = None
 
     # -- Identity (one function, all transports) ----------------------------
 
@@ -444,6 +449,9 @@ class BaseTestEnv:
         kwargs.setdefault("identity", self.identity_for(transport))
 
         dispatcher = DISPATCHERS[transport]
+        # Reset success-path wire capture; _run_a2a_handler / _run_mcp_client
+        # set it fresh on success so A2A/MCP dispatchers can surface real wire.
+        self._last_wire_response = None
         return dispatcher.dispatch(self, **kwargs)
 
     # -- Per-transport hooks (override in subclass) -------------------------
@@ -618,6 +626,10 @@ class BaseTestEnv:
         if not task_result.artifacts:
             raise ValueError(f"Task has no artifacts. Status: {task_result.status}")
         artifact_data = extract_data_from_artifact(task_result.artifacts[0])
+        # Surface the full, unstripped artifact DataPart as the real A2A wire for
+        # success-path assertions. Captured BEFORE stripping so siblings that need
+        # the top-level envelope fields (message/success) still see them.
+        self._last_wire_response = dict(artifact_data)
         # Strip protocol fields added by _serialize_for_a2a (message, success).
         # These are A2A-envelope fields, not part of the Pydantic response model,
         # and cause ValidationError under extra="forbid" in non-production mode.
@@ -702,6 +714,7 @@ class BaseTestEnv:
                         assert patched_th.called or patched_mw.called, (
                             f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         )
+                        self._last_wire_response = result.structured_content
                         return response_cls(**result.structured_content)
 
         else:
@@ -713,6 +726,7 @@ class BaseTestEnv:
                 ):
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
+                        self._last_wire_response = result.structured_content
                         return response_cls(**result.structured_content)
 
         try:

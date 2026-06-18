@@ -401,6 +401,37 @@ MCP, or A2A — only those transports observe actual wire bytes.
 compatibility. Reconstruction is lossy — assert on `wire_error_envelope`
 (or `synthesized_error_envelope` for IMPL).
 
+### TransportResult.wire_response (success-path wire)
+
+`TransportResult` also exposes `wire_response: dict | None` — the **serialized
+success-path response body**, the success-path analogue of `wire_error_envelope`.
+Populated on success by the REST dispatcher (HTTP body) and by the A2A/MCP
+dispatchers **only when the env routes through `_run_a2a_handler` /
+`_run_mcp_client`** (which stash the wire). Legacy `_run_mcp_wrapper` and the
+direct `*_raw` wrappers do not stash, so `wire_response` is `None` there — as it
+is on error and on IMPL. Today only `CreativeFormatsEnv` reads it.
+Use it to assert the **actual serialized shape** a buyer receives (e.g. the v3.1
+`format_id` `{agent_url, id}` federation contract on `list_creative_formats`)
+rather than the typed `payload`, whose fields are already coerced to their
+declared types and so cannot catch a serialization regression.
+
+**Authenticity per transport:**
+
+| Transport | `wire_response` source | Notes |
+|-----------|------------------------|-------|
+| REST | HTTP JSON body (`response.json()`) | Real wire; equals `raw_response.json()`. |
+| MCP  | `ToolResult.structured_content` (real wire) | Stashed by `_run_mcp_client`. |
+| A2A  | Full artifact DataPart (real wire) | Stashed by `_run_a2a_handler` BEFORE the `message`/`success` strip, so top-level envelope fields are present. |
+| IMPL | `None` (no wire by definition) | Serialize the typed `payload` (`model_dump(mode="json")`) — exercises the production serializer, not transport framing. |
+
+As with `wire_error_envelope`, real wire-shape regressions are only observable on
+REST/MCP/A2A; IMPL's `model_dump` only exercises the serializer. See
+`tests/integration/test_harness_wire_response.py` (pins that the field is real
+wire, not a payload reconstruction) and
+`tests/bdd/steps/domain/uc005_format_id_shape.py` (uses it for the format_id
+federation contract; reusable by the `roundtrip-from-products` /
+`third-party-agent` siblings).
+
 ## Infrastructure
 
 | What you need | Command |

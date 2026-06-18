@@ -1101,3 +1101,6 @@ Feature: BR-UC-005 Discover Creative Formats
     # unique identifier within that agent). Sellers returning bare-string format IDs
     # break the v3.1 federation contract.
     # discover_formats: format_id object shape is the federation contract
+    # The strict "every entry / never a bare string" form is mandated by the schema
+    # (core/format-id.json: required [agent_url, id]); the storyboard grades field_present on formats[0].
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/core/format-id.json
