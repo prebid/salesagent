@@ -92,9 +92,7 @@ def collect_pytest_raises_classes() -> set[str]:
         if tree is None:
             continue
         for node in iter_call_expressions(tree, name="raises"):
-            func = node.func
-            is_raises = isinstance(func, ast.Attribute) or isinstance(func, ast.Name)
-            if not is_raises or not node.args:
+            if not node.args:
                 continue
             first = node.args[0]
             candidates = first.elts if isinstance(first, ast.Tuple) else [first]

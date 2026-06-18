@@ -53,7 +53,7 @@ def _assigns_handrolled_allowlist_diff(node: ast.AST) -> bool:
 
 def _find_handrolled_allowlist_diffs() -> list[str]:
     violations: list[str] = []
-    for rel, tree in iter_architecture_guard_trees(exempt=_EXEMPT):
+    for tree, rel in iter_architecture_guard_trees(exempt=_EXEMPT):
         for node in ast.walk(tree):
             if _assigns_handrolled_allowlist_diff(node):
                 lineno = getattr(node, "lineno", "?")
@@ -63,7 +63,7 @@ def _find_handrolled_allowlist_diffs() -> list[str]:
 
 def _find_ast_helpers_imports() -> list[str]:
     violations: list[str] = []
-    for rel, tree in iter_architecture_guard_trees():
+    for tree, rel in iter_architecture_guard_trees():
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "tests.unit._ast_helpers":
                 violations.append(f"{rel}:{node.lineno}: imports tests.unit._ast_helpers")

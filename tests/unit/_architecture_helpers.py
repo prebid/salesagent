@@ -161,7 +161,7 @@ def find_plain_json_column_violations(tree: ast.Module) -> list[int]:
     return lines
 
 
-def iter_call_expressions(tree: ast.Module, name: str | None = None) -> Iterator[ast.Call]:
+def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[ast.Call]:
     """Yield Call nodes, optionally filtered by callable name."""
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -179,16 +179,18 @@ def iter_call_expressions(tree: ast.Module, name: str | None = None) -> Iterator
 def iter_architecture_guard_trees(
     *,
     exempt: Iterable[Path] | None = None,
-) -> Iterator[tuple[Path, ast.Module]]:
-    """Yield ``(repo_relative_path, parsed_tree)`` for each ``test_architecture_*.py`` module."""
+) -> Iterator[tuple[ast.Module, Path]]:
+    """Yield ``(parsed_tree, repo_relative_path)`` for each ``test_architecture_*.py`` module."""
     repo = repo_root()
     skip = set(exempt or ())
     for path in sorted((repo / "tests" / "unit").glob("test_architecture_*.py")):
         rel = path.relative_to(repo)
         if rel in skip:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        yield rel, tree
+        tree = safe_parse(path)
+        if tree is None:
+            continue
+        yield tree, rel
 
 
 # ---------------------------------------------------------------------------

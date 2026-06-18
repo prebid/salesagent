@@ -45,6 +45,13 @@ def test_iter_call_expressions_filters_by_name() -> None:
 
 
 @pytest.mark.arch_guard
+def test_iter_call_expressions_name_matches_bare_and_attribute() -> None:
+    tree = ast.parse("h()\nx.h()")
+    h_calls = list(iter_call_expressions(tree, name="h"))
+    assert len(h_calls) == 2
+
+
+@pytest.mark.arch_guard
 def test_iter_call_expressions_subtree_scope() -> None:
     tree = ast.parse(_ITER_CALL_SOURCE)
     inner_func = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))

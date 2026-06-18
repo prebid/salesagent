@@ -84,6 +84,8 @@ def _find_in_queries_on_integer_columns(filepath: str) -> list[tuple[int, str, s
 
     results = []
     for node in iter_call_expressions(tree, name="in_"):
+        if not isinstance(node.func, ast.Attribute):
+            continue
         # The value should be Model.column (another Attribute node)
         value = node.func.value
         if not isinstance(value, ast.Attribute):
