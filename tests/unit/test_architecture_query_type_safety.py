@@ -17,7 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root, src_python_files
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    iter_call_expressions,
+    repo_root,
+    src_python_files,
+)
 
 # Files to scan for database queries
 QUERY_FILES = [
@@ -78,17 +83,11 @@ def _find_in_queries_on_integer_columns(filepath: str) -> list[tuple[int, str, s
         return []
 
     results = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+    for node in iter_call_expressions(tree, name="in_"):
+        if not isinstance(node.func, ast.Attribute):
             continue
-
-        # Match pattern: Model.column.in_(args)
-        func = node.func
-        if not isinstance(func, ast.Attribute) or func.attr != "in_":
-            continue
-
         # The value should be Model.column (another Attribute node)
-        value = func.value
+        value = node.func.value
         if not isinstance(value, ast.Attribute):
             continue
 
@@ -128,14 +127,7 @@ def _find_filter_by_on_integer_columns(filepath: str) -> list[tuple[int, str, st
         return []
 
     results = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-
-        func = node.func
-        if not isinstance(func, ast.Attribute) or func.attr != "filter_by":
-            continue
-
+    for node in iter_call_expressions(tree, name="filter_by"):
         # Check keyword arguments for Integer PK column names
         for kw in node.keywords:
             if kw.arg is None:

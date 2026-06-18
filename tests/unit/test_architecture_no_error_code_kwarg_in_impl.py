@@ -16,7 +16,7 @@ import ast
 from collections.abc import Iterator
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
@@ -70,8 +70,8 @@ def _iter_adcp_error_calls() -> Iterator[tuple[str, str, ast.Call]]:
             for node in ast.walk(tree):
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                for child in ast.walk(node):
-                    if isinstance(child, ast.Call) and _func_targets_adcp_error_or_synthesize(child.func):
+                for child in iter_call_expressions(node):
+                    if _func_targets_adcp_error_or_synthesize(child.func):
                         yield rel_path, node.name, child
 
 
