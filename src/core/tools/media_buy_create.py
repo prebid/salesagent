@@ -1669,6 +1669,26 @@ def _advisory_ext(advisories: list[Error]) -> dict | None:
     )
 
 
+def _submitted_result(step_id: str, advisories: list[Error], context: ContextObject | None) -> CreateMediaBuyResult:
+    """Build the approval-pending ``submitted`` variant result.
+
+    The spec ``submitted`` variant carries task_id (the workflow step id, resolvable
+    via get_task) + the advisory message/errors slot; media_buy_id and packages are
+    FORBIDDEN — they arrive on the completion artifact after approval. Both approval
+    branches (manual review and config approval) return this identical envelope, so it
+    has a single home here rather than two byte-identical inline constructions.
+    """
+    return CreateMediaBuyResult(
+        response=CreateMediaBuySubmitted(
+            task_id=step_id,
+            message=_advisory_message(advisories),
+            errors=advisories or None,
+            context=context,
+        ),
+        status=AdcpTaskStatus.submitted.value,
+    )
+
+
 def _raise_degraded_replay_outcome(
     tenant_id: str,
     idempotency_key: str,
@@ -3167,16 +3187,9 @@ async def _create_media_buy_impl(
             # resolvable via get_task) + message + the variant's advisory
             # errors slot. media_buy_id/packages are FORBIDDEN here — they
             # arrive on the completion artifact after approval.
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,
-                    message=_advisory_message(property_list_advisories),
-                    errors=property_list_advisories or None,
-                    context=req.context,
-                ),
-                status=AdcpTaskStatus.submitted.value,
+            return _cache_and_return(
+                _submitted_result(step.step_id, property_list_advisories, req.context), req, identity, request_hash
             )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy: tests patch src.core.tools.products.get_product_catalog; the call-time import binds the patched object.
@@ -3319,16 +3332,9 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,
-                    message=_advisory_message(property_list_advisories),
-                    errors=property_list_advisories or None,
-                    context=req.context,
-                ),
-                status=AdcpTaskStatus.submitted.value,
+            return _cache_and_return(
+                _submitted_result(step.step_id, property_list_advisories, req.context), req, identity, request_hash
             )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
 
         # Continue with synchronized media buy creation
 
