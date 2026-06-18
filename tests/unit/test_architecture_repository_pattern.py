@@ -14,6 +14,10 @@ import ast
 import glob
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
@@ -575,6 +579,7 @@ class TestImplNoDirectDbSession:
     repositories and call typed methods, not raw session operations.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_get_db_session_in_impl(self):
         """No _impl function calls get_db_session() outside the allowlist."""
         all_violations = []
@@ -596,6 +601,7 @@ class TestImplNoDirectDbSession:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()
@@ -603,15 +609,11 @@ class TestImplNoDirectDbSession:
             for f, fn, _line in _find_impl_functions_with_db_session(file_path):
                 all_violations.add((f, fn))
 
-        stale = IMPL_SESSION_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            IMPL_SESSION_ALLOWLIST,
+            fix_hint="Remove fixed entries from IMPL_SESSION_ALLOWLIST.",
+        )
 
 
 class TestIntegrationTestsNoInlineSessionAdd:
@@ -621,6 +623,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
     not scattered across test bodies as raw ORM model construction.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_session_add_in_tests(self):
         """No test function calls session.add() outside the allowlist."""
         all_violations = []
@@ -645,6 +648,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()
@@ -652,12 +656,8 @@ class TestIntegrationTestsNoInlineSessionAdd:
             for f, fn, _line in _find_session_add_in_tests(file_path):
                 all_violations.add((f, fn))
 
-        stale = INTEGRATION_SESSION_ADD_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            INTEGRATION_SESSION_ADD_ALLOWLIST,
+            fix_hint="Remove fixed entries from INTEGRATION_SESSION_ADD_ALLOWLIST.",
+        )

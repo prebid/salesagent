@@ -17,6 +17,8 @@ covers the realistic regression vector.
 import ast
 from pathlib import Path
 
+import pytest
+
 
 def _a2a_test_files() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[2]
@@ -39,6 +41,7 @@ def _find_resolved_identity_calls(path: Path) -> list[int]:
     return lines
 
 
+@pytest.mark.arch_guard
 def test_a2a_test_files_use_principal_factory_make_identity():
     """No inline ``ResolvedIdentity(...)`` construction in A2A test files.
 

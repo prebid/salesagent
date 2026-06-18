@@ -420,8 +420,24 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     """Extract natural key components from a sync request account entry.
 
     Returns (brand_domain, brand_id, operator, sandbox).
+
+    Raises:
+        AdCPValidationError: if the entry omits ``brand``. SDK 5.7's
+            ``SyncAccountsRequest.accounts`` is ``list[Accounts | Accounts3]``;
+            the ``Accounts3`` (account-reference / settings-update) arm makes
+            ``brand`` optional, so a brandless entry parses with ``brand=None``.
+            The pinned 3.1 spec (sync-accounts-request.json) marks each entry
+            ``required: ["brand", "operator", "billing"]``, so a brandless
+            entry must be a clean buyer-correctable 400 — not an unguarded
+            ``None.domain`` AttributeError (which fell through to a 500).
     """
     brand = entry.brand
+    if brand is None:
+        raise AdCPValidationError(
+            "Each account entry must include 'brand', 'operator', and 'billing'; "
+            "the account-reference (settings-update) form is not supported by this seller.",
+            recovery="correctable",
+        )
     brand_domain = brand.domain
     brand_id = None
     if hasattr(brand, "brand_id") and brand.brand_id is not None:

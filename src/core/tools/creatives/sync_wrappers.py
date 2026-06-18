@@ -9,6 +9,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 
@@ -56,7 +57,7 @@ async def sync_creatives(
     identity = enrich_identity_with_account(identity, account)
 
     # Phase 1a: Pass typed models directly to impl (no more model_dump conversion)
-    validation_mode_str = validation_mode.value if validation_mode else "strict"
+    validation_mode_str = enum_value(validation_mode) or "strict"
 
     response = _sync_creatives_impl(
         creatives=creatives,

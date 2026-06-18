@@ -58,6 +58,12 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         result = env.call_via(transport, **kwargs)
         if result.is_error:
             ctx["error"] = result.error
+            # Capture the real wire envelope (A2A/REST/MCP) and the
+            # synthesized envelope (IMPL has no wire) so Then steps can
+            # assert the two-layer AdCP shape per the Error Verification
+            # Policy. Both are None-safe; absent keys mean "no envelope".
+            ctx["wire_error_envelope"] = result.wire_error_envelope
+            ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
         else:
             ctx["response"] = result.payload
     except Exception as exc:

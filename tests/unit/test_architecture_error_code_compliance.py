@@ -14,6 +14,7 @@ import ast
 import logging
 from pathlib import Path
 
+import pytest
 from adcp.server.helpers import STANDARD_ERROR_CODES
 
 from src.core.exceptions import INTERNAL_CODES
@@ -41,7 +42,7 @@ _SCAN_DIRS = [
 ]
 
 
-from tests.unit._ast_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
+from tests.unit._architecture_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
 
 
 def _collect_error_code_literals() -> list[tuple[str, int, str]]:
@@ -101,6 +102,7 @@ def _collect_error_code_literals() -> list[tuple[str, int, str]]:
 class TestErrorCodeCompliance:
     """Every Error(code=...) literal must be in STANDARD_ERROR_CODES or INTERNAL_CODES."""
 
+    @pytest.mark.arch_guard
     def test_no_nonstandard_error_codes_in_tools_and_adapters(self):
         """AST-scan Error(code=...) sites for non-standard codes."""
         violations = _collect_error_code_literals()
@@ -112,6 +114,7 @@ class TestErrorCodeCompliance:
                 + "\n\nEach code must be in STANDARD_ERROR_CODES or INTERNAL_CODES."
             )
 
+    @pytest.mark.arch_guard
     def test_adcp_error_subclass_codes_are_compliant(self):
         """Every AdCPError subclass _default_error_code must be standard or internal.
 

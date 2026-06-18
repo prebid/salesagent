@@ -100,7 +100,10 @@ class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsRespon
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    accounts: list[Account] = []  # type: ignore[assignment]  # Pattern #4: use local Account subclass
+    # Required (no default): pinned 3.1 list-accounts-response marks 'accounts'
+    # required. Redeclared for Pattern #4 (nested serialization with local subclass)
+    # and to enforce the spec-required field (#1399 Plan-B).
+    accounts: list[Account]  # type: ignore[assignment]
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
@@ -116,12 +119,17 @@ class SyncResponseAccount(SalesAgentBaseModel):
 
     Fields are typed with adcp library models (Error, Setup) so Pydantic
     reconstructs them properly on transport roundtrip (A2A/MCP/REST).
+
+    brand/operator/action/status are REQUIRED per the pinned AdCP schema
+    (adcontextprotocol/adcp@04f59d2d5, sync-accounts-response success variant,
+    accounts.items.required) — the model enforces them rather than relying on every
+    call site. billing stays optional (not in the schema's required set).
     """
 
-    brand: LibraryBrandReference | None = None
-    operator: str | None = None
-    action: str | None = None
-    status: str | None = None
+    brand: LibraryBrandReference
+    operator: str
+    action: str
+    status: str
     account_id: str | None = None
     name: str | None = None
     billing: str | None = None

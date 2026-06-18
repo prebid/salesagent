@@ -53,6 +53,9 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
 from tests.unit._bdd_guard_helpers import iter_then_functions
 
 # ── Dispatch methods that indicate a When action ────────────────────────
@@ -69,10 +72,10 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # Legacy dispatch-in-Then steps — original scenarios are xfailed.
     # Auth and budget enforcement replaced by BR-UC-002-nfr-enforcement.feature.
     # Rate limiting, payload size, SLA test unimplemented features (dead code).
-    "bdd/steps/domain/uc002_nfr.py:122 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:181 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:221 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:382 then_budget_validated_against_min_order",
+    "bdd/steps/domain/uc002_nfr.py:124 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:183 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:226 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:387 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()
@@ -170,36 +173,20 @@ class TestBddNoDispatchInThen:
     the scenario should have a separate When step for the second request.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_dispatch_in_then(self) -> None:
         """No Then step dispatches a request outside the allowlist."""
-        new_violations: list[str] = []
-        seen_in_allowlist: set[str] = set()
-
-        for key, func in iter_then_functions():
-            if _find_dispatch_call(func):
-                if key in _DISPATCH_IN_THEN_ALLOWLIST:
-                    seen_in_allowlist.add(key)
-                else:
-                    new_violations.append(key)
-
-        errors: list[str] = []
-        if new_violations:
-            errors.append(
-                f"Found {len(new_violations)} Then step(s) that dispatch requests:\n"
-                + "\n".join(f"  {v}" for v in sorted(new_violations))
-                + "\n\nThen steps must not send requests — that's a When action. "
+        found = {key for key, func in iter_then_functions() if _find_dispatch_call(func)}
+        assert_violations_match_allowlist(
+            found,
+            _DISPATCH_IN_THEN_ALLOWLIST,
+            fix_hint=(
+                "Then steps must not send requests — that's a When action. "
                 "Split into a When step (sends request) and a Then step (asserts outcome)."
-            )
+            ),
+        )
 
-        stale = sorted(_DISPATCH_IN_THEN_ALLOWLIST - seen_in_allowlist)
-        if stale:
-            errors.append(
-                "Stale allowlist entries (violations fixed — remove from "
-                "_DISPATCH_IN_THEN_ALLOWLIST):\n" + "\n".join(f"  {s}" for s in stale)
-            )
-
-        assert not errors, "\n\n".join(errors)
-
+    @pytest.mark.arch_guard
     def test_no_new_assert_on_request(self) -> None:
         """No Then step asserts on request-derived values against constants.
 
@@ -207,30 +194,12 @@ class TestBddNoDispatchInThen:
         comes from request_kwargs are precondition checks — they test the
         Given step setup, not the system. Move them to the Given step.
         """
-        new_violations: list[str] = []
-        seen_in_allowlist: set[str] = set()
-
-        for key, func in iter_then_functions():
-            if _find_assert_on_request(func):
-                if key in _ASSERT_ON_REQUEST_ALLOWLIST:
-                    seen_in_allowlist.add(key)
-                else:
-                    new_violations.append(key)
-
-        errors: list[str] = []
-        if new_violations:
-            errors.append(
-                f"Found {len(new_violations)} Then step(s) asserting on request data:\n"
-                + "\n".join(f"  {v}" for v in sorted(new_violations))
-                + "\n\nThen steps must assert on outcomes (response, DB), not on "
+        found = {key for key, func in iter_then_functions() if _find_assert_on_request(func)}
+        assert_violations_match_allowlist(
+            found,
+            _ASSERT_ON_REQUEST_ALLOWLIST,
+            fix_hint=(
+                "Then steps must assert on outcomes (response, DB), not on "
                 "request-derived values. Move precondition checks to Given steps."
-            )
-
-        stale = sorted(_ASSERT_ON_REQUEST_ALLOWLIST - seen_in_allowlist)
-        if stale:
-            errors.append(
-                "Stale allowlist entries (violations fixed — remove from "
-                "_ASSERT_ON_REQUEST_ALLOWLIST):\n" + "\n".join(f"  {s}" for s in stale)
-            )
-
-        assert not errors, "\n\n".join(errors)
+            ),
+        )

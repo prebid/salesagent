@@ -20,6 +20,8 @@ beads: salesagent-rkb9
 
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _NEEDLE = "call_impl(account_ref"
 
@@ -51,8 +53,13 @@ def test_no_partial_account_call_impl_in_bdd_steps():
 def test_allowlist_not_stale():
     """Every allowlisted file must still contain the pattern (else remove it)."""
     present = {f for f, _ in _scan_hits()}
-    stale = _ALLOWLIST - present
-    assert stale == set(), f"Allowlisted file(s) no longer use the pattern; remove from allowlist: {sorted(stale)}"
+    # found = allowlisted files that still use the pattern; the helper's "stale"
+    # mode then flags any allowlisted file that no longer does.
+    assert_violations_match_allowlist(
+        present & _ALLOWLIST,
+        _ALLOWLIST,
+        fix_hint="Allowlisted file(s) no longer use the pattern; remove them from the allowlist.",
+    )
 
 
 # --- Meta-tests: verify the scan logic ---

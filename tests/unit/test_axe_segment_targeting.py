@@ -69,6 +69,7 @@ def test_create_media_buy_request_with_axe_segments():
         brand={"domain": "example.com"},
         start_time=datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC),
         end_time=datetime(2025, 2, 15, 23, 59, 59, tzinfo=UTC),
+        idempotency_key="unit-test-key-axe-segments",
         packages=[
             PackageRequest(
                 # Required per AdCP spec

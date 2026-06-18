@@ -78,6 +78,10 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
                 }
             ],
         }
+    # idempotency_key is REQUIRED on CreateMediaBuyRequest (AdCP 3.0.1). Default a
+    # per-scenario-unique key so scenarios not exercising idempotency stay valid —
+    # a reused key would replay the original response instead of creating a buy.
+    ctx["request_kwargs"].setdefault("idempotency_key", f"bdd-key-{uuid.uuid4().hex}")
     return ctx["request_kwargs"]
 
 

@@ -445,3 +445,33 @@ class TestIdempotencyKeyLookup:
             found = repo.find_by_idempotency_key(idem_key, principal_a)
             assert found is not None
             assert found.media_buy_id == "mb_idem_create"
+
+    def test_get_by_id_or_idempotency_key_threads_account_id(self, integration_db):
+        """account_id scopes the idempotency-key fallback (spec: agent + account + key).
+
+        The lookup falls back from media_buy_id to idempotency_key; the account
+        must reach find_by_idempotency_key, or the fallback silently forces
+        ``IS NULL`` and never matches an account-scoped buy.
+        """
+        import uuid
+
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from tests.helpers import seed_media_buy
+
+        idem_key = f"acct-scope-{uuid.uuid4().hex}"
+        tenant_id = f"acct_scope_t_{uuid.uuid4().hex[:6]}"
+        principal_id = f"p_{uuid.uuid4().hex[:8]}"
+        seed_media_buy(tenant_id, principal_id, "mb_acct_scoped", idempotency_key=idem_key, account_id="acct1")
+
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_id)
+            # identifier is not a media_buy_id → falls back to idempotency_key,
+            # scoped to the booking account.
+            found = repo.get_by_id_or_idempotency_key(idem_key, principal_id, account_id="acct1")
+            assert found is not None
+            assert found.media_buy_id == "mb_acct_scoped"
+
+            # The default (no account) renders IS NULL — it must NOT match the
+            # account-scoped row (the silent narrowing the threading prevents).
+            assert repo.get_by_id_or_idempotency_key(idem_key, principal_id) is None
+            assert repo.get_by_id_or_idempotency_key(idem_key, principal_id, account_id="other") is None

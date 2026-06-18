@@ -14,6 +14,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Files that contain Given steps populating registry_formats
@@ -99,6 +101,7 @@ def _scan_given_steps() -> list[str]:
 class TestBddNoDictRegistry:
     """Structural guard: Given steps must construct Format objects, not dicts."""
 
+    @pytest.mark.arch_guard
     def test_no_dict_literals_in_registry_formats(self):
         """Given steps must not store raw dict literals in ctx["registry_formats"].
 

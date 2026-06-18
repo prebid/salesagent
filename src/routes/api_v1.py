@@ -7,6 +7,7 @@ and applies version compat at the boundary.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +19,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
 )
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import to_account_reference
@@ -74,6 +75,7 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
+    idempotency_key: str | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -256,21 +258,39 @@ async def list_authorized_properties(
 # ---------------------------------------------------------------------------
 
 
+async def _raw_json_body(request: Request) -> dict[str, Any]:
+    """The HTTP body as sent on the wire — the idempotency payload-hash input.
+
+    A dependency rather than a route ``request`` parameter, so route signatures
+    stay Depends-only (the rest-depends-auth guard). Prefers the pre-rewrite
+    bytes stashed by ``RestCompatMiddleware`` — when a deprecated-field
+    translation fires, ``request.json()`` would observe the NORMALIZED body,
+    not the bytes the buyer sent, and seller-side compat-table changes would
+    flip honest retries into conflicts mid-TTL. Starlette caches the body, so
+    the fallback read does not consume it before model parsing.
+    """
+    raw = getattr(request.state, "raw_wire_payload", None)
+    if raw is not None:
+        return json.loads(raw)
+    return await request.json()
+
+
+# Module-level singleton, matching require_auth (ruff B008 forbids Depends() in defaults).
+raw_json_body = Depends(_raw_json_body)
+
+
 @router.post("/media-buys")
-async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def create_media_buy(
+    body: CreateMediaBuyBody,
+    identity: ResolvedIdentity = require_auth,
+    raw_wire_payload: dict[str, Any] = raw_json_body,
+):
     """Create a new media buy (auth required).
 
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    # Coerce the raw account dict into an AccountReference so create_media_buy_raw
-    # resolves it at the transport boundary (ACCOUNT_NOT_FOUND surfaces before _impl).
-    account_ref = None
-    if body.account is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
-        account_ref = LibraryAccountReference.model_validate(body.account)
-
+    account_ref = to_account_reference(body.account)
     response = await media_buy_create_module.create_media_buy_raw(
         brand=body.brand,
         packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
@@ -282,7 +302,9 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
         push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
         context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
         ext=body.ext,
+        idempotency_key=body.idempotency_key,
         identity=identity,
+        raw_wire_payload=raw_wire_payload,
     )
     return response.model_dump(mode="json")
 

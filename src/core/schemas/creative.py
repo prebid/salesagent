@@ -212,7 +212,7 @@ class Creative(LibraryCreative):
         if self.principal_id is not None:
             data["principal_id"] = self.principal_id
         # Ensure status is always present as string value for DB storage
-        data["status"] = self.status.value if isinstance(self.status, CreativeStatus) else self.status
+        data["status"] = enum_value(self.status)
         return data
 
 
@@ -373,8 +373,13 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     @field_validator("action", mode="before")
     @classmethod
-    def _normalize_action_to_str(cls, v: Any) -> str:
-        """Normalize CreativeAction enum to its string value."""
+    def _normalize_action_to_str(cls, v: Any) -> str | None:
+        """Normalize CreativeAction enum to its string value.
+
+        Returns ``None`` only when ``v`` is ``None`` (delegated to ``enum_value``);
+        the required ``action: str`` field type then rejects it. Annotated
+        ``str | None`` to match ``enum_value``'s real return.
+        """
         return enum_value(v)
 
     # --- Fields removed from SDK 5.7 that we own locally ---
@@ -472,7 +477,10 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
-    creatives: list[SyncCreativeResult] = []  # type: ignore[assignment]
+    # Required (no default): pinned 3.1 SyncCreativesSuccess.required=['creatives'] — a
+    # synchronously-processed sync always carries a creatives array, even all-failed
+    # (#1399 R3-F2).
+    creatives: list[SyncCreativeResult]  # type: ignore[assignment]
 
     def model_dump(self, **kwargs):
         """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""

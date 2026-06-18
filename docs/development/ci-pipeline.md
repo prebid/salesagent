@@ -128,6 +128,57 @@ commit without authentication.
 cleanly. Check the `community_points` / `users` table FK ordering — this was the
 failure that prompted pinning (April 2026).
 
+The pin lives only in [`scripts/creative-agent-stack.sh`](../../scripts/creative-agent-stack.sh)
+— both CI and `run_all_tests.sh` call that script so local and CI cannot diverge.
+
+### CI image cache (ghcr.io) and retries
+
+On ephemeral GitHub Actions runners, local `/tmp` tarball reuse and `docker image
+inspect` guards do not survive between runs. Pin-keyed images in GHCR avoid a
+full monolith compile on warm CI runs.
+
+**Publish (trusted `main` context only).** The
+[`publish-creative-agent.yml`](../../.github/workflows/publish-creative-agent.yml)
+workflow runs on `push` to `main` and `workflow_dispatch`. It logs in to
+`ghcr.io` and calls `creative-agent-stack.sh publish`, which builds from the
+pinned tarball and pushes `ghcr.io/<repo>/adcp-creative-agent:${ADCP_PIN}`.
+If the tag already exists, publish is a no-op. Publish failures fail the
+workflow loudly (unlike the test shard, which degrades gracefully).
+
+**CI test shard (pull-only).** The creative matrix leg logs in to `ghcr.io`
+(authenticated pulls dodge anonymous rate limits and work for public images
+from fork PRs), sets `CREATIVE_AGENT_GHCR_IMAGE`, and calls
+`creative-agent-stack.sh up`:
+
+- **Warm run** (public image tag `${ADCP_PIN}` in ghcr.io): `docker pull` +
+  retag to local `adcp-creative-agent` — no compile.
+- **Cold / degraded** (package absent, private, or pull blip): fetch tarball and
+  `docker build` locally. The shard never pushes.
+
+**Local.** `run_all_tests.sh` calls `up` without `CREATIVE_AGENT_GHCR_IMAGE` —
+plain `docker build`, same pin source.
+
+Tarball fetch (`curl -f`), `docker pull`, and `docker build` each retry up to
+3 times with exponential backoff to absorb transient `ECONNRESET` flakes.
+Publish also retries `docker push`.
+
+The `integration-tests` job grants `packages: read` for GHCR pulls. Publishing
+uses `packages: write` only in `publish-creative-agent.yml` on `main`.
+
+**Maintainer prerequisites (org/repo — one-time):**
+
+1. After merge, trigger `Publish creative agent image` via `workflow_dispatch`
+   and confirm it creates `adcp-creative-agent` (not `denied: Create
+   organization package`). If denied, enable Actions package creation in Org →
+   Packages or have an admin pre-create the empty package, then re-run.
+2. Set the GHCR package **Public** so fork PRs can pull. Until then, the
+   creative shard builds locally everywhere (green, no speedup).
+
+**Fork PR caveat:** warm-cache pull is not verifiable on a fork PR until the
+public package exists. Measure the real pull time on `main` before claiming
+#1189's <30s warm step — a large image may still exceed 30s; slimming the
+image is a sensible follow-up if needed.
+
 ### Creative agent infrastructure
 
 The agent runs in its own Docker network (`creative-net`) with a separate
@@ -178,6 +229,22 @@ required (or stay blocked on stale `Test Suite / …` names).
 | `make quality-ci` | No | CI Quality Gate job |
 | `make quality` | Yes (`tests/unit/ -x`) | Local pre-commit habit |
 | `make quality-full` | Full suites via `run_all_tests.sh` | Pre-PR local gate |
+
+## Layered pre-commit model (PR 4 of #1234)
+
+| Layer | Trigger | Enforcement |
+|-------|---------|-------------|
+| Commit (~12 hooks) | `git commit` | ruff, hygiene, gitleaks, repo-invariants — warm target <2s |
+| Pre-push (~11 hooks) | `git push` | docs, routes, contracts, mypy — installed via `default_install_hook_types` |
+| pytest `arch_guard` | `make quality` | AST guards in `tests/unit/test_architecture_*.py` |
+| CI | PR to main | `make quality-ci` in Quality Gate + dedicated jobs (**20** frozen checks after PR #1379) |
+
+Requires pre-commit ≥3.2.0. Run `pre-commit install` once per clone (installs both commit and pre-push hooks).
+
+CI-only checks absorbed into `make quality-ci` (not re-run via `pre-commit run --all-files` in Quality Gate):
+`check_code_duplication`, `check-gam-auth-support`, `check_response_attribute_access`, `check_roundtrip_tests`.
+
+See [`.pre-commit-coverage-map.yml`](../../.pre-commit-coverage-map.yml) for hook migration mapping.
 
 ## Alembic migrations
 

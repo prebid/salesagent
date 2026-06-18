@@ -12,7 +12,12 @@ beads: salesagent-v0kb (structural-guard epic), salesagent-mq3n (PricingOption b
 """
 
 import ast
+import re
 from pathlib import Path
+
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root, src_python_files
 
 # Files to scan for database queries
 QUERY_FILES = [
@@ -203,9 +208,49 @@ class TestQueryTypeSafety:
                     still_violated.add(violation_key)
                     break
 
-        fixed = KNOWN_VIOLATIONS - still_violated
-        if fixed:
-            msg = "These known violations have been FIXED — remove from KNOWN_VIOLATIONS:\n" + "\n".join(
-                f"  - {v}" for v in sorted(fixed)
-            )
-            raise AssertionError(msg)
+        assert_violations_match_allowlist(
+            still_violated,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
+        )
+
+
+_LEGACY_QUERY_RE = re.compile(
+    r"(session|db_session|Session)\.query\(",
+    re.IGNORECASE,
+)
+_LEGACY_COLUMN_RE = re.compile(r"^\s+\w+\s*=\s*Column\(")
+
+
+@pytest.mark.arch_guard
+def test_no_legacy_session_query() -> None:
+    """No session.query() in src/ — use select() + scalars() (SQLAlchemy 2.0)."""
+    repo = repo_root()
+    violations: list[str] = []
+    for path in src_python_files(repo):
+        rel = str(path.relative_to(repo))
+        if "test_" in rel:
+            continue
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            if "# legacy-ok" in line or "# noqa" in line:
+                continue
+            if _LEGACY_QUERY_RE.search(line):
+                violations.append(f"{rel}:{lineno}: legacy session.query() — use select() + scalars()")
+    assert not violations, "\n".join(violations)
+
+
+@pytest.mark.arch_guard
+def test_models_use_mapped_not_column() -> None:
+    """models.py must use Mapped[] + mapped_column(), not bare Column()."""
+    repo = repo_root()
+    violations: list[str] = []
+    models_path = repo / "src" / "core" / "database" / "models.py"
+    if not models_path.exists():
+        return
+    rel = str(models_path.relative_to(repo))
+    for lineno, line in enumerate(models_path.read_text().splitlines(), 1):
+        if "# legacy-ok" in line or "# noqa" in line:
+            continue
+        if _LEGACY_COLUMN_RE.search(line):
+            violations.append(f"{rel}:{lineno}: bare Column() — use Mapped[] + mapped_column()")
+    assert not violations, "\n".join(violations)

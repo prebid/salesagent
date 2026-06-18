@@ -39,6 +39,7 @@ All tests in this file use float budget format per AdCP v2.2.0 spec:
 # ---
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -337,6 +338,7 @@ class TestMinimumSpendValidation:
         # Should fail validation and raise typed AdCPValidationError that propagates past _impl boundary.
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
                 create_test_package_request(
                     product_id="prod_global",
@@ -374,6 +376,7 @@ class TestMinimumSpendValidation:
         # Should fail validation and raise typed AdCPValidationError past _impl boundary.
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
                 create_test_package_request(
                     product_id="prod_high",
@@ -411,6 +414,7 @@ class TestMinimumSpendValidation:
         # Should succeed because product override is lower
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
                 create_test_package_request(
                     product_id="prod_low",
@@ -442,6 +446,7 @@ class TestMinimumSpendValidation:
         # Create media buy above minimum - should succeed
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
                 create_test_package_request(
                     product_id="prod_global",
@@ -475,6 +480,7 @@ class TestMinimumSpendValidation:
         # $100,000 USD produces 10M impressions which exceeds the adapter limit
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
                 create_test_package_request(
                     product_id="prod_global",
@@ -506,6 +512,7 @@ class TestMinimumSpendValidation:
         # Should fail validation and raise typed AdCPValidationError past _impl boundary.
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
                 create_test_package_request(
                     product_id="prod_global",
@@ -553,6 +560,7 @@ class TestMinimumSpendValidation:
         # Create media buy with low budget in GBP (should succeed - no minimum)
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
                 create_test_package_request(
                     product_id="prod_global_gbp",  # Use GBP product

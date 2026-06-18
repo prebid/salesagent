@@ -17,6 +17,10 @@ beads: beads-xw7 (universal no-raw-select guard)
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ── Exempt directories and files ────────────────────────────────────
@@ -435,6 +439,7 @@ def _find_raw_selects() -> list[tuple[str, str, str, int]]:
 class TestNoRawSelectOutsideRepositories:
     """No raw select(OrmModel) outside repository/infrastructure files."""
 
+    @pytest.mark.arch_guard
     def test_no_new_raw_selects(self):
         """New raw select(OrmModel) calls fail immediately.
 
@@ -465,6 +470,7 @@ class TestNoRawSelectOutsideRepositories:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection).
 
@@ -472,17 +478,13 @@ class TestNoRawSelectOutsideRepositories:
         This test catches stale entries so the allowlist stays honest.
         """
         all_violations = {(f, fn) for f, fn, _model, _line in _find_raw_selects()}
+        assert_violations_match_allowlist(
+            all_violations,
+            ALLOWLIST,
+            fix_hint="Remove fixed entries from ALLOWLIST.",
+        )
 
-        stale = ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from ALLOWLIST):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
-
+    @pytest.mark.arch_guard
     def test_violation_count_matches(self):
         """Total violations match expected count.
 

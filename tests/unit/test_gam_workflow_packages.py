@@ -43,6 +43,7 @@ def sample_request():
     # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
     return CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key="unit-test-key-gamwf-0001",
         packages=[
             PackageRequest(product_id="prod_123", budget=5000.0, pricing_option_id="test_pricing"),
             PackageRequest(product_id="prod_456", budget=5000.0, pricing_option_id="test_pricing"),

@@ -19,6 +19,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Functions that legitimately bypass transport dispatch.
@@ -74,7 +76,7 @@ def _scan_bdd_steps() -> list[str]:
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("__"):
             continue
-        source = py_file.read_text()
+        source = py_file.read_text(encoding="utf-8")
         source_lines = source.splitlines()
         tree = ast.parse(source, filename=str(py_file))
         relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent)
@@ -101,6 +103,7 @@ def _scan_bdd_steps() -> list[str]:
 class TestBddNoDirectCallImpl:
     """Structural guard: When/Given steps must use dispatch_request(), not call_impl()."""
 
+    @pytest.mark.arch_guard
     def test_no_direct_call_impl_in_steps(self):
         """Every @when/@given step must dispatch through dispatch_request().
 
@@ -114,13 +117,14 @@ class TestBddNoDirectCallImpl:
             f"(use dispatch_request or add TRANSPORT-BYPASS comment):\n" + "\n".join(f"  {v}" for v in violations)
         )
 
+    @pytest.mark.arch_guard
     def test_allowlist_no_stale_entries(self):
         """Verify every allowlisted function still exists and still bypasses."""
         for file_stem, func_name in _ALLOWLIST:
             # Find the file
             matches = list(_BDD_STEPS_DIR.rglob(f"{file_stem}.py"))
             assert matches, f"Allowlisted file '{file_stem}.py' not found"
-            source = matches[0].read_text()
+            source = matches[0].read_text(encoding="utf-8")
             tree = ast.parse(source)
             found = False
             for node in ast.walk(tree):

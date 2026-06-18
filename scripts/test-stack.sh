@@ -153,7 +153,7 @@ cmd_up() {
     fi
     [ -n "$_real_srv" ] && MCP_PORT="$_real_srv"
     export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT
-    export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
+    export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@127.0.0.1:${POSTGRES_PORT}/adcp_test"
 
     # Write env file for tox to source
     cat > "$ENV_FILE" <<EOF

@@ -22,6 +22,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 
@@ -141,6 +143,7 @@ def _scan_bdd_steps() -> list[str]:
 class TestBddNoTrivialAssertions:
     """Structural guard: Then steps must make meaningful assertions."""
 
+    @pytest.mark.arch_guard
     def test_no_trivial_then_assertions(self):
         """Every @then step must assert a comparison, type check, or delegate to a helper.
 

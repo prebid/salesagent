@@ -43,7 +43,7 @@ class TestExtractUrlFromAssetValueRootModel:
         asset = ca.assets["img"]
 
         # Confirm this is actually a RootModel wrapper (not a plain dict)
-        assert hasattr(asset, "root"), "SDK should wrap asset in Assets RootModel"
+        assert hasattr(asset, "root"), "SDK should wrap asset in Assets RootModel"  # noqa: rootmodel
 
         result = _extract_url_from_asset_value(asset)
         assert result == "https://example.com/image.png"
@@ -58,7 +58,7 @@ class TestExtractUrlFromAssetValueRootModel:
             )
         )
         asset = ca.assets["vid"]
-        assert hasattr(asset, "root")
+        assert hasattr(asset, "root")  # noqa: rootmodel
 
         result = _extract_url_from_asset_value(asset)
         assert result == "https://example.com/video.mp4"
@@ -101,7 +101,7 @@ class TestExtractTextFromAssetValueRootModel:
         asset = ca.assets["message"]
 
         # Confirm this is actually a RootModel wrapper
-        assert hasattr(asset, "root"), "SDK should wrap asset in Assets RootModel"
+        assert hasattr(asset, "root"), "SDK should wrap asset in Assets RootModel"  # noqa: rootmodel
 
         result = _extract_text_from_asset_value(asset)
         assert result == "Hello world"

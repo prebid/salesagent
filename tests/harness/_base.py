@@ -60,6 +60,8 @@ def _adcp_error_from_code(
         AdCPCapabilityNotSupportedError,
         AdCPConflictError,
         AdCPError,
+        AdCPIdempotencyConflictError,
+        AdCPIdempotencyExpiredError,
         AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
         AdCPPackageNotFoundError,
@@ -98,6 +100,8 @@ def _adcp_error_from_code(
             AdCPPackageNotFoundError,
             AdCPBudgetTooLowError,
             AdCPCapabilityNotSupportedError,
+            AdCPIdempotencyConflictError,
+            AdCPIdempotencyExpiredError,
         )
     }
     # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED
@@ -558,14 +562,36 @@ class BaseTestEnv:
             parameters = dict(kwargs)
 
         handler = AdCPRequestHandler()
-        # Single mock point: identity resolution.
-        # _get_auth_token must return a non-None value when identity exists,
-        # otherwise the handler rejects the request before _resolve_a2a_identity
-        # is called. Use auth_token from identity, falling back to a sentinel.
-        handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
-        handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
-            (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
-        )
+
+        # Auth strategy mirrors _run_mcp_client. When the identity carries a real
+        # auth_token (integration mode), populate the AuthContext that the SDK
+        # call-context builder would have built from the wire and run the REAL
+        # _get_auth_token + _resolve_a2a_identity (header → token → DB lookup →
+        # ResolvedIdentity). Only the transport's state injection is supplied here
+        # (the in-process equivalent of MCP's get_http_headers seam) — the auth
+        # chain itself is real. When no real token exists (unit mode), inject the
+        # identity directly via the single mock point (unchanged behavior).
+        auth_token = a2a_identity.auth_token if a2a_identity else None
+
+        if auth_token:
+            from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+
+            headers = {
+                "x-adcp-auth": auth_token,
+                "x-adcp-tenant": a2a_identity.tenant_id or "",
+            }
+            server_context = ServerCallContext(
+                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
+            )
+        else:
+            # _get_auth_token must return a non-None value when identity exists,
+            # otherwise the handler rejects the request before _resolve_a2a_identity
+            # is called. Use auth_token from identity, falling back to a sentinel.
+            handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
+            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
+                (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
+            )
+            server_context = ServerCallContext()
 
         # Set tenant ContextVar so production code can read it
         if a2a_identity and a2a_identity.tenant:
@@ -577,7 +603,7 @@ class BaseTestEnv:
         params = SendMessageRequest(message=message)
 
         async def _call():
-            return await handler.on_message_send(params, ServerCallContext())
+            return await handler.on_message_send(params, server_context)
 
         try:
             task_result = asyncio.run(_call())
@@ -1096,3 +1122,20 @@ class IntegrationEnv(BaseTestEnv):
             self._rest_client = TestClient(app)
 
         return self._rest_client
+
+
+class BareIntegrationEnv(IntegrationEnv):
+    """Integration env with no external patches — for repository-level tests.
+
+    Repository tests exercise the data layer directly: they need the real
+    database session and factory binding ``IntegrationEnv`` provides, but none
+    of the adapter/notifier mocks. ``get_session()`` commits any pending
+    factory data and exposes the session for direct repository construction.
+    """
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
+
+    def get_session(self) -> Any:
+        """Commit pending factory data and expose the session."""
+        self._commit_factory_data()
+        return self._session

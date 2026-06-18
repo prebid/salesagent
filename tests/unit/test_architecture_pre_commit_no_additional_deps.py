@@ -13,12 +13,23 @@ Fixed in PR 2 of issue #1234.
 
 from pathlib import Path
 
+import pytest
+
 PRE_COMMIT_CONFIG = Path(__file__).resolve().parents[2] / ".pre-commit-config.yaml"
+
+
+def _lines_with_additional_dependencies(text: str) -> list[tuple[int, str]]:
+    return [
+        (i + 1, line.rstrip())
+        for i, line in enumerate(text.splitlines())
+        if "additional_dependencies:" in line and not line.lstrip().startswith("#")
+    ]
 
 
 class TestPreCommitNoAdditionalDeps:
     """Enforce ADR-001: no additional_dependencies in .pre-commit-config.yaml."""
 
+    @pytest.mark.arch_guard
     def test_no_additional_dependencies(self):
         """Fail if any hook uses additional_dependencies.
 
@@ -38,12 +49,8 @@ class TestPreCommitNoAdditionalDeps:
         """
         assert PRE_COMMIT_CONFIG.exists(), f"{PRE_COMMIT_CONFIG} not found — are you running from the repo root?"
 
-        content = PRE_COMMIT_CONFIG.read_text()
-        lines_with_additional_deps = [
-            (i + 1, line.rstrip())
-            for i, line in enumerate(content.splitlines())
-            if "additional_dependencies:" in line and not line.lstrip().startswith("#")
-        ]
+        content = PRE_COMMIT_CONFIG.read_text(encoding="utf-8")
+        lines_with_additional_deps = _lines_with_additional_dependencies(content)
 
         if lines_with_additional_deps:
             offending = "\n".join(f"  line {lineno}: {text}" for lineno, text in lines_with_additional_deps)
@@ -54,3 +61,8 @@ class TestPreCommitNoAdditionalDeps:
                 "Fix: replace the hook with a local repo hook using language: system\n"
                 "     and entry: uv run <tool>. See .pre-commit-config.yaml for examples."
             )
+
+    @pytest.mark.arch_guard
+    def test_additional_deps_detector_catches_known_bad_config(self):
+        fake = "repos:\n  - repo: remote\n    hooks:\n      - id: mypy\n        additional_dependencies: [types-all]\n"
+        assert _lines_with_additional_dependencies(fake), "Detector must flag additional_dependencies in hook config"

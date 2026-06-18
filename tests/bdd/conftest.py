@@ -224,6 +224,14 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
     "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
+    # Missing-required-field (idempotency_key) validation error lacks a structured
+    # suggestion on every transport: format_validation_error (validation_helpers.py)
+    # returns a message string only, so the AdCPValidationError carries details=None.
+    # VALIDATION_ERROR code + the missing-field reference are correct (those Then
+    # steps pass); only `the error should include "suggestion" field` fails. The
+    # replay sibling (T-UC-002-v31-idempotency-replay) is fully wired and passing —
+    # this entry covers solely the suggestion spec-production gap.
+    "T-UC-002-v31-idempotency-missing": "missing idempotency_key VALIDATION_ERROR lacks suggestion field — spec-production gap",
     # FIXME(salesagent-9vgz.17): optimization_goals not in adcp v3.6.0 or production schemas
     # PackageRequest(extra='forbid') rejects the field with generic validation error,
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
@@ -2384,6 +2392,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # These scenarios must NOT be multiplied — they have explicit When steps.
 _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 
+# UC + tag combinations that should run IMPL-only (no 4-way parametrization).
+# UC-002 @account: MediaBuyAccountEnv tests resolve_account() directly — no
+# transport wrappers exist for the create_media_buy account resolution path.
+_IMPL_ONLY: set[tuple[str, str]] = {
+    ("UC-002", "account"),
+}
+
+# UC-002 idempotency scenarios wired to MediaBuyCreateEnv (run a real
+# create_media_buy across all 4 transports). Only these two @idempotency-key
+# tags are live; the rest stay blanket-xfailed in _harness_env until their
+# production gaps + steps are wired.
+_UC002_IDEMPOTENCY_WIRED: set[str] = {
+    "T-UC-002-v31-idempotency-replay",
+    "T-UC-002-v31-idempotency-missing",
+}
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -2591,6 +2615,25 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_pricing_option"] = pricing_option
                 ctx["dispatch_mode"] = "create"
                 yield
+        elif marker_names & _UC002_IDEMPOTENCY_WIRED:
+            # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
+            # real create_media_buy through every transport (the replay scenario
+            # creates once, then sends the same key again to exercise the
+            # production replay path). Only the two wired tags go live here; the
+            # remaining @idempotency-key scenarios (in-flight, expired, conflict,
+            # pattern, canonical) stay blanket-xfailed below until their
+            # production gaps + steps are wired.
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with MediaBuyCreateEnv() as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
         else:
             # Restore the xfail guard every other use case keeps on its catch-all:
             # non-account / non-extension UC-002 scenarios are NOT yet wired (no
@@ -2630,9 +2673,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if "account" in marker_names:
-            # Account resolution through CreativeSyncEnv — exercises the full
-            # sync_creatives transport wrappers which call enrich_identity_with_account()
+        if "account" in marker_names or "creative-invariant" in marker_names:
+            # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
+            # @account scenarios drive account resolution (enrich_identity_with_account());
+            # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
+            # response invariants (e.g. all-failed still returns the success variant).
             request.getfixturevalue("integration_db")
             from tests.harness.creative_sync import CreativeSyncEnv
 

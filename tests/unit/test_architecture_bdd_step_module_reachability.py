@@ -22,6 +22,10 @@ import ast
 import importlib
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _CONFTEST = _STEPS_DIR.parent / "conftest.py"
 _STEPDEF_PREFIX = "pytestbdd_stepdef_"
@@ -92,30 +96,19 @@ def _scan_unregistered_step_modules() -> list[str]:
 class TestBddStepModuleReachability:
     """Structural guard: every step-defining module is in pytest_plugins."""
 
-    def test_no_new_unregistered_step_modules(self):
-        """No step-defining module may be unreachable from pytest_plugins.
+    @pytest.mark.arch_guard
+    def test_unregistered_step_modules_match_allowlist(self) -> None:
+        """Every step-defining module must be in pytest_plugins or the ratcheting allowlist.
 
         An unregistered step module's definitions are dead — scenarios needing
         them auto-xfail and the steps drift out of sync with live generic steps.
-        Known pending-harness modules are tracked in the ratcheting
-        _ALLOWED_UNREGISTERED baseline and excluded here.
         """
-        new_violations = [m for m in _scan_unregistered_step_modules() if m not in _ALLOWED_UNREGISTERED]
-        assert not new_violations, (
-            f"Found {len(new_violations)} step-defining module(s) not registered in "
-            f"tests/bdd/conftest.py pytest_plugins (their steps are dead). Register "
-            f"them or delete them — do not add to _ALLOWED_UNREGISTERED:\n  " + "\n  ".join(new_violations)
-        )
-
-    def test_no_stale_allowlist_entries(self):
-        """Allowlisted modules that are now registered must be removed from the list.
-
-        Keeps the _ALLOWED_UNREGISTERED baseline ratcheting: once a module is
-        wired into pytest_plugins (or deleted), its allowlist entry is stale.
-        """
-        still_unregistered = set(_scan_unregistered_step_modules())
-        stale = sorted(_ALLOWED_UNREGISTERED - still_unregistered)
-        assert not stale, (
-            "Stale _ALLOWED_UNREGISTERED entries (now registered or deleted — "
-            "remove from the allowlist):\n  " + "\n  ".join(stale)
+        found = set(_scan_unregistered_step_modules())
+        assert_violations_match_allowlist(
+            found,
+            _ALLOWED_UNREGISTERED,
+            fix_hint=(
+                "Register the module in tests/bdd/conftest.py pytest_plugins, "
+                "or remove from _ALLOWED_UNREGISTERED when fixed."
+            ),
         )

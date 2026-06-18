@@ -4030,6 +4030,12 @@ mappings:
       business_rules: []
       status: new
   UC-006:
+    - adcp_scenario_id: "T-UC-006-all-failed-success-variant"
+      adcp_feature: "BR-UC-006-creatives-invariants.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-sync"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-006-ext-a-empty"
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null
@@ -6561,6 +6567,12 @@ mappings:
       business_rules: []
       status: new
   UC-011:
+    - adcp_scenario_id: "T-UC-011-sync-brandless"
+      adcp_feature: "BR-UC-011-account-validation.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-056"]
+      business_rules: ["BR-RULE-056"]
+      status: new
     - adcp_scenario_id: "T-UC-011-list-main"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null

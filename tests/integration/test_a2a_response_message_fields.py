@@ -14,6 +14,7 @@ If these services are unavailable (HTTP 5xx, connection errors), tests will skip
 rather than fail, since external service availability is outside our control.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -94,6 +95,7 @@ class TestA2AMessageFieldValidation:
             # CreateMediaBuyRequest validates strictly.
             params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],

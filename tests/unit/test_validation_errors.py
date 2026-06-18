@@ -61,6 +61,7 @@ def test_create_media_buy_request_invalid_brand_manifest():
         brand={"domain": "testbrand.com"},
         end_time="2026-02-01T00:00:00Z",
         start_time="2026-01-01T00:00:00Z",
+        idempotency_key="unit-test-key-invalid-brand-mfst",
     )
     assert req.brand is not None
 

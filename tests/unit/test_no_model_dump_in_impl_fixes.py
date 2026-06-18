@@ -22,6 +22,7 @@ def _make_minimal_request() -> CreateMediaBuyRequest:
         packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
         start_time=(datetime.now(UTC) + timedelta(days=1)).isoformat(),
         end_time=(datetime.now(UTC) + timedelta(days=8)).isoformat(),
+        idempotency_key="unit-test-key-nomodeldump-001",
     )
 
 

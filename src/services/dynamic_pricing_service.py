@@ -10,7 +10,7 @@ Uses historical GAM reporting data aggregated by country + creative format.
 import logging
 from datetime import UTC, datetime, timedelta
 
-# FIXME(#1360): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
+# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session

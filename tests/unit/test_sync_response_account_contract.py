@@ -66,10 +66,19 @@ class TestSyncResponseAccountFields:
         assert account.brand.domain == "acme.com"
         assert account.setup.message == "Complete billing setup"
 
-    def test_construct_minimal(self):
-        """Model can be constructed with no fields (all optional)."""
-        account = SyncResponseAccount()
-        for field in EXPECTED_FIELDS:
+    # Required-field enforcement (brand/operator/action/status per pinned schema
+    # 04f59d2d5) is verified generically in
+    # tests/unit/test_pydantic_schema_alignment.py::TestResponseModelAlignment.
+
+    def test_optional_fields_remain_optional(self):
+        """Non-required fields (account_id, name, billing, sandbox, errors, setup) stay optional."""
+        account = SyncResponseAccount(
+            brand=BrandReference(domain="acme.com"),
+            operator="create",
+            action="created",
+            status="active",
+        )
+        for field in EXPECTED_FIELDS - {"brand", "operator", "action", "status"}:
             assert getattr(account, field) is None
 
 
@@ -79,6 +88,8 @@ class TestSyncResponseAccountSerialization:
     def test_model_dump_includes_set_fields(self):
         """Fields with values appear in model_dump output."""
         account = SyncResponseAccount(
+            brand=BrandReference(domain="acme.com"),
+            operator="create",
             account_id="acc_456",
             action="updated",
             status="active",
@@ -89,17 +100,26 @@ class TestSyncResponseAccountSerialization:
         assert data["status"] == "active"
 
     def test_model_dump_excludes_none_when_requested(self):
-        """None-valued fields are excluded with exclude_none=True."""
+        """Unset OPTIONAL fields are excluded with exclude_none=True.
+
+        Required fields (brand/operator/action/status) are always present; only the
+        optional fields left unset are dropped.
+        """
         account = SyncResponseAccount(
-            account_id="acc_789",
+            brand=BrandReference(domain="acme.com"),
+            operator="create",
             action="created",
+            status="active",
         )
         data = account.model_dump(exclude_none=True)
-        assert "account_id" in data
+        # Required fields are always present.
+        assert "brand" in data
+        assert "operator" in data
         assert "action" in data
-        # Unset fields should not appear
-        assert "brand" not in data
-        assert "operator" not in data
+        assert "status" in data
+        # Unset optional fields should not appear.
+        assert "account_id" not in data
+        assert "name" not in data
         assert "billing" not in data
         assert "sandbox" not in data
         assert "errors" not in data
@@ -108,10 +128,11 @@ class TestSyncResponseAccountSerialization:
     def test_roundtrip_from_dict(self):
         """SyncResponseAccount can be constructed from a dict (transport deserialization)."""
         raw = {
+            "brand": {"domain": "acme.com"},
+            "operator": "create",
             "account_id": "acc_rt",
             "action": "created",
             "status": "active",
-            "operator": "create",
             "name": "Roundtrip Account",
             "sandbox": True,
         }
@@ -123,6 +144,10 @@ class TestSyncResponseAccountSerialization:
     def test_errors_field_serializes_nested_models(self):
         """Nested Error models in errors list serialize correctly."""
         account = SyncResponseAccount(
+            brand=BrandReference(domain="acme.com"),
+            operator="create",
+            action="created",
+            status="active",
             account_id="acc_err",
             errors=[
                 LibraryError(code="CONFLICT", message="duplicate account"),

@@ -740,29 +740,71 @@ def then_no_new_media_buy(ctx: dict) -> None:
     _assert_no_new_media_buy(ctx)
 
 
+_ADAPTER_CREATE_METHODS = ("create_order", "create_line_item", "create_media_buy")
+
+
 @then("no new ad platform order should have been created")
 def then_no_new_ad_platform_order(ctx: dict) -> None:
-    """Assert the adapter was not called to create an ad platform order.
+    """Assert the action under test booked NO new ad platform order.
 
-    Checks the harness mock for the adapter -- if the adapter's create
-    method was never called, no ad platform order was created.
+    "No NEW order" means: the adapter created no order beyond what already
+    existed before the action under test. The expected create-count is read
+    from an explicit baseline rather than sniffing the environment:
+
+      baseline = ctx.get("adapter_calls_after_first_create")
+
+    Two scenario families share this step text, distinguished only by whether
+    that baseline is present:
+
+    * Baseline ABSENT (default 0) -- fresh-failure scenarios (validation /
+      account-not-found). The request fails before reaching the adapter, so
+      EVERY adapter create method must show zero calls. We scan all the create
+      methods (``create_order``, ``create_line_item``, ``create_media_buy``) on
+      both the adapter mock and its ``return_value`` (the adapter instance),
+      because the request never got far enough to call any of them.
+
+    * Baseline PRESENT -- idempotency-replay scenarios. The "already created"
+      Given step performed a REAL first create (which DID call the adapter) and
+      recorded ``adapter_calls_after_first_create`` = the
+      ``create_media_buy`` call_count immediately after that first create. The
+      replay must serve the cached response WITHOUT a second booking, so the
+      post-action ``create_media_buy`` call_count must not exceed the baseline.
+
+    The baseline default of 0 is the correct expected count for the fresh case
+    (nothing booked yet), so the same arithmetic check -- "current count <=
+    baseline" -- serves both families without an env-sniffing branch.
     """
     env = ctx["env"]
-    # Check adapter mock -- the harness patches the adapter
-    adapter_mock = env.mock.get("adapter")
-    if adapter_mock is not None:
-        # Check common adapter creation methods
-        for method_name in ("create_order", "create_line_item", "create_media_buy"):
-            method = getattr(adapter_mock, method_name, None)
-            if method is not None and hasattr(method, "called"):
-                assert not method.called, f"Expected no ad platform order but adapter.{method_name} was called"
-        # Also check the return_value (adapter instance) for create methods
-        adapter_instance = adapter_mock.return_value if hasattr(adapter_mock, "return_value") else None
+    baseline = ctx.get("adapter_calls_after_first_create")
+
+    if baseline is None:
+        # Fresh-failure family: the adapter was never reached. Any call to ANY
+        # create method on the adapter mock or its instance is a real booking.
+        adapter_mock = env.mock.get("adapter")
+        assert adapter_mock is not None, "No adapter mock in the harness env — cannot verify booking state"
+        scan_targets = [adapter_mock]
+        adapter_instance = getattr(adapter_mock, "return_value", None)
         if adapter_instance is not None:
-            for method_name in ("create_order", "create_line_item", "create_media_buy"):
-                method = getattr(adapter_instance, method_name, None)
-                if method is not None and hasattr(method, "called"):
-                    assert not method.called, f"Expected no ad platform order but adapter().{method_name} was called"
+            scan_targets.append(adapter_instance)
+        for target, label in zip(scan_targets, ("adapter", "adapter()"), strict=False):
+            for method_name in _ADAPTER_CREATE_METHODS:
+                method = getattr(target, method_name, None)
+                call_count = getattr(method, "call_count", 0) if method is not None else 0
+                assert call_count == 0, (
+                    f"Expected no new ad platform order but {label}.{method_name} was called "
+                    f"{call_count} time(s) — the request booked an order despite failing/short-circuiting"
+                )
+        return
+
+    # Idempotency-replay family: the first create already booked one order
+    # (baseline). The replay must not book another.
+    adapter_instance = env.mock["adapter"].return_value
+    after = adapter_instance.create_media_buy.call_count
+    assert after <= baseline, (
+        f"Adapter create_media_buy was called {after} time(s) total, but only "
+        f"{baseline} (the original) is allowed — the replay re-booked an ad platform order "
+        "instead of serving the cached response"
+    )
 
 
 # ── Helpers for new steps ───────────────────────────────────────────

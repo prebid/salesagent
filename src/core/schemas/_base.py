@@ -230,6 +230,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # create-media-buy-response; pinned 04f59d2d5). Override to keep it off the
     # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
     buyer_ref: str | None = Field(default=None, exclude=True)
+    # SDK 5.7 also dropped valid_actions and context from the parent, but production
+    # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
+    # and survives a parent extra-mode change, not riding inherited extra='allow'.
+    # valid_actions_for_status() yields strings that are all valid MediaBuyValidAction
+    # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
+    valid_actions: list[MediaBuyValidAction] | None = None
+    context: ContextObject | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -329,6 +336,21 @@ class CreateMediaBuyResult(TaskResultEnvelope):
     """
 
     response: CreateMediaBuySuccess | CreateMediaBuyError
+
+    # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
+    # envelope / top of the structured result). Set True ONLY when this response
+    # is a verbatim replay of a previously cached success. Injected at response
+    # time, never stored in the cached body; omitted when False so fresh
+    # responses are byte-identical to before. Only valid on a successful result.
+    replayed: bool = False
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        result = self.response.model_dump(mode=info.mode, context=info.context)
+        result["status"] = self.status
+        if self.replayed:
+            result["replayed"] = True
+        return result
 
     def __iter__(self):
         """Support tuple unpacking: response, status = result."""
@@ -1489,10 +1511,11 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     # adcp 4.3 makes account and idempotency_key required.  Our impl resolves
     # identity at the transport layer (ResolvedIdentity), not from the request
-    # payload, so account is optional here.  idempotency_key is generated at
-    # the transport boundary when not supplied by the caller.
+    # payload, so account stays optional here.  idempotency_key inherits the
+    # library's REQUIRED field (MinLen 16 + pattern) — a missing key rejects at
+    # the boundary as VALIDATION_ERROR (the AdCP 3.0.1 conformance storyboard
+    # accepts it; the spec prose prefers INVALID_REQUEST).
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
@@ -1675,9 +1698,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes account and idempotency_key required.  Override as optional
-    # — identity is resolved at the transport boundary, and idempotency_key is
-    # generated at the boundary when not supplied by the caller.
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional:
+    # identity is resolved at the transport boundary, and update_media_buy's
+    # required-key enforcement is a deliberate fast-follow — create_media_buy
+    # enforces it today; the update BDD contract still encodes optional keys.
+    # Removable when the update BDD contract requires keys (the update_media_buy
+    # required-key fast-follow), at which point the idempotency_key override goes
+    # away and the library's required field applies.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
     idempotency_key: str | None = None  # type: ignore[assignment]
 

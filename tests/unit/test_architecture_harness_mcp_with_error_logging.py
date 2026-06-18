@@ -27,6 +27,8 @@ beads: salesagent-ihwl
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _HARNESS_DIR = Path(__file__).resolve().parents[1] / "harness"
 
 # Production MCP tool wrappers that must be invoked through with_error_logging.
@@ -34,9 +36,9 @@ _MCP_TOOLS = {"create_media_buy", "update_media_buy"}
 
 # Known-deferred violations (salesagent-ensj). (relative_path, enclosing_function).
 # Each entry has a FIXME(salesagent-ensj) at the source site. Allowlist only shrinks.
-_KNOWN_VIOLATIONS: set[tuple[str, str]] = {
-    ("media_buy_create.py", "call_mcp"),  # FIXME(salesagent-ensj): wrap create_media_buy with with_error_logging
-}
+# media_buy_create.py:call_mcp was fixed when the harness MCP path moved to
+# _run_mcp_client (no direct create_media_buy(ctx=...) call) — entry removed.
+_KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
 
 
 def _enclosing_funcs_with_direct_tool_call(source: str) -> set[str]:
@@ -94,10 +96,13 @@ def test_no_unguarded_direct_mcp_tool_calls():
 
 def test_known_violations_not_stale():
     """Allowlist only shrinks — a fixed site must be removed from _KNOWN_VIOLATIONS."""
-    violations = _scan_violations()
-    stale = _KNOWN_VIOLATIONS - violations
-    assert stale == set(), (
-        f"Allowlisted site(s) no longer violate and must be removed from _KNOWN_VIOLATIONS: {sorted(stale)}"
+    assert_violations_match_allowlist(
+        _scan_violations(),
+        _KNOWN_VIOLATIONS,
+        fix_hint=(
+            "Wrap the tool with with_error_logging(...) before invoking so the MCP error "
+            "path surfaces the wire envelope (salesagent-ihwl)."
+        ),
     )
 
 

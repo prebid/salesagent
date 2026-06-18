@@ -38,6 +38,7 @@ Tests that exercise schema validation or pure helper functions (no DB pipeline)
 do not use the harness.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -110,11 +111,17 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 
     Defaults: one package with product_id, pricing_option_id, budget.
     Start 1 day ahead, end 8 days ahead.
+
+    idempotency_key is required by adcp 4.3 and drives real replay/conflict
+    behavior against the persistent integration DB (the harness runs the real
+    idempotency machinery), so a per-call-unique key is injected by default.
+    Callers may override it via the ``idempotency_key`` kwarg.
     """
     defaults = {
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
+        "idempotency_key": f"int-key-{uuid.uuid4().hex}",
         "packages": [
             {
                 "product_id": "prod_1",
@@ -1239,6 +1246,7 @@ class TestProposalBasedObligations:
             packages=[{"product_id": "p1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
             proposal_id="prop_abc",
             total_budget={"amount": 10000.0, "currency": "USD"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         assert req.proposal_id == "prop_abc"
         assert req.total_budget is not None

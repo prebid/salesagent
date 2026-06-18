@@ -14,6 +14,7 @@ for upstream inclusion in AdCP.
 
 from typing import TYPE_CHECKING, Any
 
+from src.core.enum_helpers import enum_value
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 from src.core.validation_helpers import package_field_path
@@ -376,8 +377,6 @@ def _extract_simple_values(items: list) -> set[str]:
 def _extract_system_values(items: list) -> dict[str, set[str]]:
     """Extract {system: set(values)} from a list of GeoMetro/GeoPostalArea objects or dicts."""
     from adcp.types import GeoMetro, GeoPostalArea
-
-    from src.core.helpers import enum_value
 
     by_system: dict[str, set[str]] = {}
     for item in items:

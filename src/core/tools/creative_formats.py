@@ -16,7 +16,7 @@ import time
 from collections.abc import Sequence
 from typing import Annotated, TypeVar
 
-# FIXME(#1360): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
+# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
 from adcp.types import (
     AssetContentType,
@@ -137,9 +137,7 @@ def build_list_creative_formats_request(
     context: ContextObject | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
-    asset_types_strs = (
-        [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
-    )
+    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
     return ListCreativeFormatsRequest(
         format_ids=format_ids,
         output_format_ids=output_format_ids,
