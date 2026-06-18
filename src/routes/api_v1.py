@@ -70,6 +70,10 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     start_time: str | None = None
     end_time: str | None = None
     po_number: str | None = None
+    # Local compat field: forward-compatible name for deprecated campaign_ref per
+    # BR-COMPAT-001 (compat layer renames campaign_ref -> buyer_campaign_ref). NOT in
+    # adcp 5.7 SDK or pin 04f59d2d5 — declared so strict extra='forbid' accepts it.
+    buyer_campaign_ref: str | None = None
     account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
     reporting_webhook: dict[str, Any] | None = None
     push_notification_config: dict[str, Any] | None = None
@@ -297,6 +301,7 @@ async def create_media_buy(
         start_time=body.start_time,
         end_time=body.end_time,
         po_number=body.po_number,
+        buyer_campaign_ref=body.buyer_campaign_ref,
         account=account_ref,
         reporting_webhook=body.reporting_webhook,  # type: ignore[arg-type]  # raw dict; coerced by CreateMediaBuyRequest
         push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
