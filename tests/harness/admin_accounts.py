@@ -19,6 +19,7 @@ from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
+from tests.e2e.conftest import e2e_host
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 logger = logging.getLogger(__name__)
@@ -144,7 +145,10 @@ class AdminAccountEnv:
         """Set up requests.Session for e2e transport against Docker stack."""
         import requests
 
-        self._base_url = f"http://localhost:{self._e2e_port}"
+        # Host path: localhost:<published-port>. In-network the server is reached
+        # by service name (ADCP_TEST_HOST=proxy) with no published host port.
+        host = e2e_host()
+        self._base_url = f"http://{host}:{self._e2e_port}"
         self._session = requests.Session()
         logger.info("Admin e2e transport: %s", self._base_url)
 

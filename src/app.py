@@ -18,6 +18,7 @@ from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.types import AgentCard as A2AAgentCard
 from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastmcp.exceptions import ToolError
@@ -35,6 +36,8 @@ from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.exceptions import (
     AdCPError,
+    AdCPInvalidRequestError,
+    AdCPValidationError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
@@ -201,9 +204,54 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     on every transport, not the 500 default FastAPI gives unhandled errors.
 
     Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
-    ValueError subclass) — request-body validation keeps its existing handler.
+    ValueError subclass) — that has its own handler below.
     """
     return _envelope_response(request, normalize_to_adcp_error(exc))
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Translate FastAPI request-body schema failures into the AdCP envelope.
+
+    A payload that is malformed or violates a schema constraint (a missing,
+    mistyped, out-of-enum, or out-of-range field — exactly what FastAPI's
+    ``RequestValidationError`` represents) maps to the standard ``INVALID_REQUEST``
+    code per the AdCP error-code vocabulary ("Request is malformed, missing
+    required fields, or violates schema constraints").
+
+    Without this handler FastAPI emits its default raw ``422 {"detail": [...]}``,
+    which is NOT the two-layer envelope buyers parse — so the REST boundary
+    silently diverged from MCP/A2A (which wrap schema rejections in the AdCP
+    envelope). Surfacing the first failure's pointer as ``field`` keeps the
+    response actionable; the full list is preserved under ``details``.
+    """
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    # Drop ONLY the leading "body"/"query"/"path" location segment (the FastAPI
+    # location prefix); join the rest into the JSONPath-lite ``field`` the envelope
+    # already uses (e.g. attribution_window.post_click.interval). Stripping at any
+    # position would erase a body field literally named "query"/"body"/"path".
+    raw_loc = [str(p) for p in first.get("loc", ())]
+    loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
+    field = ".".join(loc) or None
+    message = first.get("msg") or "Request failed schema validation"
+    # Code selection by failure semantics, grounded in the AdCP graded
+    # error-compliance storyboard: a VALUE/enum/range violation on a
+    # structurally-valid field is canonically VALIDATION_ERROR; a missing/
+    # malformed/unknown field (structural) is INVALID_REQUEST. The full
+    # value-vs-structural reclassification across all fields is a repo-wide
+    # follow-up; for now the attribution_window family — reconciled to
+    # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly. (salesagent-meho)
+    exc_cls = AdCPValidationError if (field and field.startswith("attribution_window")) else AdCPInvalidRequestError
+    adcp_exc = exc_cls(
+        message,
+        field=field,
+        suggestion="check request parameters and fix",
+        details={
+            "validation_errors": [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")} for e in errors]
+        },
+    )
+    return _envelope_response(request, adcp_exc)
 
 
 @app.exception_handler(PermissionError)
@@ -295,6 +343,18 @@ def _create_dynamic_agent_card(request: Request):
     """Create agent card with tenant-specific URL from request headers."""
 
     def get_protocol(hostname: str) -> str:
+        # Prefer the scheme the edge proxy terminated and forwarded
+        # (X-Forwarded-Proto, set by our nginx) — the authoritative signal for the
+        # client-facing scheme. Fall back to a hostname heuristic only when the
+        # header is absent (e.g. direct, non-proxied access). This matches how the
+        # admin app already trusts X-Forwarded-Proto, and fixes the agent card
+        # advertising https for an http-only reverse proxy.
+        forwarded_proto = _get_header_case_insensitive(request.headers, "X-Forwarded-Proto")
+        if forwarded_proto:
+            # May be a comma-separated proxy chain; the first hop is client-facing.
+            proto = forwarded_proto.split(",")[0].strip().lower()
+            if proto in ("http", "https"):
+                return proto
         return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
 
     apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")

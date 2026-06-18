@@ -11,6 +11,7 @@
 #
 # Usage:
 #   scripts/creative-agent-stack.sh up      # idempotent: build+run if needed, wait healthy
+#   scripts/creative-agent-stack.sh build   # idempotent: fetch+build image only (in-network compose service)
 #   scripts/creative-agent-stack.sh down    # stop+rm containers+network (keeps image/tarball cache)
 #   scripts/creative-agent-stack.sh url     # print CREATIVE_AGENT_URL
 #   scripts/creative-agent-stack.sh publish # build+push pin-keyed image to ghcr.io (CI publish workflow)
@@ -124,13 +125,23 @@ cmd_publish() {
 
 cmd_url() { echo "$CREATIVE_AGENT_URL"; }
 
+# Fetch the pinned source + build the image only. Idempotent. Shared by `up`
+# (standalone host run) and `build` (in-network: docker-compose.e2e.yml reuses
+# the resulting `adcp-creative-agent` image as a network service, no :9999).
+cmd_build() {
+    # Delegate to _ensure_image: it is idempotent (returns early if the image
+    # exists), prefers a ghcr pull when CREATIVE_AGENT_GHCR_IMAGE is set, and
+    # falls back to a retried local build. No duplicated fetch/build logic here.
+    _ensure_image
+}
+
 cmd_up() {
     if _healthy; then
         echo "[creative-agent] already healthy on :9999 (reuse)"
         return 0
     fi
 
-    _ensure_image
+    cmd_build
 
     docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET"
 
@@ -173,8 +184,9 @@ cmd_down() {
 
 case "${1:-}" in
     up) cmd_up ;;
+    build) cmd_build ;;
     down) cmd_down ;;
     url) cmd_url ;;
     publish) cmd_publish ;;
-    *) echo "usage: $0 {up|down|url|publish}" >&2; exit 2 ;;
+    *) echo "usage: $0 {up|build|down|url|publish}" >&2; exit 2 ;;
 esac

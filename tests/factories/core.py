@@ -13,12 +13,28 @@ from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
 from src.core.database.models import (
     AdapterConfig,
+    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     PropertyTag,
     PublisherPartner,
     Tenant,
 )
+
+
+def subdomain_for(tenant_id: str) -> str:
+    """Single source of truth for a tenant's DNS subdomain.
+
+    DNS labels cannot contain underscores, so tenant_id underscores map to
+    hyphens. This MUST be the only derivation: the persisted ``Tenant.subdomain``
+    (ORM factory) and the ``ResolvedIdentity`` tenant dict (``make_tenant``) have
+    to agree, because the e2e_rest transport authenticates by sending this
+    subdomain as the ``x-adcp-tenant`` header and the live server resolves the
+    tenant from it. A mismatch (underscore in the DB row vs hyphen on the wire)
+    makes the server fail to resolve the tenant and return 401 — which silently
+    parked every e2e_rest delivery scenario on the known-failures ledger.
+    """
+    return f"pub-{tenant_id}".replace("_", "-")
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -29,7 +45,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     tenant_id = Sequence(lambda n: f"tenant_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Publisher {o.tenant_id}")
-    subdomain = LazyAttribute(lambda o: f"pub-{o.tenant_id}")
+    subdomain = LazyAttribute(lambda o: subdomain_for(o.tenant_id))
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"
@@ -43,7 +59,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         Uses same defaults as TenantFactory fields.
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
-        subdomain = f"pub-{tenant_id}".replace("_", "-")
+        subdomain = subdomain_for(tenant_id)
         tenant: dict[str, Any] = {
             "tenant_id": tenant_id,
             "name": f"Test Publisher {tenant_id}",
@@ -84,6 +100,29 @@ class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
     display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
     is_verified = True
     sync_status = "success"
+
+
+class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """A verified authorized property — satisfies the create_media_buy setup
+    checklist's "Authorized Properties" gate (SetupChecklistService counts
+    AuthorizedProperty rows for the tenant). The in-process transports skip the
+    gate via the testing context; the live e2e_rest server enforces it, so a
+    fully-set-up tenant needs at least one of these.
+    """
+
+    class Meta:
+        model = AuthorizedProperty
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    property_id = Sequence(lambda n: f"prop_{n:04d}")
+    property_type = "website"
+    name = LazyAttribute(lambda o: f"Authorized Property {o.property_id}")
+    publisher_domain = Sequence(lambda n: f"authorized-{n:04d}.example.com")
+    identifiers = LazyAttribute(lambda o: [{"type": "domain", "value": o.publisher_domain}])
+    verification_status = "verified"
 
 
 class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):

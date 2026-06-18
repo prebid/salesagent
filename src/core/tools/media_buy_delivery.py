@@ -25,6 +25,36 @@ from src.core.exceptions import (
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
+
+def _validate_attribution_window(attribution_window: "AttributionWindow | None") -> None:
+    """Enforce BR-RULE-092 INV-5: a 'campaign'-unit Duration must have interval == 1.
+
+    The AdCP Duration schema documents "interval must be 1 when unit is campaign"
+    (the window spans the full campaign flight) in its description only — it is a
+    cross-field constraint JSON Schema cannot express, so neither the SDK model nor
+    FastAPI's request validation rejects ``interval != 1``. Enforce it here so a
+    malformed campaign window is rejected with ``VALIDATION_ERROR`` — the canonical
+    code for a business-rule violation on a well-formed payload (interval and unit
+    are individually valid; only their relationship is not), per the AdCP graded
+    error-compliance storyboard. The AdCP schema defines unit/model as plain enums
+    with no per-field error-code, so this aligns with the other value/enum
+    validations (UC-006/UC-018) rather than the earlier INVALID_REQUEST mis-pin.
+    """
+    if attribution_window is None:
+        return
+    for window in (attribution_window.post_click, attribution_window.post_view):
+        if window is None:
+            continue
+        unit = enum_value(window.unit)
+        if unit == "campaign" and window.interval != 1:
+            raise AdCPValidationError(
+                "attribution_window: interval must be 1 when unit is 'campaign' "
+                "(the window spans the full campaign flight)",
+                field="attribution_window",
+                suggestion="interval must be 1 when unit is 'campaign'",
+            )
+
+
 logger = logging.getLogger(__name__)
 console = Console()
 
@@ -98,6 +128,11 @@ def _get_media_buy_delivery_impl(
 
     # Validate identity is provided
     identity = require_identity(identity, context=req.context)
+
+    # BR-RULE-092 INV-5: reject a campaign-unit attribution window with interval != 1
+    # (cross-field constraint the schema can't express, so it reaches us as valid).
+    # After require_identity so an unauthenticated caller gets AUTH_REQUIRED first.
+    _validate_attribution_window(req.attribution_window)
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()

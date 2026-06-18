@@ -1,10 +1,14 @@
 """Pydantic AI agent for creative review decisions."""
 
+from __future__ import annotations
+
 import logging
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+
+if TYPE_CHECKING:
+    from pydantic_ai import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,8 @@ def create_review_agent(model: str) -> Agent[None, CreativeReviewResult]:
     Returns:
         Configured Agent instance
     """
+    from pydantic_ai import Agent
+
     return Agent(
         model=model,
         output_type=CreativeReviewResult,

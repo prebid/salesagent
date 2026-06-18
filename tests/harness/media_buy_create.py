@@ -89,11 +89,19 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """Create the full dependency chain needed for create_media_buy.
 
         Creates: tenant (with auto CurrencyLimit USD), principal,
-        PropertyTag ("all_inventory"), Product with PricingOption.
+        PropertyTag ("all_inventory"), Product with PricingOption, and one
+        verified AuthorizedProperty.
 
         Returns (tenant, principal, product, pricing_option).
         """
+        from tests.factories import AuthorizedPropertyFactory
+
         tenant, principal = self.setup_default_data()
+        # Satisfy the create_media_buy setup-checklist "Authorized Properties"
+        # gate. In-process transports skip it via the testing context, but the
+        # live e2e_rest server enforces it (validate_setup_complete), so a
+        # fully-set-up tenant needs at least one authorized property.
+        AuthorizedPropertyFactory(tenant=tenant)
         product, pricing_option = self.setup_product_chain(tenant)
         return tenant, principal, product, pricing_option
 
