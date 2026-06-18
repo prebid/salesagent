@@ -191,9 +191,9 @@ class KevelSiteResolver:
     def _get_site_lookup(self) -> dict[str, set[int]]:
         """Return the cached ``{host: {site_ids}}`` index, fetching if needed.
 
-        Threading: the cache read + expiry-drop runs under ``_cache_lock`` so
-        concurrent callers see a consistent view and the expiry ``pop`` cannot
-        race a fresh write. The HTTP fetch happens OUTSIDE the lock — two
+        Threading: ``ThreadSafeTTLCache`` serializes the cache read + expiry-drop
+        internally so concurrent callers see a consistent view and the expiry
+        ``pop`` cannot race a fresh write. The HTTP fetch happens OUTSIDE that lock — two
         concurrent cold-cache callers may both fetch (acceptable: both
         produce the same lookup), but the cache write back into ``_site_cache``
         is atomic and last-write-wins.

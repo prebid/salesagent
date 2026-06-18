@@ -141,7 +141,8 @@ class Kevel(AdServerAdapter):
         ``_property_list_cache`` so the later synchronous compile hits a warm cache
         instead of blocking the event loop. Dry-run (no site resolver) has no index
         fetch to warm. Best-effort: a fetch failure is left for the compile path to
-        surface as ``AdCPAdapterError``.
+        surface as a typed ``AdCPError`` (transient for an outage; correctable for a
+        list-service 4xx).
         """
         if self._site_resolver is None:
             return

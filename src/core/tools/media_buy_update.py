@@ -197,7 +197,7 @@ def _update_media_buy_impl(
     # orphaned in ``in_progress`` forever, which suppresses the
     # buyer-facing ``status="failed"`` push notification fired from
     # ``context_manager.update_workflow_step:330-332``.
-    # Mirrors ``media_buy_create.py:3688-3697`` exactly.
+    # Mirrors the create-side workflow-step failure handling in ``media_buy_create.py``.
     ctx_manager = get_context_manager()
     step = None
     # property_list overlay recompile-and-PUTs are collected here during the

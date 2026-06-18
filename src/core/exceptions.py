@@ -707,25 +707,13 @@ class AdCPBudgetTooLowError(AdCPError):
 class AdCPCapabilityNotSupportedError(AdCPError):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
-    .. note::
-        **Intentional spec divergence.** The AdCP spec classifies
-        ``UNSUPPORTED_FEATURE`` as ``terminal``; we emit ``correctable``.
-        The salesagent raises this exception only when the buyer holds the
-        recovery lever — they can fix the request by dropping the
-        unsupported feature (e.g. removing ``property_list`` targeting
-        against an adapter that doesn't compile it). Classifying it
-        ``terminal`` would tell the buyer agent to give up on a recoverable
-        condition.
-
-        **Revisit condition:** if the SDK runtime starts enforcing the
-        spec's ``terminal`` classification at the wire (rejecting our
-        ``correctable`` recovery hint), drop this override and update
-        affected raise-site call sites to either select a different code or
-        accept the ``terminal`` retry semantics. Until then this is the
-        documented, expected behavior — not a TODO.
-
-        FIXME(salesagent-unsupported-feature-recovery): grep tag for the
-        revisit condition above. Remove when the SDK enforces terminal.
+    Recovery is ``correctable``, matching the spec: AdCP 3.1.0-beta.3
+    ``error-handling.mdx`` classifies ``UNSUPPORTED_FEATURE`` as ``correctable``
+    ("Check ``get_adcp_capabilities`` and remove unsupported fields"). The buyer
+    holds the recovery lever — they fix the request by dropping the unsupported
+    feature (e.g. removing ``property_list`` targeting against an adapter that
+    doesn't compile it) — so ``terminal`` (give up / escalate to a human) would be
+    the wrong instruction for a buyer-resolvable condition.
     """
 
     _default_status_code: ClassVar[int] = 422
