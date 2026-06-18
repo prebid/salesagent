@@ -22,7 +22,7 @@ import pytest
 from adcp.types import Identifier, PropertyListReference
 
 from src.adapters.kevel_site_resolver import KevelSiteResolver, ResolvedSiteIds
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPValidationError
 from src.core.property_list_resolver import clear_cache as clear_property_list_cache
 from tests.helpers.adcp_factories import create_test_identifier as _identifier
 
@@ -463,7 +463,9 @@ class TestPaginationAndFetch:
                 resolver._fetch_all_sites()
         mock_client.get.assert_not_called()  # tripped before any fetch
 
-    def test_http_error_raises_adcp_adapter_error(self):
+    def test_http_5xx_error_is_transient(self):
+        # A Kevel /v1/site 5xx is the service misbehaving → transient (retry), surfaced as
+        # AdCPAdapterError. Routing through adcp_error_for_httpx_exc must preserve this.
         resolver = _resolver()
         mock_client = MagicMock()
         mock_client.__enter__ = MagicMock(return_value=mock_client)
@@ -474,11 +476,32 @@ class TestPaginationAndFetch:
         )
         mock_client.get = MagicMock(return_value=mock_response)
 
-        with (
-            patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client),
-            pytest.raises(AdCPAdapterError, match="Failed to fetch Kevel site list"),
-        ):
-            resolver._fetch_all_sites()
+        with patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client):
+            with pytest.raises(AdCPAdapterError, match="Failed to fetch Kevel site list") as exc_info:
+                resolver._fetch_all_sites()
+        assert exc_info.value.recovery == "transient"
+
+    def test_http_4xx_error_is_correctable_not_transient(self):
+        # The A4 status->recovery sweep gap this closes: before adcp_error_for_httpx_exc, a
+        # /v1/site 4xx surfaced as AdCPAdapterError (transient → buyer retries a request that
+        # can never succeed). It must surface as a correctable AdCPValidationError instead.
+        resolver = _resolver()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_response = MagicMock(status_code=403)
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("forbidden", request=MagicMock(), response=mock_response)
+        )
+        mock_client.get = MagicMock(return_value=mock_response)
+
+        with patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client):
+            with pytest.raises(AdCPValidationError, match="Failed to fetch Kevel site list") as exc_info:
+                resolver._fetch_all_sites()
+        assert exc_info.value.recovery == "correctable"
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        # The pre-fix code raised AdCPAdapterError (transient); the correctable class is not one.
+        assert not isinstance(exc_info.value, AdCPAdapterError)
 
     def test_malformed_page_missing_key_raises(self):
         """A 2xx page missing 'items' or 'totalPages' is malformed → raise.

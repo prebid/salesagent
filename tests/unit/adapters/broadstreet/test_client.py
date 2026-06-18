@@ -205,6 +205,7 @@ class TestBroadstreetAPIErrorRecoveryTaxonomy:
             (None, "SERVICE_UNAVAILABLE", "transient"),  # transport outage (RequestException)
             (500, "SERVICE_UNAVAILABLE", "transient"),
             (503, "SERVICE_UNAVAILABLE", "transient"),
+            (429, "RATE_LIMITED", "transient"),  # rate limited — retry with backoff, not a client error
             (403, "CONFIGURATION_ERROR", "terminal"),  # operator access_token denied
             (404, "VALIDATION_ERROR", "correctable"),
             (400, "VALIDATION_ERROR", "correctable"),

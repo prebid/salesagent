@@ -27,6 +27,7 @@ class BroadstreetAPIError(AdCPAdapterError):
     avoid. Recovery is refined from the HTTP status:
 
     - transport outage (no status) / 5xx -> ``SERVICE_UNAVAILABLE``, transient
+    - 429 (rate limited) -> ``RATE_LIMITED``, transient (retry with backoff)
     - 403 (operator ``access_token`` denied) -> ``CONFIGURATION_ERROR``, terminal
     - other 4xx -> ``VALIDATION_ERROR``, correctable (fix the request/reference)
 
@@ -48,6 +49,11 @@ class BroadstreetAPIError(AdCPAdapterError):
             if status_code == 403:
                 self.error_code = "CONFIGURATION_ERROR"
                 self.recovery = "terminal"
+            elif status_code == 429:
+                # Match the shared status->recovery table (AdCPRateLimitError): a 429 is a
+                # transient rate limit (retry with backoff), not a correctable client error.
+                self.error_code = "RATE_LIMITED"
+                self.recovery = "transient"
             elif 400 <= status_code < 500:
                 self.error_code = "VALIDATION_ERROR"
                 self.recovery = "correctable"

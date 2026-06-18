@@ -48,7 +48,23 @@ ALLOWLIST: frozenset[str] = frozenset()
 # degradation and is NOT flagged.
 HAND_ROLLED_REWRAP_ALLOWLIST: frozenset[str] = frozenset()
 
+# An ``httpx`` handler that catches ``httpx.HTTPStatusError`` (a status IS present) but re-raises a
+# directly-constructed ``AdCP*Error`` (e.g. ``AdCPAdapterError(f"...{exc}")``) hard-codes ONE recovery
+# class and discards the status — a /v1/site 4xx then surfaces transient (retry forever) instead of
+# correctable (fix the request). MUST stay empty — route the handler through
+# ``adcp_error_for_httpx_exc(exc, message)`` (the httpx dual of ``wrap_request_errors``) instead. This is
+# the httpx counterpart of HAND_ROLLED_REWRAP_ALLOWLIST and, because HTTPStatusError unambiguously carries
+# a status, it is immune to the message-form (f-string / repr / kw-arg) evasions the requests matcher
+# permits as "enriching".
+HTTPX_STATUS_DISCARD_ALLOWLIST: frozenset[str] = frozenset()
+
 _ADAPTERS_DIR = REPO_ROOT / "src/adapters"
+
+# The shared status->recovery mappers (src/core/exceptions.py). An httpx-status handler is status-
+# preserving when it routes through one of these instead of constructing a fixed-recovery error.
+_STATUS_MAPPERS: frozenset[str] = frozenset({"adcp_error_for_http_status", "adcp_error_for_httpx_exc"})
+
+_HTTPX_STATUS_ERROR = "HTTPStatusError"
 
 # The canonical home of the RequestException -> AdCPAdapterError mapping; its bare
 # ``AdCPAdapterError(str(e))`` is the SOURCE, not a hand-rolled copy.
@@ -95,8 +111,10 @@ def _with_wraps_request_errors(node: ast.AST, parents: dict[ast.AST, ast.AST]) -
 def _handler_is_safe(handler: ast.ExceptHandler) -> bool:
     """A handler is safe if it swallows the exception or re-raises only as a typed AdCP error.
 
-    A bare ``raise`` (re-raises the caught transport exception) or a ``raise`` of
-    any non-``AdCP`` error lets the raw exception escape and is unsafe.
+    Safe re-raises are either a direct ``AdCP*Error(...)`` construction or the RESULT of a shared
+    status->recovery mapper (``raise adcp_error_for_httpx_exc(exc, ...)`` — the mapper returns a typed
+    ``AdCPError``). A bare ``raise`` (re-raises the caught transport exception) or a ``raise`` of any
+    other expression lets the raw exception escape and is unsafe.
     """
     for node in ast.walk(handler):
         if not isinstance(node, ast.Raise):
@@ -104,9 +122,12 @@ def _handler_is_safe(handler: ast.ExceptHandler) -> bool:
         exc = node.exc
         if exc is None:
             return False  # bare ``raise`` re-raises the raw transport exception
-        if isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name) and _is_adcp_error_name(exc.func.id):
-            continue
-        return False  # raises something other than a typed AdCP error
+        if isinstance(exc, ast.Call):
+            fn = exc.func
+            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+            if name and (_is_adcp_error_name(name) or name in _STATUS_MAPPERS):
+                continue
+        return False  # raises something other than a typed AdCP error or a status-mapper result
     return True  # no raise in the handler -> swallowed
 
 
@@ -186,6 +207,72 @@ def collect_hand_rolled_request_exception_rewraps() -> list[str]:
                 isinstance(node, ast.ExceptHandler)
                 and _handler_catches_request_exception(node)
                 and _handler_raises_bare_adapter_error(node)
+            ):
+                out.append(f"{rel(filepath)}:{node.lineno}")
+    return out
+
+
+def _handler_catches_httpx_status_error(handler: ast.ExceptHandler) -> bool:
+    """True if the ``except`` catches ``httpx.HTTPStatusError`` (alone or in a tuple).
+
+    Catching ``HTTPStatusError`` means an HTTP status IS present on the exception, so any
+    re-raise that does not consult that status is necessarily discarding it.
+    """
+    exc_type = handler.type
+    if exc_type is None:
+        return False
+    candidates = exc_type.elts if isinstance(exc_type, ast.Tuple) else [exc_type]
+    for c in candidates:
+        name = c.attr if isinstance(c, ast.Attribute) else (c.id if isinstance(c, ast.Name) else None)
+        if name == _HTTPX_STATUS_ERROR:
+            return True
+    return False
+
+
+def _handler_calls_status_mapper(handler: ast.ExceptHandler) -> bool:
+    """True if the handler routes through a shared status->recovery mapper (status-preserving)."""
+    for node in ast.walk(handler):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+            if name in _STATUS_MAPPERS:
+                return True
+    return False
+
+
+def _handler_raises_constructed_adcp_error(handler: ast.ExceptHandler) -> bool:
+    """True if the handler directly constructs and raises a typed ``AdCP*Error``.
+
+    Direct construction (``raise AdCPAdapterError(...)``) hard-codes a single recovery class;
+    from an ``HTTPStatusError`` handler that means the real status is discarded. A re-raise of a
+    status mapper's RESULT (``raise adcp_error_for_httpx_exc(exc, ...)``) is a function call, not a
+    direct ``AdCP*Error`` construction, so it is not flagged. Independent of the message form
+    (f-string, ``repr``, keyword arg), so the matcher cannot be evaded by reshaping the message.
+    """
+    for node in ast.walk(handler):
+        if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+            continue
+        fn = node.exc.func
+        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        if name and _is_adcp_error_name(name):
+            return True
+    return False
+
+
+def collect_status_discarding_httpx_rewraps() -> list[str]:
+    """Return ``path:line`` for every adapter ``except httpx.HTTPStatusError`` handler that re-raises a
+    directly-constructed ``AdCP*Error`` without routing through a shared status->recovery mapper."""
+    out: list[str] = []
+    for filepath in sorted(_ADAPTERS_DIR.rglob("*.py")):
+        tree = safe_parse(filepath)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ExceptHandler)
+                and _handler_catches_httpx_status_error(node)
+                and _handler_raises_constructed_adcp_error(node)
+                and not _handler_calls_status_mapper(node)
             ):
                 out.append(f"{rel(filepath)}:{node.lineno}")
     return out
@@ -285,3 +372,76 @@ class TestAdapterHttpWritesWrapped:
         assert _hits(bare_rewrap) == 1, "matcher failed to detect the bare hand-rolled re-wrap"
         assert _hits(swallow) == 0, "matcher wrongly flagged a swallowing handler"
         assert _hits(context_rewrap) == 0, "matcher wrongly flagged a context-adding re-raise"
+
+    def test_no_status_discarding_httpx_rewrap(self):
+        # A future ``except httpx.HTTPStatusError: raise AdCPAdapterError(f"...{exc}")`` catches a
+        # status-bearing failure but forces a single recovery class — a /v1/site 4xx then reports
+        # transient (retry forever) instead of correctable. Route it through adcp_error_for_httpx_exc.
+        offenders = sorted(set(collect_status_discarding_httpx_rewraps()) - HTTPX_STATUS_DISCARD_ALLOWLIST)
+        if offenders:
+            detail = "\n".join(f"  - {site}" for site in offenders)
+            raise AssertionError(
+                "An httpx handler catches HTTPStatusError but re-raises a directly-constructed "
+                f"AdCP*Error, discarding the status (a 4xx wrongly reported transient):\n{detail}\n\n"
+                "Route the handler through `adcp_error_for_httpx_exc(exc, message)` "
+                "(src/core/exceptions.py — the httpx dual of wrap_request_errors) instead. "
+                "Do NOT add to HTTPX_STATUS_DISCARD_ALLOWLIST."
+            )
+
+    def test_httpx_status_discard_allowlist_is_empty(self):
+        assert HTTPX_STATUS_DISCARD_ALLOWLIST == frozenset(), (
+            f"HTTPX_STATUS_DISCARD_ALLOWLIST must be empty but contains {sorted(HTTPX_STATUS_DISCARD_ALLOWLIST)}. "
+            "Route the handler through adcp_error_for_httpx_exc instead of allowlisting it."
+        )
+
+    def test_httpx_status_discard_matcher_detects_and_ignores(self):
+        # Positive + negative self-tests so the httpx scan cannot pass vacuously: the matcher must
+        # flag a direct AdCP*Error re-raise from an HTTPStatusError handler, and must NOT flag a
+        # handler routing through either status mapper, nor a swallowing handler.
+        discard = ast.parse(
+            "import httpx\n"
+            "def f():\n"
+            "    try:\n"
+            "        client.get('x').raise_for_status()\n"
+            "    except (httpx.HTTPStatusError, httpx.RequestError) as e:\n"
+            "        raise AdCPAdapterError(f'failed: {e}') from e\n"
+        )
+        mapped_httpx = ast.parse(
+            "import httpx\n"
+            "def f():\n"
+            "    try:\n"
+            "        client.get('x').raise_for_status()\n"
+            "    except (httpx.HTTPStatusError, httpx.RequestError) as e:\n"
+            "        raise adcp_error_for_httpx_exc(e, 'failed') from e\n"
+        )
+        mapped_status = ast.parse(
+            "import httpx\n"
+            "def f():\n"
+            "    try:\n"
+            "        client.get('x').raise_for_status()\n"
+            "    except httpx.HTTPStatusError as e:\n"
+            "        raise adcp_error_for_http_status(e.response.status_code, 'failed') from e\n"
+        )
+        swallow = ast.parse(
+            "import httpx\n"
+            "def f():\n"
+            "    try:\n"
+            "        client.get('x').raise_for_status()\n"
+            "    except httpx.HTTPStatusError as e:\n"
+            "        log(e)\n"
+        )
+
+        def _hits(tree: ast.AST) -> int:
+            return sum(
+                1
+                for n in ast.walk(tree)
+                if isinstance(n, ast.ExceptHandler)
+                and _handler_catches_httpx_status_error(n)
+                and _handler_raises_constructed_adcp_error(n)
+                and not _handler_calls_status_mapper(n)
+            )
+
+        assert _hits(discard) == 1, "matcher failed to detect the status-discarding httpx re-wrap"
+        assert _hits(mapped_httpx) == 0, "matcher wrongly flagged a handler routing through adcp_error_for_httpx_exc"
+        assert _hits(mapped_status) == 0, "matcher wrongly flagged a handler routing through adcp_error_for_http_status"
+        assert _hits(swallow) == 0, "matcher wrongly flagged a swallowing handler"

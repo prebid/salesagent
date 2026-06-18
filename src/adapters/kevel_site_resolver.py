@@ -41,7 +41,7 @@ from typing import ClassVar
 import httpx
 from adcp.types import Identifier, PropertyListReference
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, adcp_error_for_httpx_exc
 from src.core.property_list_resolver import loggable_list_id, resolve_property_list_typed_sync
 from src.core.ttl_cache import ThreadSafeTTLCache
 from src.services.identifier_matching import (
@@ -263,8 +263,12 @@ class KevelSiteResolver:
                     response = client.get(url)
                     response.raise_for_status()
                 except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
-                    raise AdCPAdapterError(
-                        f"Failed to fetch Kevel site list (network {self.network_id}, page {page}): {exc}"
+                    # Route through the shared status->recovery table so a Kevel /v1/site 4xx
+                    # surfaces correctable (fix the request) rather than transient (retry); a
+                    # response-less timeout/connection failure has no status and stays transient.
+                    raise adcp_error_for_httpx_exc(
+                        exc,
+                        f"Failed to fetch Kevel site list (network {self.network_id}, page {page}): {exc}",
                     ) from exc
 
                 try:

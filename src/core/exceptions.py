@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+import httpx
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel
 
@@ -914,6 +915,27 @@ def adcp_error_for_http_status(
         return AdCPRateLimitError(message)
     if 400 <= status < 500:
         return AdCPValidationError(message, field=field, suggestion=suggestion)
+    return AdCPAdapterError(message)
+
+
+def adcp_error_for_httpx_exc(
+    exc: httpx.HTTPError, message: str, *, field: str | None = None, suggestion: str | None = None
+) -> AdCPError:
+    """Map an ``httpx`` transport failure to its typed AdCP error — the httpx dual of ``wrap_request_errors``.
+
+    A response-bearing ``httpx.HTTPStatusError`` carries an HTTP status, so it routes through
+    the shared ``adcp_error_for_http_status`` table (429/5xx -> transient, other 4xx ->
+    correctable). A response-less failure (``TimeoutException``/``RequestError`` — timeout,
+    connection reset) has no status and is a transient ``AdCPAdapterError``. Without this seam an
+    httpx handler that re-wraps every failure as ``AdCPAdapterError`` reports a 4xx as transient
+    (retry) when it is correctable (fix the request).
+
+    ``field``/``suggestion`` enrich the correctable (4xx) case; they are ignored for the transient
+    classes. ``property_list_resolver._raise_fetch_error`` shares the same status table directly but
+    additionally distinguishes timeout from connect in its message, so it does not route through here.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return adcp_error_for_http_status(exc.response.status_code, message, field=field, suggestion=suggestion)
     return AdCPAdapterError(message)
 
 
