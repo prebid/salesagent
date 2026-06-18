@@ -95,9 +95,15 @@ def then_brand_resolved(compat_result: dict, domain: str) -> None:
 
 @then(parsers.parse('the result contains buyer_campaign_ref "{value}"'))
 def then_result_contains_buyer_campaign_ref(compat_result: dict, value: str) -> None:
-    """Verify campaign_ref was renamed to buyer_campaign_ref."""
+    """Verify campaign_ref was routed into ext.buyer_campaign_ref.
+
+    AdCP 3.12 removed the top-level buyer_campaign_ref field; the migration
+    path for the deprecated v2.5 campaign_ref is the ext extension object, so
+    the value must land under ext, never as a top-level field.
+    """
     params = compat_result["normalization_result"].params
-    assert params["buyer_campaign_ref"] == value
+    assert params["ext"]["buyer_campaign_ref"] == value
+    assert "buyer_campaign_ref" not in params
 
 
 @then("the result does not contain campaign_ref")
