@@ -38,6 +38,7 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     "tests/integration/test_delivery_webhook_behavioral.py": 5,
     "tests/integration/test_get_products_behavioral.py": 44,
     "tests/unit/test_authorized_properties_behavioral.py": 23,
+    "tests/unit/test_create_media_buy_behavioral.py": 15,  # gh-#1377: transport boundary serialization tests
     "tests/unit/test_creative_formats_behavioral.py": 17,
     "tests/unit/test_delivery_poll_behavioral.py": 14,
     "tests/unit/test_delivery_service_behavioral.py": 6,

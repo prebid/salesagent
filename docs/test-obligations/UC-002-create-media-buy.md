@@ -1524,6 +1524,30 @@ Source: BR-RULE-026
 
 ---
 
+### Transport Boundary: push_notification_config Serialization
+
+#### Scenario: MCP Wrapper Serializes AnyUrl to Plain String
+**Obligation ID** UC-002-TRANSPORT-PNC-SERIALIZATION-01
+**Layer** behavioral
+**Given** a `create_media_buy` MCP request with `push_notification_config.url` set to a Pydantic `AnyUrl` value
+**When** the MCP wrapper serializes the `PushNotificationConfig` model to a dict before calling `_impl`
+**Then** the `url` field in the resulting dict is a plain `str`, not a Pydantic `AnyUrl` object
+**And** enum fields such as `authentication.schemes` are serialized to their string values
+**And** `_impl` receives a dict whose values are all plain Python types compatible with SQLAlchemy `String` columns
+**Priority:** P0 (regression: gh-#1377)
+
+#### Scenario: A2A Wrapper Serializes AnyUrl to Plain String
+**Obligation ID** UC-002-TRANSPORT-PNC-SERIALIZATION-02
+**Layer** behavioral
+**Given** a `create_media_buy` A2A request with `push_notification_config` as a `PushNotificationConfig` model instance
+**When** the A2A wrapper (`create_media_buy_raw`) serializes the model to a dict before calling `_impl`
+**Then** the `url` field in the resulting dict is a plain `str`, not a Pydantic `AnyUrl` object
+**And** enum fields such as `authentication.schemes` are serialized to their string values
+**And** `_impl` receives a dict whose values are all plain Python types compatible with SQLAlchemy `String` columns
+**Priority:** P0 (regression: gh-#1377)
+
+---
+
 ## Summary Statistics
 
 | Category | Count |
