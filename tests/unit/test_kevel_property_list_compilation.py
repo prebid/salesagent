@@ -28,7 +28,13 @@ from adcp.types import PropertyListReference
 from src.adapters.base import AdServerAdapter
 from src.adapters.kevel import Kevel
 from src.adapters.kevel_site_resolver import ResolvedSiteIds
-from src.core.exceptions import AdCPAdapterError, AdCPCapabilityNotSupportedError, AdCPPackageNotFoundError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPCapabilityNotSupportedError,
+    AdCPError,
+    AdCPPackageNotFoundError,
+)
+from src.core.property_list_resolver import clear_cache as clear_property_list_cache
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuyRequest, MediaPackage, Principal, Targeting
 from tests.helpers.adcp_factories import create_test_identifier
 
@@ -535,3 +541,56 @@ class TestPrewarmTargeting:
         with patch.object(adapter, "_site_resolver") as mock_resolver:
             mock_resolver.resolve.side_effect = AdCPAdapterError("site index unreachable")
             adapter.prewarm_targeting([_package_with_ref(_ref())])  # must not raise
+
+
+class TestPropertyListFetchTransientPropagatesThroughCompile:
+    """A list-service fetch failure during Kevel compilation propagates as TRANSIENT, not terminal.
+
+    The reachability the property-list wire recovery class depends on. The create-path PREFETCH
+    (``_resolve_property_list_identifiers``) and Kevel ``prewarm_targeting`` are best-effort and
+    SWALLOW a resolution failure (advisory-only — proved by ``test_kevel_swallows_resolution_error``).
+    The COMPILE path is where a property_list fetch failure is FATAL and reaches the transport
+    boundary, so the recovery class the buyer reads on the wire depends on the compile path NOT
+    swallowing it and NOT re-wrapping it as terminal. The httpx-status->recovery mapping itself is
+    pinned at the resolver seam (``test_property_list_resolver``, ``test_kevel_site_resolver``); this
+    pins that the Kevel compile path preserves that transient recovery up to the boundary, where the
+    generic two-layer serializer (wire-proven in ``test_error_paths``/``test_idempotency_rate_limit``)
+    carries it onto the wire.
+    """
+
+    @pytest.mark.parametrize(
+        ("status_code", "expected_code"),
+        [(429, "RATE_LIMITED"), (503, "SERVICE_UNAVAILABLE")],
+    )
+    def test_list_service_failure_during_compile_stays_transient(self, status_code, expected_code):
+        import httpx
+
+        # Unique list_id + cleared module cache so the patched fetch actually runs (not a cache hit).
+        clear_property_list_cache()
+        adapter = _kevel()  # non-dry-run → real site resolver → the compile path performs the real list fetch
+        ref = PropertyListReference(agent_url="https://gov.example/lists", list_id=f"cb_{uuid.uuid4().hex}")
+
+        response = MagicMock(status_code=status_code)
+        response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("boom", request=MagicMock(), response=response)
+        )
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_client.get = MagicMock(return_value=response)
+
+        # Bypass the SSRF/DNS pre-flight (it rejects the unresolvable test host before any HTTP) so the
+        # patched httpx client — the first fetch the compile path makes — is what surfaces the status.
+        with (
+            patch("src.core.property_list_resolver.check_url_ssrf", return_value=(True, None)),
+            patch("src.core.property_list_resolver.httpx.Client", return_value=mock_client),
+        ):
+            with pytest.raises(AdCPError) as exc_info:
+                adapter._raise_if_property_list_uncompilable([_package_with_ref(ref)])
+
+        # transient = "retry"; a regression to terminal/correctable would tell the buyer to escalate
+        # to a human (or edit the request) on a retryable list-service outage.
+        assert exc_info.value.recovery == "transient", (
+            f"a list-service {status_code} during compile must stay transient, got {exc_info.value.recovery!r}"
+        )
+        assert exc_info.value.error_code == expected_code
