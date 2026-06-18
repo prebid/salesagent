@@ -222,7 +222,8 @@ def _raise_fetch_error(ref: PropertyListReference, url: str, exc: Exception) -> 
         status = exc.response.status_code
         raise adcp_error_for_http_status(
             status,
-            f"The property list service at {ref.agent_url} returned HTTP {status} for list_id '{ref.list_id}'.",
+            f"The property list service at {ref.agent_url} returned HTTP {status} "
+            f"for list_id '{loggable_list_id(ref.list_id)}'.",
             field="property_list",
             suggestion="Check the property list reference (agent_url and list_id), or pick a different list.",
         ) from exc

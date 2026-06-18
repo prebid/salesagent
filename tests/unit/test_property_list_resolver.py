@@ -674,6 +674,22 @@ class TestFetchErrorTaxonomy:
         assert excinfo.value.recovery == "correctable"
         assert ref.list_id in str(excinfo.value)
 
+    def test_sync_4xx_message_sanitizes_buyer_list_id(self):
+        # CWE-117: list_id carries no charset constraint, so an embedded newline could forge
+        # operator log lines once this 4xx message reaches the boundary error logger. The message
+        # must route list_id through loggable_list_id — a revert to a raw f-string reddens this.
+        from src.core.exceptions import AdCPValidationError
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed_sync
+
+        clear_cache()
+        ref = _make_ref(list_id="evil\nINJECTED-LOG-LINE")
+        with patch("src.core.property_list_resolver.httpx.Client", return_value=self._sync_client_raising(404)):
+            with pytest.raises(AdCPValidationError) as excinfo:
+                resolve_property_list_typed_sync(ref)
+        message = str(excinfo.value)
+        assert "evil\nINJECTED-LOG-LINE" not in message, "raw newline-bearing list_id must not reach the message"
+        assert "evilINJECTED-LOG-LINE" in message, "the sanitized list_id (newline stripped) should still be shown"
+
     def test_sync_500_stays_transient(self):
         from src.core.property_list_resolver import clear_cache, resolve_property_list_typed_sync
 
