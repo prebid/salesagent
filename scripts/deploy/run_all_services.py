@@ -374,9 +374,9 @@ def main():
     # Start services in threads
     threads = []
 
-    #skip_cron = os.environ.get("SKIP_CRON", "false").lower() == "true"
+    # skip_cron = os.environ.get("SKIP_CRON", "false").lower() == "true"
 
-    #TODO: Remove skip_cron hardcoded value 
+    # TODO: Remove skip_cron hardcoded value
     skip_cron = False
     skip_nginx = os.environ.get("SKIP_NGINX", "false").lower() == "true"
     if skip_cron and skip_nginx:
