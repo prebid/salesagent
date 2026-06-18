@@ -9,6 +9,8 @@ import os
 
 import pytest
 
+from tests.e2e.conftest import e2e_host
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "ui: UI smoke tests (require running Docker stack + Playwright)")
@@ -16,28 +18,53 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def base_url():
-    """Base URL for the running app."""
+    """Base URL for the running app.
+
+    Host path: localhost:<published-port>. In-network the server is reached by
+    service name (ADCP_TEST_HOST=proxy) with no published host port.
+    """
+    host = e2e_host()
     port = os.environ.get("ADCP_SALES_PORT", "8000")
-    return f"http://localhost:{port}"
+    return f"http://{host}:{port}"
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_test_auth_enabled():
     """Enable auth_setup_mode on the default tenant so /test/auth works.
 
-    The app's internal DB URL uses Docker-internal hostnames (postgres:5432),
-    so we construct a localhost URL using the exposed POSTGRES_PORT.
+    Seeds the SERVER's database (/adcp). In-network there is no published
+    Postgres port, so honor the service-name URL the runner exports
+    (E2E_DATABASE_URL=postgres:5432/adcp); on the host path fall back to
+    localhost:<published POSTGRES_PORT>.
     """
-    pg_port = os.environ.get("POSTGRES_PORT")
-    if not pg_port:
-        pytest.skip("POSTGRES_PORT not set — cannot configure test auth")
-
-    db_url = f"postgresql://adcp_user:secure_password_change_me@localhost:{pg_port}/adcp"
+    db_url = os.environ.get("E2E_DATABASE_URL")
+    if not db_url:
+        pg_port = os.environ.get("POSTGRES_PORT")
+        if not pg_port:
+            pytest.skip("neither E2E_DATABASE_URL nor POSTGRES_PORT set — cannot configure test auth")
+        db_host = os.environ.get("ADCP_TEST_DB_HOST", "localhost")
+        db_url = f"postgresql://adcp_user:secure_password_change_me@{db_host}:{pg_port}/adcp"
 
     from sqlalchemy import create_engine, text
 
     engine = create_engine(db_url)
     with engine.connect() as conn:
+        # bdd's _reset_e2e_db TRUNCATEs tenants CASCADE, so the server-seeded
+        # default tenant may be gone by the time the (serial) ui suite runs.
+        # Re-create it idempotently before configuring it, supplying the
+        # NOT-NULL columns that lack a server default (mirrors init_db() in
+        # src/core/database/database.py); ON CONFLICT keeps it a no-op when the
+        # server-seeded row is still present.
+        conn.execute(
+            text(
+                "INSERT INTO tenants"
+                " (tenant_id, name, subdomain, is_active, billing_plan,"
+                "  enable_axe_signals, human_review_required, approval_mode)"
+                " VALUES ('default', 'UI Smoke Tenant', 'default', true, 'standard',"
+                "  false, false, 'require-human')"
+                " ON CONFLICT (tenant_id) DO NOTHING"
+            )
+        )
         conn.execute(text("UPDATE tenants SET auth_setup_mode = true WHERE tenant_id = 'default'"))
         # Configure as GAM tenant so inventory tree UI paths are exercised
         conn.execute(text("UPDATE tenants SET ad_server = 'google_ad_manager' WHERE tenant_id = 'default'"))

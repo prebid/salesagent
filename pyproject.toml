@@ -97,15 +97,16 @@ dev = [
     "types-waitress>=3.0.1.20250801",
     "pytest-json-report>=1.5.0",
     "pytest-bdd>=7.0.0",
+    "pytest-xdist>=3.5.0",  # bdd suite runs `pytest -n auto --dist loadfile`
     "semgrep>=1.50.0",
     "pylint>=4.0.5",
     # Security patches for transitive dev dependencies
     "black>=26.3.1",  # GHSA-3936-cmfr-pm3m
     "types-python-dateutil>=2.9.0.20260408",
-    # Added in PR 2 of issue #1234: xdist for parallel test execution in CI,
-    # randomly for test order randomisation to surface order-dependent failures.
-    # xdist floor kept at >=3.5.0 from branch fix(test-infra) 45c310f3e (union of both sides).
-    "pytest-xdist>=3.5.0",
+    # Added in PR 2 of issue #1234: randomly for test order randomisation to
+    # surface order-dependent failures. xdist floor kept at >=3.5.0 (union of
+    # both sides; branch fix(test-infra) 45c310f3e). pytest-xdist is declared
+    # once above next to pytest-bdd.
     "pytest-randomly>=3.15.0",
 ]
 

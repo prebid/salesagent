@@ -1,13 +1,17 @@
 """Pydantic AI agent for product ranking based on brief relevance."""
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
 
 from src.core.schemas import Product
+
+if TYPE_CHECKING:
+    from pydantic_ai import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,8 @@ def create_ranking_agent(model: Any) -> Agent[None, ProductRankingResult]:
     Returns:
         Configured Agent instance
     """
+    from pydantic_ai import Agent
+
     return Agent(
         model=model,
         output_type=ProductRankingResult,
