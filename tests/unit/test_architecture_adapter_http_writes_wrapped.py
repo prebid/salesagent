@@ -48,23 +48,56 @@ ALLOWLIST: frozenset[str] = frozenset()
 # degradation and is NOT flagged.
 HAND_ROLLED_REWRAP_ALLOWLIST: frozenset[str] = frozenset()
 
-# An ``httpx`` handler that catches ``httpx.HTTPStatusError`` (a status IS present) but re-raises a
-# directly-constructed ``AdCP*Error`` (e.g. ``AdCPAdapterError(f"...{exc}")``) hard-codes ONE recovery
-# class and discards the status — a /v1/site 4xx then surfaces transient (retry forever) instead of
-# correctable (fix the request). MUST stay empty — route the handler through
-# ``adcp_error_for_httpx_exc(exc, message)`` (the httpx dual of ``wrap_request_errors``) instead. This is
-# the httpx counterpart of HAND_ROLLED_REWRAP_ALLOWLIST and, because HTTPStatusError unambiguously carries
-# a status, it is immune to the message-form (f-string / repr / kw-arg) evasions the requests matcher
-# permits as "enriching".
+# An ``httpx`` handler that catches ``httpx.HTTPStatusError`` / its base ``httpx.HTTPError`` (a status CAN
+# be present) but re-raises a directly-constructed ``AdCP*Error`` — inline or assign-then-raise — hard-codes
+# ONE recovery class and discards the status, so a /v1/site 4xx surfaces transient (retry forever) instead
+# of correctable. MUST stay empty — route the handler through ``adcp_error_for_httpx_exc(exc, message)``
+# (the httpx dual of ``wrap_request_errors``) instead. The matcher is immune to the message form
+# (f-string / repr / kw-arg), to the assign-then-raise form, and to the base-class ``HTTPError`` catch.
+# Residual it does NOT model (accepted — contrived, no live site): an aliased import
+# (``from httpx import HTTPStatusError as HSE``), and a dead status-mapper call placed in the handler
+# alongside a real status-discarding raise purely to satisfy the routing check.
 HTTPX_STATUS_DISCARD_ALLOWLIST: frozenset[str] = frozenset()
 
 _ADAPTERS_DIR = REPO_ROOT / "src/adapters"
+
+# This PR added a buyer-facing HTTP write OUTSIDE src/adapters/: the property-list fetch in
+# src/core/property_list_resolver.py (raise_for_status, wrapped via _raise_fetch_error). The guard's
+# invariant ("an HTTP write that reaches the buyer must surface a typed AdCPError") applies there too,
+# so the scan covers src/adapters/ PLUS that file. Scoped to this file (not all of src/core/) so it
+# does not pull pre-existing unrelated HTTP-write sites into this PR's guard.
+_EXTRA_SCAN_FILES: tuple = (REPO_ROOT / "src/core/property_list_resolver.py",)
+
+
+def _iter_scan_files() -> list:
+    """Every .py file this guard scans: all of src/adapters/ + the explicit extra HTTP-write files."""
+    return sorted(_ADAPTERS_DIR.rglob("*.py")) + [f for f in _EXTRA_SCAN_FILES if f.exists()]
+
 
 # The shared status->recovery mappers (src/core/exceptions.py). An httpx-status handler is status-
 # preserving when it routes through one of these instead of constructing a fixed-recovery error.
 _STATUS_MAPPERS: frozenset[str] = frozenset({"adcp_error_for_http_status", "adcp_error_for_httpx_exc"})
 
-_HTTPX_STATUS_ERROR = "HTTPStatusError"
+# Catching the status-bearing ``HTTPStatusError`` OR its base ``HTTPError`` (which includes it) means a
+# status CAN be present, so a status-discarding re-raise is a defect. ``RequestError`` is the status-LESS
+# sibling — deliberately excluded so correct timeout/connect handlers are not false-flagged.
+_HTTPX_STATUS_CATCH_NAMES: frozenset[str] = frozenset({"HTTPStatusError", "HTTPError"})
+
+# Exception types whose catch actually intercepts a ``raise_for_status()`` transport failure. A handler
+# that raises a typed error but catches none of these (e.g. ``except KeyError``) does NOT protect the write.
+_HTTP_TRANSPORT_EXC_NAMES: frozenset[str] = frozenset(
+    {
+        "RequestException",
+        "HTTPError",
+        "ConnectionError",
+        "Timeout",
+        "RequestError",
+        "HTTPStatusError",
+        "TimeoutException",
+        "TransportError",
+        "NetworkError",
+    }
+)
 
 # The canonical home of the RequestException -> AdCPAdapterError mapping; its bare
 # ``AdCPAdapterError(str(e))`` is the SOURCE, not a hand-rolled copy.
@@ -131,14 +164,39 @@ def _handler_is_safe(handler: ast.ExceptHandler) -> bool:
     return True  # no raise in the handler -> swallowed
 
 
+def _handler_catches_http_transport(handler: ast.ExceptHandler) -> bool:
+    """True if the ``except`` can actually intercept a ``raise_for_status()`` transport failure.
+
+    A handler that RAISES a typed error only protects the write if it also CATCHES the raw exception:
+    ``except KeyError: raise AdCPAdapterError(...)`` is "safe" by the raise check yet lets the HTTPError
+    escape. A bare ``except:`` or ``except Exception``/``BaseException`` catches everything; otherwise the
+    catch-set must name an HTTP/transport exception type.
+    """
+    exc_type = handler.type
+    if exc_type is None:
+        return True  # bare ``except:`` catches the transport failure
+    candidates = exc_type.elts if isinstance(exc_type, ast.Tuple) else [exc_type]
+    for c in candidates:
+        name = c.attr if isinstance(c, ast.Attribute) else (c.id if isinstance(c, ast.Name) else None)
+        if name in _HTTP_TRANSPORT_EXC_NAMES or name in ("Exception", "BaseException"):
+            return True
+    return False
+
+
 def _try_protects(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
-    """True if some enclosing ``try`` (with ``node`` in its body) has all-safe handlers."""
+    """True if some enclosing ``try`` (with ``node`` in its body) safely intercepts the transport failure.
+
+    Requires BOTH: every handler is safe (swallows or re-raises only as a typed AdCP error), AND at least
+    one handler actually catches an HTTP/transport exception — otherwise the raw failure escapes a
+    non-transport ``except`` (e.g. ``except KeyError``) while the guard reads it as protected.
+    """
     for try_node in _enclosing(node, parents, ast.Try):
         # Only count the try if the node is in its body, not in a handler/finally.
         in_body = any(node is descendant for stmt in try_node.body for descendant in ast.walk(stmt))  # type: ignore[attr-defined]
         if not in_body or not try_node.handlers:  # type: ignore[attr-defined]
             continue
-        if all(_handler_is_safe(h) for h in try_node.handlers):  # type: ignore[attr-defined]
+        handlers = try_node.handlers  # type: ignore[attr-defined]
+        if all(_handler_is_safe(h) for h in handlers) and any(_handler_catches_http_transport(h) for h in handlers):
             return True
     return False
 
@@ -146,7 +204,7 @@ def _try_protects(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
 def collect_unwrapped_http_writes() -> list[str]:
     """Return ``path:line`` for every unprotected ``raise_for_status()`` under src/adapters."""
     unwrapped: list[str] = []
-    for filepath in sorted(_ADAPTERS_DIR.rglob("*.py")):
+    for filepath in _iter_scan_files():
         tree = safe_parse(filepath)
         if tree is None:
             continue
@@ -196,7 +254,7 @@ def collect_hand_rolled_request_exception_rewraps() -> list[str]:
     re-raises ``AdCPAdapterError(str(...))`` — the hand-rolled copy of ``wrap_request_errors``.
     Excludes the canonical helper file itself."""
     out: list[str] = []
-    for filepath in sorted(_ADAPTERS_DIR.rglob("*.py")):
+    for filepath in _iter_scan_files():
         if filepath.name == _WRAP_HELPER_FILE:
             continue
         tree = safe_parse(filepath)
@@ -213,10 +271,12 @@ def collect_hand_rolled_request_exception_rewraps() -> list[str]:
 
 
 def _handler_catches_httpx_status_error(handler: ast.ExceptHandler) -> bool:
-    """True if the ``except`` catches ``httpx.HTTPStatusError`` (alone or in a tuple).
+    """True if the ``except`` catches ``httpx.HTTPStatusError`` or its base ``httpx.HTTPError``.
 
-    Catching ``HTTPStatusError`` means an HTTP status IS present on the exception, so any
-    re-raise that does not consult that status is necessarily discarding it.
+    Catching either means a status CAN be present on the caught exception (``HTTPError`` is the base of
+    both the status-bearing ``HTTPStatusError`` and the status-less ``RequestError``), so a re-raise that
+    does not consult the status discards it for the 4xx case. ``RequestError`` alone is excluded — it
+    carries no status, so a transient re-wrap there is correct.
     """
     exc_type = handler.type
     if exc_type is None:
@@ -224,7 +284,7 @@ def _handler_catches_httpx_status_error(handler: ast.ExceptHandler) -> bool:
     candidates = exc_type.elts if isinstance(exc_type, ast.Tuple) else [exc_type]
     for c in candidates:
         name = c.attr if isinstance(c, ast.Attribute) else (c.id if isinstance(c, ast.Name) else None)
-        if name == _HTTPX_STATUS_ERROR:
+        if name in _HTTPX_STATUS_CATCH_NAMES:
             return True
     return False
 
@@ -241,20 +301,32 @@ def _handler_calls_status_mapper(handler: ast.ExceptHandler) -> bool:
 
 
 def _handler_raises_constructed_adcp_error(handler: ast.ExceptHandler) -> bool:
-    """True if the handler directly constructs and raises a typed ``AdCP*Error``.
+    """True if the handler raises a directly-constructed typed ``AdCP*Error``.
 
-    Direct construction (``raise AdCPAdapterError(...)``) hard-codes a single recovery class;
-    from an ``HTTPStatusError`` handler that means the real status is discarded. A re-raise of a
-    status mapper's RESULT (``raise adcp_error_for_httpx_exc(exc, ...)``) is a function call, not a
-    direct ``AdCP*Error`` construction, so it is not flagged. Independent of the message form
-    (f-string, ``repr``, keyword arg), so the matcher cannot be evaded by reshaping the message.
+    Two forms are caught: inline (``raise AdCPAdapterError(...)``) and assign-then-raise
+    (``err = AdCPAdapterError(...); raise err``). Direct construction hard-codes a single recovery class;
+    from an ``HTTPStatusError`` handler that discards the real status. Raising a status mapper's RESULT
+    (``raise adcp_error_for_httpx_exc(exc, ...)``) is a function call, not a direct ``AdCP*Error``
+    construction, so it is not flagged. Independent of the message form (f-string, ``repr``, keyword arg).
     """
+    # Names bound to an AdCP*Error construction in the handler body (for the assign-then-raise form).
+    adcp_bound: set[str] = set()
     for node in ast.walk(handler):
-        if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            fn = node.value.func
+            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+            if name and _is_adcp_error_name(name):
+                adcp_bound.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    for node in ast.walk(handler):
+        if not (isinstance(node, ast.Raise) and node.exc is not None):
             continue
-        fn = node.exc.func
-        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
-        if name and _is_adcp_error_name(name):
+        exc = node.exc
+        if isinstance(exc, ast.Call):
+            fn = exc.func
+            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+            if name and _is_adcp_error_name(name):
+                return True
+        elif isinstance(exc, ast.Name) and exc.id in adcp_bound:
             return True
     return False
 
@@ -263,7 +335,7 @@ def collect_status_discarding_httpx_rewraps() -> list[str]:
     """Return ``path:line`` for every adapter ``except httpx.HTTPStatusError`` handler that re-raises a
     directly-constructed ``AdCP*Error`` without routing through a shared status->recovery mapper."""
     out: list[str] = []
-    for filepath in sorted(_ADAPTERS_DIR.rglob("*.py")):
+    for filepath in _iter_scan_files():
         tree = safe_parse(filepath)
         if tree is None:
             continue
@@ -285,14 +357,14 @@ class TestAdapterHttpWritesWrapped:
         # Self-check: the scan must find raise_for_status sites, or a refactor
         # silently broke the AST walk and this guard passes vacuously.
         sites_seen = 0
-        for filepath in sorted(_ADAPTERS_DIR.rglob("*.py")):
+        for filepath in _iter_scan_files():
             tree = safe_parse(filepath)
             if tree is None:
                 continue
             sites_seen += sum(
                 1 for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "raise_for_status"
             )
-        assert sites_seen > 0, f"no raise_for_status sites found under {_ADAPTERS_DIR} — scan likely broken"
+        assert sites_seen > 0, "no raise_for_status sites found in the scan set — scan likely broken"
 
         unwrapped = sorted(set(collect_unwrapped_http_writes()) - ALLOWLIST)
         if unwrapped:
@@ -430,6 +502,23 @@ class TestAdapterHttpWritesWrapped:
             "    except httpx.HTTPStatusError as e:\n"
             "        log(e)\n"
         )
+        base_class = ast.parse(
+            "import httpx\n"
+            "def f():\n"
+            "    try:\n"
+            "        client.get('x').raise_for_status()\n"
+            "    except httpx.HTTPError as e:\n"  # base class — includes HTTPStatusError
+            "        raise AdCPAdapterError(f'failed: {e}') from e\n"
+        )
+        assign_then_raise = ast.parse(
+            "import httpx\n"
+            "def f():\n"
+            "    try:\n"
+            "        client.get('x').raise_for_status()\n"
+            "    except httpx.HTTPStatusError as e:\n"
+            "        err = AdCPAdapterError(f'failed: {e}')\n"
+            "        raise err from e\n"
+        )
 
         def _hits(tree: ast.AST) -> int:
             return sum(
@@ -445,3 +534,35 @@ class TestAdapterHttpWritesWrapped:
         assert _hits(mapped_httpx) == 0, "matcher wrongly flagged a handler routing through adcp_error_for_httpx_exc"
         assert _hits(mapped_status) == 0, "matcher wrongly flagged a handler routing through adcp_error_for_http_status"
         assert _hits(swallow) == 0, "matcher wrongly flagged a swallowing handler"
+        assert _hits(base_class) == 1, "matcher must flag the base-class httpx.HTTPError status discard"
+        assert _hits(assign_then_raise) == 1, "matcher must flag the assign-then-raise status discard"
+
+    def test_wrapping_check_requires_an_http_transport_catch(self):
+        # A handler that re-raises a typed AdCP error but catches a NON-transport type (KeyError) does not
+        # actually intercept the raise_for_status failure — the raw HTTPError escapes. _try_protects must
+        # NOT treat it as protected; a real transport catch (RequestException) must.
+        import textwrap
+
+        def _protected(src: str) -> bool:
+            tree = ast.parse(textwrap.dedent(src))
+            parents = _build_parents(tree)
+            rfs = next(n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "raise_for_status")
+            return _try_protects(rfs, parents)
+
+        wrong_catch = """
+            def f():
+                try:
+                    resp.raise_for_status()
+                except KeyError:
+                    raise AdCPAdapterError("nope")
+        """
+        http_catch = """
+            import requests
+            def f():
+                try:
+                    resp.raise_for_status()
+                except requests.exceptions.RequestException:
+                    raise AdCPAdapterError("wrapped")
+        """
+        assert not _protected(wrong_catch), "a KeyError catch must not count as protecting the HTTP write"
+        assert _protected(http_catch), "a RequestException catch + typed raise must protect the HTTP write"
