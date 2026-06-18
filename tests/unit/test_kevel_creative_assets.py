@@ -50,6 +50,17 @@ def _image_asset(creative_id: str = "cr_1", package_id: str = "pkg_1") -> dict:
     }
 
 
+def _status_get_mock(status_code: int) -> MagicMock:
+    """A ``requests.get`` replacement whose GET /flight response.raise_for_status() raises an
+    HTTPError carrying ``status_code`` — exercising wrap_request_errors' status->AdCPError mapping
+    (429->AdCPRateLimitError, 4xx->AdCPValidationError, 5xx->AdCPAdapterError)."""
+    response = MagicMock(status_code=status_code)
+    http_error = requests.exceptions.HTTPError(str(status_code))
+    http_error.response = response
+    response.raise_for_status = MagicMock(side_effect=http_error)
+    return MagicMock(return_value=response)
+
+
 class TestAddCreativeAssetsFlightFetchFold:
     """The fold preserves graceful degradation and corrects the campaignId prefix."""
 
@@ -77,12 +88,23 @@ class TestAddCreativeAssetsFlightFetchFold:
         assert kwargs["params"] == {"campaignId": "PO1"}, "campaignId must strip the kevel_ prefix"
         assert [s.status for s in result] == ["approved"]
 
-    def test_flight_fetch_outage_still_degrades_gracefully(self):
-        # The shared fetch raises AdCPAdapterError (wrap_request_errors) on a transport outage,
-        # not the bare RequestException the local copy raised. The widened handler must catch it
-        # and mark assets failed — a regression to the un-widened except would propagate instead.
+    @pytest.mark.parametrize(
+        ("get_mock", "label"),
+        [
+            (MagicMock(side_effect=requests.exceptions.ConnectionError("kevel down")), "outage->AdCPAdapterError"),
+            (_status_get_mock(429), "429->AdCPRateLimitError"),
+            (_status_get_mock(403), "403->AdCPValidationError"),
+            (_status_get_mock(503), "503->AdCPAdapterError"),
+        ],
+    )
+    def test_flight_fetch_failure_always_degrades_gracefully(self, get_mock, label):
+        # _fetch_campaign_flights' status-aware wrap maps each failure to a DIFFERENT AdCPError
+        # subclass (429->RateLimit, 4xx->Validation, 5xx/outage->Adapter). All must degrade to
+        # "failed", not escape add_creative_assets' per-asset status contract. A regression to
+        # `except (RequestException, AdCPAdapterError)` reddens the 429 and 403 arms (neither class
+        # is an AdCPAdapterError subclass) while leaving the outage/503 arms green.
         adapter = _kevel()
-        with patch("src.adapters.kevel.requests.get", side_effect=requests.exceptions.ConnectionError("kevel down")):
+        with patch("src.adapters.kevel.requests.get", get_mock):
             result = adapter.add_creative_assets("kevel_PO1", [_image_asset()], datetime(2026, 6, 1, tzinfo=UTC))
 
-        assert [s.status for s in result] == ["failed"], "a flight-fetch outage must degrade gracefully, not raise"
+        assert [s.status for s in result] == ["failed"], f"{label}: a flight-fetch failure must degrade, not escape"

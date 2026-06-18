@@ -14,8 +14,8 @@ from src.adapters.kevel_site_resolver import (
 )
 from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
+    AdCPError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -653,8 +653,9 @@ class Kevel(AdServerAdapter):
                 # Map package names to flight IDs via the shared campaign-flights fetch.
                 # ``kevel_`` is stripped to match the campaignId convention every other
                 # flight-fetch path uses (update_package_targeting, update_media_buy); the
-                # shared fetch raises AdCPAdapterError on a transport failure, caught with
-                # RequestException below so an outage still degrades gracefully.
+                # shared fetch's status-aware wrap raises a typed AdCPError (429 rate-limit,
+                # 4xx validation, 5xx/outage adapter), all caught below so any flight-fetch
+                # failure degrades gracefully rather than escaping the per-asset status contract.
                 flight_map = {
                     flight["Name"]: flight["Id"]
                     for flight in self._fetch_campaign_flights(media_buy_id.replace("kevel_", ""))
@@ -703,10 +704,12 @@ class Kevel(AdServerAdapter):
 
                     created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
 
-            except (requests.exceptions.RequestException, AdCPAdapterError) as e:
+            except (requests.exceptions.RequestException, AdCPError) as e:
                 # RequestException covers the per-creative POST /creative and POST /ad calls;
-                # AdCPAdapterError covers the shared _fetch_campaign_flights wrap. Both degrade
-                # gracefully — the buy's other creatives are unaffected by one transport failure.
+                # AdCPError covers EVERY typed failure the shared _fetch_campaign_flights wrap can
+                # produce — AdCPRateLimitError (429), AdCPValidationError (4xx), AdCPAdapterError
+                # (5xx/outage) — not just the 5xx subtype. All degrade gracefully so one flight-fetch
+                # failure marks assets "failed" rather than escaping the per-asset status contract.
                 self.log(f"Error creating Kevel Creative or Ad: {e}")
                 for asset in assets:
                     if not any(s.creative_id == asset["creative_id"] for s in created_asset_statuses):
