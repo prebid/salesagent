@@ -6,19 +6,23 @@ loudly instead of silently (Pattern 3, #1455).
 
 from __future__ import annotations
 
-import re
+import ast
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
 
-from tests.unit._architecture_helpers import repo_root
+from scripts.ci.workflow_helpers import load_ci_workflow
+from tests.unit._architecture_helpers import (
+    iter_pre_commit_hooks,
+    parse_module,
+    repo_root,
+)
 
 COVERAGE_MAP_PATH = Path(".pre-commit-coverage-map.yml")
-PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
 MAKEFILE_PATH = Path("Makefile")
-CI_WORKFLOW_PATH = Path(".github/workflows/ci.yml")
 
 ALLOWED_ENFORCED_BY = frozenset(
     {
@@ -37,29 +41,36 @@ ALLOWED_ENFORCED_BY = frozenset(
 _REQUIRED_KEYS = frozenset({"enforced_by", "location"})
 
 
-def _load_coverage_map(path: Path = COVERAGE_MAP_PATH) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+def _load_coverage_map(path: Path | None = None) -> dict[str, Any]:
+    map_path = path or (repo_root() / COVERAGE_MAP_PATH)
+    return yaml.safe_load(map_path.read_text(encoding="utf-8"))
 
 
-def _pre_commit_hook_ids(cfg_path: Path = PRE_COMMIT_CONFIG_PATH) -> set[str]:
-    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    return {hook["id"] for repo in cfg["repos"] for hook in repo["hooks"]}
+def _pre_commit_hook_ids(cfg_path: Path | None = None) -> set[str]:
+    return {hook["id"] for hook in iter_pre_commit_hooks(path=cfg_path)}
 
 
-def _pre_commit_hook_scripts(cfg_path: Path = PRE_COMMIT_CONFIG_PATH) -> dict[str, list[str]]:
+def _pre_commit_hook_entries(cfg_path: Path | None = None) -> dict[str, str]:
+    return {hook["id"]: hook["entry"] for hook in iter_pre_commit_hooks(path=cfg_path)}
+
+
+def _pre_commit_hook_scripts(cfg_path: Path | None = None) -> dict[str, list[str]]:
     """Map hook id → script basenames referenced by the hook entry command."""
-    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     scripts: dict[str, list[str]] = {}
-    for repo in cfg["repos"]:
-        for hook in repo["hooks"]:
-            entry = hook.get("entry", "")
-            basenames = [Path(part).name for part in entry.split() if part.endswith(".py")]
-            scripts[hook["id"]] = basenames
+    for hook in iter_pre_commit_hooks(path=cfg_path):
+        entry = hook["entry"]
+        basenames = [Path(part).name for part in entry.split() if part.endswith(".py")]
+        scripts[hook["id"]] = basenames
     return scripts
 
 
-def _makefile_quality_ci_body(makefile_path: Path = MAKEFILE_PATH) -> str:
-    lines = makefile_path.read_text(encoding="utf-8").splitlines()
+def _pre_commit_hook_stages(cfg_path: Path | None = None) -> dict[str, list[str]]:
+    return {hook["id"]: hook["stages"] for hook in iter_pre_commit_hooks(path=cfg_path)}
+
+
+def _makefile_quality_ci_body(makefile_path: Path | None = None) -> str:
+    path = makefile_path or (repo_root() / MAKEFILE_PATH)
+    lines = path.read_text(encoding="utf-8").splitlines()
     body: list[str] = []
     in_target = False
     for line in lines:
@@ -73,17 +84,40 @@ def _makefile_quality_ci_body(makefile_path: Path = MAKEFILE_PATH) -> str:
     return "\n".join(body)
 
 
-def _schema_contract_job_text(ci_path: Path = CI_WORKFLOW_PATH) -> str:
-    text = ci_path.read_text(encoding="utf-8")
-    match = re.search(r"^  schema-contract:\n(.*?)(?=^  \w|\Z)", text, flags=re.MULTILINE | re.DOTALL)
-    assert match, "schema-contract job not found in ci.yml"
-    return match.group(1)
+def _schema_contract_pytest_paths(workflow: dict[str, Any] | None = None) -> list[str]:
+    jobs = (workflow or load_ci_workflow())["jobs"]
+    job = jobs["schema-contract"]
+    paths: list[str] = []
+    for step in job.get("steps", []):
+        uses = step.get("uses", "")
+        if not str(uses).endswith("_pytest"):
+            continue
+        path = step.get("with", {}).get("paths")
+        if path:
+            paths.append(str(path))
+    assert paths, "schema-contract job must declare pytest paths"
+    return paths
 
 
-def _guard_location_path(location: str) -> Path:
-    """Strip ``::test_name`` suffix and return repo-relative guard file path."""
-    file_part = location.split("::", 1)[0]
-    return Path(file_part)
+def _guard_location_parts(location: str) -> tuple[Path, str | None]:
+    """Return repo-relative guard file path and optional ``::test_name`` suffix."""
+    if "::" in location:
+        file_part, test_name = location.split("::", 1)
+        return Path(file_part), test_name
+    return Path(location), None
+
+
+def _guard_test_exists(repo: Path, location: str) -> bool:
+    path, test_name = _guard_location_parts(location)
+    if test_name is None:
+        return True
+    guard_file = repo / path
+    if not guard_file.is_file():
+        return False
+    tree = parse_module(guard_file)
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == test_name for node in ast.walk(tree)
+    )
 
 
 def _hook_script_names(hook_id: str, hook_scripts: dict[str, list[str]]) -> list[str]:
@@ -95,6 +129,13 @@ def _hook_script_names(hook_id: str, hook_scripts: dict[str, list[str]]) -> list
 
 def _script_in_quality_ci(hook_id: str, quality_ci: str, hook_scripts: dict[str, list[str]]) -> bool:
     return any(name in quality_ci for name in _hook_script_names(hook_id, hook_scripts))
+
+
+def _pytest_paths_from_hook_entry(entry: str) -> list[str]:
+    """Extract pytest file/dir targets from a hook entry command."""
+    if "pytest" not in entry:
+        return []
+    return [part for part in entry.split() if part.startswith("tests/")]
 
 
 def _validate_entry_schema(hook_id: str, entry: Any) -> list[str]:
@@ -116,18 +157,23 @@ def _validate_entry_references(
     *,
     repo: Path,
     hook_ids: set[str],
+    hook_entries: dict[str, str],
     hook_scripts: dict[str, list[str]],
+    hook_stages: dict[str, list[str]],
     quality_ci: str,
-    schema_contract: str,
+    schema_contract_paths: list[str],
 ) -> list[str]:
     errors: list[str] = []
     enforced_by = entry["enforced_by"]
     location = str(entry["location"])
 
     if enforced_by in {"guard", "guard-existing"}:
-        path = repo / _guard_location_path(location)
-        if not path.is_file():
-            errors.append(f"{hook_id}: guard location missing: {path.relative_to(repo)}")
+        path, test_name = _guard_location_parts(location)
+        guard_file = repo / path
+        if not guard_file.is_file():
+            errors.append(f"{hook_id}: guard location missing: {path}")
+        elif test_name is not None and not _guard_test_exists(repo, location):
+            errors.append(f"{hook_id}: guard test missing: {location}")
 
     if enforced_by in {"ci-step", "pre-push + ci-step"}:
         if "Makefile::quality-ci" not in location:
@@ -138,18 +184,17 @@ def _validate_entry_references(
     if enforced_by in {"pre-push", "pre-push + ci-step", "pre-push + ci"}:
         if hook_id not in hook_ids:
             errors.append(f"{hook_id}: pre-push hook id missing from .pre-commit-config.yaml")
+        elif "stages_prepush" in location and "pre-push" not in hook_stages.get(hook_id, []):
+            errors.append(f"{hook_id}: location claims stages_prepush but hook lacks pre-push stage")
 
-    if enforced_by == "pre-push + ci":
+    if enforced_by in {"pre-push + ci", "ci"}:
         if "schema-contract" not in location:
-            errors.append(f"{hook_id}: pre-push + ci location must reference schema-contract job")
-        elif hook_id == "adcp-contract-tests" and "test_adcp_contract.py" not in schema_contract:
-            errors.append(f"{hook_id}: schema-contract job must run test_adcp_contract.py")
-
-    if enforced_by == "ci":
-        if "schema-contract" not in location:
-            errors.append(f"{hook_id}: ci location must reference schema-contract job")
-        elif hook_id == "mcp-contract-validation" and "test_mcp_contract_validation.py" not in schema_contract:
-            errors.append(f"{hook_id}: schema-contract job must run test_mcp_contract_validation.py")
+            errors.append(f"{hook_id}: {enforced_by} location must reference schema-contract job")
+        else:
+            expected_paths = _pytest_paths_from_hook_entry(hook_entries.get(hook_id, ""))
+            for expected in expected_paths:
+                if expected not in schema_contract_paths:
+                    errors.append(f"{hook_id}: schema-contract job must run {expected} (from hook entry)")
 
     return errors
 
@@ -159,16 +204,21 @@ def validate_coverage_map(
     *,
     repo: Path | None = None,
     hook_ids: set[str] | None = None,
+    hook_entries: dict[str, str] | None = None,
     hook_scripts: dict[str, list[str]] | None = None,
+    hook_stages: dict[str, list[str]] | None = None,
     quality_ci: str | None = None,
-    schema_contract: str | None = None,
+    schema_contract_paths: list[str] | None = None,
 ) -> list[str]:
     """Return all schema and referential-integrity errors for *coverage_map*."""
     root = repo or repo_root()
-    hooks = hook_ids if hook_ids is not None else _pre_commit_hook_ids(root / PRE_COMMIT_CONFIG_PATH)
-    scripts = hook_scripts if hook_scripts is not None else _pre_commit_hook_scripts(root / PRE_COMMIT_CONFIG_PATH)
+    cfg_path = root / Path(".pre-commit-config.yaml")
+    hooks = hook_ids if hook_ids is not None else _pre_commit_hook_ids(cfg_path)
+    entries = hook_entries if hook_entries is not None else _pre_commit_hook_entries(cfg_path)
+    scripts = hook_scripts if hook_scripts is not None else _pre_commit_hook_scripts(cfg_path)
+    stages = hook_stages if hook_stages is not None else _pre_commit_hook_stages(cfg_path)
     ci_body = quality_ci if quality_ci is not None else _makefile_quality_ci_body(root / MAKEFILE_PATH)
-    contract = schema_contract if schema_contract is not None else _schema_contract_job_text(root / CI_WORKFLOW_PATH)
+    contract_paths = schema_contract_paths if schema_contract_paths is not None else _schema_contract_pytest_paths()
 
     errors: list[str] = []
     for hook_id, entry in coverage_map.items():
@@ -180,9 +230,11 @@ def validate_coverage_map(
                     entry,
                     repo=root,
                     hook_ids=hooks,
+                    hook_entries=entries,
                     hook_scripts=scripts,
+                    hook_stages=stages,
                     quality_ci=ci_body,
-                    schema_contract=contract,
+                    schema_contract_paths=contract_paths,
                 )
             )
     return errors
@@ -211,24 +263,127 @@ def test_coverage_map_prepush_ci_step_entries() -> None:
         assert "Makefile::quality-ci" in entry["location"], hook_id
 
 
+@dataclass(frozen=True)
+class _BrokenEntryProbe:
+    hook_id: str
+    entry: Any
+    expected_substr: str
+    hook_ids: set[str] | None = None
+    hook_entries: dict[str, str] | None = None
+    hook_scripts: dict[str, list[str]] | None = None
+    hook_stages: dict[str, list[str]] | None = None
+    quality_ci: str | None = None
+    schema_contract_paths: list[str] | None = None
+
+
+_BROKEN_ENTRY_PROBES = (
+    _BrokenEntryProbe("scalar-entry", "not-a-mapping", "entry must be a mapping"),
+    _BrokenEntryProbe("missing-keys", {}, "missing keys"),
+    _BrokenEntryProbe(
+        "bad-enforced-by",
+        {"enforced_by": "bogus", "location": "nowhere"},
+        "invalid enforced_by",
+    ),
+    _BrokenEntryProbe(
+        "phantom-guard",
+        {"enforced_by": "guard", "location": "tests/unit/test_architecture_does_not_exist.py"},
+        "guard location missing",
+    ),
+    _BrokenEntryProbe(
+        "phantom-guard-test",
+        {
+            "enforced_by": "guard",
+            "location": "tests/unit/test_architecture_pre_commit_coverage_map.py::test_does_not_exist",
+        },
+        "guard test missing",
+    ),
+    _BrokenEntryProbe(
+        "ci-step-no-makefile",
+        {"enforced_by": "ci-step", "location": "nowhere"},
+        "ci-step location must reference Makefile::quality-ci",
+    ),
+    _BrokenEntryProbe(
+        "ci-step-no-script",
+        {"enforced_by": "ci-step", "location": "Makefile::quality-ci"},
+        "no matching script for hook",
+        quality_ci="",
+    ),
+    _BrokenEntryProbe(
+        "phantom-prepush",
+        {"enforced_by": "pre-push", "location": "stages_prepush"},
+        "pre-push hook id missing",
+        hook_ids=set(),
+    ),
+    _BrokenEntryProbe(
+        "prepush-stage-mismatch",
+        {
+            "enforced_by": "pre-push + ci-step",
+            "location": "stages_prepush + Makefile::quality-ci",
+        },
+        "location claims stages_prepush but hook lacks pre-push stage",
+        hook_ids={"prepush-stage-mismatch"},
+        hook_stages={"prepush-stage-mismatch": ["commit"]},
+        hook_scripts={"prepush-stage-mismatch": ["check_docs_links.py"]},
+        quality_ci="check_docs_links.py",
+    ),
+    _BrokenEntryProbe(
+        "prepush-ci-no-job",
+        {"enforced_by": "pre-push + ci", "location": "stages_prepush"},
+        "location must reference schema-contract job",
+        hook_ids={"prepush-ci-no-job"},
+        hook_stages={"prepush-ci-no-job": ["pre-push"]},
+        hook_entries={"prepush-ci-no-job": "uv run pytest tests/unit/test_adcp_contract.py"},
+    ),
+    _BrokenEntryProbe(
+        "prepush-ci-missing-test",
+        {
+            "enforced_by": "pre-push + ci",
+            "location": "stages_prepush + .github/workflows/ci.yml::schema-contract",
+        },
+        "schema-contract job must run tests/unit/test_adcp_contract.py",
+        hook_ids={"prepush-ci-missing-test"},
+        hook_stages={"prepush-ci-missing-test": ["pre-push"]},
+        hook_entries={"prepush-ci-missing-test": "uv run pytest tests/unit/test_adcp_contract.py"},
+        schema_contract_paths=["tests/integration/test_mcp_contract_validation.py"],
+    ),
+    _BrokenEntryProbe(
+        "ci-no-job",
+        {"enforced_by": "ci", "location": "nowhere"},
+        "location must reference schema-contract job",
+    ),
+    _BrokenEntryProbe(
+        "ci-missing-test",
+        {
+            "enforced_by": "ci",
+            "location": ".github/workflows/ci.yml::schema-contract",
+        },
+        "schema-contract job must run tests/unit/test_adcp_contract.py",
+        hook_entries={"ci-missing-test": "uv run pytest tests/unit/test_adcp_contract.py"},
+        schema_contract_paths=["tests/integration/test_mcp_contract_validation.py"],
+    ),
+)
+
+
 @pytest.mark.arch_guard
-def test_coverage_map_parser_catches_broken_guard_location() -> None:
-    """Self-test: a phantom guard path must fail validation."""
+@pytest.mark.parametrize("probe", _BROKEN_ENTRY_PROBES, ids=lambda p: p.hook_id)
+def test_coverage_map_parser_catches_broken_entries(probe: _BrokenEntryProbe, tmp_path: Path) -> None:
+    """Self-test: each validation branch must fail on a deliberately broken entry."""
     repo = repo_root()
-    probe = repo / ".pre-commit-coverage-map.probe.yml"
-    probe.write_text(
-        yaml.safe_dump(
-            {
-                "phantom-guard": {
-                    "enforced_by": "guard",
-                    "location": "tests/unit/test_architecture_does_not_exist.py",
-                }
-            }
-        ),
+    probe_path = tmp_path / "probe.yml"
+    probe_path.write_text(
+        yaml.safe_dump({probe.hook_id: probe.entry}),
         encoding="utf-8",
     )
-    try:
-        errors = validate_coverage_map(_load_coverage_map(probe), repo=repo)
-        assert any("phantom-guard" in e and "missing" in e for e in errors)
-    finally:
-        probe.unlink(missing_ok=True)
+    errors = validate_coverage_map(
+        _load_coverage_map(probe_path),
+        repo=repo,
+        hook_ids=probe.hook_ids,
+        hook_entries=probe.hook_entries,
+        hook_scripts=probe.hook_scripts,
+        hook_stages=probe.hook_stages,
+        quality_ci=probe.quality_ci,
+        schema_contract_paths=probe.schema_contract_paths,
+    )
+    assert any(probe.expected_substr in e for e in errors), (
+        f"expected error containing {probe.expected_substr!r}, got: {errors}"
+    )
