@@ -297,6 +297,16 @@ Source: UC-002-main-mcp.md
 **Business Rule:** BR-RULE-018 INV-1
 **Priority:** P0
 
+#### Scenario: Auto-Approve -- ObjectWorkflowMapping Persisted Before Push Notification
+**Obligation ID** UC-002-MAIN-22
+**Layer** behavioral
+**Given** auto-approval path
+**When** the system completes the media buy and calls `update_workflow_step(status="completed")`
+**Then** an `ObjectWorkflowMapping` row linking the workflow step to the media buy is persisted in the database BEFORE `update_workflow_step` is called
+**And** `link_workflow_to_object` is invoked with `object_type="media_buy"` and the correct `object_id`
+**Business Rule:** BR-RULE-020 (regression: issue #1378 — silent webhook drop on auto-approve path)
+**Priority:** P0
+
 ---
 
 ### 3.6 Upgrade: Boundary Field Propagation (salesagent-7gnv)
