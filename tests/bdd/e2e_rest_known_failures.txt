@@ -60,8 +60,6 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_part
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_before_end-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_equals_end-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_identification_mode_resolution__mode[e2e_rest-both provided-media_buy_ids=["mb-001"] buyer_refs=["ref-001"]-INV-3: media_buy_ids wins, buyer_refs ignored]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_identification_mode_resolution__mode[e2e_rest-buyer_refs only-buyer_refs=["ref-001"]-INV-2: resolves by buyer refs]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_identification_mode_resolution__mode[e2e_rest-media_buy_ids only-media_buy_ids=["mb-001"]-INV-1: resolves by publisher IDs]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-false (explicit)-false-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-omitted (absent from request)-(field absent)-valid]
