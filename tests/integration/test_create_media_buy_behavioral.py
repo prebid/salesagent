@@ -26,7 +26,7 @@ OBLIGATION COVERAGE:
   UC-002-EXT-I-03, UC-002-EXT-J-02, UC-002-EXT-K-03
   UC-002-EXT-L-01, -02, -03, UC-002-EXT-M-01, -03
   UC-002-EXT-N-02, UC-002-EXT-O-01, UC-002-EXT-Q-01, -02
-  UC-002-MAIN-01, -03, -04, -05, -09, -10, -14, -15, -17, -20
+  UC-002-MAIN-01, -03, -04, -05, -09, -10, -14, -15, -17, -20, -22
   UC-002-POST-01, -03, UC-002-PRECOND-01, -02
   UC-002-UPG-01, -02, -04, -07, -09
 
@@ -716,14 +716,16 @@ class TestMainFlowObligations:
         assert result.response.media_buy_id is not None
 
     def test_auto_approve_calls_link_workflow_to_object(self, integration_db):
-        """Auto-approve path calls link_workflow_to_object before update_workflow_step.
+        """Auto-approve path persists ObjectWorkflowMapping before update_workflow_step.
 
         Regression test for issue #1378: on the auto-approve path no ObjectWorkflowMapping
         row was created before update_workflow_step() triggered _send_push_notifications,
         causing the webhook to be silently dropped.
 
-        Covers: UC-002-MAIN-01 (push notification delivery on auto-approve)
+        Covers: UC-002-MAIN-22
         """
+        from src.core.database.repositories.workflow import WorkflowRepository
+
         req = _make_request()
 
         with _env() as env:
@@ -741,7 +743,9 @@ class TestMainFlowObligations:
                 tenant_id=ANY,
             )
             # link_workflow_to_object must be called BEFORE update_workflow_step("completed")
-            link_call_idx = next(i for i, c in enumerate(ctx_mgr_mock.method_calls) if c[0] == "link_workflow_to_object")
+            link_call_idx = next(
+                i for i, c in enumerate(ctx_mgr_mock.method_calls) if c[0] == "link_workflow_to_object"
+            )
             complete_call_idx = next(
                 i
                 for i, c in enumerate(ctx_mgr_mock.method_calls)
@@ -750,6 +754,11 @@ class TestMainFlowObligations:
             assert link_call_idx < complete_call_idx, (
                 "link_workflow_to_object must be called before update_workflow_step(status='completed')"
             )
+            # Production-state assertion: the ObjectWorkflowMapping row must actually
+            # be persisted in the DB (the harness runs the real link_workflow_to_object).
+            repo = WorkflowRepository(env._session, tenant_id=tenant.tenant_id)
+            mapping = repo.get_latest_mapping_for_object("media_buy", result.response.media_buy_id)
+            assert mapping is not None, "ObjectWorkflowMapping row was not persisted for the auto-approved media buy"
 
     @pytest.mark.asyncio
     async def test_authentication_extracts_principal_id(self):
