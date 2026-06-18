@@ -14,6 +14,7 @@ from src.adapters.kevel_site_resolver import (
 )
 from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
+    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
@@ -649,13 +650,15 @@ class Kevel(AdServerAdapter):
                 created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
         else:
             try:
-                # Get all flights for the campaign to map package names to flight IDs
-                flights_response = requests.get(
-                    f"{self.base_url}/flight", headers=self.headers, params={"campaignId": media_buy_id}
-                )
-                flights_response.raise_for_status()
-                flights = flights_response.json().get("items", [])
-                flight_map = {flight["Name"]: flight["Id"] for flight in flights}
+                # Map package names to flight IDs via the shared campaign-flights fetch.
+                # ``kevel_`` is stripped to match the campaignId convention every other
+                # flight-fetch path uses (update_package_targeting, update_media_buy); the
+                # shared fetch raises AdCPAdapterError on a transport failure, caught with
+                # RequestException below so an outage still degrades gracefully.
+                flight_map = {
+                    flight["Name"]: flight["Id"]
+                    for flight in self._fetch_campaign_flights(media_buy_id.replace("kevel_", ""))
+                }
 
                 for asset in assets:
                     creative_payload = {
@@ -700,7 +703,10 @@ class Kevel(AdServerAdapter):
 
                     created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
 
-            except requests.exceptions.RequestException as e:
+            except (requests.exceptions.RequestException, AdCPAdapterError) as e:
+                # RequestException covers the per-creative POST /creative and POST /ad calls;
+                # AdCPAdapterError covers the shared _fetch_campaign_flights wrap. Both degrade
+                # gracefully — the buy's other creatives are unaffected by one transport failure.
                 self.log(f"Error creating Kevel Creative or Ad: {e}")
                 for asset in assets:
                     if not any(s.creative_id == asset["creative_id"] for s in created_asset_statuses):
