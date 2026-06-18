@@ -1522,13 +1522,6 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
     packages: list[PackageRequest] | None = None
 
-    # Local compat field: the forward-compatible name for the deprecated
-    # ``campaign_ref`` per BR-COMPAT-001 (the request-compat layer renames
-    # campaign_ref -> buyer_campaign_ref). NOT present in adcp 5.7 SDK or pin
-    # 04f59d2d5 — declared here so strict extra='forbid' validation accepts it
-    # and it round-trips to raw_request, mirroring GetMediaBuysMediaBuy.
-    buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
-
     @model_validator(mode="after")
     def validate_timezone_aware(self):
         """Validate that datetime fields are timezone-aware.

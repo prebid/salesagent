@@ -4160,7 +4160,6 @@ def _build_create_media_buy_request(
     start_time: str | None,
     end_time: str | None,
     po_number: str | None,
-    buyer_campaign_ref: str | None,
     reporting_webhook: ReportingWebhook | None,
     context: ContextObject | None,
     ext: dict[str, Any] | None,
@@ -4186,7 +4185,6 @@ def _build_create_media_buy_request(
             start_time=start_time,
             end_time=end_time,
             po_number=po_number,
-            buyer_campaign_ref=buyer_campaign_ref,
             reporting_webhook=reporting_webhook,
             context=context,
             ext=ext,
@@ -4212,15 +4210,6 @@ async def create_media_buy(
     ] = None,
     end_time: Annotated[str | None, Field(description="Campaign end time in ISO 8601 format")] = None,
     po_number: Annotated[str | None, Field(description="Purchase order number for billing reference")] = None,
-    buyer_campaign_ref: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Buyer campaign reference. Forward-compatible name for the deprecated "
-                "campaign_ref (renamed by the request-compat layer per BR-COMPAT-001)."
-            ),
-        ),
-    ] = None,
     reporting_webhook: ReportingWebhook | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
@@ -4283,7 +4272,6 @@ async def create_media_buy(
         start_time=start_time,
         end_time=end_time,
         po_number=po_number,
-        buyer_campaign_ref=buyer_campaign_ref,
         reporting_webhook=reporting_webhook,
         context=context,
         ext=ext,
@@ -4321,7 +4309,6 @@ async def create_media_buy_raw(
     start_time: str | None = None,  # ISO 8601 or 'asap' - REQUIRED per AdCP spec
     end_time: str | None = None,  # ISO 8601 - REQUIRED per AdCP spec
     po_number: str | None = None,
-    buyer_campaign_ref: str | None = None,  # forward-compat name for deprecated campaign_ref (BR-COMPAT-001)
     reporting_webhook: ReportingWebhook | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
@@ -4365,7 +4352,6 @@ async def create_media_buy_raw(
         start_time=start_time,
         end_time=end_time,
         po_number=po_number,
-        buyer_campaign_ref=buyer_campaign_ref,
         reporting_webhook=to_reporting_webhook(reporting_webhook),
         context=to_context_object(context),
         ext=ext,
