@@ -89,11 +89,19 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """Create the full dependency chain needed for create_media_buy.
 
         Creates: tenant (with auto CurrencyLimit USD), principal,
-        PropertyTag ("all_inventory"), Product with PricingOption.
+        PropertyTag ("all_inventory"), Product with PricingOption, and one
+        verified AuthorizedProperty.
 
         Returns (tenant, principal, product, pricing_option).
         """
+        from tests.factories import AuthorizedPropertyFactory
+
         tenant, principal = self.setup_default_data()
+        # Satisfy the create_media_buy setup-checklist "Authorized Properties"
+        # gate. In-process transports skip it via the testing context, but the
+        # live e2e_rest server enforces it (validate_setup_complete), so a
+        # fully-set-up tenant needs at least one authorized property.
+        AuthorizedPropertyFactory(tenant=tenant)
         product, pricing_option = self.setup_product_chain(tenant)
         return tenant, principal, product, pricing_option
 
@@ -137,10 +145,12 @@ class MediaBuyCreateEnv(IntegrationEnv):
         return product, pricing_option
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
-        """Mock context manager that delegates create_context / create_workflow_step to the REAL one.
+        """Mock context manager that delegates create_context / create_workflow_step /
+        link_workflow_to_object to the REAL one.
 
-        Persisting real Context / WorkflowStep rows lets the manual-approval path satisfy
-        the ObjectWorkflowMapping foreign keys while the other ContextManager methods stay mocked.
+        Persisting real Context / WorkflowStep / ObjectWorkflowMapping rows lets both
+        the manual-approval path and the auto-approve path satisfy the FK constraints
+        that _send_push_notifications relies on to deliver webhooks.
         """
         from src.core.context_manager import get_context_manager
 
@@ -171,10 +181,14 @@ class MediaBuyCreateEnv(IntegrationEnv):
                 is_async=kwargs.get("is_async", True),
             )
 
+        def _link_workflow_to_object(*_args: Any, **kwargs: Any):
+            return real.link_workflow_to_object(**kwargs)
+
         mgr.create_context.side_effect = _create_context
         mgr.get_context.return_value = None
         mgr.create_workflow_step.side_effect = _create_workflow_step
         mgr.get_or_create_context.side_effect = _get_or_create_context
+        mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
         mgr.update_workflow_step.return_value = None
         mgr.add_message.return_value = None
         return mgr

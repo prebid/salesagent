@@ -2575,6 +2575,85 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             assert mb_id is not None, f"Valid {field}: delivery missing media_buy_id"
 
 
+def _assert_error_outcome(ctx: dict, code: str, field: str, *, require_suggestion: bool) -> None:
+    """Reference error assertion (clean scenario -> step -> harness path).
+
+    The SCENARIO names the expected wire error CODE (its Examples `expected` column);
+    this step asserts the harness-normalized two-layer envelope carries it, with the
+    ``recovery`` the AdCP schema classifies for that code. No transport awareness, no
+    per-field hard-coding, no reconstruction:
+      * the expected code comes from the scenario,
+      * the recovery comes from the schema (``STANDARD_ERROR_CODES`` mirrors
+        adcp error-code.json),
+      * the envelope comes from the harness (``ctx["wire_error_envelope"]``, populated
+        per-transport by the dispatcher — REST body / MCP ToolError JSON / A2A artifact
+        / e2e HTTP), so the same assertion holds on every transport.
+    """
+    from adcp.server.helpers import STANDARD_ERROR_CODES
+
+    from tests.helpers import assert_envelope_shape
+
+    spec = STANDARD_ERROR_CODES.get(code)
+    assert spec is not None, f"{code!r} is not a standard AdCP error code (error-code.json)"
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, (
+        f"Expected {field} rejected with {code}, but the operation succeeded — no wire error "
+        f"envelope. response={ctx.get('response')!r}"
+    )
+    assert_envelope_shape(envelope, code, recovery=spec["recovery"])
+    if require_suggestion:
+        assert envelope.get("adcp_error", {}).get("suggestion"), (
+            f"Expected a suggestion in the {code} envelope for {field}: {envelope}"
+        )
+
+
+def _assert_wire_rejection(ctx: dict, field: str) -> None:
+    """Generic 'invalid' fallback for fields whose Examples do not YET name a specific
+    error code (migration to ``error "<CODE>"`` pending — attribution_window is the
+    migrated reference). Asserts a well-formed two-layer AdCP CLIENT rejection on the
+    wire: not a server fault (INTERNAL_ERROR / transient) and not an auth failure. The
+    precise code/recovery is asserted only once the scenario carries it.
+    """
+    envelope = ctx.get("wire_error_envelope")
+    if isinstance(envelope, dict) and "adcp_error" in envelope:
+        layer = envelope["adcp_error"]
+        code = layer.get("code")
+        recovery = layer.get("recovery")
+        # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
+        # INTERNAL_ERROR / CONFIGURATION_ERROR to SERVICE_UNAVAILABLE, and the base
+        # AdCPError default recovery is "terminal" — so a {SERVICE_UNAVAILABLE,
+        # terminal} server fault would otherwise pass as a field rejection. (#1420 should-fix)
+        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "AUTH_REQUIRED", "AUTH_TOKEN_INVALID"}, (
+            f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
+            f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
+        )
+        assert recovery in ("correctable", "terminal"), (
+            f"Invalid {field}: expected a client rejection (recovery correctable/terminal), got "
+            f"recovery={recovery!r} — a transient server fault is not a rejection. Envelope: {envelope}"
+        )
+        return
+
+    # Legacy fallback — no wire envelope captured (bare in-process exception).
+    from pydantic import ValidationError
+
+    from src.core.exceptions import AdCPError
+
+    assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
+    error = ctx["error"]
+    assert isinstance(error, (AdCPError, ValidationError)), (
+        f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
+    )
+    if isinstance(error, AdCPError):
+        assert error.error_code and error.error_code != "INTERNAL_ERROR", (
+            f"Invalid {field}: expected a validation rejection, got {error.error_code}: {error}"
+        )
+
+
+# Fields migrated to the clean reference path (scenario names the exact error code,
+# step asserts it on the harness wire envelope). attribution_window is the first.
+_WIRE_ASSERTED_FIELDS = {"attribution_window"}
+
+
 def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknown") -> None:
     """Assert partition/boundary outcome with field-aware content validation."""
     expected = expected.strip()
@@ -2583,30 +2662,32 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         assert "error" not in ctx, f"Expected valid {field} result but got error: {ctx.get('error')}"
         assert "response" in ctx, f"Expected response for valid {field} but none found"
         _assert_valid_content(ctx, field)
-    elif expected == "invalid":
-        from pydantic import ValidationError
+        return
+    if expected == "invalid":
+        _assert_wire_rejection(ctx, field)
+        return
 
+    # error "<CODE>" [with suggestion] — the scenario names the expected code.
+    m = re.match(r'error "(?P<code>[A-Z_]+)"(?P<sug> with suggestion)?$', expected)
+    if m:
+        code = m.group("code")
+        require_suggestion = bool(m.group("sug"))
+        if field in _WIRE_ASSERTED_FIELDS:
+            _assert_error_outcome(ctx, code, field, require_suggestion=require_suggestion)
+            return
+        # Legacy reconstructed path (other fields, pending migration to the wire path).
         from src.core.exceptions import AdCPError
 
-        assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
+        assert "error" in ctx, f"Expected error '{code}' for {field} but operation succeeded"
         error = ctx["error"]
-        assert isinstance(error, (AdCPError, ValidationError)), (
-            f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
-        )
-    else:
-        m = re.match(r'error "(.+?)" with suggestion', expected)
-        if m:
-            from src.core.exceptions import AdCPError
-
-            code = m.group(1)
-            assert "error" in ctx, f"Expected error '{code}' for {field} but operation succeeded"
-            error = ctx["error"]
-            assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
-            assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
+        assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
+        assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
+        if require_suggestion:
             suggestion = (error.details or {}).get("suggestion")
             assert suggestion, f"Expected suggestion in error for {field}, got details: {error.details}"
-        else:
-            raise AssertionError(f"Unexpected expected value '{expected}' for {field}")
+        return
+
+    raise AssertionError(f"Unexpected expected value '{expected}' for {field}")
 
 
 @then(parsers.re(r"the (?P<field>.+) validation should result in (?P<expected>.+)"))

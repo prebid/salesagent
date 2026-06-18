@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pytest_bdd import parsers, when
+from pytest_bdd import given, parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
 from tests.harness.transport import Transport
@@ -62,6 +62,9 @@ def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsReq
             ctx["error"] = result.error
         else:
             ctx["response"] = result.payload
+            # Real serialized wire (REST/A2A/MCP); None on IMPL — surfaced for
+            # success-path wire-shape steps (e.g. format_id federation contract).
+            ctx["wire_response"] = result.wire_response
     except Exception as exc:
         ctx["error"] = exc
 
@@ -120,6 +123,7 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
 # ── Generic format request (transport-agnostic) ──────────────────────
 
 
+@given("the Buyer Agent calls list_creative_formats without filters")
 @when(
     parsers.re(
         r"the Buyer Agent (?:requests the format catalog"
@@ -128,7 +132,12 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
     )
 )
 def when_request_unfiltered(ctx: dict) -> None:
-    """Any phrasing of 'make an unfiltered format request'."""
+    """Unfiltered list_creative_formats dispatch.
+
+    Serves both the generic 'requests/sends a list_creative_formats request'
+    When phrasings and the UC-005 baseline Given 'the Buyer Agent calls
+    list_creative_formats without filters' (single canonical dispatch step).
+    """
     _call(ctx)
 
 

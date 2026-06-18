@@ -1,9 +1,14 @@
 """Pydantic AI agent for generating order names."""
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+
+if TYPE_CHECKING:
+    from pydantic_ai import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,8 @@ def create_naming_agent(model: str, max_length: int = 150) -> Agent[None, OrderN
     Returns:
         Configured Agent instance
     """
+    from pydantic_ai import Agent
+
     # Include max_length in the system prompt
     system_prompt = f"""{NAMING_SYSTEM_PROMPT}
 

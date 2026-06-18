@@ -107,7 +107,7 @@ from src.core.auth import (
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, ObjectWorkflowMapping
+from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
@@ -2816,15 +2816,14 @@ async def _create_media_buy_impl(
                 logger.info(f"✅ Created {len(pending_packages)} MediaPackage records")
 
             # Link the workflow step to the media buy so the approval button shows in UI
-            with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
-                # FIXME(salesagent-9f2): workflow mapping should use a repository method
-                assert wf_uow.session is not None
-                mapping = ObjectWorkflowMapping(
-                    object_type="media_buy", object_id=media_buy_id, step_id=step.step_id, action="create"
-                )
-                wf_uow.session.add(mapping)
-                # UoW auto-commits on clean exit
-                logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
+            ctx_manager.link_workflow_to_object(
+                step_id=step.step_id,
+                object_type="media_buy",
+                object_id=media_buy_id,
+                action="create",
+                tenant_id=tenant["tenant_id"],
+            )
+            logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
 
             # Create creative assignments for manual approval flow
             # This must happen AFTER media packages are created so we have package_ids
@@ -3993,7 +3992,17 @@ async def _create_media_buy_impl(
         if hooks_result.media_buy_id_override:
             modified_response = adcp_response.model_copy(update={"media_buy_id": hooks_result.media_buy_id_override})
 
-        # Mark workflow step as completed on success
+        # Link workflow step to media buy so _send_push_notifications can find the webhook URL.
+        # This MUST happen before update_workflow_step() which triggers _send_push_notifications.
+        ctx_manager.link_workflow_to_object(
+            step_id=step.step_id,
+            object_type="media_buy",
+            object_id=response.media_buy_id,
+            action="create",
+            tenant_id=tenant["tenant_id"],
+        )
+
+        # Mark workflow step as completed on success (triggers _send_push_notifications)
         ctx_manager.update_workflow_step(step.step_id, status="completed")
 
         # Send Slack notification for successful media buy creation

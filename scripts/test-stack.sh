@@ -9,7 +9,7 @@
 # After 'up', the script writes port assignments to .test-stack.env
 # which tox environments read via pass_env.
 
-set -eo pipefail
+set -euo pipefail
 
 cd "$( dirname "${BASH_SOURCE[0]}" )/.."
 [ -f .env ] && { set -a; source .env; set +a; }
@@ -78,7 +78,10 @@ reap_abandoned_stacks() {
         done
 }
 
-dc() { docker-compose -f docker-compose.e2e.yml -p "${COMPOSE_PROJECT_NAME:-adcp-test-$$}" "$@"; }
+# Host stack: pytest runs on the host and reaches the stack over localhost, so
+# overlay the ports file (the base compose publishes no host ports — reserved for
+# the in-network runner, run_all_tests.sh).
+dc() { docker-compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml -p "${COMPOSE_PROJECT_NAME:-adcp-test-$$}" "$@"; }
 
 cmd_up() {
     echo -e "${BLUE}Starting Docker test stack...${NC}"

@@ -14,14 +14,13 @@ Use this as a template when adding new E2E tests.
 
 import json
 import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
 from time import sleep
 
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
     build_creative,
@@ -31,58 +30,19 @@ from tests.e2e.adcp_request_builder import (
 )
 
 
-class WebhookReceiver(BaseHTTPRequestHandler):
+class WebhookReceiver(WebhookCaptureHandler):
     """Simple webhook receiver for testing async notifications."""
 
-    received_webhooks = []
-
-    def do_POST(self):
-        """Handle POST requests (webhook notifications)."""
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
-
-        try:
-            webhook_data = json.loads(body.decode("utf-8"))
-            self.received_webhooks.append(webhook_data)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "received"}')
-        except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
-
-    def log_message(self, format, *args):
-        """Suppress HTTP server logs."""
-        pass
+    received_webhooks: list = []
 
 
 @pytest.fixture
 def webhook_server():
     """Start a local webhook server for testing async notifications."""
-    # Find an available port
-    import socket
-
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-
-    # Start server
-    server = HTTPServer(("127.0.0.1", port), WebhookReceiver)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    webhook_url = f"http://127.0.0.1:{port}/webhook"
-
-    yield {"url": webhook_url, "server": server, "received": WebhookReceiver.received_webhooks}
-
-    # Cleanup
-    server.shutdown()
-    server.server_close()
-    WebhookReceiver.received_webhooks.clear()
+    # Loopback-only receiver: this reference test reaches the server over the
+    # host loopback, so pin the callback host rather than honoring ADCP_WEBHOOK_HOST.
+    with run_webhook_capture_server(WebhookReceiver, WebhookReceiver.received_webhooks, host="127.0.0.1") as info:
+        yield info
 
 
 class TestAdCPReferenceImplementation:
