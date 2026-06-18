@@ -318,7 +318,10 @@ class MediaBuyCreateEnv(IntegrationEnv):
         if req is None:
             return _ensure_idempotency_key(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
-        for key in ("account", "proposal_id", "total_budget"):
+        # Keep ``account``: the create_media_buy wrappers declare it and resolve it
+        # at the transport boundary (998ad1be2). Stripping it here regresses
+        # account-not-found scenarios to a successful create.
+        for key in ("proposal_id", "total_budget"):
             flat.pop(key, None)
         _restore_creative_ids(req, flat)
         flat.update(kwargs)

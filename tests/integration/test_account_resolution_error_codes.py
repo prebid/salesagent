@@ -106,6 +106,7 @@ class TestAccountNotFoundViaTransports:
 
     def _nonexistent_account_req(self):
         from datetime import UTC, datetime, timedelta
+        from uuid import uuid4
 
         from src.core.schemas import CreateMediaBuyRequest
 
@@ -116,6 +117,10 @@ class TestAccountNotFoundViaTransports:
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),
             packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            # idempotency_key is REQUIRED on CreateMediaBuyRequest (16-255 chars, #1312).
+            # Tests going through the harness get a default via _ensure_idempotency_key;
+            # this helper builds the request directly, so supply one explicitly.
+            idempotency_key=f"test-acct-notfound-{uuid4().hex}",
         )
 
     def test_account_not_found_via_a2a(self, env_with_data):

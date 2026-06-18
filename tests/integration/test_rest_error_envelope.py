@@ -33,6 +33,7 @@ class TestRestErrorSuggestionPreservation:
 
     def _zero_budget_req(self):
         """Build a create request with a zero-budget package (triggers BUDGET_TOO_LOW)."""
+        import uuid
         from datetime import UTC, datetime, timedelta
 
         from src.core.schemas import CreateMediaBuyRequest
@@ -43,6 +44,10 @@ class TestRestErrorSuggestionPreservation:
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),
             packages=[{"product_id": "prod_1", "budget": 0.0, "pricing_option_id": "cpm_usd_fixed"}],
+            # idempotency_key is REQUIRED on CreateMediaBuyRequest (AdCP 3.0.1, #1312);
+            # this builder constructs the request directly so it must supply one (16-255
+            # chars). The zero-budget VALIDATION_ERROR path runs after request construction.
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
 
     def test_rest_wire_envelope_contains_suggestion(self, env_with_data):
