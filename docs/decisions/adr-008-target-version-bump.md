@@ -29,7 +29,7 @@ Defer the target-version bump to a separate PR after #1234 closes.
 **PR 5 retains** (the load-bearing piece — anchor consolidation):
 - cross-surface uv version consolidation (`UV_VERSION` anchor across Dockerfile, `_install-uv` composite action, workflows)
 - cross-surface Python version consolidation (`.python-version`, `mypy.ini`, Dockerfile `ARG PYTHON_VERSION`, `pyproject.toml` `requires-python`)
-- cross-surface Postgres version consolidation (`docker-compose*.yml`, `compose.yaml`, `.github/workflows/`, git-tracked scripts/docs — Dockerfile has no postgres image)
+- cross-surface Postgres version consolidation (`docker-compose*.yml`, `.github/workflows/`, git-tracked scripts/docs — Dockerfile has no postgres image)
 - structural guards `test_architecture_uv_version_anchor.py` and `test_architecture_postgres_image_anchor.py` (extended to cover all named anchors)
 
 **PR 5 drops** (deferred per this ADR):
