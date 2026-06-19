@@ -4,6 +4,7 @@
 # - [assignment] on lines ~1449, ~1450, ~1637, ~1638: account/idempotency_key
 #   overrides (required -> optional). Architectural; permanent.
 
+import re
 import warnings
 from datetime import date, datetime
 from decimal import Decimal
@@ -59,7 +60,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 )  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -1727,6 +1728,44 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
         return data
 
 
+# AdCP idempotency_key constraint (create- and update-media-buy-request.json):
+# minLength 16, maxLength 255, pattern ^[A-Za-z0-9_.:-]{16,255}$.
+_IDEMPOTENCY_KEY_MIN = 16
+_IDEMPOTENCY_KEY_MAX = 255
+_IDEMPOTENCY_KEY_CHARSET = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+
+def validate_idempotency_key_shape(key: str | None) -> None:
+    """Enforce the AdCP idempotency_key length/charset constraint.
+
+    Shared by create and update so both reject a malformed key identically. A
+    length or character-set violation is a value/format error → VALIDATION_ERROR
+    (per the idempotency storyboard and the value/range taxonomy), carrying a
+    buyer-facing suggestion. ``None`` is allowed here — required-ness is enforced
+    separately (and is deliberately relaxed on update).
+    """
+    if key is None:
+        return
+    if len(key) < _IDEMPOTENCY_KEY_MIN:
+        raise AdCPValidationError(
+            f"idempotency_key is too short ({len(key)} characters).",
+            field="idempotency_key",
+            suggestion=f"Use an idempotency_key of at least {_IDEMPOTENCY_KEY_MIN} characters.",
+        )
+    if len(key) > _IDEMPOTENCY_KEY_MAX:
+        raise AdCPValidationError(
+            f"idempotency_key is too long ({len(key)} characters).",
+            field="idempotency_key",
+            suggestion=f"Use an idempotency_key of at most {_IDEMPOTENCY_KEY_MAX} characters.",
+        )
+    if not _IDEMPOTENCY_KEY_CHARSET.match(key):
+        raise AdCPValidationError(
+            "idempotency_key contains characters outside [A-Za-z0-9_.:-].",
+            field="idempotency_key",
+            suggestion="Use only letters, digits, and the characters _ . : -",
+        )
+
+
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """Update media buy request extending library type.
 
@@ -1751,16 +1790,12 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # required-key fast-follow), at which point the idempotency_key override goes
     # away and the library's required field applies.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    # Optional on update (identity resolves at the boundary), but when a key IS
-    # provided it must satisfy the same AdCP format constraint as create
-    # (minLength 16, maxLength 255, ^[A-Za-z0-9_.:-]{16,255}$). The bare
-    # ``str | None`` override silently dropped that constraint, so update never
-    # validated key shape; restore it here. A malformed key is a value/format
-    # violation → VALIDATION_ERROR (Pydantic), matching create and the
-    # idempotency storyboard.
-    idempotency_key: str | None = Field(  # type: ignore[assignment]
-        default=None, min_length=16, max_length=255, pattern=r"^[A-Za-z0-9_.:-]{16,255}$"
-    )
+    # Optional on update (identity resolves at the boundary). When a key IS
+    # provided it must satisfy the AdCP idempotency_key constraint
+    # (minLength 16, maxLength 255, ^[A-Za-z0-9_.:-]{16,255}$); enforced by
+    # ``_check_idempotency_key`` below so a violation surfaces a buyer-facing
+    # VALIDATION_ERROR + suggestion (a bare Field constraint cannot carry one).
+    idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
@@ -1804,6 +1839,12 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
                 values["end_time"] = datetime.fromisoformat(end_time)
 
         return values
+
+    @model_validator(mode="after")
+    def _check_idempotency_key(self):
+        """Reject a malformed idempotency_key with VALIDATION_ERROR (AdCP 16-255)."""
+        validate_idempotency_key_shape(self.idempotency_key)
+        return self
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):

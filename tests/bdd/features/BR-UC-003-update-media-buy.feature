@@ -805,17 +805,17 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F3: Suggestion for recovery
 
   @T-UC-003-ext-p-short @extension @ext-p @error @post-f1 @post-f2 @post-f3
-  Scenario: Idempotency key too short -- below 8 characters
+  Scenario: Idempotency key too short -- below 16 characters
     Given a valid update_media_buy request with:
     | field           | value       |
     | media_buy_id    | mb_existing |
     | idempotency_key | abc1234     |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
-    And the suggestion should contain "at least 8 characters"
-    # BR-RULE-081 INV-3: key < 8 chars → rejected
+    And the suggestion should contain "at least 16 characters"
+    # BR-RULE-081 INV-3: key < 16 chars → rejected (schema minLength 16; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F2: Error explains key too short
     # POST-F3: Suggestion for recovery
@@ -828,10 +828,10 @@ Feature: BR-UC-003 Update Media Buy
     | idempotency_key | <256 character string>   |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "255 characters"
-    # BR-RULE-081 INV-4: key > 255 chars → rejected
+    # BR-RULE-081 INV-4: key > 255 chars → rejected (schema maxLength 255; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
@@ -921,15 +921,15 @@ Feature: BR-UC-003 Update Media Buy
       | partition      | value                                  | outcome |
       | absent         | <not provided>                         | success |
       | typical_valid  | abc12345-retry-001                     | success |
-      | boundary_min   | 12345678                               | success |
+      | boundary_min   | 1234567890123456                       | success |
       | boundary_max   | <255 character string>                 | success |
       | uuid_format    | 550e8400-e29b-41d4-a716-446655440000   | success |
 
     Examples: Invalid partitions
       | partition      | value          | outcome                                              |
-      | empty_string   |                | error "INVALID_REQUEST" with suggestion               |
-      | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion               |
-      | too_long       | <256 chars>    | error "INVALID_REQUEST" with suggestion               |
+      | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
+      | too_short      | abc1234        | error "VALIDATION_ERROR" with suggestion              |
+      | too_long       | <256 character string> | error "VALIDATION_ERROR" with suggestion      |
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
@@ -949,13 +949,13 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                  | value               | outcome                                |
       | absent (field not provided)     | <not provided>      | success                                |
-      | empty string (length 0)         |                     | error "INVALID_REQUEST" with suggestion |
-      | length 7 (min - 1)             | abc1234             | error "INVALID_REQUEST" with suggestion |
-      | length 8 (min, inclusive)       | 12345678            | success                                |
-      | length 9 (min + 1)             | 123456789           | success                                |
+      | empty string (length 0)         |                     | error "VALIDATION_ERROR" with suggestion |
+      | length 15 (min - 1)            | <15 char string>    | error "VALIDATION_ERROR" with suggestion |
+      | length 16 (min, inclusive)      | <16 char string>    | success                                |
+      | length 17 (min + 1)            | <17 char string>    | success                                |
       | length 254 (max - 1)           | <254 char string>   | success                                |
       | length 255 (max, inclusive)     | <255 char string>   | success                                |
-      | length 256 (max + 1)           | <256 char string>   | error "INVALID_REQUEST" with suggestion |
+      | length 256 (max + 1)           | <256 char string>   | error "VALIDATION_ERROR" with suggestion |
 
   @T-UC-003-partition-media-buy-status @partition @media_buy_status
   Scenario Outline: Media buy status partition validation - <partition>

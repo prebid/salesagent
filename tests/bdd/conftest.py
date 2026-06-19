@@ -621,15 +621,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-003-ext-m-unsupported": "production doesn't validate placement targeting support",
             "T-UC-003-ext-n": "production doesn't check admin privileges on update",
             # Graduated: T-UC-003-ext-o (rczc: adapter failure returns correct shape on all 4 transports)
-            # FIXME(salesagent-u4l2): stale .feature expectation. Production NOW validates
-            # idempotency_key shape on update (UpdateMediaBuyRequest enforces the pinned-schema
-            # constraint minLength 16 / maxLength 255 / ^[A-Za-z0-9_.:-]{16,255}$, mirroring
-            # create) and emits VALIDATION_ERROR — the spec-correct code for a value/format
-            # violation (idempotency storyboard accepts VALIDATION_ERROR; pin 04f59d2d5 schema
-            # bound is 16, not 8). The .feature asserts INVALID_REQUEST + "at least 8 characters",
-            # both stale → reconcile upstream in adcp-req, do not patch local generated .feature.
-            "T-UC-003-ext-p-short": "stale .feature: asserts INVALID_REQUEST + '8 characters'; production correctly emits VALIDATION_ERROR for the 16-255 schema constraint — reconcile upstream (salesagent-u4l2)",
-            "T-UC-003-ext-p-long": "stale .feature: asserts INVALID_REQUEST + '8 characters'; production correctly emits VALIDATION_ERROR for the 16-255 schema constraint — reconcile upstream (salesagent-u4l2)",
             "T-UC-003-ext-q-rejected": "production doesn't reject updates to terminal-status media buys",
             "T-UC-003-ext-q-canceled": "production doesn't reject updates to terminal-status media buys",
             "T-UC-003-ext-q-completed": "production doesn't reject updates to terminal-status media buys",
