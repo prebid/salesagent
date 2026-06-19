@@ -1751,7 +1751,16 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # required-key fast-follow), at which point the idempotency_key override goes
     # away and the library's required field applies.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
+    # Optional on update (identity resolves at the boundary), but when a key IS
+    # provided it must satisfy the same AdCP format constraint as create
+    # (minLength 16, maxLength 255, ^[A-Za-z0-9_.:-]{16,255}$). The bare
+    # ``str | None`` override silently dropped that constraint, so update never
+    # validated key shape; restore it here. A malformed key is a value/format
+    # violation → VALIDATION_ERROR (Pydantic), matching create and the
+    # idempotency storyboard.
+    idempotency_key: str | None = Field(  # type: ignore[assignment]
+        default=None, min_length=16, max_length=255, pattern=r"^[A-Za-z0-9_.:-]{16,255}$"
+    )
 
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]

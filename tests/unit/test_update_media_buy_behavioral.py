@@ -2305,6 +2305,42 @@ class TestUC003ExtH:
         assert exc_info.value.suggestion is not None
 
 
+class TestUC003ExtPIdempotencyKeyShape:
+    """update_media_buy validates idempotency_key shape, like create_media_buy.
+
+    The pinned AdCP schema (04f59d2d5) constrains idempotency_key to
+    minLength 16 / maxLength 255 / ^[A-Za-z0-9_.:-]{16,255}$. The bare
+    ``str | None`` override on UpdateMediaBuyRequest had silently dropped that
+    constraint, so update never validated key shape. A malformed key is a
+    value/format violation → VALIDATION_ERROR (the idempotency storyboard's
+    accepted code), not INVALID_REQUEST.
+    """
+
+    @pytest.mark.parametrize(
+        "bad_key",
+        [
+            "abc1234",  # too short (< 16)
+            "x" * 256,  # too long (> 255)
+            "has spaces and is definitely long enough",  # pattern violation
+        ],
+    )
+    def test_malformed_idempotency_key_rejected(self, bad_key: str):
+        with pytest.raises(ValidationError, match="idempotency_key"):
+            UpdateMediaBuyRequest(media_buy_id="mb_existing", idempotency_key=bad_key)
+
+    def test_valid_idempotency_key_accepted(self):
+        req = UpdateMediaBuyRequest(
+            media_buy_id="mb_existing",
+            idempotency_key="550e8400-e29b-41d4-a716-446655440000",
+        )
+        assert req.idempotency_key == "550e8400-e29b-41d4-a716-446655440000"
+
+    def test_idempotency_key_remains_optional(self):
+        # Identity resolves at the boundary; an omitted key is still valid on update.
+        req = UpdateMediaBuyRequest(media_buy_id="mb_existing")
+        assert req.idempotency_key is None
+
+
 # ---------------------------------------------------------------------------
 # EXT-I: Creative IDs Not Found
 # ---------------------------------------------------------------------------
