@@ -149,7 +149,7 @@ cmd_up() {
         docker rm -f "$PG" >/dev/null 2>&1 || true
         docker run -d --network "$NET" --name "$PG" \
             -e POSTGRES_DB=adcp_registry -e POSTGRES_USER=adcp -e POSTGRES_PASSWORD=localdev \
-            postgres:16 >/dev/null
+            postgres:17-alpine >/dev/null
         sleep 5
     fi
 

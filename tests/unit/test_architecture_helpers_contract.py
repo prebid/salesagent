@@ -11,6 +11,9 @@ from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_violations_match_allowlist,
     iter_call_expressions,
+    postgres_image_ref,
+    postgres_tag_pattern_map,
+    uv_version_pattern_map,
 )
 
 _ITER_CALL_SOURCE = """
@@ -103,12 +106,21 @@ def test_assert_anchor_consistency_passes_when_values_match() -> None:
 @pytest.mark.arch_guard
 def test_assert_anchor_consistency_flags_drift() -> None:
     sources = [
-        (Path("ci.yml"), "UV_VERSION: '0.11.15'\n"),
+        (Path(".uv-version"), "0.11.15\n"),
         (Path("Dockerfile"), "ARG UV_VERSION=0.11.14\n"),
     ]
-    pattern_map = {
-        "ci.yml": r"UV_VERSION:\s*['\"]([\d.]+)['\"]",
-        "Dockerfile": r"ARG UV_VERSION=([\d.]+)",
-    }
-    with pytest.raises(AssertionError, match="uv drift"):
-        assert_anchor_consistency(sources, pattern_map, label="uv")
+    with pytest.raises(AssertionError, match="uv version drift"):
+        assert_anchor_consistency(sources, uv_version_pattern_map(), label="uv version")
+
+
+@pytest.mark.arch_guard
+def test_assert_anchor_consistency_flags_intra_file_drift() -> None:
+    sources = [
+        (
+            Path("ci.yml"),
+            f"services:\n  db1:\n    image: {postgres_image_ref('17-alpine')}\n  db2:\n    image: {postgres_image_ref('15-alpine')}\n",
+        ),
+    ]
+
+    with pytest.raises(AssertionError, match="postgres image drift"):
+        assert_anchor_consistency(sources, postgres_tag_pattern_map(), label="postgres image")
