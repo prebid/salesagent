@@ -592,7 +592,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Error code mismatches (production uses different codes than spec)
             "T-UC-003-ext-a": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
             "T-UC-003-ext-a-unknown": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
-            "T-UC-003-ext-b": "production returns ValueError, spec expects PRODUCT_NOT_FOUND",
             "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
@@ -616,7 +615,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-003-ext-j-rejected": "production doesn't validate creative state on update path",
             "T-UC-003-ext-j-format": "production doesn't validate creative format compatibility on update",
             "T-UC-003-ext-k": "inline creative sync: FK violation in production (missing creative commit)",
-            "T-UC-003-ext-l": "production doesn't validate package_id existence on update",
             "T-UC-003-ext-m": "production doesn't validate placement_ids on update path",
             "T-UC-003-ext-m-unsupported": "production doesn't validate placement targeting support",
             "T-UC-003-ext-n": "production doesn't check admin privileges on update",

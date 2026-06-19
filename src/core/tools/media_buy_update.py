@@ -593,7 +593,6 @@ def _update_media_buy_impl(
                                 field=package_field_path("package_id"),
                                 context=req.context,
                             )
-
                         # Extract budget amount - handle both float and Budget object
                         budget_amount: float
                         currency: str
@@ -620,6 +619,15 @@ def _update_media_buy_impl(
                                 exc_type=AdCPBudgetTooLowError,
                                 context=req.context,
                             )
+
+                        # The package must exist in the media buy before we hand the
+                        # budget change to the adapter — otherwise the adapter silently
+                        # no-ops (quiet failure). Checked after the budget-value
+                        # validation so a malformed budget still surfaces BUDGET_TOO_LOW.
+                        # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
+                        uow.media_buys.get_package_or_raise(
+                            req.media_buy_id, pkg_update.package_id, context=req.context
+                        )
 
                         result = adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,

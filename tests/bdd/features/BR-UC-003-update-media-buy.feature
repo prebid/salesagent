@@ -487,12 +487,13 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Media buy not found -- by media_buy_id
     Given a valid update_media_buy request with:
-    | field        | value         |
+    | field        | value          |
     | media_buy_id | mb_nonexistent |
+    | paused       | true           |
     And no media buy exists with media_buy_id "mb_nonexistent"
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "PRODUCT_NOT_FOUND"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "verify"
     # POST-F1: System state unchanged
@@ -741,7 +742,7 @@ Feature: BR-UC-003 Update Media Buy
     And package "pkg_nonexistent" does not exist in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "PACKAGE_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "package"
     # POST-F1: System state unchanged
