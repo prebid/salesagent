@@ -220,9 +220,17 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-e": "duplicate product_id error lacks suggestion field — spec-production gap",
     # FIXME(salesagent-9vgz.10): production returns validation_error, spec expects BUDGET_TOO_LOW
     "T-UC-002-ext-k": "daily spend cap returns generic validation_error, not BUDGET_TOO_LOW",
-    # FIXME(salesagent-9vgz.10): proposal validation not implemented in production
-    "T-UC-002-ext-l": "proposal_id validation not implemented in production",
-    "T-UC-002-ext-m": "proposal budget guidance not implemented in production",
+    # FIXME(#1417): proposal-based create_media_buy is an unbuilt spec feature.
+    # BR-UC-002-alt-proposal (status: active) + BR-UC-002-ext-l/ext-m define a full
+    # proposal flow: resolve proposal_id, expiry check (PROPOSAL_EXPIRED), and
+    # total_budget vs total_budget_guidance.min (BUDGET_TOO_LOW). The pinned
+    # adcp library CreateMediaBuyRequest carries proposal_id, but production
+    # src/core/tools/media_buy_create.py never reads it — no resolve_proposal,
+    # no validate_proposal_budget, no proposal store. Scenario-level strict xfail
+    # until the proposal feature is built (no proposal masking; Then steps still
+    # hard-assert the BR error codes).
+    "T-UC-002-ext-l": "BR-UC-002-ext-l: proposal_id resolution / PROPOSAL_EXPIRED unbuilt — proposal feature not implemented in production (spec-production gap)",
+    "T-UC-002-ext-m": "BR-UC-002-ext-m: proposal total_budget_guidance.min validation / BUDGET_TOO_LOW unbuilt — proposal feature not implemented in production (spec-production gap)",
     # FIXME(salesagent-9vgz.13): pricing validation returns generic validation_error, not PRICING_ERROR
     # AdCPValidationError(details={"error_code": "PRICING_ERROR"}) is raised but then caught
     # and re-raised as ValueError(str(e)) at media_buy_create.py:1741-1743, losing the structured
