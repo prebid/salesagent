@@ -218,8 +218,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # Production correctly detects duplicate product_ids and raises ValueError with
     # good message, but the error is not a structured AdCPError — no suggestion field.
     "T-UC-002-ext-e": "duplicate product_id error lacks suggestion field — spec-production gap",
-    # FIXME(salesagent-9vgz.10): production returns validation_error, spec expects BUDGET_TOO_LOW
-    "T-UC-002-ext-k": "daily spend cap returns generic validation_error, not BUDGET_TOO_LOW",
+    # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
+    # Production correctly emits BUDGET_EXCEEDED for "daily budget exceeds cap"
+    # (AdCPBudgetExceededError; verified at wire on mcp/rest/a2a). v3.1 renamed the
+    # code BUDGET_TOO_LOW -> BUDGET_EXCEEDED for BR-RULE-012 "exceeds cap"
+    # (adcp-req .impl-coverage/BR-UC-002.yaml:1198); the generated .feature still
+    # asserts the pre-v3.1 BUDGET_TOO_LOW. Graduates once adcp-req is reconciled and
+    # BR-UC-002 is regenerated (salesagent-lp0x). Strict xfail; assertion unchanged.
+    "T-UC-002-ext-k": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen (salesagent-lp0x)",
     # FIXME(#1417): proposal-based create_media_buy is an unbuilt spec feature.
     # BR-UC-002-alt-proposal (status: active) + BR-UC-002-ext-l/ext-m define a full
     # proposal flow: resolve proposal_id, expiry check (PROPOSAL_EXPIRED), and
@@ -595,7 +601,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
             "T-UC-003-ext-e-equal": "production doesn't validate end_time == start_time on update",
             "T-UC-003-ext-f": "production doesn't validate currency on update path",
-            "T-UC-003-ext-g": "production doesn't validate daily spend cap on update",
+            # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
+            # Production validates the daily spend cap on update and correctly emits
+            # BUDGET_EXCEEDED (AdCPBudgetExceededError, media_buy_update.py:484;
+            # verified at wire on mcp/rest/a2a). The generated .feature asserts the
+            # pre-v3.1 BUDGET_TOO_LOW (see UC-002 ext-k). Graduates after upstream regen.
+            "T-UC-003-ext-g": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production validates and correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen (salesagent-lp0x)",
             "T-UC-003-ext-i": "production doesn't validate creative existence on update path",
             "T-UC-003-ext-j-error": "production doesn't validate creative state on update path",
             "T-UC-003-ext-j-rejected": "production doesn't validate creative state on update path",
