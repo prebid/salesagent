@@ -4293,7 +4293,7 @@ async def create_media_buy(
     # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None).
     # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
     # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
-    # String columns cannot coerce, causing StatementError at flush time (gh-#1377).
+    # String columns cannot coerce, causing StatementError at flush time.
     pnc_dict = push_notification_config.model_dump(mode="json") if push_notification_config else None
     result = await _create_media_buy_impl(
         req=req,
@@ -4378,7 +4378,7 @@ async def create_media_buy_raw(
     # Serialize SDK model to dict for _impl (which uses dict-based config access).
     # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
     # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
-    # String columns cannot coerce, causing StatementError at flush time (gh-#1377).
+    # String columns cannot coerce, causing StatementError at flush time.
     pnc_dict = (
         push_notification_config.model_dump(mode="json")
         if isinstance(push_notification_config, PushNotificationConfig)
