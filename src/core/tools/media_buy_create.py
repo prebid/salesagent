@@ -44,6 +44,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
+    AdCPCapabilityNotSupportedError,
     AdCPCreativeNotFoundError,
     AdCPError,
     AdCPFormatNotFoundError,
@@ -2245,11 +2246,13 @@ async def _create_media_buy_impl(
 
             # Check if tenant supports this currency
             if not currency_limit:
-                error_msg = (
-                    f"Currency {request_currency} is not supported by this publisher. "
-                    f"Contact the publisher to add support for this currency."
+                # Currency support is a seller capability, not a malformed request:
+                # emit UNSUPPORTED_FEATURE (matches the update path and UC-002 ext-d).
+                raise AdCPCapabilityNotSupportedError(
+                    f"Currency {request_currency} is not supported by this publisher.",
+                    suggestion="Contact the publisher to add support for this currency, or use a supported currency.",
+                    context=req.context,
                 )
-                raise AdCPValidationError(error_msg)
 
             # Check if currency is supported by GAM network (if GAM is configured)
             # GAM only accepts: primary currency OR enabled secondary currencies
@@ -2262,12 +2265,13 @@ async def _create_media_buy_impl(
                     supported_currencies.update(adapter_config.gam_secondary_currencies)
 
                 if request_currency not in supported_currencies:
-                    error_msg = (
+                    # Same seller-capability gap as above, scoped to the GAM network.
+                    raise AdCPCapabilityNotSupportedError(
                         f"Currency {request_currency} is not supported by the GAM network. "
-                        f"Supported currencies: {', '.join(sorted(supported_currencies))}. "
-                        f"Contact the publisher to enable this currency in GAM."
+                        f"Supported currencies: {', '.join(sorted(supported_currencies))}.",
+                        suggestion="Contact the publisher to enable this currency in GAM, or use a supported currency.",
+                        context=req.context,
                     )
-                    raise AdCPValidationError(error_msg)
 
             # NEW: Validate pricing_model selections (AdCP PR #88)
             # Store validated pricing info for later use in adapter

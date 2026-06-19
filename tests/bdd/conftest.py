@@ -210,10 +210,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # 'ignore' in prod (field silently dropped). Neither produces INVALID_REQUEST.
     # Spec expects business-logic validation with INVALID_REQUEST code and suggestion field.
     "T-UC-002-ext-f": "unknown targeting field caught by Pydantic (VALIDATION_ERROR), not business logic (INVALID_REQUEST) — spec-production gap",
-    # FIXME(salesagent-9vgz.4): currency validation not implemented in production
-    # Production code accepts any currency on pricing options without checking
-    # against the tenant's CurrencyLimit table. Spec expects UNSUPPORTED_FEATURE error.
-    "T-UC-002-ext-d": "currency validation against CurrencyLimit not implemented — spec-production gap",
+    # FIXME(salesagent-scxw): the error CODE is fixed (currency-not-supported now
+    # raises AdCPCapabilityNotSupportedError -> UNSUPPORTED_FEATURE, verified by
+    # tests/integration/test_currency_not_supported_error_code.py). But this scenario
+    # selects a non-default-currency pricing_option_id, and create_media_buy derives
+    # request_currency from the product's FIRST pricing option — it never validates the
+    # SELECTED option's currency — so the create SUCCEEDS instead of failing. Graduates
+    # once selected-option currency validation lands (salesagent-scxw).
+    "T-UC-002-ext-d": "selected pricing-option currency not validated against CurrencyLimit; create succeeds instead of UNSUPPORTED_FEATURE — spec-production gap (salesagent-scxw)",
     # FIXME(salesagent-9vgz.4): duplicate product_id error lacks suggestion field
     # Production correctly detects duplicate product_ids and raises ValueError with
     # good message, but the error is not a structured AdCPError — no suggestion field.
@@ -600,7 +604,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Production doesn't validate these cases at all
             "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
             "T-UC-003-ext-e-equal": "production doesn't validate end_time == start_time on update",
-            "T-UC-003-ext-f": "production doesn't validate currency on update path",
+            # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
+            # Production validates currency on update and correctly emits
+            # UNSUPPORTED_FEATURE (AdCPCapabilityNotSupportedError, media_buy_update.py:441;
+            # verified at wire on mcp/rest/a2a). The generated .feature asserts INVALID_REQUEST.
+            # UNSUPPORTED_FEATURE is the authoritative code (adcp-req BR-UC-002 impl-coverage;
+            # matches UC-002 ext-d). Graduates after upstream regen.
+            "T-UC-003-ext-f": "generated .feature asserts INVALID_REQUEST; production correctly emits UNSUPPORTED_FEATURE for unsupported currency on update — stale spec, pending upstream regen (salesagent-lp0x)",
             # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
             # Production validates the daily spend cap on update and correctly emits
             # BUDGET_EXCEEDED (AdCPBudgetExceededError, media_buy_update.py:484;
@@ -2838,21 +2848,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         marker_names = {m.name for m in request.node.iter_markers()}
         # Tags that need the full create_media_buy flow (MediaBuyCreateEnv)
         # rather than account resolution only (MediaBuyAccountEnv).
-        _UC002_CREATE_FLOW_TAGS = {"T-UC-002-ext-d"}
-        if marker_names & _UC002_CREATE_FLOW_TAGS:
-            # Validation / error-path scenarios — full create flow via MediaBuyCreateEnv
-            request.getfixturevalue("integration_db")
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with MediaBuyCreateEnv() as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
-        elif "account" in marker_names:
+        if "account" in marker_names:
             # Account resolution scenarios only — MediaBuyAccountEnv handles resolve_account
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_account import MediaBuyAccountEnv
