@@ -49,24 +49,6 @@ class TestAdCPReferenceImplementation:
     """Reference E2E test demonstrating full AdCP V2.3 workflow."""
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason=(
-            "Test-data shape mismatches surface successively once typed AdCPError "
-            "propagates past the impl boundary. Previously a broad "
-            "`except (AdCPError, ValueError, PermissionError)` swallowed the "
-            "errors so the test exited early and silently passed. With the "
-            "narrower catch in place, real validation runs and the lifecycle "
-            "trips additional schema-shape bugs that belong in a dedicated E2E "
-            "hygiene effort, not the error-emission substrate. The "
-            "push_notification_config.authentication {type:'none'} stubs have "
-            "been replaced with the default RFC 9421 profile (3 sites). "
-            "Removability: remove this marker when the full lifecycle passes "
-            "end-to-end against the docker stack."
-        ),
-        strict=False,  # see Removability note above — partial fix landed but
-        # downstream phases are still unverified locally; flip to strict=True
-        # once a full e2e run confirms the test passes.
-    )
     async def test_complete_campaign_lifecycle_with_webhooks(
         self, docker_services_e2e, live_server, test_auth_token, webhook_server
     ):
@@ -164,24 +146,24 @@ class TestAdCPReferenceImplementation:
                 webhook_url=webhook_server["url"],  # Async notifications!
                 context={"e2e": "create_media_buy"},
             )
+            # Register a push_notification_config at create. This exercises the config
+            # registration path end-to-end — the AnyUrl/Enum serialization that, if it
+            # regressed, would crash this PHASE (see media_buy_create.py model_dump(mode="json")).
+            # Delivery of the resulting webhook is verified separately (PHASE 6 / the dedicated
+            # xfail test); this lifecycle asserts only the synchronous contract.
+            media_buy_request["push_notification_config"] = {"url": webhook_server["url"]}
 
             # Create media buy (pass params directly - no req wrapper)
             media_buy_result = await client.call_tool("create_media_buy", media_buy_request)
             media_buy_data = parse_tool_result(media_buy_result)
 
-            # When webhook is provided, response may have task_id instead of media_buy_id
-            # For this test, we'll use buyer_ref if media_buy_id is not available
+            # This test drives the SYNCHRONOUS success path: the mock adapter returns a
+            # CreateMediaBuySuccess, whose AdCP 3.1 shape requires media_buy_id + packages.
+            # (The async "submitted" shape returns status="submitted" + task_id and NO
+            # media_buy_id; that lands on the task completion artifact.) A previous version
+            # silently returned when media_buy_id was missing, skipping the rest of the lifecycle.
             media_buy_id = media_buy_data.get("media_buy_id")
-            buyer_ref = media_buy_data.get("buyer_ref")
-
-            if not media_buy_id:
-                # If async operation, skip delivery check since we don't have the ID yet
-                print(f"   ✓ Media buy submitted (async): {buyer_ref}")
-                print(f"   ✓ Status: {media_buy_data.get('status', 'unknown')}")
-                print(f"   ✓ Webhook configured: {webhook_server['url']}")
-                print("   ⚠️  Skipping delivery check (async operation, no media_buy_id yet)")
-                # Skip the rest of the test phases that need media_buy_id
-                return
+            assert media_buy_id, f"create_media_buy must return media_buy_id; got: {media_buy_data}"
 
             print(f"   ✓ Media buy created: {media_buy_id}")
             print(f"   ✓ Status: {media_buy_data.get('status', 'unknown')}")
@@ -195,31 +177,40 @@ class TestAdCPReferenceImplementation:
             print("\n🎨 PHASE 3: Sync Creatives")
 
             # Build creatives using helper.
-            # format_id requires the structured FormatReferenceStructuredObject
-            # ({agent_url, id}) — discover from the product's format_ids list rather
-            # than hardcoding a bare string id (AdCP 3.0.x schema requirement).
-            product_format_ids = {fid["id"]: fid for fid in product["format_ids"]}
-            fmt_300x250 = product_format_ids.get("display_300x250") or product["format_ids"][0]
-            fmt_728x90 = (
-                product_format_ids.get("display_728x90")
-                or product["format_ids"][min(1, len(product["format_ids"]) - 1)]
+            # A creative's format_id ({agent_url, id}) MUST reference a format the
+            # creative agent actually recognises — sync_creatives validates it via
+            # the creative-agent registry and rejects unknown formats (the creative
+            # is then echoed with action="failed" but never persisted, so it never
+            # appears in list_creatives). Discover formats from the
+            # list_creative_formats response (PHASE 1), NOT the product's
+            # format_ids: a product may advertise an id (e.g. "display_300x250")
+            # that the agent doesn't expose (it has "display_300x250_image"), which
+            # would make every creative fail to sync.
+            image_formats = [
+                f for f in formats_data["formats"] if any(a.get("asset_type") == "image" for a in f.get("assets", []))
+            ]
+            assert len(image_formats) >= 2, (
+                "Creative-agent registry must expose >=2 image formats; got "
+                f"{[f['format_id']['id'] for f in formats_data['formats']]}"
             )
+            fmt_1 = image_formats[0]["format_id"]
+            fmt_2 = image_formats[1]["format_id"]
 
             creative_id_1 = f"creative_{uuid.uuid4().hex[:8]}"
             creative_id_2 = f"creative_{uuid.uuid4().hex[:8]}"
 
             creative_1 = build_creative(
                 creative_id=creative_id_1,
-                format_id=fmt_300x250,
-                name="Nike Air Jordan - Display 300x250",
+                format_id=fmt_1,
+                name=f"Nike Air Jordan - {fmt_1['id']}",
                 asset_url="https://example.com/nike-jordan-300x250.jpg",
                 click_through_url="https://nike.com/air-jordan-2025",
             )
 
             creative_2 = build_creative(
                 creative_id=creative_id_2,
-                format_id=fmt_728x90,
-                name="Nike Air Jordan - Display 728x90",
+                format_id=fmt_2,
+                name=f"Nike Air Jordan - {fmt_2['id']}",
                 asset_url="https://example.com/nike-jordan-728x90.jpg",
                 click_through_url="https://nike.com/air-jordan-2025",
             )
@@ -232,6 +223,13 @@ class TestAdCPReferenceImplementation:
 
             assert "creatives" in sync_data, "Response must contain creatives (AdCP spec field name)"
             assert len(sync_data["creatives"]) == 2, "Should sync 2 creatives"
+            # A non-failed action is what proves persistence: sync_creatives echoes
+            # rejected creatives back with action="failed" (and does NOT persist
+            # them), so a length check alone lets a validation failure pass here and
+            # only surface as an empty list in PHASE 7. Assert the action so the
+            # failure lands at its true cause.
+            for c in sync_data["creatives"]:
+                assert c.get("action") != "failed", f"Creative {c.get('creative_id')} failed to sync: {c.get('errors')}"
             print(f"   ✓ Synced {len(sync_data['creatives'])} creatives")
             print(f"   ✓ Creative IDs: {creative_id_1}, {creative_id_2}")
 
@@ -264,10 +262,7 @@ class TestAdCPReferenceImplementation:
             # ================================================================
             # PHASE 5: Update Campaign Budget (Async via Webhook)
             # ================================================================
-            print("\n💰 PHASE 5: Update Campaign Budget (webhook notification expected)")
-
-            # Clear any previous webhooks
-            webhook_server["received"].clear()
+            print("\n💰 PHASE 5: Update Campaign Budget (configures push_notification_config)")
 
             # Update budget (AdCP spec: budget is a number, not an object)
             update_result = await client.call_tool(
@@ -294,40 +289,23 @@ class TestAdCPReferenceImplementation:
             assert update_data.get("context") == {"e2e": "update_media_buy"}
 
             # ================================================================
-            # PHASE 6: Verify Webhook Notification (Async Verification)
+            # PHASE 6: Webhook delivery — verified by a dedicated test
             # ================================================================
-            print("\n🔔 PHASE 6: Verify Webhook Notifications")
-
-            # Wait for webhook (with timeout)
-            max_wait = 5  # seconds
-            waited = 0
-            webhook_received = False
-
-            while waited < max_wait and not webhook_received:
-                if len(webhook_server["received"]) > 0:
-                    webhook_received = True
-                    break
-                sleep(0.5)
-                waited += 0.5
-
-            if webhook_received:
-                print(f"   ✓ Webhook received after {waited}s")
-                print(f"   ✓ Webhook count: {len(webhook_server['received'])}")
-
-                # Verify webhook content
-                webhook_data = webhook_server["received"][0]
-                print(f"   ✓ Webhook keys: {list(webhook_data.keys())}")
-
-                # Basic webhook validation
-                assert isinstance(webhook_data, dict), "Webhook data must be a dict"
-                print("   ✓ Webhook data validated")
-                # Verify context echoed in webhook result payload
-                if "result" in webhook_data and isinstance(webhook_data["result"], dict):
-                    assert webhook_data["result"].get("context") == {"e2e": "update_media_buy"}
-            else:
-                # Webhook may not be implemented yet - that's okay for this reference test
-                print(f"   ⚠ No webhook received after {max_wait}s (may not be implemented yet)")
-                print("   ℹ️ This is acceptable - webhook support is optional for this phase")
+            # The phases above exercise the webhook *configuration* contract
+            # end-to-end: create_media_buy registers the push_notification_config and
+            # the update supplies it (this path regressed the AnyUrl serialization
+            # bug fixed in media_buy_create.py — a re-break would crash PHASE 2 here).
+            #
+            # Webhook *delivery* is intentionally asserted elsewhere, not in this
+            # lifecycle: update_media_buy's task-status webhook never reaches the
+            # receiver because _send_push_notifications fires inside the tool's
+            # transaction and queries object_workflow_mapping in a SEPARATE session
+            # before that mapping is committed ("No object mappings found" → no POST).
+            # That is a pre-existing server bug; it is documented and asserted by the
+            # dedicated xfail test `test_update_media_buy_push_webhook_delivery`
+            # below, so this reference lifecycle stays green for the synchronous
+            # contract instead of silently swallowing a missing webhook.
+            print("\n🔔 PHASE 6: webhook delivery → see test_update_media_buy_push_webhook_delivery (xfail)")
 
             # ================================================================
             # PHASE 7: List Creatives (Verify State)
@@ -361,3 +339,108 @@ class TestAdCPReferenceImplementation:
             print("  ✓ Creative listing (verify state)")
             print("\nUse this as a template for new E2E tests!")
             print("=" * 80)
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Pre-existing server bug: update_media_buy's task-status push webhook is never "
+            "delivered. _send_push_notifications (src/core/context_manager.py) fires inside the "
+            "tool's transaction and queries object_workflow_mapping in a SEPARATE session before "
+            "the tool's UnitOfWork commits that mapping, so it logs 'No object mappings found for "
+            "step ...' and returns without POSTing. The mapping row IS written (visible in the DB "
+            "after the request), proving a commit-ordering / session-visibility defect, not a "
+            "missing mapping. The create/auto-approve path was fixed by calling "
+            "link_workflow_to_object() before update_workflow_step(status='completed') so the "
+            "notification finds the mapping; update_media_buy still needs the same treatment. "
+            "Remove this marker once the update path links the mapping before firing the "
+            "notification (or shares the tool session)."
+        ),
+    )
+    async def test_update_media_buy_push_webhook_delivery(self, docker_services_e2e, live_server, test_auth_token):
+        """update_media_buy must deliver a task-status push webhook to the configured URL.
+
+        Focused async-delivery counterpart to the synchronous reference lifecycle. All values
+        are discovered from prior responses (no hardcoded ids). It uses the shared webhook
+        helper's DEFAULT (reachable) callback host — not the lifecycle's loopback-pinned fixture
+        — so that once the server links the mapping before the notification the webhook actually
+        lands and strict=True forces removal of this marker. Currently xfails on the
+        commit-ordering bug documented above.
+        """
+        headers = {"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"}
+        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
+
+        # Default host: the server must be able to REACH this receiver (localhost ->
+        # host.docker.internal on the host, or the runner's network alias in-network),
+        # unlike the lifecycle fixture which is loopback-pinned.
+        with run_webhook_capture_server(WebhookReceiver, WebhookReceiver.received_webhooks) as webhook:
+            async with Client(transport=transport) as client:
+                # Discover a real product + pricing option (no hardcoded ids).
+                products_data = parse_tool_result(
+                    await client.call_tool(
+                        "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "display advertising"}
+                    )
+                )
+                product = products_data["products"][0]
+                pricing_option_id = product["pricing_options"][0]["pricing_option_id"]
+
+                # Create the media buy AND register the push notification config: create is the
+                # only operation that persists the PushNotificationConfig row that gates delivery,
+                # so the row must exist for the update webhook to fire once the bug is fixed.
+                start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+                create_request = build_adcp_media_buy_request(
+                    product_ids=[product["product_id"]],
+                    total_budget=5000.0,
+                    start_time=start_time,
+                    end_time=end_time,
+                    brand={"domain": "testbrand.com"},
+                    pricing_option_id=pricing_option_id,
+                )
+                create_request["push_notification_config"] = {"url": webhook["url"]}
+                create_data = parse_tool_result(await client.call_tool("create_media_buy", create_request))
+                media_buy_id = create_data.get("media_buy_id")
+                assert media_buy_id, f"create_media_buy must return media_buy_id; got: {create_data}"
+
+                # The create/auto-approve path now DELIVERS its completion webhook, so drain it
+                # deterministically (wait for it to land, then clear) — racing a bare clear()
+                # against it lets a late create webhook arrive during the update wait below and
+                # falsely satisfy the assertion.
+                drained = 0.0
+                while drained < 15.0 and not webhook["received"]:
+                    sleep(0.5)
+                    drained += 0.5
+                assert webhook["received"], (
+                    "Expected the create-completion webhook to land (create delivery is fixed); "
+                    "none arrived, so the update delivery below cannot be isolated."
+                )
+                webhook["received"].clear()
+
+                # Update the budget: completing this workflow step should POST a task-status
+                # notification to the configured webhook URL.
+                update_data = parse_tool_result(
+                    await client.call_tool(
+                        "update_media_buy",
+                        {
+                            "media_buy_id": media_buy_id,
+                            "budget": 7500.0,
+                            "context": {"e2e": "update_webhook"},
+                            "push_notification_config": {"url": webhook["url"]},
+                        },
+                    )
+                )
+                assert update_data.get("media_buy_id") == media_buy_id
+
+                # Wait for the asynchronous delivery of the UPDATE notification.
+                waited = 0.0
+                while waited < 15.0 and not webhook["received"]:
+                    sleep(0.5)
+                    waited += 0.5
+
+                assert webhook["received"], (
+                    "Expected a task-status webhook within 15s of update_media_buy, got none "
+                    "(server did not deliver the update push notification)."
+                )
+                payload = webhook["received"][0]
+                assert isinstance(payload, dict) and payload, (
+                    f"Webhook payload must be a non-empty dict, got {payload!r}"
+                )
