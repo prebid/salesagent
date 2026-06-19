@@ -2273,31 +2273,36 @@ class TestUC003ExtH:
     """Missing package ID obligations."""
 
     def test_package_update_without_package_id(self):
-        """Package update without package_id rejected at schema level in adcp 3.12.
+        """Package update without package_id rejected at schema level as INVALID_REQUEST.
+
+        Identifying which package to update is a request-shape requirement, so the
+        spec grades it INVALID_REQUEST (BR-UC-003 ext-h), not a generic VALIDATION_ERROR.
 
         Covers: UC-003-EXT-H-01
         """
-        from pydantic import ValidationError
+        from src.core.exceptions import AdCPInvalidRequestError
 
-        with pytest.raises(ValidationError, match="package_id"):
+        with pytest.raises(AdCPInvalidRequestError, match="package_id") as exc_info:
             UpdateMediaBuyRequest(
                 media_buy_id="mb_no_pkg",
                 packages=[{"budget": 5000.0}],  # No package_id
             )
+        assert exc_info.value.error_code == "INVALID_REQUEST"
 
     def test_package_level_requires_package_id(self):
-        """Package-level updates require package_id.
+        """Package-level updates require package_id (INVALID_REQUEST with a suggestion).
 
         Covers: UC-003-EXT-H-02
         """
-        from pydantic import ValidationError
+        from src.core.exceptions import AdCPInvalidRequestError
 
-        # package_id is now required, cannot omit it
-        with pytest.raises(ValidationError, match="package_id"):
+        # package_id is required to identify the package; omitting it is INVALID_REQUEST.
+        with pytest.raises(AdCPInvalidRequestError, match="package_id") as exc_info:
             UpdateMediaBuyRequest(
                 media_buy_id="mb_no_pkg_ref",
                 packages=[{"budget": 5000.0}],  # No package_id
             )
+        assert exc_info.value.suggestion is not None
 
 
 # ---------------------------------------------------------------------------

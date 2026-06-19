@@ -153,9 +153,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-javy): UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap salesagent-javy",
-    # FIXME(salesagent-kxzs): UC-003 ext-w — immutable product_id rejection maps to VALIDATION_ERROR
-    # via schema extra=forbid, not the spec-expected INVALID_REQUEST (BR-RULE-198).
-    "T-UC-003-ext-w": "immutable product_id rejection emits VALIDATION_ERROR not spec INVALID_REQUEST (BR-RULE-198) — production gap salesagent-kxzs",
     # FIXME(salesagent-u35g): UC-003 ext-u — new_packages midflight-additions capability check
     # (BR-RULE-217 -> UNSUPPORTED_FEATURE) not implemented; production accepts new_packages unhandled.
     "T-UC-003-ext-u": "new_packages midflight capability check not implemented (BR-RULE-217) — production gap salesagent-u35g",
@@ -598,7 +595,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-003-ext-b": "production returns ValueError, spec expects PRODUCT_NOT_FOUND",
             "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
-            "T-UC-003-ext-h": "production returns missing_package_id, spec expects INVALID_REQUEST",
             # Production doesn't validate these cases at all
             "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
             "T-UC-003-ext-e-equal": "production doesn't validate end_time == start_time on update",

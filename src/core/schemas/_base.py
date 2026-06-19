@@ -11,7 +11,7 @@ from decimal import Decimal
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
 from src.core.enum_helpers import enum_value
 
@@ -59,7 +59,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 )  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.exceptions import AdCPNotFoundError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -1680,6 +1680,51 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     # Override library targeting_overlay so local extensions (collection_list)
     # are coerced to typed CollectionListReference at the boundary, not dicts.
     targeting_overlay: Targeting | None = None
+
+    # Fields that are immutable once a package is created (BR-RULE-198). They are
+    # not valid update fields, so the AdCP package-update schema rejects them via a
+    # root `not` constraint. We surface that as INVALID_REQUEST (a known, named
+    # business-rule rejection) rather than letting them fall through to the generic
+    # extra="forbid" VALIDATION_ERROR — and, because this runs before extra-mode
+    # handling, it also closes the production (extra="ignore") silent-drop gap.
+    _IMMUTABLE_PACKAGE_FIELDS: ClassVar[frozenset[str]] = frozenset({"product_id", "format_ids", "pricing_option_id"})
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_package_update_shape(cls, data: Any) -> Any:
+        """Enforce the package-update request shape with INVALID_REQUEST.
+
+        Two structural ("which package, and is this field allowed?") rules,
+        both graded INVALID_REQUEST by the spec rather than the generic
+        VALIDATION_ERROR:
+        - package_id identifies the package being updated; it is required
+          (BR-UC-003 ext-h). Raising here (mode="before") surfaces a helpful
+          INVALID_REQUEST + suggestion instead of Pydantic's bare
+          "Field required" VALIDATION_ERROR.
+        - immutable fields (BR-RULE-198) cannot be changed post-create; the
+          AdCP package-update schema rejects them via a root ``not`` constraint.
+          Running before extra-mode handling means dev (extra="forbid") and
+          prod (extra="ignore") both reject them as INVALID_REQUEST rather than
+          a generic VALIDATION_ERROR / silent drop.
+        """
+        if isinstance(data, dict):
+            from src.core.validation_helpers import package_field_path
+
+            if not data.get("package_id"):
+                raise AdCPInvalidRequestError(
+                    "package_id is required to identify the package being updated.",
+                    field=package_field_path("package_id"),
+                    suggestion="Include the package_id of the package you want to update.",
+                )
+            present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
+            if present:
+                fields = ", ".join(present)
+                raise AdCPInvalidRequestError(
+                    f"Package field(s) {fields} are immutable after a media buy is created and cannot be updated.",
+                    field=package_field_path(present[0]),
+                    suggestion="Remove the immutable field(s) from the package update, or create a new media buy to change product, formats, or pricing.",
+                )
+        return data
 
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
