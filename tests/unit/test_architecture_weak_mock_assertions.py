@@ -79,8 +79,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_performance_index_behavioral.py", "test_empty_performance_data_succeeds"),
     ("tests/unit/test_performance_index_behavioral.py", "test_product_to_package_mapping"),
     ("tests/unit/test_pr1071_review_fixes.py", "test_audit_log_records_has_brand_not_has_brand_manifest"),
-    ("tests/unit/test_push_notification_forwarding.py", "test_a2a_wrapper_forwards_push_notification_config"),
-    ("tests/unit/test_push_notification_forwarding.py", "test_mcp_wrapper_forwards_push_notification_config"),
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),

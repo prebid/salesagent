@@ -4299,8 +4299,11 @@ async def create_media_buy(
 
     identity = enrich_identity_with_account(identity, req.account)
 
-    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
-    pnc_dict = push_notification_config.model_dump() if push_notification_config else None
+    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None).
+    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
+    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
+    # String columns cannot coerce, causing StatementError at flush time.
+    pnc_dict = push_notification_config.model_dump(mode="json") if push_notification_config else None
     result = await _create_media_buy_impl(
         req=req,
         push_notification_config=pnc_dict,
@@ -4381,9 +4384,12 @@ async def create_media_buy_raw(
     # pass identity directly without ctx, so this is best-effort)
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
 
-    # Serialize SDK model to dict for _impl (which uses dict-based config access)
+    # Serialize SDK model to dict for _impl (which uses dict-based config access).
+    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
+    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
+    # String columns cannot coerce, causing StatementError at flush time.
     pnc_dict = (
-        push_notification_config.model_dump()
+        push_notification_config.model_dump(mode="json")
         if isinstance(push_notification_config, PushNotificationConfig)
         else push_notification_config
     )
