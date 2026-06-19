@@ -691,8 +691,12 @@ def given_end_before_start(ctx: dict) -> None:
     kwargs["end_time"] = _future(1).isoformat()
 
 
-@given(parsers.parse("the start_time is {value}"))
-@given(parsers.parse("start_time is {value}"))
+# Single-token value only (\S+). A bare ``{value}`` parse would greedily swallow
+# spaced phrasings like ``start_time is "..." (in the past)`` and shadow the
+# specific step ``given_past_start_time`` (pytest-bdd resolves multiple matches
+# last-registered-wins). parsers.re uses fullmatch, so \S+ refuses any value
+# containing whitespace, letting the specific spaced-phrase step win.
+@given(parsers.re(r"(?:the )?start_time is (?P<value>\S+)"))
 def given_start_time_value(ctx: dict, value: str) -> None:
     """Set or remove start_time on the request (unquoted table value).
 
@@ -709,8 +713,10 @@ def given_start_time_value(ctx: dict, value: str) -> None:
         kwargs["start_time"] = value
 
 
-@given(parsers.parse("the end_time is {value}"))
-@given(parsers.parse("end_time is {value}"))
+# Single-token value only (\S+); see given_start_time_value. Refusing whitespace
+# lets the specific step ``given_end_before_start`` ("end_time is before start_time")
+# win instead of this generic capturing "before start_time" as a literal value.
+@given(parsers.re(r"(?:the )?end_time is (?P<value>\S+)"))
 def given_end_time_value(ctx: dict, value: str) -> None:
     """Set or remove end_time on the request (unquoted table value).
 
