@@ -23,7 +23,12 @@ from sqlalchemy import func, select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPCapabilityNotSupportedError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
@@ -221,11 +226,13 @@ class TestCreateMediaBuyCurrencyValidation:
             ],
         )
 
-        with pytest.raises(AdCPValidationError) as excinfo:
+        # Currency support is a seller capability, not a malformed request:
+        # unsupported currency -> UNSUPPORTED_FEATURE (salesagent-gh8p.3).
+        with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
             await _create_media_buy_impl(req=req, identity=identity)
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "UNSUPPORTED_FEATURE"
         msg = exc.message.lower()
         assert "currency" in msg or "eur" in msg
 

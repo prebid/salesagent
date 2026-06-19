@@ -50,6 +50,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
+    AdCPCapabilityNotSupportedError,
     AdCPCreativeNotFoundError,
     AdCPFormatNotFoundError,
     AdCPNotFoundError,
@@ -1447,11 +1448,13 @@ class TestExtensionObligations:
                 gam_network_currency="USD",
                 gam_secondary_currencies=None,
             )
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Currency unsupported by the GAM network is a seller-capability gap:
+            # UNSUPPORTED_FEATURE, not VALIDATION_ERROR (salesagent-gh8p.3).
+            with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
                 env.call_impl(req=req)
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "UNSUPPORTED_FEATURE"
         error_msg = exc.message.lower()
         assert "not supported" in error_msg
         assert "gam" in error_msg
