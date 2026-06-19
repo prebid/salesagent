@@ -281,13 +281,11 @@ class GetProductsRequest(LibraryGetProductsRequest):
         rejects v3 omissions before construction. A ``None`` mode is accepted here
         so direct/forward-compat construction keeps working.
         """
-        # Lazy import keeps the schemas -> validation_helpers edge off module
-        # import time (validation_helpers pulls in schema types).
-        from src.core.validation_helpers import resolve_enum_value
+        from src.core.helpers import enum_value
 
         if self.buying_mode is None:
             return self
-        mode = resolve_enum_value(self.buying_mode)
+        mode = enum_value(self.buying_mode)
         if mode not in {"brief", "wholesale", "refine"}:
             raise ValueError(f"buying_mode must be one of 'brief', 'wholesale', 'refine'; got {mode!r}")
 

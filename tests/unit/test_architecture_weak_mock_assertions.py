@@ -1,7 +1,11 @@
 """Guard: Tests must not use weak mock assertions.
 
-Both ``assert_called()`` and ``assert_called_once()`` are matched, since
-neither verifies the arguments a mock was called with.
+Both the sync (``assert_called()`` / ``assert_called_once()``) and async
+(``assert_awaited()`` / ``assert_awaited_once()``) bare forms are matched, since
+none verifies the arguments a mock was called with. Each has an atomic ``*_with``
+form (``assert_called_once_with`` / ``assert_awaited_once_with``) that does. The two
+scanners share one matcher (``_function_flags``); ``TestMatcherCompleteness`` pins the
+sync+async forms so the matcher cannot silently narrow.
 
 Two anti-patterns are guarded:
 
@@ -34,6 +38,45 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "tests",)
+
+# Bare "only checks the call happened" assertions — sync (Mock) and async (AsyncMock).
+# Each has a *_with form that verifies arguments atomically; the bare form does not.
+_BARE_ASSERT_METHODS = frozenset({"assert_called", "assert_called_once", "assert_awaited", "assert_awaited_once"})
+
+
+def _function_flags(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[bool, bool]:
+    """Return ``(has_bare_assert, has_call_args)`` for a function node.
+
+    ``has_bare_assert``: a bare (zero-arg) call to any ``_BARE_ASSERT_METHODS`` member.
+    ``has_call_args``: any ``.call_args`` attribute access.
+
+    Matching is function-level (not per-mock), matching the original guard's
+    granularity — a function that bare-asserts one mock and inspects another's
+    ``call_args`` is flagged; such cases are tracked in the allowlists.
+    """
+    has_bare = False
+    has_call_args = False
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            func = child.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in _BARE_ASSERT_METHODS
+                and len(child.args) == 0
+                and len(child.keywords) == 0
+            ):
+                has_bare = True
+        if isinstance(child, ast.Attribute) and child.attr == "call_args":
+            has_call_args = True
+    return has_bare, has_call_args
+
+
+def _walk_functions(source: str):
+    """Yield every (Async)FunctionDef node in *source*."""
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield node
+
 
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was introduced. Allowlist shrinks as tests
@@ -120,26 +163,8 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
 
-        has_bare_called_once = False
-        has_call_args = False
-
-        for child in ast.walk(node):
-            # Bare assert_called()/assert_called_once() — exactly zero arguments
-            if isinstance(child, ast.Call):
-                func = child.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr in {"assert_called", "assert_called_once"}
-                    and len(child.args) == 0
-                    and len(child.keywords) == 0
-                ):
-                    has_bare_called_once = True
-
-            # .call_args attribute access (any object)
-            if isinstance(child, ast.Attribute) and child.attr == "call_args":
-                has_call_args = True
-
-        if has_bare_called_once and has_call_args:
+        has_bare, has_call_args = _function_flags(node)
+        if has_bare and has_call_args:
             violations.append((file_path, node.name, node.lineno))
 
     return violations
@@ -261,28 +286,10 @@ def _find_bare_assertions(file_path: str) -> list[tuple[str, str, int]]:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
 
-        has_bare_called_once = False
-        has_call_args = False
-
-        for child in ast.walk(node):
-            # Bare assert_called()/assert_called_once() — exactly zero arguments
-            if isinstance(child, ast.Call):
-                func = child.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr in {"assert_called", "assert_called_once"}
-                    and len(child.args) == 0
-                    and len(child.keywords) == 0
-                ):
-                    has_bare_called_once = True
-
-            # .call_args attribute access (any object)
-            if isinstance(child, ast.Attribute) and child.attr == "call_args":
-                has_call_args = True
-
+        has_bare, has_call_args = _function_flags(node)
         # Only flag if bare assertion WITHOUT call_args
         # (with call_args is the split pattern, handled by the other guard)
-        if has_bare_called_once and not has_call_args:
+        if has_bare and not has_call_args:
             violations.append((file_path, node.name, node.lineno))
 
     return violations
@@ -313,3 +320,40 @@ class TestNoBareAssertCalledOnce:
                 "Use unittest.mock.ANY for arguments you don't care about."
             ),
         )
+
+
+class TestMatcherCompleteness:
+    """The matcher recognizes the sync AND async bare forms, and skips atomic forms.
+
+    Positive/negative self-tests so a future edit cannot silently narrow the matcher
+    (e.g. drop the async forms, or start matching an atomic ``*_with`` form) without a
+    failing test. Guards the guard.
+    """
+
+    @staticmethod
+    def _flags(source: str) -> tuple[bool, bool]:
+        return _function_flags(next(_walk_functions(source)))
+
+    def test_sync_split_detected(self):
+        src = "def t():\n    m.assert_called_once()\n    assert m.call_args.args[0] == 1\n"
+        assert self._flags(src) == (True, True)
+
+    def test_async_split_detected(self):
+        src = "async def t():\n    m.assert_awaited_once()\n    _, x = m.call_args.args\n"
+        assert self._flags(src) == (True, True)
+
+    def test_async_bare_detected_without_call_args(self):
+        src = "async def t():\n    m.assert_awaited_once()\n"
+        assert self._flags(src) == (True, False)
+
+    def test_sync_bare_detected_without_call_args(self):
+        src = "def t():\n    m.assert_called()\n"
+        assert self._flags(src) == (True, False)
+
+    def test_atomic_async_form_not_flagged(self):
+        src = "async def t():\n    m.assert_awaited_once_with(ANY, identity)\n"
+        assert self._flags(src) == (False, False)
+
+    def test_atomic_sync_form_not_flagged(self):
+        src = "def t():\n    m.assert_called_once_with(1, k=2)\n"
+        assert self._flags(src) == (False, False)

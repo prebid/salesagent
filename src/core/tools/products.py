@@ -45,7 +45,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import resolve_enum_value, safe_parse_json_field
+from src.core.validation_helpers import safe_parse_json_field
 from src.core.version_compat import apply_version_compat
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 from src.services.property_intersection import PropertyIntersection, property_list_drop_advisory
@@ -184,7 +184,7 @@ async def _get_products_impl(
     # _validate_buying_mode_invariants on GetProductsRequest — it runs on every model
     # construction (via create_get_products_request) and raises before _impl sees the
     # request, so trust that single layer here rather than re-checking.
-    mode = resolve_enum_value(req.buying_mode)
+    mode = enum_value(req.buying_mode)
 
     # No generic brief/brand/filters gate: the cross-mode validator enforces per-mode
     # requirements (brief mode needs a brief, refine needs a refine array), and wholesale
@@ -776,7 +776,7 @@ async def _get_products_impl(
                     for option in product.pricing_options:
                         inner = option.root
                         # Get pricing model as string (handle both enum and literal)
-                        pricing_model = resolve_enum_value(inner.pricing_model)
+                        pricing_model = enum_value(inner.pricing_model)
                         # Add supported annotation (will be included in response)
                         # Dynamic attributes on discriminated union types
                         is_supported = pricing_model in supported_models

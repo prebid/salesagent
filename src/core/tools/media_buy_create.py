@@ -1702,7 +1702,7 @@ def _replay_create_from_envelope(envelope: dict[str, Any]) -> CreateMediaBuyResu
 
     The cache stores ``{"status": <protocol task status>, "response": <success or
     submitted dump>}``. Both the synchronous-success and the approval-pending
-    ``submitted`` create responses are cached (AdCP 3.1.0-beta.3 security.mdx
+    ``submitted`` create responses are cached (AdCP 3.0.1 security.mdx
     idempotency rule 2 — sync-success and async-``submitted`` branches), so the
     original variant is reconstructed BY ITS SHAPE: the submitted variant carries
     ``task_id`` and forbids ``media_buy_id``; the success variant carries
@@ -1733,7 +1733,7 @@ def _replay_create_from_envelope(envelope: dict[str, Any]) -> CreateMediaBuyResu
 
 def _create_to_cacheable(result: CreateMediaBuyResult) -> tuple[BaseModel, str] | None:
     """Cache the sync-success and the approval-pending ``submitted`` variants (AdCP
-    3.1.0-beta.3 security.mdx idempotency rule 2 — sync-success and async-``submitted``
+    3.0.1 security.mdx idempotency rule 2 — sync-success and async-``submitted``
     branches); error variants and dry-runs are never cached. The stored variant is
     reconstructed by its shape on replay (``_replay_create_from_envelope``)."""
     if isinstance(result.response, (CreateMediaBuySuccess, CreateMediaBuySubmitted)):
@@ -1801,9 +1801,9 @@ def _cache_and_return(
 ) -> CreateMediaBuyResult:
     """Best-effort store of a fresh successful create into the verbatim cache, then return it.
 
-    Thin create_media_buy binding of the shared replay engine; only a genuine
-    ``CreateMediaBuySuccess`` carrying an idempotency_key is cached (the policy's
-    ``to_cacheable`` rejects submitted/error variants and dry-runs).
+    Thin create_media_buy binding of the shared replay engine; the sync-success and the
+    approval-pending ``submitted`` variants carrying an idempotency_key are cached (the
+    policy's ``to_cacheable`` rejects error variants and dry-runs).
     """
     return idempotency_replay.cache_and_return(
         _CREATE_REPLAY_POLICY,
@@ -1814,6 +1814,7 @@ def _cache_and_return(
         idempotency_key=req.idempotency_key,
         request_hash=request_hash,
     )
+
 
 def _raise_degraded_replay_outcome(
     tenant_id: str,

@@ -202,7 +202,7 @@ def create_get_products_request(
             filters_obj = ProductFilters(**filters)
 
     try:
-        req = GetProductsRequest(  # type: ignore[call-arg]
+        req = GetProductsRequest(
             brand=to_brand_reference(brand),
             brief=brief or None,
             filters=filters_obj,

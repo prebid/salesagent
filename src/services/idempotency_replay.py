@@ -323,7 +323,12 @@ def raise_degraded_replay_outcome(
         if window_expired:
             raise AdCPIdempotencyExpiredError(
                 "idempotency_key was seen before, but its replay window "
-                f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired"
+                f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired",
+                suggestion=(
+                    "Perform a natural-key existence check to determine whether the "
+                    "original request succeeded, then accept that result or mint a fresh "
+                    "idempotency_key for a new attempt."
+                ),
             )
 
         # Rule 5: same key + different canonical payload conflicts even on the

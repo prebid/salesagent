@@ -144,3 +144,67 @@ class TestSyncAccountsRace:
                     account_id=None,
                     request_hash="some-canonical-hash",
                 )
+
+
+class TestCrossToolIdempotencyIsolation:
+    """A key cached by create_media_buy, probed by sync_accounts at the SAME (agent, account, key)
+    scope, never replays the create body as a sync response.
+
+    The cache tuple is tool-agnostic — one shared row, not a per-tool cache (see
+    ``IdempotencyAttemptRepository.find_by_key``) — so the engine's docstring claims cross-tool
+    isolation rests on two invariants. This pins BOTH (neither has a within-tool oracle):
+      #1 the two requests have disjoint required fields → different canonical hashes → the shared
+         row conflicts (IDEMPOTENCY_CONFLICT) instead of replaying;
+      #2 even on a FORCED hash collision, the stored create envelope fails ``SyncAccountsResponse``
+         validation → cache miss (None), never the create body mistyped as a sync response.
+    """
+
+    def test_create_cached_key_probed_by_sync_conflicts_or_misses(self, integration_db):
+        from src.core.database.repositories.uow import AccountUoW
+        from src.core.tools.accounts import _SYNC_REPLAY_POLICY
+        from src.core.tools.media_buy_create import CreateMediaBuySuccess
+
+        tenant_id, principal_id, key = "xtool_idem", "agent_xtool", "k-cross-tool"
+        create_hash = "create-canonical-hash-0001"
+
+        with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+            env.setup_default_data()
+
+            # create_media_buy caches a success under the shared scope tuple (UoW commits on exit).
+            with AccountUoW(tenant_id) as uow:
+                assert uow.idempotency_attempts is not None
+                uow.idempotency_attempts.record_success(
+                    principal_id=principal_id,
+                    tool_name="create_media_buy",
+                    idempotency_key=key,
+                    response_model=CreateMediaBuySuccess(media_buy_id="mb-xtool", packages=[]),
+                    protocol_status="completed",
+                    payload_hash=create_hash,
+                    account_id=None,
+                )
+
+            # #1: a sync request hashes differently from the cached create → the shared row conflicts.
+            with pytest.raises(AdCPIdempotencyConflictError) as exc_info:
+                idempotency_replay.lookup_cached_replay(
+                    _SYNC_REPLAY_POLICY,
+                    tenant_id,
+                    principal_id=principal_id,
+                    account_id=None,
+                    idempotency_key=key,
+                    request_hash="sync-canonical-hash-differs",
+                )
+            assert exc_info.value.error_code == "IDEMPOTENCY_CONFLICT"
+
+            # #2: forced hash collision — the create envelope cannot validate as SyncAccountsResponse,
+            # so the probe MISSES (re-executes) rather than replaying a create body typed as sync.
+            assert (
+                idempotency_replay.lookup_cached_replay(
+                    _SYNC_REPLAY_POLICY,
+                    tenant_id,
+                    principal_id=principal_id,
+                    account_id=None,
+                    idempotency_key=key,
+                    request_hash=create_hash,
+                )
+                is None
+            )

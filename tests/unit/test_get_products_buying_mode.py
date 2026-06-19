@@ -153,10 +153,10 @@ class TestWrapperOwnsBuyingModeRequiredness:
         assert build.pre_v3_defaulted is True
 
 
-# Each cross-mode violation (with a mode declared) → the actionable buyer suggestion
-# extract_buying_mode_suggestion returns. Pins the buyer-facing wire contract. The missing-mode
-# suggestion is exercised at the wrapper layer (TestWrapperOwnsBuyingModeRequiredness), not here,
-# since the version-agnostic model accepts a None mode.
+# Each validator violation (cross-mode rule or invalid mode value) → the actionable buyer
+# suggestion extract_buying_mode_suggestion returns. Pins the buyer-facing wire contract. The
+# missing-mode suggestion is exercised at the wrapper layer (TestWrapperOwnsBuyingModeRequiredness),
+# not here, since the version-agnostic model accepts a None mode.
 _SUGGESTION_CASES = [
     (
         {"buying_mode": "brief"},
@@ -181,6 +181,12 @@ _SUGGESTION_CASES = [
     (
         {"buying_mode": "refine"},
         "Provide a refine array with at least one entry, or use a different buying_mode.",
+    ),
+    # Invalid mode value (not a cross-mode rule) — pins the 7th validator message so a reword
+    # of "buying_mode must be one of" can't silently drop the wire suggestion.
+    (
+        {"buying_mode": "bogus_mode"},
+        "Use buying_mode='brief', 'wholesale', or 'refine'.",
     ),
 ]
 

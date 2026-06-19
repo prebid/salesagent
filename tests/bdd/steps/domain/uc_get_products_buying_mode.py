@@ -17,6 +17,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from src.core.helpers import enum_value
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
     PrincipalFactory,
@@ -26,7 +27,6 @@ from tests.factories import (
 
 # product_ids seeded by create_buying_mode_test_products — the curated catalog.
 _CATALOG_PRODUCT_IDS = {"display_premium", "video_premium"}
-_RECOGNIZED_REFINE_STATUS = {"applied", "partial", "unable"}
 
 
 def _parse_request_table(datatable: Any) -> dict[str, Any]:
@@ -111,13 +111,19 @@ def then_no_proposals(ctx: dict) -> None:
 
 @then("each refinement_applied entry should have a recognized status")
 def then_refinement_status_recognized(ctx: dict) -> None:
-    """Each refinement_applied entry echoes a recognized status (applied/partial/unable)."""
+    """Every refinement_applied entry carries status 'unable' — the documented behavior until
+    proposal-state persistence lands. Pinning the concrete value (not just enum membership) keeps
+    the assertion non-circular: it reddens if a future change emits 'applied'/'partial' before
+    refinement is actually applied. The full per-transport contract lives in the integration sibling.
+    """
     resp = _require_response(ctx)
     assert resp.refinement_applied, "refine response must carry refinement_applied entries"
     for entry in resp.refinement_applied:
         inner = getattr(entry, "root", entry)
-        status = inner.status.value if hasattr(inner.status, "value") else inner.status
-        assert status in _RECOGNIZED_REFINE_STATUS, f"Unrecognized refinement status: {status!r}"
+        assert enum_value(inner.status) == "unable", (
+            f"refinement status must be 'unable' until refinement application is implemented, "
+            f"got {enum_value(inner.status)!r}"
+        )
 
 
 # ── Then: validation rejects ────────────────────────────────────────
