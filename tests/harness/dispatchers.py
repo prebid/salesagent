@@ -307,11 +307,21 @@ class RestE2EDispatcher:
             )
 
         try:
-            payload = env.parse_rest_response(response.json())
+            wire_response = response.json()
+            payload = env.parse_rest_response(wire_response)
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
 
-        return TransportResult(payload=payload, envelope=envelope, error=None, raw_response=response)
+        # Expose the serialized success body as wire_response (parallel to
+        # wire_error_envelope on the error path) so success Then-steps assert on the
+        # real HTTP body rather than re-deriving from the typed payload (#rlgl.3).
+        return TransportResult(
+            payload=payload,
+            envelope=envelope,
+            error=None,
+            wire_response=wire_response,
+            raw_response=response,
+        )
 
 
 class McpE2EDispatcher:

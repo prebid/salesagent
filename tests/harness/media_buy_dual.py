@@ -106,9 +106,35 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return super()._run_rest_request(endpoint, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        # The E2E dispatcher (RestE2EDispatcher) reads REST_ENDPOINT/REST_METHOD as
+        # plain attrs and never calls _run_rest_request, so set the mode flag + target
+        # id HERE (deterministically per request, not via parse_rest_response's reset —
+        # the E2E error path calls parse_rest_error, which would leave a stale flag).
         if _is_update_request(kwargs):
+            self._active_update = True
+            req = kwargs.get("req")
+            target = self._seeded_media_buy_id
+            if req is not None and getattr(req, "media_buy_id", None):
+                target = req.media_buy_id
+            self._update_target_id = target
             return self._build_update_rest_body(**kwargs)
+        self._active_update = False
         return super().build_rest_body(**kwargs)
+
+    @property
+    def REST_ENDPOINT(self) -> str:  # noqa: N802 — matches the inherited class-attr name
+        """Update scenarios PUT a per-id endpoint; create scenarios POST the collection.
+
+        A @property (not a static attr) because the E2E dispatcher reads it directly and
+        the update path needs the seeded media_buy_id in the URL. The in-process path
+        ignores this value (it builds its own PUT URL in _run_update_rest_request)."""
+        if self._active_update:
+            return f"/api/v1/media-buys/{self._update_target_id}"
+        return "/api/v1/media-buys"
+
+    @property
+    def REST_METHOD(self) -> str:  # noqa: N802 — dispatcher reads getattr(env, "REST_METHOD", "post")
+        return "put" if self._active_update else "post"
 
     def parse_rest_response(self, data: dict[str, Any]) -> Any:
         if self._active_update:
@@ -117,6 +143,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return super().parse_rest_response(data)
 
     _active_update: bool = False
+    _update_target_id: str = "NOT_SEEDED"
 
     # -- Concrete update transport implementations -----------------------------
 

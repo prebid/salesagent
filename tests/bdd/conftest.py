@@ -2852,7 +2852,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv() as env:
+            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -2902,7 +2902,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_dual import MediaBuyDualEnv
 
-            with MediaBuyDualEnv() as env:
+            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant

@@ -1589,7 +1589,11 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config=push_notification_config,
             reporting_webhook=params.get("reporting_webhook"),
             context=params.get("context"),
-            account=params.get("account"),
+            # Wrap for boundary-pattern consistency with delivery/sync_creatives. A crash is
+            # structurally impossible here (create_media_buy_raw re-coerces via
+            # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
+            # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
+            account=to_account_reference(params.get("account")),
             idempotency_key=params.get("idempotency_key"),
             identity=identity,
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are
@@ -1965,7 +1969,10 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
-            account=params.get("account"),
+            # Wrap the raw dict into an AccountReference at the boundary — resolve_account
+            # does account_ref.root and crashes on a bare dict. GetMediaBuyDeliveryRequest
+            # has no account field, so this is the only coercion point (mirrors sync_creatives).
+            account=to_account_reference(params.get("account")),
             context=params.get("context"),
             identity=identity,
         )
