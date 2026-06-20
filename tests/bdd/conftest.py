@@ -991,14 +991,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # T-UC-004-attr-echo: resolved — vvx9 + ral2 fixed enum→str handling
             # T-UC-004-attr-omitted: resolved — vvx9 + ral2 fixed enum→str handling
             # T-UC-004-attr-campaign-valid: resolved — _impl now resolves campaign unit to days
-            # campaign unit interval validation: _impl doesn't validate attribution_window
-            "T-UC-004-attr-campaign-invalid": (
-                # INV-5 IS implemented (_validate_attribution_window raises VALIDATION_ERROR);
-                # the in-process request path drops attribution_window.post_click (#1462) so it
-                # can't fire there. Reason corrected per PR #1420 reviewer nit.
-                "attribution_window campaign INV-5 can't fire in-process — request path drops post_click (#1462)",
-                True,
-            ),
+            # T-UC-004-attr-campaign-invalid: GRADUATED (salesagent-rlgl.2). The standalone
+            # "Campaign unit with interval != 1 - rejected" scenario now asserts on the wire
+            # envelope (its When uses the non-shadowed 'for "mb-001" with attribution_window'
+            # regex step, so the window reaches production and INV-5 fires VALIDATION_ERROR
+            # with a suggestion on a2a and e2e_rest). The old transport-blind strict marker
+            # was stale — removed rather than re-scoped (BDD has no in-process/_impl variant).
             # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
             # T-UC-004-dim-sortby-valid: resolved — sort_by now works in _impl
             # Graduated: T-UC-004-dim-sortby-fallback (impl, mcp, rest pass — only a2a still fails)
@@ -1108,8 +1106,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # interval_negative / invalid_unit / invalid_model — the attribution_window
             # reference now asserts the wire envelope (error "INVALID_REQUEST" with
             # suggestion), which a2a/mcp/rest emit, closing the old reconstructed-path
-            # C4 gap. campaign_interval_not_one is xfailed separately below (#1462,
-            # post_click dropped in the in-process request path).
+            # C4 gap. campaign_interval_not_one is xfailed separately below — its window
+            # never reaches production due to generic-step shadowing (salesagent-50hl),
+            # not the #1462 in-process drop.
             (
                 "T-UC-004-boundary-reporting-dims",
                 {"geo with geo_level=metro but no system"},
@@ -1597,37 +1596,33 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # for value/enum/range/business-rule violations; reconciled from the earlier
         # INVALID_REQUEST mis-pin per the AdCP graded error-compliance storyboard), the
         # step asserts it on the harness wire envelope. interval=0 / unit=weeks /
-        # model=last_click PASS on a2a/mcp/rest (VALIDATION_ERROR). The one remaining gap
-        # is "campaign with interval=2": INV-5 can't fire because the in-process request
-        # path drops attribution_window.post_click (#1462). e2e_rest parses the body
-        # server-side, so it is NOT marked here (it asserts for real).
-        _aw_campaign_invalid = (
-            "T-UC-004-boundary-attribution" in marker_names and "unit=campaign with interval=2" in nodeid
-        )
+        # model=last_click PASS on a2a/mcp/rest (VALIDATION_ERROR).
+        # GRADUATED (salesagent-rlgl.2): the boundary "campaign with interval=2" now passes
+        # on a2a (and e2e_rest, already unmarked) — both carry attribution_window.post_click
+        # to production, so INV-5 fires (VALIDATION_ERROR) and the wire-envelope assertion
+        # holds. The old #1462 "request path drops post_click" framing was wrong for the wire
+        # transports; #1462 is the in-process _impl path, which BDD does not parametrize.
         _aw_partition_campaign = (
             "T-UC-004-partition-attribution" in marker_names and "campaign_interval_not_one" in nodeid
         )
-        # #1462: the request path drops attribution_window.post_click, so the validation
-        # never sees the window and the call succeeds instead of being rejected. This
-        # manifests transport-/shape-specifically: campaign interval=2 on the in-process
-        # transports, and EVERY error row of the partition shape over e2e_rest. The
-        # boundary shape over e2e_rest is unaffected (it asserts for real and passes).
+        # The partition shape's error rows STILL fail, but NOT because of #1462: the generic
+        # "with {request_params}" step shadows the specific "with attribution_window {value}"
+        # step, and _parse_request_params drops the space-form window, so the window never
+        # reaches production (salesagent-50hl). e2e_rest INVALID_REQUEST rows assert
+        # server-side. Marker kept until the step-binding bug is fixed.
         _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
-        _hits_1462 = ((_aw_campaign_invalid or _aw_partition_campaign) and (is_a2a or is_mcp or is_rest)) or (
+        _partition_window_dropped = (_aw_partition_campaign and (is_a2a or is_mcp or is_rest)) or (
             _aw_partition_error and is_e2e_rest
         )
-        if _hits_1462:
+        if _partition_window_dropped:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="attribution_window: validation can't fire — the request path drops "
-                    "attribution_window.post_click (#1462)",
+                    reason="attribution_window partition: the generic 'with {request_params}' step "
+                    "shadows the specific partition step and drops the window (salesagent-50hl); "
+                    "validation never fires so the rejection assertion can't pass",
                     strict=True,
                 )
             )
-            # Graduated: e2e_rest invalid attribution_window schema violations now
-            # return 400 INVALID_REQUEST (the RequestValidationError handler in
-            # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
-            # handles them.
 
         # Graduated: T-UC-004-boundary-account — transport-aware.
         # "account_id present"/"brand + operator" (valid): fail on mcp/rest only.
@@ -1783,13 +1778,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             # attribution_window: validation IS implemented (SDK model enum/range +
             # _validate_attribution_window for campaign INV-5, emitting VALIDATION_ERROR),
-            # but the in-process request path drops attribution_window.post_click (#1462)
-            # so it can't fire in-process; e2e_rest parses the body server-side and asserts
-            # for real. (Reason corrected per PR #1420 reviewer nit; not "not implemented".)
+            # but the partition-shape error rows never reach it: the generic
+            # "with {request_params}" step shadows the specific "with attribution_window
+            # {value}" step and _parse_request_params drops the space-form window
+            # (salesagent-50hl) — a TEST step-binding bug, not the #1462 in-process gap.
             (
                 "T-UC-004-partition-attribution",
                 {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
-                "attribution_window validation can't fire in-process — request path drops post_click (#1462)",
+                "attribution_window partition rows never reach validation — generic with-{request_params} "
+                "step shadows the specific partition step and drops the window (salesagent-50hl)",
             ),
             # daily breakdown: production doesn't validate non-boolean values
             (

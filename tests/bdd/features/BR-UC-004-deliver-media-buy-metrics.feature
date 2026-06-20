@@ -626,13 +626,13 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-attr-campaign-invalid @invariant @BR-RULE-092 @attribution @error
   Scenario: Campaign unit with interval != 1 - rejected
+    # HAND-EDITED (salesagent-rlgl.2): Then asserts the buyer-facing WIRE envelope
+    # via the existing wire-assertion path (attribution_window in _WIRE_ASSERTED_FIELDS
+    # -> _assert_error_outcome -> assert_envelope_shape on ctx["wire_error_envelope"]),
+    # not the lossy reconstructed ctx["error"] generic then_error.py steps.
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 2, "unit": "campaign"}}
-    Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should contain "interval must be 1"
-    And the error should include "suggestion" field
-    And the suggestion should contain "interval must be 1"
+    Then the attribution_window validation should result in error "VALIDATION_ERROR" with suggestion
     # BR-RULE-092 INV-5 violated: unit=campaign + interval!=1 -> rejected
     # POST-F2: Error explains constraint
     # POST-F3: Suggestion for recovery
