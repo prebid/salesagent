@@ -177,8 +177,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
     "T-UC-005-sandbox-validation": "sandbox validation not triggered for invalid filters — spec-production gap",
-    # Un-graduated: T-UC-005-main-referrals — creative agent referrals empty in response (all transports)
-    "T-UC-005-main-referrals": "creative agent referrals not populated in list_creative_formats response — spec-production gap",
+    # T-UC-005-main-referrals: in-process ONLY (the registry is mocked and returns no agents).
+    # GRADUATED for e2e_rest in the apply loop below (salesagent-rlgl.5) — with a seeded tenant
+    # the live server populates creative_agents (>=DEFAULT_AGENT). NOT a spec-production gap.
+    "T-UC-005-main-referrals": "creative agent referrals empty — in-process registry mock returns no agents; "
+    "production populates >=DEFAULT_AGENT over real transports (mock limitation, not a spec-production gap)",
     # FIXME: T-UC-005-main — format 'audio-spot' has no assets or renders (all transports)
     "T-UC-005-main": "some formats (e.g. audio-spot) lack asset_requirements and render_capabilities — spec-production gap",
     # Partially graduated: dispatch fix landed (salesagent-40kk); error code mismatch remains
@@ -714,6 +717,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
             if tag in marker_names:
+                if is_e2e_rest and tag == "T-UC-005-main-referrals":
+                    # GRADUATED for e2e_rest (salesagent-rlgl.5): with a seeded tenant the
+                    # live server populates creative_agents (>=DEFAULT_AGENT), so referrals
+                    # are present on the wire and the (wire-asserting) Then passes. The marker
+                    # stays strict for in-process transports where the registry mock is empty.
+                    break
                 if is_e2e_rest and tag in uc005_filter_e2e_untestable:
                     # tolerate either outcome — see uc005_filter_e2e_reason (salesagent-7fye)
                     item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
@@ -2935,6 +2944,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         from tests.harness.creative_formats import CreativeFormatsEnv
 
         with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
+            # Seed a tenant ONLY in e2e mode: the live server authenticates the token
+            # against the DB tenant, and UC-005 baseline scenarios carry no account/tenant
+            # Given step to seed it (unlike UC-006/UC-011). In-process the registry is mocked
+            # and the DB is per-test, so the in-process status quo must stay unseeded.
+            # Mirrors the UC-004 poll branch (salesagent-rlgl.5).
+            if env.e2e_config is not None:
+                env.setup_default_data()
             ctx["env"] = env
             yield
 
