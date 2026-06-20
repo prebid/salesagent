@@ -421,19 +421,80 @@ def _get_product(ctx: dict) -> Any:
     return product
 
 
+def _ensure_referenced_creatives_valid(ctx: dict) -> None:
+    """Create valid (approved, format-compatible) creatives for any referenced_creative_ids
+    not already in the DB.
+
+    Placement scenarios reference a creative (e.g. cr_001) but the generated feature
+    does not include a creative-setup Given. Creative validation now runs before
+    placement validation in the creative_assignments handler (CREATIVE_REJECTED), so
+    without a valid creative the placement check is never reached. This seeds the
+    referenced creatives with a format matching the package product so the scenario
+    exercises placement validation as intended.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+    from tests.factories.creative import CreativeFactory
+
+    creative_ids = ctx.get("referenced_creative_ids") or []
+    if not creative_ids:
+        return
+    product = _get_product(ctx)
+    fmt = "display_300x250"
+    if product is not None and product.format_ids:
+        first = product.format_ids[0]
+        fmt = (first.get("id") or first.get("format_id") or fmt) if isinstance(first, dict) else fmt
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with db_session(ctx) as session:
+        existing = {
+            c.creative_id
+            for c in session.scalars(
+                select(CreativeModel)
+                .filter_by(tenant_id=tenant.tenant_id)
+                .where(CreativeModel.creative_id.in_(creative_ids))
+            ).all()
+        }
+    for cid in creative_ids:
+        if cid in existing:
+            continue
+        CreativeFactory(
+            creative_id=cid,
+            tenant=tenant,
+            principal=principal,
+            format=fmt,
+            approved=True,
+            status="approved",
+            data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
+        )
+    ctx["env"]._commit_factory_data()
+
+
 @given(parsers.parse('placement "{placement_id}" is not valid for the package product'))
 def given_placement_invalid_for_product(ctx: dict, placement_id: str) -> None:
     """Declare that the placement_id is NOT valid for the product.
 
-    The product setup by the harness has placements plc_a and plc_b.
-    Any other placement_id is invalid. This step verifies the placement
-    is indeed not in the valid set.
+    Ensures the product defines placements plc_a and plc_b; any other
+    placement_id is invalid. This step verifies the placement is indeed
+    not in the valid set.
     """
     product = _get_product(ctx)
     assert product is not None, "No product in ctx or DB"
-    # Verify the placement is genuinely not in the product's valid placements
-    placements = getattr(product, "placement_configs", None) or []
-    valid_ids = {p.get("placement_id") if isinstance(p, dict) else getattr(p, "placement_id", None) for p in placements}
+    # Ensure the product supports placement targeting with a known valid set, so the
+    # requested placement_id exercises production's invalid-id branch
+    # (media_buy_update.py:944) rather than the no-placements branch (:958). The model
+    # column is `placements` (list of dicts with placement_id), not `placement_configs`.
+    if not product.placements:
+        product.placements = [
+            {"placement_id": "plc_a", "name": "Placement A"},
+            {"placement_id": "plc_b", "name": "Placement B"},
+        ]
+        ctx["env"]._commit_factory_data()
+        product = _get_product(ctx)
+    # Seed valid creatives so creative validation passes and placement validation is reached.
+    _ensure_referenced_creatives_valid(ctx)
+    valid_ids = {p.get("placement_id") for p in (product.placements or []) if isinstance(p, dict)}
     assert placement_id not in valid_ids, (
         f"Placement '{placement_id}' IS valid for product — step claims it should not be. Valid: {valid_ids}"
     )
@@ -448,19 +509,19 @@ def given_product_no_placement_targeting(ctx: dict) -> None:
     """
     product = _get_product(ctx)
     assert product is not None, "No product in ctx or DB"
-    # Assert product has the placement_configs attribute — if absent, the step
-    # cannot guarantee the product is configured as "no placement targeting".
-    assert hasattr(product, "placement_configs"), (
-        f"Product {type(product).__name__} has no 'placement_configs' attribute — "
-        "cannot clear placements to disable placement-level targeting"
-    )
-    product.placement_configs = []
+    # The model column is `placements`; clearing it (None) means the product defines no
+    # placements, so production treats placement-level targeting as unsupported
+    # (media_buy_update.py:958 -> UNSUPPORTED_FEATURE).
+    product.placements = None
     env = ctx["env"]
     env._commit_factory_data()
+    # Seed valid creatives so creative validation passes and the unsupported-placement
+    # check is reached.
+    _ensure_referenced_creatives_valid(ctx)
     # Post-condition: verify placements were actually cleared
     reloaded = _get_product(ctx)
-    cleared = getattr(reloaded, "placement_configs", None) or []
-    assert len(cleared) == 0, f"placement_configs not cleared after commit — still has {len(cleared)} entries"
+    cleared = reloaded.placements or []
+    assert len(cleared) == 0, f"placements not cleared after commit — still has {len(cleared)} entries"
 
 
 # ═══════════════════════════════════════════════════════════════════════

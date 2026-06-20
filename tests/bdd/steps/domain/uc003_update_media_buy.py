@@ -541,15 +541,18 @@ def given_placement_ids_valid(ctx: dict) -> None:
         "No product in ctx (neither 'default_product' nor 'existing_product') — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
-    # Verify product does not have restrictive placement config that would reject these
-    allowed = getattr(product, "allowed_placement_ids", None)
+    # Verify product does not have restrictive placement config that would reject these.
+    # The model column is `placements` (list of dicts with placement_id); when set it
+    # restricts the valid placement ids, when None/empty all placements are allowed.
+    placements = getattr(product, "placements", None)
+    allowed = {p.get("placement_id") for p in placements if isinstance(p, dict)} if placements else None
     if allowed is not None:
         invalid = [p for p in pids if p not in allowed]
         assert not invalid, (
             f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
             "step claims 'all placement_ids are valid for the product'"
         )
-    # When product has no allowed_placement_ids restriction, all placements are
+    # When product has no placements restriction, all placements are
     # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
     # Log which path was taken for debugging.
     ctx.setdefault("placement_validation_path", "unrestricted" if allowed is None else "restricted")
@@ -1870,7 +1873,8 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
             "Scenario requires '(product unsupported)' but no product found in ctx or DB — "
             "ensure a Given step sets ctx['default_product'] or the harness creates a product"
         )
-        product.supports_placement_targeting = False
+        # The model column is `placements`; clearing it disables placement-level targeting.
+        product.placements = None
         env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]

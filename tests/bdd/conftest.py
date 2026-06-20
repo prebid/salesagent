@@ -239,13 +239,16 @@ _XFAIL_TAGS: dict[str, str] = {
     # hard-assert the BR error codes).
     "T-UC-002-ext-l": "BR-UC-002-ext-l: proposal_id resolution / PROPOSAL_EXPIRED unbuilt — proposal feature not implemented in production (spec-production gap)",
     "T-UC-002-ext-m": "BR-UC-002-ext-m: proposal total_budget_guidance.min validation / BUDGET_TOO_LOW unbuilt — proposal feature not implemented in production (spec-production gap)",
-    # FIXME(salesagent-9vgz.13): pricing validation returns generic validation_error, not PRICING_ERROR
-    # AdCPValidationError(details={"error_code": "PRICING_ERROR"}) is raised but then caught
-    # and re-raised as ValueError(str(e)) at media_buy_create.py:1741-1743, losing the structured
-    # error code. The outer handler converts it to Error(code="validation_error").
-    "T-UC-002-ext-n": "pricing validation returns generic validation_error, not PRICING_ERROR",
-    "T-UC-002-ext-n-bid": "pricing validation returns generic validation_error, not PRICING_ERROR",
-    "T-UC-002-ext-n-floor": "pricing validation returns generic validation_error, not PRICING_ERROR",
+    # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
+    # The generated .feature asserts PRICING_ERROR, which is NOT in the AdCP standard
+    # error-code vocabulary (static/schemas/source/enums/error-code.json @04f59d2d5).
+    # Production correctly emits the standard VALIDATION_ERROR on the wire (verified on
+    # a2a/mcp/rest) for all three pricing checks. Owner decision (gh8p.4): reconcile the
+    # .feature to a standard code upstream rather than implement a non-canonical
+    # PRICING_ERROR in production. Graduates after upstream regen.
+    "T-UC-002-ext-n": "generated .feature asserts non-canonical PRICING_ERROR; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
+    "T-UC-002-ext-n-bid": "generated .feature asserts non-canonical PRICING_ERROR; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
+    "T-UC-002-ext-n-floor": "generated .feature asserts non-canonical PRICING_ERROR; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
     # FIXME(salesagent-9vgz.15): production errors lack suggestion field
     # AdCPNotFoundError/AdCPValidationError/AdCPAdapterError raised with details={"error_code": ...}
     # but no details["suggestion"]. Spec requires suggestion for buyer remediation.
@@ -593,8 +596,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # code doesn't implement the expected validation.
         _UC003_EXT_XFAILS: dict[str, str] = {
             # Error code mismatches (production uses different codes than spec)
-            "T-UC-003-ext-a": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
-            "T-UC-003-ext-a-unknown": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
+            # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
+            # The generated .feature asserts non-canonical lowercase "authentication_error",
+            # which is NOT in the AdCP standard vocabulary (error-code.json @04f59d2d5 defines
+            # AUTH_REQUIRED, whose description explicitly covers both credentials-missing and
+            # principal-presented-but-rejected). Owner decision (gh8p.6): reconcile the .feature
+            # to AUTH_REQUIRED upstream. Separately, these scenarios' request fixture is
+            # under-specified (media_buy_id only) so production rejects on the emptiness guard
+            # before reaching auth — that request shape is fixed upstream too. The
+            # production AUTH_TOKEN_INVALID->AUTH_REQUIRED reversal is deferred (72-test design
+            # change, its own ticket). Graduates after upstream regen.
+            "T-UC-003-ext-a": "generated .feature asserts non-canonical authentication_error + under-specified request; spec-canonical is AUTH_REQUIRED — stale spec, pending upstream regen (salesagent-lp0x)",
+            "T-UC-003-ext-a-unknown": "generated .feature asserts non-canonical authentication_error + under-specified request; spec-canonical is AUTH_REQUIRED — stale spec, pending upstream regen (salesagent-lp0x)",
             "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
@@ -614,8 +627,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # pre-v3.1 BUDGET_TOO_LOW (see UC-002 ext-k). Graduates after upstream regen.
             "T-UC-003-ext-g": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production validates and correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen (salesagent-lp0x)",
             "T-UC-003-ext-k": "inline creative sync: FK violation in production (missing creative commit)",
-            "T-UC-003-ext-m": "production doesn't validate placement_ids on update path",
-            "T-UC-003-ext-m-unsupported": "production doesn't validate placement targeting support",
+            # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
+            # Production DOES validate placement_ids on update (media_buy_update.py:944 ->
+            # VALIDATION_ERROR for an invalid id; :958 -> UNSUPPORTED_FEATURE when the product
+            # defines no placements) — both standard AdCP codes, verified on a2a/mcp/rest.
+            # The generated .feature asserts non-canonical lowercase "invalid_placement_ids"
+            # (not in error-code.json @04f59d2d5). Owner decision (gh8p.8): reconcile the
+            # .feature upstream to INVALID_REQUEST (invalid id) / UNSUPPORTED_FEATURE
+            # (no placement support). The fixture gap (steps used placement_configs vs the real
+            # `placements` column) is fixed in-repo so the scenario now reaches dispatch.
+            # Graduates after upstream regen.
+            "T-UC-003-ext-m": "generated .feature asserts non-canonical invalid_placement_ids; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
+            "T-UC-003-ext-m-unsupported": "generated .feature asserts non-canonical invalid_placement_ids; production emits standard UNSUPPORTED_FEATURE — stale spec, pending upstream regen (salesagent-lp0x)",
             "T-UC-003-ext-n": "production doesn't check admin privileges on update",
             # Graduated: T-UC-003-ext-o (rczc: adapter failure returns correct shape on all 4 transports)
             "T-UC-003-ext-q-rejected": "production doesn't reject updates to terminal-status media buys",
