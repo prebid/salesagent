@@ -1000,6 +1000,10 @@ def _update_media_buy_impl(
                                             f"Available: {sorted(available_placement_ids)}",
                                             field="creative_assignments[].placement_ids",
                                             context=req.context,
+                                            suggestion=(
+                                                f"Use placement_ids from the product's available "
+                                                f"placements ({sorted(available_placement_ids)}) and resend."
+                                            ),
                                         )
                                 elif product_obj and not product_obj.placements:
                                     # Product doesn't define placements, so placement targeting not supported
@@ -1007,6 +1011,10 @@ def _update_media_buy_impl(
                                         f"Product '{product_id}' does not support placement targeting "
                                         f"(no placements defined)",
                                         context=req.context,
+                                        suggestion=(
+                                            "Remove placement_ids from creative_assignments, or choose a "
+                                            "product that supports placement-level targeting, then resend."
+                                        ),
                                     )
 
                         updated_assignments = []

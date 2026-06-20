@@ -396,7 +396,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package references pricing_option_id "po-nonexistent" not found on the product
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "PRICING_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -409,7 +409,7 @@ Feature: BR-UC-002 Create Media Buy
     And a package selects an auction pricing option but provides no bid_price
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "PRICING_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
 
   @T-UC-002-ext-n-floor @extension @ext-n @error
@@ -419,7 +419,7 @@ Feature: BR-UC-002 Create Media Buy
     And a package has bid_price 0.50 but floor_price is 1.00
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "PRICING_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # --- ext-o: Creative Not Found in Library ---
 

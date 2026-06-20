@@ -764,7 +764,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "invalid_placement_ids"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-028 INV-2: invalid placement_id → rejected
     # POST-F1: System state unchanged
@@ -785,7 +785,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "invalid_placement_ids"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
     # BR-RULE-028 INV-3: product doesn't support placement targeting → rejected
     # POST-F3: Suggestion for recovery
@@ -1847,8 +1847,8 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition                    | placement_config                              | outcome                                          |
-      | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "invalid_placement_ids" with suggestion     |
-      | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "invalid_placement_ids" with suggestion     |
+      | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "VALIDATION_ERROR" with suggestion     |
+      | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "UNSUPPORTED_FEATURE" with suggestion     |
 
   @T-UC-003-boundary-placement-id @boundary @placement_id_validation
   Scenario Outline: Placement ID validation boundary - <boundary_point>
@@ -1868,7 +1868,7 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                       | placement_config                              | outcome                                      |
       | all placement IDs valid              | placement_ids=[plc_a, plc_b] (valid)          | success                                      |
       | no placement IDs (untargeted)        | no placement_ids specified                    | success                                      |
-      | product without placement support    | placement_ids=[plc_a] (product unsupported)   | error "invalid_placement_ids" with suggestion |
+      | product without placement support    | placement_ids=[plc_a] (product unsupported)   | error "UNSUPPORTED_FEATURE" with suggestion |
 
   @T-UC-003-partition-adapter-dispatch @partition @adapter_dispatch
   Scenario Outline: Adapter dispatch partition validation - <partition>

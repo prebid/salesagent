@@ -1333,7 +1333,10 @@ def _validate_pricing_model_selection(
             if campaign_currency:
                 error_msg += f" in currency {campaign_currency}"
         error_msg += f". Available options: {', '.join(available_options)}"
-        raise AdCPValidationError(error_msg)
+        raise AdCPValidationError(
+            error_msg,
+            suggestion="Select a pricing_option_id offered by the product (see the product's pricing_options) and resend.",
+        )
 
     # Validate auction pricing
     if not selected_option.is_fixed:
@@ -1341,6 +1344,7 @@ def _validate_pricing_model_selection(
             raise AdCPValidationError(
                 f"Package requires bid_price for auction-based {selected_option.pricing_model} pricing. "
                 f"Floor price: {selected_option.price_guidance.get('floor') if selected_option.price_guidance else 'N/A'}",
+                suggestion="Provide a bid_price at or above the floor price for this auction pricing option and resend.",
             )
 
         floor_price = (
@@ -1353,6 +1357,7 @@ def _validate_pricing_model_selection(
         if bid_decimal < floor_price:
             raise AdCPValidationError(
                 f"Bid price {package.bid_price} is below floor price {floor_price} for {selected_option.pricing_model} pricing",
+                suggestion=f"Increase bid_price to at least the floor price ({floor_price}) and resend.",
             )
 
     # Validate fixed pricing has rate

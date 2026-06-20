@@ -239,16 +239,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # hard-assert the BR error codes).
     "T-UC-002-ext-l": "BR-UC-002-ext-l: proposal_id resolution / PROPOSAL_EXPIRED unbuilt — proposal feature not implemented in production (spec-production gap)",
     "T-UC-002-ext-m": "BR-UC-002-ext-m: proposal total_budget_guidance.min validation / BUDGET_TOO_LOW unbuilt — proposal feature not implemented in production (spec-production gap)",
-    # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
-    # The generated .feature asserts PRICING_ERROR, which is NOT in the AdCP standard
-    # error-code vocabulary (static/schemas/source/enums/error-code.json @04f59d2d5).
-    # Production correctly emits the standard VALIDATION_ERROR on the wire (verified on
-    # a2a/mcp/rest) for all three pricing checks. Owner decision (gh8p.4): reconcile the
-    # .feature to a standard code upstream rather than implement a non-canonical
-    # PRICING_ERROR in production. Graduates after upstream regen.
-    "T-UC-002-ext-n": "generated .feature asserts non-canonical PRICING_ERROR; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
-    "T-UC-002-ext-n-bid": "generated .feature asserts non-canonical PRICING_ERROR; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
-    "T-UC-002-ext-n-floor": "generated .feature asserts non-canonical PRICING_ERROR; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
+    # Graduated (salesagent-lp0x): the .feature now asserts the standard VALIDATION_ERROR
+    # (PRICING_ERROR is not in the AdCP vocabulary @04f59d2d5) and production emits it with
+    # a recovery suggestion. T-UC-002-ext-n / -ext-n-bid / -ext-n-floor pass; xfails removed.
     # FIXME(salesagent-9vgz.15): production errors lack suggestion field
     # AdCPNotFoundError/AdCPValidationError/AdCPAdapterError raised with details={"error_code": ...}
     # but no details["suggestion"]. Spec requires suggestion for buyer remediation.
@@ -627,18 +620,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # pre-v3.1 BUDGET_TOO_LOW (see UC-002 ext-k). Graduates after upstream regen.
             "T-UC-003-ext-g": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production validates and correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen (salesagent-lp0x)",
             "T-UC-003-ext-k": "inline creative sync: FK violation in production (missing creative commit)",
-            # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
-            # Production DOES validate placement_ids on update (media_buy_update.py:944 ->
-            # VALIDATION_ERROR for an invalid id; :958 -> UNSUPPORTED_FEATURE when the product
-            # defines no placements) — both standard AdCP codes, verified on a2a/mcp/rest.
-            # The generated .feature asserts non-canonical lowercase "invalid_placement_ids"
-            # (not in error-code.json @04f59d2d5). Owner decision (gh8p.8): reconcile the
-            # .feature upstream to INVALID_REQUEST (invalid id) / UNSUPPORTED_FEATURE
-            # (no placement support). The fixture gap (steps used placement_configs vs the real
-            # `placements` column) is fixed in-repo so the scenario now reaches dispatch.
-            # Graduates after upstream regen.
-            "T-UC-003-ext-m": "generated .feature asserts non-canonical invalid_placement_ids; production emits standard VALIDATION_ERROR — stale spec, pending upstream regen (salesagent-lp0x)",
-            "T-UC-003-ext-m-unsupported": "generated .feature asserts non-canonical invalid_placement_ids; production emits standard UNSUPPORTED_FEATURE — stale spec, pending upstream regen (salesagent-lp0x)",
+            # Graduated (salesagent-lp0x): the .feature now asserts standard codes
+            # (VALIDATION_ERROR for an invalid placement id, UNSUPPORTED_FEATURE when the
+            # product defines no placements; invalid_placement_ids is not in the AdCP
+            # vocabulary @04f59d2d5) and production emits them with a recovery suggestion.
+            # The placement fixture gap (placement_configs -> placements) is fixed.
+            # T-UC-003-ext-m / -ext-m-unsupported pass; xfails removed.
             "T-UC-003-ext-n": "production doesn't check admin privileges on update",
             # Graduated: T-UC-003-ext-o (rczc: adapter failure returns correct shape on all 4 transports)
             "T-UC-003-ext-q-rejected": "production doesn't reject updates to terminal-status media buys",
