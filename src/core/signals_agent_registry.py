@@ -34,7 +34,7 @@ from typing import Any
 from adcp import ADCPMultiAgentClient
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
 from src.core.schemas import GetSignalsRequest
 
 logger = logging.getLogger(__name__)
@@ -218,19 +218,19 @@ class SignalsAgentRegistry:
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"Authentication failed: {e.message}") from e
+            raise AdCPAuthenticationError(f"Authentication failed: {e.message}") from e
 
         except ADCPTimeoutError as e:
             logger.error(f"Request timed out for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"Request timed out: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Request timed out: {e.message}") from e
 
         except ADCPConnectionError as e:
             logger.error(f"Connection failed for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"Connection failed: {e.message}") from e
+            raise AdCPServiceUnavailableError(f"Connection failed: {e.message}") from e
 
         except ADCPError as e:
             logger.error(f"AdCP error for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"AdCP error: {e.message}") from e
+            raise AdCPAdapterError(str(e.message)) from e
 
     async def get_signals(
         self,
