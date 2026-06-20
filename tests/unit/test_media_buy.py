@@ -29,6 +29,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPContextNotFoundError,
+    AdCPCreativeRejectedError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -789,7 +790,7 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
             assert "creative_errors" in exc_info.value.details
@@ -819,7 +820,7 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
         assert "creative_errors" in exc_info.value.details
@@ -849,7 +850,7 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
         assert "creative_errors" in exc_info.value.details
@@ -901,7 +902,7 @@ class TestCreateMediaBuyCreativeValidation:
             product_result.all.return_value = [mock_product]
             session.scalars.side_effect = [creative_result, product_result]
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
             assert "creative_errors" in exc_info.value.details
@@ -979,7 +980,7 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
             # Both errors should be accumulated in a single exception
@@ -2344,15 +2345,14 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative, product, assignment queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_c1, mock_c2]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c1, mock_c2]
+            mock_uow.products.get_by_id.return_value = mock_product
+
+            # Existing-assignment lookup still goes through session.scalars.
             assign_result = MagicMock()
             assign_result.all.return_value = [mock_existing_assignment]
-
-            uow_session.scalars.side_effect = [creative_result, prod_result, assign_result]
+            uow_session.scalars.side_effect = [assign_result]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2425,13 +2425,8 @@ class TestUpdateMediaBuyCreativeIds:
             # Media buy via repo
             mock_uow.media_buys.get_by_id.return_value = mock_buy
 
-            # Creative query via session - no creatives found
-            creative_result = MagicMock()
-            creative_result.all.return_value = []
-
-            uow_session.scalars.side_effect = [creative_result]
-
-            from src.core.exceptions import AdCPCreativeRejectedError
+            # No creatives found via repository.
+            mock_uow.creatives.admin_get_by_ids.return_value = []
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)not found"):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2515,15 +2510,11 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative and product queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_creative]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.products.get_by_id.return_value = mock_product
 
-            uow_session.scalars.side_effect = [creative_result, prod_result]
-
-            with pytest.raises(AdCPValidationError, match="(?i)cannot.*assign|error|invalid"):
+            with pytest.raises(AdCPCreativeRejectedError, match="(?i)cannot.*assign|error|state"):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_format_mismatch_rejected(self):
@@ -2605,15 +2596,11 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative and product queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_creative]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.products.get_by_id.return_value = mock_product
 
-            uow_session.scalars.side_effect = [creative_result, prod_result]
-
-            with pytest.raises(AdCPValidationError, match="(?i)format|not supported"):
+            with pytest.raises(AdCPCreativeRejectedError, match="(?i)format|not supported"):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_change_set_computation(self):
@@ -2711,15 +2698,14 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative, product, assignment queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_c2, mock_c4]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c2, mock_c4]
+            mock_uow.products.get_by_id.return_value = mock_product
+
+            # Existing-assignment lookup still goes through session.scalars.
             assign_result = MagicMock()
             assign_result.all.return_value = [mock_assign_c1, mock_assign_c2, mock_assign_c3]
-
-            uow_session.scalars.side_effect = [creative_result, prod_result, assign_result]
+            uow_session.scalars.side_effect = [assign_result]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 

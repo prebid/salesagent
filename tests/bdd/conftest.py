@@ -613,10 +613,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # verified at wire on mcp/rest/a2a). The generated .feature asserts the
             # pre-v3.1 BUDGET_TOO_LOW (see UC-002 ext-k). Graduates after upstream regen.
             "T-UC-003-ext-g": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production validates and correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen (salesagent-lp0x)",
-            "T-UC-003-ext-i": "production doesn't validate creative existence on update path",
-            "T-UC-003-ext-j-error": "production doesn't validate creative state on update path",
-            "T-UC-003-ext-j-rejected": "production doesn't validate creative state on update path",
-            "T-UC-003-ext-j-format": "production doesn't validate creative format compatibility on update",
             "T-UC-003-ext-k": "inline creative sync: FK violation in production (missing creative commit)",
             "T-UC-003-ext-m": "production doesn't validate placement_ids on update path",
             "T-UC-003-ext-m-unsupported": "production doesn't validate placement targeting support",

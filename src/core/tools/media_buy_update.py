@@ -58,9 +58,6 @@ from src.core.auth import (
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
-    Creative as DBCreative,
-)
-from src.core.database.models import (
     CreativeAssignment as DBAssignment,
 )
 from src.core.database.models import (
@@ -119,6 +116,129 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     if req.packages:
         actions.append("update_packages")
     return actions
+
+
+def _normalize_creative_agent_url(url: str | None) -> str | None:
+    """Normalize a creative/format agent_url for comparison.
+
+    Strips a trailing slash and an optional ``/mcp`` suffix so the two
+    URL variants a buyer may use compare equal.
+    """
+    if not url:
+        return None
+    return url.rstrip("/").removesuffix("/mcp")
+
+
+def _validate_creatives_for_assignment(
+    creative_ids: list[str],
+    *,
+    uow: "MediaBuyUoW",
+    product: "DBProduct | None",
+    product_name: str | None = None,
+    context: ContextObject | None = None,
+) -> None:
+    """Validate a set of creatives is assignable to a package.
+
+    Shared by both the ``creative_ids`` and ``creative_assignments`` update
+    paths so the existence / status / format-compatibility rules live in one
+    place (DRY). Checks run in order and raise ``AdCPCreativeRejectedError``
+    (wire code ``CREATIVE_REJECTED``, correctable) on the first failing
+    category, always carrying a ``suggestion`` for buyer recovery:
+
+    1. Existence — every ``creative_id`` exists for this tenant.
+    2. Status — none are in ``error`` or ``rejected`` state.
+    3. Format compatibility — each creative's ``(agent_url, format)`` is
+       supported by the package's product ``format_ids``. A product with no
+       declared formats imposes no restriction.
+
+    Args:
+        creative_ids: Creative IDs referenced by the package update.
+        uow: Tenant-scoped unit of work exposing ``creatives``.
+        product: The package's product ORM record (or ``None`` if the package
+            has no resolvable product, in which case the format check is skipped).
+        product_name: Display name for error messages (falls back to the
+            product's name, then the product_id).
+        context: AdCP context object, flowed into the error envelope.
+
+    Raises:
+        AdCPCreativeRejectedError: If any creative is not found, in a terminal
+            state, or has a format incompatible with the product.
+    """
+    if not creative_ids:
+        return
+
+    requested_ids = list(dict.fromkeys(creative_ids))  # de-dup, preserve order
+
+    # (a) Existence — tenant-scoped multi-get via repository.
+    assert uow.creatives is not None, "MediaBuyUoW.creatives required for creative validation"
+    creatives_list = uow.creatives.admin_get_by_ids(requested_ids)
+    found_by_id = {c.creative_id: c for c in creatives_list}
+    missing_ids = [cid for cid in requested_ids if cid not in found_by_id]
+    if missing_ids:
+        raise AdCPCreativeRejectedError(
+            f"Creative IDs not found: {', '.join(missing_ids)}",
+            suggestion=(
+                "Sync the creative(s) via sync_creatives (or pick an existing "
+                "creative from list_creatives) before assigning them."
+            ),
+            details={"creative_ids": missing_ids},
+            context=context,
+        )
+
+    # (b) Status — terminal-state creatives are not assignable.
+    bad_state = [c for c in creatives_list if c.status in ("error", "rejected")]
+    if bad_state:
+        offenders = ", ".join(f"{c.creative_id} (status={c.status})" for c in bad_state)
+        raise AdCPCreativeRejectedError(
+            f"Creative(s) cannot be assigned in their current state: {offenders}",
+            suggestion=(
+                "Resolve the creative's errors and re-sync it so it returns to an "
+                "approved/active state before assigning it."
+            ),
+            details={"creative_ids": [c.creative_id for c in bad_state]},
+            context=context,
+        )
+
+    # (c) Format compatibility against the package's product.
+    if product is None or not product.format_ids:
+        # No product or no declared formats — no format restriction.
+        return
+
+    display_name = product_name or getattr(product, "name", None) or getattr(product, "product_id", "")
+
+    # Build the set of supported (normalized_agent_url, format_id) pairs.
+    supported_formats: set[tuple[str | None, str]] = set()
+    for fmt in product.format_ids:
+        if isinstance(fmt, dict):
+            agent_url = fmt.get("agent_url")
+            format_id = fmt.get("id") or fmt.get("format_id")
+            if format_id:
+                supported_formats.add((_normalize_creative_agent_url(agent_url), format_id))
+
+    if not supported_formats:
+        return  # No usable format restrictions — allow all.
+
+    incompatible: list[str] = []
+    for creative in creatives_list:
+        creative_pair = (_normalize_creative_agent_url(creative.agent_url), creative.format)
+        if creative_pair not in supported_formats:
+            display = f"{creative.agent_url}/{creative.format}" if creative.agent_url else str(creative.format)
+            incompatible.append(f"{creative.creative_id} (format '{display}')")
+
+    if incompatible:
+        supported_display = ", ".join(
+            f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in sorted(supported_formats, key=lambda p: p[1])
+        )
+        raise AdCPCreativeRejectedError(
+            f"Creative format(s) not supported by product '{display_name}': {', '.join(incompatible)}. "
+            f"Supported formats: {supported_display}",
+            suggestion=(
+                "Assign a creative whose format matches one of the product's supported "
+                f"formats ({supported_display}), or convert the creative to a supported format."
+            ),
+            details={"supported_formats": supported_display},
+            context=context,
+        )
 
 
 def _verify_principal(
@@ -681,113 +801,22 @@ def _update_media_buy_impl(
                         # Use the actual internal media_buy_id
                         actual_media_buy_id = media_buy_obj.media_buy_id
 
-                        # Validate all creative IDs exist
-                        creative_stmt = select(DBCreative).where(
-                            DBCreative.tenant_id == tenant["tenant_id"],
-                            DBCreative.creative_id.in_(pkg_update.creative_ids),
-                        )
-                        creatives_list = session.scalars(creative_stmt).all()
-                        found_creative_ids = {c.creative_id for c in creatives_list}
-                        missing_ids = set(pkg_update.creative_ids) - found_creative_ids
-
-                        if missing_ids:
-                            raise AdCPCreativeRejectedError(
-                                f"Creative IDs not found: {', '.join(missing_ids)}", context=req.context
-                            )
-
-                        # Validate creatives are in usable state before updating
-                        # Note: We validate existence (already done above) and status, not structure
-                        # Structure validation happens during sync_creatives - here we just assign
-                        validation_errors = []
-                        for creative in creatives_list:
-                            # Check if creative is in a valid state for assignment
-                            # Creatives in "error" or "rejected" state should not be assignable
-                            if creative.status in ["error", "rejected"]:
-                                validation_errors.append(
-                                    f"Creative {creative.creative_id} cannot be assigned (status={creative.status})"
-                                )
-
-                        # Validate creative formats against package product formats
-                        # Get package and product to check supported formats
+                        # Validate creatives (existence, status, format) via the
+                        # shared helper so the rules match the creative_assignments path.
                         db_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-
-                        # Get product_id from package_config
                         product_id = (
                             db_package.package_config.get("product_id")
                             if db_package and db_package.package_config
                             else None
                         )
-
-                        if product_id:
-                            # Get product to check supported formats
-                            product_stmt = select(DBProduct).where(
-                                DBProduct.tenant_id == tenant["tenant_id"], DBProduct.product_id == product_id
-                            )
-                            product = session.scalars(product_stmt).first()
-
-                            if product and product.format_ids:
-                                # Build set of supported formats (agent_url, format_id) tuples
-                                supported_formats = set()
-                                for fmt in product.format_ids:
-                                    if isinstance(fmt, dict):
-                                        agent_url = fmt.get("agent_url")
-                                        format_id = fmt.get("id") or fmt.get("format_id")
-                                        if agent_url and format_id:
-                                            supported_formats.add((agent_url, format_id))
-
-                                # Check each creative's format
-                                for creative in creatives_list:
-                                    creative_agent_url = creative.agent_url
-                                    creative_format_id = creative.format
-
-                                    # Allow /mcp URL variant
-                                    def normalize_url(url: str | None) -> str | None:
-                                        if not url:
-                                            return None
-                                        return url.rstrip("/").removesuffix("/mcp")
-
-                                    normalized_creative_url = normalize_url(creative_agent_url)
-                                    is_supported = False
-
-                                    for supported_url, supported_format_id in supported_formats:
-                                        normalized_supported_url = normalize_url(supported_url)
-                                        if (
-                                            normalized_creative_url == normalized_supported_url
-                                            and creative_format_id == supported_format_id
-                                        ):
-                                            is_supported = True
-                                            break
-
-                                    if not supported_formats:
-                                        # Product has no format restrictions - allow all
-                                        is_supported = True
-
-                                    if not is_supported:
-                                        creative_format_display = (
-                                            f"{creative_agent_url}/{creative_format_id}"
-                                            if creative_agent_url
-                                            else creative_format_id
-                                        )
-                                        supported_formats_display = ", ".join(
-                                            [f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in supported_formats]
-                                        )
-                                        validation_errors.append(
-                                            f"Creative {creative.creative_id} format '{creative_format_display}' "
-                                            f"is not supported by product '{product.name}'. "
-                                            f"Supported formats: {supported_formats_display}"
-                                        )
-
-                        if validation_errors:
-                            error_msg = (
-                                "Cannot update media buy with invalid creatives. "
-                                "The following creatives cannot be assigned:\n"
-                                + "\n".join(f"  • {err}" for err in validation_errors)
-                            )
-                            logger.error(f"[UPDATE] {error_msg}")
-                            raise AdCPValidationError(
-                                error_msg,
-                                details={"creative_errors": validation_errors},
-                            )
+                        assert uow.products is not None
+                        product = uow.products.get_by_id(product_id) if product_id else None
+                        _validate_creatives_for_assignment(
+                            pkg_update.creative_ids,
+                            uow=uow,
+                            product=product,
+                            context=req.context,
+                        )
 
                         # Get existing assignments for this package
                         assignment_stmt = select(DBAssignment).where(
@@ -913,6 +942,25 @@ def _update_media_buy_impl(
                         media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
 
                         actual_media_buy_id = media_buy_obj.media_buy_id
+
+                        # Validate referenced creatives (existence, status, format) BEFORE
+                        # building any assignment rows — otherwise a not-found creative_id
+                        # would surface as a composite-FK IntegrityError. Same rules as the
+                        # creative_ids path via the shared helper.
+                        ca_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
+                        ca_product_id = (
+                            ca_package.package_config.get("product_id")
+                            if ca_package and ca_package.package_config
+                            else None
+                        )
+                        assert uow.products is not None
+                        ca_product = uow.products.get_by_id(ca_product_id) if ca_product_id else None
+                        _validate_creatives_for_assignment(
+                            [ca.creative_id for ca in pkg_update.creative_assignments],
+                            uow=uow,
+                            product=ca_product,
+                            context=req.context,
+                        )
 
                         # Validate placement_ids against product's available placements (adcp#208)
                         # Build set of placement_ids from all creative_assignments

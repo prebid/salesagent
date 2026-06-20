@@ -1112,13 +1112,19 @@ class TestUC003UpdateCreativeIds:
     """Creative ID update obligations."""
 
     def _setup_creative_mocks(self, env, creative_ids, statuses=None, formats=None):
-        """Helper to set up creative-related mocks."""
+        """Helper to set up creative-related mocks.
+
+        Wires the shared creative-validation path: existence/status/format are
+        resolved via ``uow.creatives.admin_get_by_ids`` and ``uow.products.get_by_id``
+        (not raw session.scalars), matching production.
+        """
         mock_session = env.mock["uow"].return_value.session
+        uow = env.mock["uow"].return_value
 
         # Media buy lookup
         mock_mb = MagicMock()
         mock_mb.media_buy_id = "mb_creative"
-        env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
+        uow.media_buys.get_by_id.return_value = mock_mb
 
         # Build creative mocks
         creatives = []
@@ -1130,7 +1136,11 @@ class TestUC003UpdateCreativeIds:
             c.format = formats[i] if formats else "display"
             creatives.append(c)
 
-        # Session scalars returns creatives
+        # Creative existence/status via repository (shared validation helper).
+        uow.creatives.admin_get_by_ids.side_effect = None
+        uow.creatives.admin_get_by_ids.return_value = creatives
+
+        # Session scalars returns creatives (legacy paths) + no existing assignments.
         mock_scalars = MagicMock()
         mock_scalars.all.return_value = creatives
         mock_scalars.first.return_value = None  # No existing assignments by default
@@ -1139,7 +1149,7 @@ class TestUC003UpdateCreativeIds:
         # Package with product
         mock_pkg = MagicMock()
         mock_pkg.package_config = {"product_id": "prod_1"}
-        env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+        uow.media_buys.get_package.return_value = mock_pkg
 
         return mock_session, creatives
 
@@ -1159,9 +1169,8 @@ class TestUC003UpdateCreativeIds:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            mock_scalars = MagicMock()
-            mock_scalars.all.return_value = [c1]
-            mock_session.scalars.return_value = mock_scalars
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.side_effect = None
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.return_value = [c1]
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1179,30 +1188,23 @@ class TestUC003UpdateCreativeIds:
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-03
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
+            self._setup_creative_mocks(env, ["C1"], statuses=["error"])
 
-            mock_session, _ = self._setup_creative_mocks(env, ["C1"], statuses=["error"])
-
-            # Product with matching format (to pass format check)
+            # Product with no format restriction (to isolate the status check).
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-            mock_scalars_seq = MagicMock()
-            mock_scalars_seq.all.return_value = [
-                MagicMock(creative_id="C1", status="error", agent_url="http://test.com", format="display")
-            ]
-            mock_scalars_seq.first.return_value = mock_product
-            mock_session.scalars.return_value = mock_scalars_seq
+            env.mock["uow"].return_value.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="status=error") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_rejected_state_rejected(self):
         """Creative in rejected state cannot be assigned.
@@ -1210,29 +1212,22 @@ class TestUC003UpdateCreativeIds:
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-04
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session, _ = self._setup_creative_mocks(env, ["C1"], statuses=["rejected"])
+            self._setup_creative_mocks(env, ["C1"], statuses=["rejected"])
 
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-            mock_scalars_seq = MagicMock()
-            mock_scalars_seq.all.return_value = [
-                MagicMock(creative_id="C1", status="rejected", agent_url="http://test.com", format="display")
-            ]
-            mock_scalars_seq.first.return_value = mock_product
-            mock_session.scalars.return_value = mock_scalars_seq
+            env.mock["uow"].return_value.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="status=rejected") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_format_compatibility_check(self):
         """Creative format mismatch with product returns INVALID_CREATIVES.
@@ -1240,13 +1235,11 @@ class TestUC003UpdateCreativeIds:
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-05
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_creative"
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             # Creative with "video" format
             c1 = MagicMock()
@@ -1254,35 +1247,29 @@ class TestUC003UpdateCreativeIds:
             c1.status = "active"
             c1.agent_url = "http://test.com"
             c1.format = "video"
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1]
 
             # Product with only "display" format
             mock_product = MagicMock()
             mock_product.format_ids = [{"agent_url": "http://test.com", "id": "display"}]
             mock_product.name = "Display Product"
+            uow.products.get_by_id.return_value = mock_product
 
             # Package with product
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
-
-            # First call returns creatives, second returns product
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            uow.media_buys.get_package.return_value = mock_pkg
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="not supported") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_update_no_adapter_call(self):
         """Creative ID updates persist directly to DB without adapter call.
@@ -1291,35 +1278,35 @@ class TestUC003UpdateCreativeIds:
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_creative"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
             c1.agent_url = "http://test.com"
             c1.format = "display"
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1]
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+            uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
-            mock_product.format_ids = []
+            mock_product.format_ids = []  # no restriction
             mock_product.name = "Test Product"
+            uow.products.get_by_id.return_value = mock_product
 
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                    MagicMock(all=Mock(return_value=[])),  # existing assignments
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            # Remaining raw select is the existing-assignments lookup → empty.
+            mock_scalars = MagicMock()
+            mock_scalars.all.return_value = []
+            mock_session.scalars.return_value = mock_scalars
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1619,28 +1606,31 @@ class TestUC003UpdateCreativeAssignments:
             assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
 
     def test_creative_existence_validated_for_assignments(self):
-        """Creative not found when using creative_assignments path.
+        """Creative not found is rejected on the creative_assignments path.
+
+        Regression for the bug where the creative_assignments handler skipped
+        existence validation and let a missing creative_id reach the composite
+        FK as an IntegrityError. The shared validation helper now rejects it
+        with CREATIVE_REJECTED before any assignment row is built.
 
         Covers: UC-003-ALT-UPDATE-CREATIVE-ASSIGNMENTS-05
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_assign_not_found"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
-            # No placement_ids in assignment -> skip placement validation
-            # Existing assignments empty, new assignment for C999 (doesn't exist)
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[])),  # existing assignments
-                    MagicMock(first=Mock(return_value=None)),  # find assignment for C999
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            mock_pkg = MagicMock()
+            mock_pkg.package_config = {"product_id": "prod_1"}
+            uow.media_buys.get_package.return_value = mock_pkg
+
+            # C999 does not exist in the creative library.
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = []
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1654,12 +1644,10 @@ class TestUC003UpdateCreativeAssignments:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
-
-            # The creative_assignments path creates assignments even for
-            # non-existing creatives (existence check is in creative_ids path).
-            # This test documents the current behavior.
-            assert isinstance(result.response, UpdateMediaBuySuccess)
+            with pytest.raises(AdCPCreativeRejectedError, match="C999") as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
 
 # ---------------------------------------------------------------------------
@@ -2290,6 +2278,8 @@ class TestUC003ExtI:
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # No creatives found
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.side_effect = None
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.return_value = []
             mock_scalars = MagicMock()
             mock_scalars.all.return_value = []
             mock_session.scalars.return_value = mock_scalars
@@ -2320,45 +2310,38 @@ class TestUC003ExtJ:
         Covers: UC-003-EXT-J-02
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_rejected"
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "rejected"
             c1.agent_url = "http://test.com"
             c1.format = "display"
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1]
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+            uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            uow.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_rejected",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="status=rejected") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_all_validation_errors_collected(self):
         """Multiple creative errors collected and returned together.
@@ -2366,13 +2349,11 @@ class TestUC003ExtJ:
         Covers: UC-003-EXT-J-04
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_multi_err"
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             # C1 in error state, C2 in rejected state
             c1 = MagicMock()
@@ -2387,35 +2368,29 @@ class TestUC003ExtJ:
             c2.agent_url = "http://test.com"
             c2.format = "display"
 
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1, c2]
+
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+            uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1, c2])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            uow.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_multi_err",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C2"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            # Both errors should be collected
-            error_details = exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
-            assert len(error_details["creative_errors"]) == 2
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            # Both offending creatives reported together in the rejection.
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert set(exc_info.value.details["creative_ids"]) == {"C1", "C2"}
 
 
 # ---------------------------------------------------------------------------

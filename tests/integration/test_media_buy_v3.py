@@ -496,11 +496,16 @@ class TestUpdateMediaBuyCreativeAssignments:
         assert not hasattr(update_result, "errors") or not update_result.errors
 
     @pytest.mark.asyncio
-    async def test_invalid_placement_ids_rejected(self, mb_tenant, mb_principal, mb_products, mb_identity):
+    async def test_invalid_placement_ids_rejected(
+        self, mb_tenant, mb_principal, mb_products, mb_identity, mb_creatives
+    ):
         """UC-003-CA02: placement_ids not in product rejected.
 
         Covers: UC-003-ALT-UPDATE-CREATIVE-ASSIGNMENTS-03
         Integration equivalent of unit xfail test_invalid_placement_ids_rejected.
+
+        Uses an existing creative (``c1``) so creative validation passes and the
+        placement check is the one that rejects the request.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -519,7 +524,7 @@ class TestUpdateMediaBuyCreativeAssignments:
                     "package_id": package_id,
                     "creative_assignments": [
                         {
-                            "creative_id": "c_placement_test",
+                            "creative_id": "c1",
                             "placement_ids": ["nonexistent_placement_123"],
                         }
                     ],

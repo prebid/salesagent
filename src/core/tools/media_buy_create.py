@@ -45,7 +45,7 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
-    AdCPCreativeNotFoundError,
+    AdCPCreativeRejectedError,
     AdCPError,
     AdCPFormatNotFoundError,
     AdCPIdempotencyConflictError,
@@ -291,7 +291,8 @@ def _validate_creatives_before_adapter_call(
         session: SQLAlchemy session (from UoW).
 
     Raises:
-        AdCPValidationError: If any creative is missing required fields (URL, dimensions)
+        AdCPCreativeRejectedError: If any creative is missing required fields (URL,
+            dimensions), is in a terminal state, or has an incompatible format.
     """
     from sqlalchemy import select
 
@@ -419,16 +420,19 @@ def _validate_creatives_before_adapter_call(
     if validation_errors:
         error_msg = (
             "Cannot create media buy with invalid creatives. "
-            "The following creatives have validation errors:\n"
-            + "\n".join(f"  • {err}" for err in validation_errors)
-            + "\n\nReference creatives must have dimensions (width/height) and a content URL "
-            "matching their format specification. "
-            + "Creative formats must match the product's accepted formats. "
-            + "Generative creatives will be converted to reference formats during campaign creation. "
-            + "Please ensure reference creatives are properly synced before creating media buys."
+            "The following creatives have validation errors:\n" + "\n".join(f"  • {err}" for err in validation_errors)
         )
         logger.error(f"[PRE-VALIDATION] {error_msg}")
-        raise AdCPValidationError(error_msg, details={"creative_errors": validation_errors})
+        raise AdCPCreativeRejectedError(
+            error_msg,
+            suggestion=(
+                "Reference creatives must have dimensions (width/height) and a content URL "
+                "matching their format specification, and their format must match the product's "
+                "accepted formats. Re-sync the creative(s) via sync_creatives so they pass "
+                "validation before creating the media buy."
+            ),
+            details={"creative_errors": validation_errors},
+        )
 
 
 def _execute_adapter_media_buy_creation(
@@ -3676,7 +3680,14 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-                        raise AdCPCreativeNotFoundError(error_msg)
+                        raise AdCPCreativeRejectedError(
+                            error_msg,
+                            suggestion=(
+                                "Sync the creative(s) via sync_creatives (or pick an existing "
+                                "creative from list_creatives) before referencing them in a media buy."
+                            ),
+                            details={"creative_ids": sorted(missing_ids)},
+                        )
 
                     # Validate creative formats against product formats BEFORE creating assignments
                     # This ensures creatives match the product's supported formats

@@ -158,6 +158,33 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         _mb_repo.get_by_id_or_raise.side_effect = _get_by_id_or_raise
         _mb_repo.get_package_or_raise.side_effect = _get_package_or_raise
 
+        # creatives repo: by default every referenced creative "exists" with an
+        # approved status and no format restriction (uow.products.get_by_id
+        # returns a product without format_ids). Tests that exercise the
+        # rejection paths (missing/error/rejected/incompatible) override
+        # admin_get_by_ids or products.get_by_id.
+        self._uow_instance.creatives = MagicMock()
+
+        def _default_admin_get_by_ids(creative_ids: list[str]) -> list[Any]:
+            creatives = []
+            for cid in creative_ids:
+                cr = MagicMock()
+                cr.creative_id = cid
+                cr.status = "approved"
+                cr.agent_url = None
+                cr.format = "display_300x250"
+                creatives.append(cr)
+            return creatives
+
+        self._uow_instance.creatives.admin_get_by_ids.side_effect = _default_admin_get_by_ids
+
+        # products repo: default product has no format restriction so the
+        # shared creative-format check is a no-op unless a test overrides it.
+        self._uow_instance.products = MagicMock()
+        _default_product = MagicMock()
+        _default_product.format_ids = []
+        self._uow_instance.products.get_by_id.return_value = _default_product
+
         self._uow_instance.currency_limits = MagicMock()
         self._uow_instance.__enter__ = MagicMock(return_value=self._uow_instance)
         self._uow_instance.__exit__ = MagicMock(return_value=False)
