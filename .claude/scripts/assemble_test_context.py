@@ -67,17 +67,17 @@ AGENT_INSTRUCTIONS = """## Agent Instructions (non-negotiable)
 class StepContext:
     """Collected context for one weak Then step."""
 
-    step_file: str          # e.g., "tests/bdd/steps/domain/uc004_delivery.py"
-    step_line: int          # line number
-    step_name: str          # e.g., "then_has_metrics"
-    weakness: str           # "count-only", "assert-hasattr", "getattr-existence"
-    step_source: str = ""   # the actual function body
+    step_file: str  # e.g., "tests/bdd/steps/domain/uc004_delivery.py"
+    step_line: int  # line number
+    step_name: str  # e.g., "then_has_metrics"
+    weakness: str  # "count-only", "assert-hasattr", "getattr-existence"
+    step_source: str = ""  # the actual function body
     gherkin_text: str = ""  # the Gherkin Then line(s) using this step
-    scenario_text: str = "" # full scenario(s) that use this step
+    scenario_text: str = ""  # full scenario(s) that use this step
     feature_file: str = ""  # which feature file
     business_rules: dict[str, str] = field(default_factory=dict)  # BR-RULE-XXX → text from adcp-req
     production_signatures: list[str] = field(default_factory=list)  # from .agent-index/
-    harness_env: str = ""   # which harness env this UC uses
+    harness_env: str = ""  # which harness env this UC uses
     ast_grep_patterns: list[str] = field(default_factory=list)
 
 
@@ -158,7 +158,9 @@ def _lookup_business_rule(rule_num: str) -> str:
     try:
         result = subprocess.run(
             ["grep", "-r", f"BR-RULE-{rule_num}", str(ADCP_REQ_DIR / "requirements")],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.stdout.strip():
             # Return first few lines of context
@@ -190,15 +192,24 @@ def collect_agent_index_signatures(uc_prefix: str) -> list[str]:
 
 def detect_uc_from_path(step_file: str) -> str:
     """Detect UC prefix from step file path."""
-    if "uc002" in step_file: return "UC-002"
-    if "uc003" in step_file: return "UC-003"
-    if "uc004" in step_file: return "UC-004"
-    if "uc005" in step_file: return "UC-005"
-    if "uc006" in step_file: return "UC-006"
-    if "uc011" in step_file: return "UC-011"
-    if "uc019" in step_file: return "UC-019"
-    if "uc026" in step_file: return "UC-026"
-    if "get_products" in step_file: return "UC-GET-PRODUCTS"
+    if "uc002" in step_file:
+        return "UC-002"
+    if "uc003" in step_file:
+        return "UC-003"
+    if "uc004" in step_file:
+        return "UC-004"
+    if "uc005" in step_file:
+        return "UC-005"
+    if "uc006" in step_file:
+        return "UC-006"
+    if "uc011" in step_file:
+        return "UC-011"
+    if "uc019" in step_file:
+        return "UC-019"
+    if "uc026" in step_file:
+        return "UC-026"
+    if "get_products" in step_file:
+        return "UC-GET-PRODUCTS"
     return "GENERIC"
 
 
@@ -262,9 +273,7 @@ def assemble_step_context(step_ref: str, weakness: str = "unknown") -> StepConte
     if ctx.feature_file:
         feature_path = FEATURES_DIR / ctx.feature_file
         if feature_path.exists():
-            ctx.business_rules = extract_business_rules(
-                ctx.scenario_text, feature_path.read_text()
-            )
+            ctx.business_rules = extract_business_rules(ctx.scenario_text, feature_path.read_text())
 
     # 4. Production signatures from .agent-index/
     ctx.production_signatures = collect_agent_index_signatures(uc_prefix)
@@ -351,7 +360,9 @@ Output the compressed bundle as markdown.
     try:
         result = subprocess.run(
             ["claude", "-p", prompt],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0 and result.stdout.strip():
             compressed = result.stdout.strip()
@@ -368,10 +379,15 @@ def main():
     parser = argparse.ArgumentParser(description="Assemble BDD Then-step context bundles")
     parser.add_argument("--step", help='Step ref: "uc004_delivery.py:1112 then_has_metrics"')
     parser.add_argument("--file", help="Step file path — assemble all weak steps in this file")
-    parser.add_argument("--allowlist", choices=["count-only", "hasattr", "getattr", "all"],
-                        default="all", help="Which allowlist to process")
-    parser.add_argument("--output", type=Path, default=PROJECT_ROOT / ".claude" / "context-bundles",
-                        help="Output directory for bundles")
+    parser.add_argument(
+        "--allowlist",
+        choices=["count-only", "hasattr", "getattr", "all"],
+        default="all",
+        help="Which allowlist to process",
+    )
+    parser.add_argument(
+        "--output", type=Path, default=PROJECT_ROOT / ".claude" / "context-bundles", help="Output directory for bundles"
+    )
     parser.add_argument("--raw", action="store_true", help="Stage 1 only (no LLM compression)")
     args = parser.parse_args()
 
