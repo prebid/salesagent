@@ -250,9 +250,16 @@ Integration/admin tests that targeted a manual MCP server on `localhost:8080`
 or `:8100` never ran in tox or CI (`-m "not requires_server"`). Equivalent
 coverage lives in `tests/e2e/` via `live_server` / `docker_services_e2e`.
 
-**Postponed after #1234 closure:** `tests/admin/test_sell_readiness_browser.py`
-(browser flows using `live_server`) remain excluded from Admin UI Tests by
-`@pytest.mark.slow` until a dedicated admin+e2e-stack job exists.
+**Postponed — still #1233 scope, after #1234 epic closes** (see
+[#1233](https://github.com/prebid/salesagent/issues/1233) closure plan):
+
+| Item | Tracking | When |
+|------|----------|------|
+| `test_sell_readiness_browser.py` admin browser flows | #1233 D11 follow-up | Dedicated admin+e2e-stack CI job |
+| Nightly GAM `requires_gam` workflow | #1477 (D13) | Post-#1234; closes #1233 D13 when merged |
+
+These are **not** #1234 rollout blockers; they remain on the #1233 checklist and
+will be picked up once #1234 merges.
 ## Layered pre-commit model (PR 4 of #1234)
 
 | Layer | Trigger | Enforcement |
