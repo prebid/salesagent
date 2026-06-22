@@ -245,8 +245,8 @@ Checks invoked directly by `make quality-ci` (not via `pre-commit run --all-file
 
 - **CI-only** (no commit/pre-push stage): `check_code_duplication`, `check-gam-auth-support`,
   `check_response_attribute_access`, `check_roundtrip_tests`.
-- **Dual-stage** (`pre-push + ci-step` in the coverage map): `check_route_conflicts`,
-  `check_type_ignore_count`, `check_docs_links`, `check_hardcoded_urls`.
+- **Dual-stage** (`pre-push + ci-step` in the coverage map): `check-route-conflicts`,
+  `type-ignore-no-regression`, `check-docs-links`, `no-hardcoded-urls`.
 
 See [`.pre-commit-coverage-map.yml`](../../.pre-commit-coverage-map.yml) for hook migration mapping.
 
