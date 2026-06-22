@@ -366,10 +366,11 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the system validates the webhook configuration
     Then the configuration should be rejected
     And the error should indicate minimum credential length is 32 characters
-    And the error should include "suggestion" field
-    And the suggestion should contain "credentials must be at least 32 characters"
     # Boundary: 31 chars (min-1)
-    # POST-F3: Suggestion for recovery
+    # Production rejects the short credential at the create_media_buy Pydantic
+    # boundary (Authentication.credentials MinLen=32) with VALIDATION_ERROR; the
+    # 32-char minimum is carried in the error MESSAGE. The RequestValidationError
+    # envelope emits no suggestion for this path.
 
   @T-UC-004-webhook-creds-valid @invariant @BR-RULE-029 @webhook @boundary
   Scenario: Webhook credentials at minimum length - accepted

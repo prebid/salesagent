@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_error
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -879,17 +878,33 @@ def when_deliver_with_retry(ctx: dict) -> None:
 
 @when("the system validates the webhook configuration")
 def when_validate_webhook_config(ctx: dict) -> None:
-    """Validate webhook configuration."""
-    secret = ctx.get("webhook_secret", "")
-    if len(secret) < 32:
-        from src.core.exceptions import AdCPValidationError
+    """Dispatch a create_media_buy carrying the webhook config through the wire.
 
-        ctx["error"] = AdCPValidationError(
-            message="credentials must be at least 32 characters",
-            details={"suggestion": "credentials must be at least 32 characters"},
-        )
-    else:
-        ctx["webhook_validated"] = True
+    The webhook credential min-length (32) is enforced by the SDK
+    ``Authentication.credentials`` (MinLen=32) nested under ``reporting_webhook``.
+    A request carrying a <32-char credential is rejected by production's Pydantic
+    boundary on the wire (VALIDATION_ERROR) — we dispatch the RAW flat body so the
+    rejection happens in PRODUCTION, not in test code. A 32-char credential is
+    accepted and the create succeeds.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _pricing_option_id
+
+    secret = ctx.get("webhook_secret", "")
+    kwargs = _ensure_request_defaults(ctx)
+    product = ctx.get("default_product")
+    pricing_option = ctx.get("default_pricing_option")
+    if product is not None:
+        kwargs["packages"][0]["product_id"] = product.product_id
+    if pricing_option is not None:
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
+    kwargs["reporting_webhook"] = {
+        "url": _WEBHOOK_URL,
+        "reporting_frequency": "daily",
+        "authentication": {"schemes": ["Bearer"], "credentials": secret},
+    }
+    # Dispatch the flat body (no typed construction) so a short credential reaches
+    # the production transport boundary instead of being rejected in test code.
+    dispatch_request(ctx, **kwargs)
 
 
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
@@ -1718,35 +1733,34 @@ def then_circuit_healthy(ctx: dict) -> None:
 
 @then("the configuration should be rejected")
 def then_config_rejected(ctx: dict) -> None:
-    """Assert configuration was rejected with a validation/rejection error message."""
-    error = _require_error(ctx)
-    msg = _get_error_message(error).lower()
-    rejection_keywords = {"reject", "invalid", "validation", "minimum", "too short", "credential", "length", "required"}
-    assert any(kw in msg for kw in rejection_keywords), (
-        f"Expected a rejection/validation error message, but got: {error!r}. Expected one of: {rejection_keywords}"
-    )
+    """Assert production rejected the webhook config on the wire (VALIDATION_ERROR).
+
+    The short credential is rejected by production's Pydantic boundary
+    (Authentication.credentials MinLen=32) — assert the real two-layer AdCP
+    wire envelope, not a reconstructed/hand-built exception.
+    """
+    result = ctx["result"]
+    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32")
 
 
 @then("the error should indicate minimum credential length is 32 characters")
 def then_error_min_credential_length(ctx: dict) -> None:
-    """Assert error specifies the 32-character minimum credential length.
+    """Assert the wire error message names the 32-character minimum.
 
-    Verifies both the minimum length value and that the error is a
-    validation/credential rejection (not some unrelated error containing '32').
+    The 32-char minimum surfaces in the wire error MESSAGE (Pydantic's
+    "String should have at least 32 characters"). Production's RequestValidationError
+    envelope does NOT emit a suggestion for this path, so the message — not a
+    suggestion — carries the boundary value.
     """
-    error = _require_error(ctx)
-    msg = _get_error_message(error).lower()
-    assert "32" in msg, f"Expected '32' (minimum length) in error message: {error}"
-    credential_terms = {"credential", "secret", "length", "minimum", "characters", "short"}
-    assert any(term in msg for term in credential_terms), (
-        f"Error mentions '32' but not in a credential-length context. Expected one of {credential_terms} in: {error}"
-    )
+    result = ctx["result"]
+    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32 characters")
 
 
 @then("the configuration should be accepted")
 def then_config_accepted(ctx: dict) -> None:
-    """Assert configuration was accepted (webhook/circuit-breaker config)."""
-    assert "error" not in ctx, f"Config rejected: {ctx.get('error')}"
+    """Assert production accepted the webhook config on the wire (create succeeded)."""
+    result = ctx["result"]
+    assert not result.is_error, f"Config rejected on the wire: {ctx.get('wire_error_envelope') or ctx.get('error')}"
 
 
 # ── HMAC / auth header assertions ─────────────────────────────────

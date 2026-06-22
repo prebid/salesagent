@@ -809,6 +809,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # UC-004 webhook short-credential (salesagent-33r0 site 2): a <32-char
+        # reporting_webhook credential is rejected by the SDK Authentication.credentials
+        # MinLen=32 at the create_media_buy boundary. On a2a/rest the boundary
+        # normalizes the rejection to the AdCP two-layer VALIDATION_ERROR envelope;
+        # on MCP, FastMCP's framework-level TypeAdapter rejects it BEFORE our wrapper
+        # runs, raising a bare ToolError with no AdCP envelope (the same documented MCP
+        # TypeAdapter forward-compat gap recorded for the UC-002 oneOf-both shape above).
+        if is_mcp and "T-UC-004-webhook-creds-short" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="MCP TypeAdapter rejects the short webhook credential as a bare ToolError "
+                    "before the AdCP boundary translator runs — no two-layer VALIDATION_ERROR envelope "
+                    "on MCP (a2a/rest pass). Documented MCP forward-compat gap.",
+                    strict=True,
+                )
+            )
+
         # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
         _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}
         if marker_names & _UC006_AUTH_XFAIL:
@@ -2835,6 +2852,13 @@ def _detect_uc011_harness(marker_names: set[str]) -> str:
 def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     """Detect which delivery harness a UC-004 scenario needs."""
     marker_names = {m.name for m in request.node.iter_markers()}
+    # Webhook-credential-length scenarios assert that a too-short reporting_webhook
+    # credential is rejected at the create_media_buy boundary (the SDK
+    # Authentication.credentials MinLen=32 fires on the wire). They need the
+    # create transport wrappers, not the delivery/circuit-breaker harness — route
+    # them to MediaBuyCreateEnv so production Pydantic does the rejecting.
+    if {"T-UC-004-webhook-creds-short", "T-UC-004-webhook-creds-valid"} & marker_names:
+        return "create"
     if "webhook-reliability" in marker_names:
         return "circuit-breaker"
     if "webhook" in marker_names:
@@ -3059,6 +3083,21 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with CircuitBreakerEnv(e2e_config=ctx.get("e2e_config")) as env:
                 env.setup_default_data()
                 ctx["env"] = env
+                yield
+        elif harness_type == "create":
+            # Webhook-credential-length scenarios dispatch a real create_media_buy
+            # carrying a reporting_webhook so production's Pydantic boundary
+            # (Authentication.credentials MinLen=32) accepts/rejects on the wire.
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
