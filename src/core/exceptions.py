@@ -951,17 +951,21 @@ def _adcp_adapter_error_class_for_http_status(status: int) -> type[AdCPError]:
     return _adcp_error_class_for_http_status(status)
 
 
-def ad_server_status_to_recovery(status: int) -> tuple[str, RecoveryHint]:
-    """The ``(error_code, recovery)`` an AD-SERVER HTTP status maps to.
+def ad_server_error_attrs(status: int) -> tuple[str, RecoveryHint, int]:
+    """The ``(error_code, recovery, status_code)`` an AD-SERVER HTTP status maps to.
 
-    The pure-mapping form for a consumer that configures its recovery in ``__init__``
-    (``BroadstreetAPIError``) and so cannot consume a factory that hands back a
-    *different* object. Reads the selected class's ``_default_*`` so the table has one
-    home, shared with ``adcp_adapter_error_for_http_status``. A 403 is terminal
-    (operator credential denied); all other statuses share the general table.
+    The pure-mapping form for a consumer that configures its error attributes in
+    ``__init__`` (``BroadstreetAPIError``) and so cannot consume a factory that hands
+    back a *different* object. Reads the selected class's ``_default_*`` so it produces
+    the SAME triple as ``adcp_adapter_error_for_http_status``'s factory path for the
+    same status — INCLUDING the buyer-facing HTTP ``status_code``, so one ad-server
+    event yields one buyer-facing status regardless of which adapter the tenant runs
+    (the upstream ad-server status stays in the error message / ``response_body``, not
+    the wire status line). A 403 is terminal (operator credential denied); all other
+    statuses share the general table.
     """
     cls = _adcp_adapter_error_class_for_http_status(status)
-    return (cls._default_error_code, cls._default_recovery)
+    return (cls._default_error_code, cls._default_recovery, cls._default_status_code)
 
 
 def adcp_adapter_error_for_http_status(
