@@ -581,8 +581,9 @@ class TestPropertyListFetchTransientPropagatesThroughCompile:
 
         # Bypass the SSRF/DNS pre-flight (it rejects the unresolvable test host before any HTTP) so the
         # patched httpx client — the first fetch the compile path makes — is what surfaces the status.
+        # _validated_agent_ip returns the pinned IP; the patched client is mocked, so it is never used.
         with (
-            patch("src.core.property_list_resolver.check_url_ssrf", return_value=(True, None)),
+            patch("src.core.property_list_resolver._validated_agent_ip", return_value="93.184.216.34"),
             patch("src.core.property_list_resolver.httpx.Client", return_value=mock_client),
         ):
             with pytest.raises(AdCPError) as exc_info:

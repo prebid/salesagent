@@ -25,12 +25,16 @@ def _clear_cache():
 def _stub_dns():
     """Stub DNS resolution so tests don't make real DNS lookups.
 
-    Returns a public IP for all hostnames by default. Tests in
-    TestSSRFProtection override this where needed.
+    Returns a public IP for all hostnames by default — both ``gethostbyname``
+    (check_url_ssrf) and ``getaddrinfo`` (resolve_validated_ip's all-records validation
+    + connection pinning). Tests in TestSSRFProtection override these where needed.
     """
-    with patch(
-        "src.core.security.url_validator.socket.gethostbyname",
-        return_value="93.184.216.34",
+    with (
+        patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"),
+        patch(
+            "src.core.security.url_validator.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", ("93.184.216.34", 0))],
+        ),
     ):
         yield
 
@@ -491,14 +495,19 @@ class TestSSRFProtection:
         ],
     )
     async def test_rejects_private_ip_after_dns_resolution(self, malicious_url, resolved_ip, description):
-        """HTTPS URLs that resolve to private/internal IPs must be rejected."""
+        """HTTPS URLs that resolve to private/internal IPs must be rejected.
+
+        resolve_validated_ip validates every getaddrinfo result, so a host resolving to a
+        private IP is rejected before any connect — and because the fetch is pinned to the
+        validated IP, a later rebind to a private address cannot redirect the connection.
+        """
         from src.core.property_list_resolver import resolve_property_list_typed
 
         ref = _make_ref(agent_url=malicious_url)
 
         with patch(
-            "src.core.security.url_validator.socket.gethostbyname",
-            return_value=resolved_ip,
+            "src.core.security.url_validator.socket.getaddrinfo",
+            return_value=[(2, 1, 6, "", (resolved_ip, 0))],
         ):
             with pytest.raises(AdCPAdapterError, match="[Bb]locked|[Pp]rivate|[Ii]nternal"):
                 await resolve_property_list_typed(ref)

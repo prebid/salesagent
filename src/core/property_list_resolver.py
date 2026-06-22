@@ -27,7 +27,11 @@ from adcp.types import GetPropertyListResponse, Identifier, PropertyListReferenc
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPAdapterError, adcp_error_for_http_status
-from src.core.security.url_validator import check_url_ssrf
+from src.core.security.url_validator import (
+    resolve_validated_ip,
+    ssrf_pinned_async_transport,
+    ssrf_pinned_transport,
+)
 from src.core.ttl_cache import ThreadSafeTTLCache
 
 logger = logging.getLogger(__name__)
@@ -123,29 +127,35 @@ def iter_package_property_list_refs(
         yield index, package, ref, property_list_cache_key(ref)
 
 
-def _validate_agent_url(agent_url: str) -> None:
-    """Validate agent_url to prevent SSRF attacks.
+def _validated_agent_ip(agent_url: str) -> str:
+    """Validate agent_url for SSRF and return the validated IP to pin the fetch to.
 
-    Buyer-supplied agent_url must be HTTPS and must not target private/internal
-    networks or cloud metadata services.
+    Buyer-supplied agent_url must be HTTPS and must resolve ONLY to public IPs. The
+    returned IP is connection-pinned (``ssrf_pinned_transport``) so the fetch cannot be
+    redirected to a private/internal address by DNS rebinding between this check and the
+    HTTP client's connect.
 
     Raises:
         AdCPAdapterError: If the URL is not allowed.
     """
-    is_safe, error = check_url_ssrf(agent_url, require_https=True)
-    if not is_safe:
+    validated_ip, error = resolve_validated_ip(agent_url, require_https=True)
+    if validated_ip is None:
         raise AdCPAdapterError(f"Property list agent_url rejected: {error}")
+    return validated_ip
 
 
-def _build_request(ref: PropertyListReference) -> tuple[str, dict[str, str]]:
-    """Build (request_url, headers) for the property list fetch (validates agent_url for SSRF)."""
+def _build_request(ref: PropertyListReference) -> tuple[str, dict[str, str], str]:
+    """Build (request_url, headers, validated_ip) for the property list fetch.
+
+    Validates agent_url for SSRF and resolves the IP the connection is pinned to.
+    """
     agent_url_str = str(ref.agent_url)
-    _validate_agent_url(agent_url_str)
+    validated_ip = _validated_agent_ip(agent_url_str)
     request_url = agent_url_str.rstrip("/") + "/lists/" + ref.list_id
     headers: dict[str, str] = {}
     if ref.auth_token:
         headers["Authorization"] = f"Bearer {ref.auth_token}"
-    return request_url, headers
+    return request_url, headers, validated_ip
 
 
 def _check_cache(ref: PropertyListReference) -> list[Identifier] | None:
@@ -238,13 +248,17 @@ async def resolve_property_list_typed(ref: PropertyListReference) -> list[Identi
     Async path. Use the sync variant from synchronous code (e.g. ad-server
     adapters whose ``create_media_buy`` API is sync).
     """
-    request_url, headers = _build_request(ref)
+    request_url, headers, validated_ip = _build_request(ref)
     cached = _check_cache(ref)
     if cached is not None:
         return cached
 
     try:
-        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+        # Pin the connection to the SSRF-validated IP (the URL keeps its hostname so TLS
+        # cert verification stays normal) — a rebinding host cannot redirect to a private IP.
+        async with httpx.AsyncClient(
+            transport=ssrf_pinned_async_transport(validated_ip), timeout=_DEFAULT_TIMEOUT
+        ) as client:
             response = await client.get(request_url, headers=headers)
             response.raise_for_status()
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
@@ -261,13 +275,14 @@ def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identif
     the module-level cache with the async variant, so back-to-back async and
     sync lookups for the same list reference only fetch once.
     """
-    request_url, headers = _build_request(ref)
+    request_url, headers, validated_ip = _build_request(ref)
     cached = _check_cache(ref)
     if cached is not None:
         return cached
 
     try:
-        with httpx.Client(timeout=_DEFAULT_TIMEOUT) as client:
+        # Pin the connection to the SSRF-validated IP (see the async variant above).
+        with httpx.Client(transport=ssrf_pinned_transport(validated_ip), timeout=_DEFAULT_TIMEOUT) as client:
             response = client.get(request_url, headers=headers)
             response.raise_for_status()
     except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
