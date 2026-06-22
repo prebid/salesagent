@@ -2726,6 +2726,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-004"
     if any(t.startswith("T-UC-011") for t in marker_names):
         return "UC-011"
+    if any(t.startswith("T-UC-018") for t in marker_names):
+        return "UC-018"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names:
@@ -2841,6 +2843,26 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
+
+    elif uc == "UC-018":
+        # list_creatives — only the @list-after-sync storyboard scenario is wired
+        # (#1405). The remaining UC-018 scenarios (main/partition/boundary/filter
+        # siblings) have no step definitions yet, so xfail fast at the fixture
+        # (mirrors UC-002/006/011) rather than spinning up a DB per scenario only
+        # to auto-xfail at the first missing step.
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if "list-after-sync" in marker_names:
+            # CreativeListEnv mocks only the audit logger; DB, repository, and
+            # query building are real. The Background auth step switches the env
+            # principal; the seed step owns the creatives under it.
+            request.getfixturevalue("integration_db")
+            from tests.harness.creative_list import CreativeListEnv
+
+            with CreativeListEnv(e2e_config=ctx.get("e2e_config")) as env:
+                ctx["env"] = env
+                yield
+        else:
+            pytest.xfail("UC-018 harness wired only for the @list-after-sync storyboard scenario (#1405)")
 
     elif uc == "UC-011":
         marker_names = {m.name for m in request.node.iter_markers()}
