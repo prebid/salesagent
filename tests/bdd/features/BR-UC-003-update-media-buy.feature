@@ -977,13 +977,13 @@ Feature: BR-UC-003 Update Media Buy
       | partition                  | status               | outcome |
       | status_pending_activation  | pending_activation   | success |
       | status_active              | active               | success |
-      | status_paused              | paused               | success |
 
     Examples: Invalid partitions
-      | partition            | status     | outcome                                      |
-      | terminal_rejected    | rejected   | error "INVALID_STATUS" with suggestion        |
-      | terminal_canceled    | canceled   | error "INVALID_STATUS" with suggestion        |
-      | terminal_completed   | completed  | error "INVALID_STATUS" with suggestion        |
+      | partition              | status     | outcome                                      |
+      | paused_packages_locked | paused     | error "INVALID_STATE" with suggestion        |
+      | terminal_rejected      | rejected   | error "INVALID_STATE" with suggestion        |
+      | terminal_canceled    | canceled   | error "INVALID_STATE" with suggestion        |
+      | terminal_completed   | completed  | error "INVALID_STATE" with suggestion        |
 
   @T-UC-003-boundary-media-buy-status @boundary @media_buy_status
   Scenario Outline: Media buy status boundary validation - <boundary_point>
@@ -1004,10 +1004,10 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                            | status               | outcome                                  |
       | pending_activation (non-terminal, updatable) | pending_activation | success                                  |
       | active (non-terminal, updatable)          | active               | success                                  |
-      | paused (non-terminal, updatable)          | paused               | success                                  |
-      | rejected (terminal, update blocked)       | rejected             | error "INVALID_STATUS" with suggestion   |
-      | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATUS" with suggestion   |
-      | completed (terminal, update blocked)      | completed            | error "INVALID_STATUS" with suggestion   |
+      | paused (packages locked, budget/dates ok) | paused               | error "INVALID_STATE" with suggestion    |
+      | rejected (terminal, update blocked)       | rejected             | error "INVALID_STATE" with suggestion   |
+      | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATE" with suggestion   |
+      | completed (terminal, update blocked)      | completed            | error "INVALID_STATE" with suggestion   |
 
   @T-UC-003-partition-budget-amount @partition @budget_amount
   Scenario Outline: Budget amount partition validation - <partition>

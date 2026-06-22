@@ -2576,35 +2576,18 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
 
 
 def _assert_error_outcome(ctx: dict, code: str, field: str, *, require_suggestion: bool) -> None:
-    """Reference error assertion (clean scenario -> step -> harness path).
+    """Assert the scenario's named wire error CODE on the two-layer envelope.
 
-    The SCENARIO names the expected wire error CODE (its Examples `expected` column);
-    this step asserts the harness-normalized two-layer envelope carries it, with the
-    ``recovery`` the AdCP schema classifies for that code. No transport awareness, no
-    per-field hard-coding, no reconstruction:
-      * the expected code comes from the scenario,
-      * the recovery comes from the schema (``STANDARD_ERROR_CODES`` mirrors
-        adcp error-code.json),
-      * the envelope comes from the harness (``ctx["wire_error_envelope"]``, populated
-        per-transport by the dispatcher — REST body / MCP ToolError JSON / A2A artifact
-        / e2e HTTP), so the same assertion holds on every transport.
+    Thin wrapper over the harness-provided ``TransportResult.assert_wire_error``
+    (single source of truth for wire-error assertions; recovery is pin-sourced
+    from the AdCP error-code enum). The ``field`` is preserved as failure context.
     """
-    from adcp.server.helpers import STANDARD_ERROR_CODES
-
-    from tests.helpers import assert_envelope_shape
-
-    spec = STANDARD_ERROR_CODES.get(code)
-    assert spec is not None, f"{code!r} is not a standard AdCP error code (error-code.json)"
-    envelope = ctx.get("wire_error_envelope")
-    assert envelope is not None, (
-        f"Expected {field} rejected with {code}, but the operation succeeded — no wire error "
-        f"envelope. response={ctx.get('response')!r}"
-    )
-    assert_envelope_shape(envelope, code, recovery=spec["recovery"])
-    if require_suggestion:
-        assert envelope.get("adcp_error", {}).get("suggestion"), (
-            f"Expected a suggestion in the {code} envelope for {field}: {envelope}"
-        )
+    result = ctx.get("result")
+    assert result is not None, f"[{field}] No transport result captured to assert {code} on the wire"
+    try:
+        result.assert_wire_error(code, require_suggestion=require_suggestion)
+    except AssertionError as exc:
+        raise AssertionError(f"[{field}] {exc}") from None
 
 
 def _assert_wire_rejection(ctx: dict, field: str) -> None:

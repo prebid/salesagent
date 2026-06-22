@@ -56,6 +56,10 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         transport = transport_map[transport]
     try:
         result = env.call_via(transport, **kwargs)
+        # Expose the normalized TransportResult so Then-steps can use the
+        # harness-provided, transport-independent assertions (result.assert_wire_error)
+        # instead of hand-rolling envelope parsing.
+        ctx["result"] = result
         if result.is_error:
             ctx["error"] = result.error
             # Capture the real wire envelope (A2A/REST/MCP) and the
