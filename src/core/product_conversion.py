@@ -14,15 +14,20 @@ V3 Migration Notes:
 import logging
 
 from adcp import (
+    CpaPricingOption,
     CpcPricingOption,
     CpcvPricingOption,
     CpmPricingOption,
     CppPricingOption,
     CpvPricingOption,
     FlatRatePricingOption,
+    TimeBasedPricingOption,
+    TimeUnit,
     VcpmPricingOption,
 )
 from adcp.types._generated import MediaChannel
+from adcp.types.generated_poc.enums.event_type import EventType
+from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
 from packaging.version import InvalidVersion, Version
 
 # Import our extended Product (includes implementation_config)
@@ -65,6 +70,8 @@ def convert_pricing_option_to_adcp(
     | CpvPricingOption
     | CppPricingOption
     | FlatRatePricingOption
+    | CpaPricingOption
+    | TimeBasedPricingOption
 ):
     """Convert database PricingOption to AdCP V3 pricing option.
 
@@ -248,9 +255,68 @@ def convert_pricing_option_to_adcp(
             result_fields["parameters"] = parameters
         return FlatRatePricingOption(**result_fields)
 
+    elif pricing_model == "cpa":
+        # CPA (Cost Per Acquisition) - AdCP v3.1 pricing model for affiliate/conversion pricing.
+        # Requires event_type; defaults to "purchase" for affiliate/SSS use cases.
+        if not rate:
+            raise ValueError(f"CPA pricing option {pricing_option_id} requires rate")
+        # Resolve event_type from parameters if provided, otherwise default to "purchase"
+        event_type_val = EventType.purchase
+        if parameters and isinstance(parameters, dict):
+            raw_event = parameters.get("event_type")
+            if raw_event:
+                try:
+                    event_type_val = EventType(raw_event)
+                except ValueError:
+                    logger.warning(
+                        "Unknown event_type '%s' for CPA pricing option %s, defaulting to 'purchase'",
+                        raw_event,
+                        pricing_option_id,
+                    )
+        return CpaPricingOption(
+            **common_fields,
+            event_type=event_type_val,
+            fixed_price=float(rate),
+        )
+
+    elif pricing_model == "time":
+        # Time-Based pricing - AdCP v3.1 model where rate scales with campaign duration.
+        # fixed_price is the cost per time_unit; parameters.time_unit is required.
+        # Supports both fixed (fixed_price) and auction (floor_price) variants.
+        if not parameters or not isinstance(parameters, dict) or "time_unit" not in parameters:
+            raise ValueError(
+                f"Time-based pricing option {pricing_option_id} requires parameters.time_unit "
+                f"(one of: hour, day, week, month)"
+            )
+        raw_time_unit = parameters["time_unit"]
+        try:
+            time_unit_val = TimeUnit(raw_time_unit)
+        except ValueError:
+            raise ValueError(
+                f"Time-based pricing option {pricing_option_id} has unknown time_unit '{raw_time_unit}'. "
+                f"Supported values: {[u.value for u in TimeUnit]}"
+            )
+        time_params = TimeParameters(
+            time_unit=time_unit_val,
+            min_duration=parameters.get("min_duration"),
+            max_duration=parameters.get("max_duration"),
+        )
+        time_fields: dict = {**common_fields, "parameters": time_params}
+        if is_fixed:
+            if not rate:
+                raise ValueError(f"Fixed time-based pricing option {pricing_option_id} requires rate")
+            time_fields["fixed_price"] = float(rate)
+        else:
+            if floor_price is not None:
+                time_fields["floor_price"] = float(floor_price)
+            if price_guidance:
+                time_fields["price_guidance"] = price_guidance
+        return TimeBasedPricingOption(**time_fields)
+
     else:
         raise ValueError(
-            f"Unsupported pricing_model '{pricing_model}'. Supported models: cpm, vcpm, cpc, cpcv, cpv, cpp, flat_rate"
+            f"Unsupported pricing_model '{pricing_model}'. "
+            f"Supported models: cpm, vcpm, cpc, cpcv, cpv, cpp, flat_rate, cpa, time"
         )
 
 
