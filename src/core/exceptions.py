@@ -882,28 +882,117 @@ class AdCPInventoryUnavailableError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+# ---------------------------------------------------------------------------
+# HTTP status -> AdCP recovery, single-sourced per boundary.
+# ---------------------------------------------------------------------------
+# An outbound HTTP failure maps to an AdCP recovery class, and the verdict has
+# exactly one home per boundary so consumers cannot drift (the failure mode that
+# let an error type hand-copy the table and then mis-set a 403). Two boundaries,
+# two tables, because the buyer's lever differs:
+#
+#   * GENERAL / buyer-facing (a buyer's referenced resource — e.g. the buyer's
+#     property-list service fetched in ``property_list_resolver``): a 4xx is the
+#     buyer's reference/token, so "fix the request and resend" -> correctable.
+#   * AD-SERVER (the tenant operator's ad server — Kevel/Xandr/Triton/Broadstreet
+#     writes + the Kevel site read): a 403 is the operator's credential being
+#     denied, which the buyer has no lever to fix, so per the spec recovery
+#     taxonomy ("terminal: requires human action") it is terminal — matching the
+#     application-level credential-rejection raise sites (e.g. Xandr _authenticate).
+#
+# Each table is keyed off a single class selector, so the (error_code, recovery)
+# pair is read from the chosen subclass's ``_default_*`` — one source, no copy.
+
+
+def _adcp_error_class_for_http_status(status: int) -> type[AdCPError]:
+    """The AdCPError subclass a GENERAL (buyer-facing) HTTP status maps to.
+
+    - ``429`` -> ``AdCPRateLimitError`` (RATE_LIMITED / transient)
+    - other ``4xx`` -> ``AdCPValidationError`` (VALIDATION_ERROR / correctable)
+    - ``5xx`` and any non-4xx -> ``AdCPAdapterError`` (SERVICE_UNAVAILABLE / transient)
+    """
+    if status == 429:
+        return AdCPRateLimitError
+    if 400 <= status < 500:
+        return AdCPValidationError
+    return AdCPAdapterError
+
+
+def status_to_recovery(status: int) -> tuple[str, RecoveryHint]:
+    """The ``(error_code, recovery)`` a GENERAL (buyer-facing) HTTP status maps to.
+
+    The pure mapping underneath ``adcp_error_for_http_status`` for a consumer that
+    needs the verdict without constructing an exception — an error type that
+    configures ``self.error_code``/``self.recovery`` in ``__init__`` cannot consume a
+    factory that hands back a *different* object. Reads the selected class's
+    ``_default_*`` so the table has one home. Ad-server boundaries use
+    ``ad_server_status_to_recovery`` instead (a 403 there is terminal).
+    """
+    cls = _adcp_error_class_for_http_status(status)
+    return (cls._default_error_code, cls._default_recovery)
+
+
 def adcp_error_for_http_status(
     status: int, message: str, *, field: str | None = None, suggestion: str | None = None
 ) -> AdCPError:
-    """Map an outbound HTTP status to its AdCP recovery class — the single status->recovery table.
+    """Map a GENERAL (buyer-facing) outbound HTTP status to its typed AdCP error.
 
-    Shared by every adapter/service HTTP boundary (``wrap_request_errors`` for the
-    ``requests``-based ad-server writes; ``_raise_fetch_error`` for the ``httpx``-based
-    property-list fetch) so one underlying status yields ONE recovery verdict
-    (AdCP 3.1.0-beta.3 recovery taxonomy):
+    The boundary where a 4xx is the buyer's referenced resource (the property-list
+    fetch in ``property_list_resolver``): a 4xx is correctable (fix the reference and
+    resend), 429/5xx are transient (AdCP 3.1.0-beta.3 recovery taxonomy). Ad-server
+    writes/reads use ``adcp_adapter_error_for_http_status`` instead — a 403 there is
+    the tenant operator's credential, which is terminal, not buyer-correctable.
 
-    - ``429`` -> transient (rate limit; retry with backoff) — ``AdCPRateLimitError``
-    - other ``4xx`` -> correctable (the request was rejected; fix and resend) — ``AdCPValidationError``
-    - ``5xx`` (and any non-4xx) -> transient (service misbehaving; retry) — ``AdCPAdapterError``
-
-    ``field``/``suggestion`` enrich the correctable (4xx) case for buyer-facing paths;
-    they are ignored for the transient classes (a 429/5xx is not fixed by editing the request).
+    ``field``/``suggestion`` enrich the correctable (4xx) case; they are ignored for the
+    transient classes (a 429/5xx is not fixed by editing the request).
     """
-    if status == 429:
-        return AdCPRateLimitError(message)
-    if 400 <= status < 500:
-        return AdCPValidationError(message, field=field, suggestion=suggestion)
-    return AdCPAdapterError(message)
+    cls = _adcp_error_class_for_http_status(status)
+    if cls is AdCPValidationError:
+        return cls(message, field=field, suggestion=suggestion)
+    return cls(message)
+
+
+def _adcp_adapter_error_class_for_http_status(status: int) -> type[AdCPError]:
+    """The AdCPError subclass an AD-SERVER HTTP status maps to.
+
+    The general selector refined for the one status whose buyer recovery differs at
+    an ad-server boundary: a ``403`` is the tenant operator's credential being denied
+    -> ``AdCPConfigurationError`` (CONFIGURATION_ERROR / terminal), matching the
+    application-level credential-rejection raise sites. All other statuses share the
+    general selector.
+    """
+    if status == 403:
+        return AdCPConfigurationError
+    return _adcp_error_class_for_http_status(status)
+
+
+def ad_server_status_to_recovery(status: int) -> tuple[str, RecoveryHint]:
+    """The ``(error_code, recovery)`` an AD-SERVER HTTP status maps to.
+
+    The ad-server dual of ``status_to_recovery`` for a consumer that configures its
+    recovery in ``__init__`` (``BroadstreetAPIError``). A 403 is terminal (operator
+    credential denied); all other statuses share the general table.
+    """
+    cls = _adcp_adapter_error_class_for_http_status(status)
+    return (cls._default_error_code, cls._default_recovery)
+
+
+def adcp_adapter_error_for_http_status(
+    status: int, message: str, *, field: str | None = None, suggestion: str | None = None
+) -> AdCPError:
+    """Map an AD-SERVER outbound HTTP status to its typed AdCP error.
+
+    The ad-server dual of ``adcp_error_for_http_status`` (``wrap_request_errors`` for
+    the ``requests``-based ad-server writes; ``adcp_error_for_httpx_exc`` for the
+    ``httpx``-based Kevel site read). A 403 (operator ``access_token``/credential
+    denied) is a terminal ``AdCPConfigurationError`` (wire ``SERVICE_UNAVAILABLE`` /
+    recovery ``terminal``): the buyer has no lever to fix the tenant's ad-server
+    credential, so "fix and resend" (correctable) would loop them wrongly. All other
+    statuses share the general factory (429/5xx -> transient, other 4xx -> correctable).
+    """
+    cls = _adcp_adapter_error_class_for_http_status(status)
+    if cls is AdCPValidationError:
+        return cls(message, field=field, suggestion=suggestion)
+    return cls(message)
 
 
 def adcp_error_for_httpx_exc(
@@ -911,19 +1000,21 @@ def adcp_error_for_httpx_exc(
 ) -> AdCPError:
     """Map an ``httpx`` transport failure to its typed AdCP error — the httpx dual of ``wrap_request_errors``.
 
-    A response-bearing ``httpx.HTTPStatusError`` carries an HTTP status, so it routes through
-    the shared ``adcp_error_for_http_status`` table (429/5xx -> transient, other 4xx ->
-    correctable). A response-less failure (``TimeoutException``/``RequestError`` — timeout,
-    connection reset) has no status and is a transient ``AdCPAdapterError``. Without this seam an
-    httpx handler that re-wraps every failure as ``AdCPAdapterError`` reports a 4xx as transient
-    (retry) when it is correctable (fix the request).
+    Used by the Kevel site read (``kevel_site_resolver``), an AD-SERVER call authenticated with
+    the tenant operator's API key, so a response-bearing ``httpx.HTTPStatusError`` routes through
+    the ad-server table (``adcp_adapter_error_for_http_status``): a 403 is the operator's credential
+    -> terminal, other 4xx -> correctable, 429/5xx -> transient. A response-less failure
+    (``TimeoutException``/``RequestError`` — timeout, connection reset) has no status and is a
+    transient ``AdCPAdapterError``. Without this seam an httpx handler that re-wraps every failure as
+    ``AdCPAdapterError`` reports a status-bearing failure as transient (retry forever).
 
-    ``field``/``suggestion`` enrich the correctable (4xx) case; they are ignored for the transient
-    classes. ``property_list_resolver._raise_fetch_error`` shares the same status table directly but
-    additionally distinguishes timeout from connect in its message, so it does not route through here.
+    ``field``/``suggestion`` enrich the correctable (4xx) case; they are ignored for the
+    transient/terminal classes. ``property_list_resolver._raise_fetch_error`` is the buyer-facing
+    sibling (a 4xx there is the buyer's reference -> correctable) and uses the GENERAL table directly,
+    distinguishing timeout from connect in its message, so it does not route through here.
     """
     if isinstance(exc, httpx.HTTPStatusError):
-        return adcp_error_for_http_status(exc.response.status_code, message, field=field, suggestion=suggestion)
+        return adcp_adapter_error_for_http_status(exc.response.status_code, message, field=field, suggestion=suggestion)
     return AdCPAdapterError(message)
 
 

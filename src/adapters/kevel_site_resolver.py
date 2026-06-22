@@ -263,8 +263,10 @@ class KevelSiteResolver:
                     response = client.get(url)
                     response.raise_for_status()
                 except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError) as exc:
-                    # Route through the shared status->recovery table so a Kevel /v1/site 4xx
-                    # surfaces correctable (fix the request) rather than transient (retry); a
+                    # Route through the ad-server status->recovery table (this fetch uses the
+                    # tenant operator's X-Adzerk-ApiKey): a /v1/site 403 is the operator's
+                    # credential being denied -> terminal (the buyer has no lever), other 4xx
+                    # -> correctable (fix the request) rather than transient (retry); a
                     # response-less timeout/connection failure has no status and stays transient.
                     raise adcp_error_for_httpx_exc(
                         exc,
