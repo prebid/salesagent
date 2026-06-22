@@ -101,13 +101,12 @@ def extract_step_source(filepath: Path, line: int, name: str) -> str:
                 buf.append(l)
             elif l.strip().startswith("@"):
                 buf.append(l)  # decorators
+        elif l.strip() == "":
+            buf.append(l)
+        elif len(l) - len(l.lstrip()) <= indent and l.strip() and not l.strip().startswith("#"):
+            break
         else:
-            if l.strip() == "":
-                buf.append(l)
-            elif len(l) - len(l.lstrip()) <= indent and l.strip() and not l.strip().startswith("#"):
-                break
-            else:
-                buf.append(l)
+            buf.append(l)
     return "\n".join(buf)
 
 
@@ -285,7 +284,7 @@ def assemble_step_context(step_ref: str, weakness: str = "unknown") -> StepConte
     ctx.ast_grep_patterns = [
         f"ast-grep --pattern 'def {step_name}($$$):' tests/bdd/steps/",
         f"ast-grep --pattern '@then($$$)' {step_file}",
-        f"ast-grep --pattern 'def _*impl($$$):' src/core/tools/",
+        "ast-grep --pattern 'def _*impl($$$):' src/core/tools/",
     ]
 
     return ctx
