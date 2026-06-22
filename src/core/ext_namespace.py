@@ -13,6 +13,13 @@ from typing import Any
 
 PREBID_EXT_NAMESPACE = "prebid"
 
+#: Sub-key under the prebid namespace carrying the machine-readable property_list
+#: drop/zero-overlap advisories (``ext.prebid.property_list_advisories``). Single-sourced
+#: here — the create-success producer (``_advisory_ext``) and the response reader
+#: (``_ext_property_list_advisories``) are a producer/consumer pair that must agree, the
+#: same coupling the namespace literal above was lifted here to break.
+PROPERTY_LIST_ADVISORIES_KEY = "property_list_advisories"
+
 
 def prebid_ext(**fields: Any) -> dict[str, dict[str, Any]]:
     """Wrap vendor ``fields`` under the prebid ext namespace."""

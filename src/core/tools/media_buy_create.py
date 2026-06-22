@@ -117,7 +117,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-from src.core.ext_namespace import prebid_ext
+from src.core.ext_namespace import PROPERTY_LIST_ADVISORIES_KEY, prebid_ext
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -1663,9 +1663,14 @@ def _advisory_ext(advisories: list[Error]) -> dict | None:
     if not advisories:
         return None
     # Vendor-namespaced per the spec's ExtensionObject description ("must be
-    # namespaced under a vendor/platform key"); the namespace lives in prebid_ext.
+    # namespaced under a vendor/platform key"); the namespace lives in prebid_ext and
+    # the sub-key in PROPERTY_LIST_ADVISORIES_KEY, so producer and reader share both.
     return prebid_ext(
-        property_list_advisories=[advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories]
+        **{
+            PROPERTY_LIST_ADVISORIES_KEY: [
+                advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories
+            ]
+        }
     )
 
 
