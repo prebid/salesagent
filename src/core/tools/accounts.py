@@ -24,19 +24,18 @@ from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
 )
 from adcp.types.generated_poc.account.sync_accounts_request import (
-    Account as SyncAccountInput,
-)
-from adcp.types.generated_poc.account.sync_accounts_response import (
-    Account as SyncResponseAccount,
+    Accounts as SyncAccountInput,  # SDK 5.7: Account → Accounts
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -44,8 +43,10 @@ from src.core.schemas.account import (
     ListAccountsResponse,
     SyncAccountsRequest,
     SyncAccountsResponse,
+    SyncResponseAccount,
 )
 from src.core.tool_context import ToolContext
+from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -129,13 +130,9 @@ def _list_accounts_impl(
         req = ListAccountsRequest()
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
-    if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        from src.core.exceptions import AdCPAuthenticationError
-
-        raise AdCPAuthenticationError("Authentication required for list_accounts")
-
-    tenant_id = identity.tenant_id
-    principal_id = identity.principal_id
+    principal_id = require_principal_id(identity, context=req.context)
+    tenant = require_tenant(identity, context=req.context)
+    tenant_id = tenant["tenant_id"]
 
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
@@ -145,7 +142,7 @@ def _list_accounts_impl(
         # Apply status filter if requested
         status_filter = getattr(req, "status", None)
         if status_filter is not None:
-            status_str = status_filter.value if hasattr(status_filter, "value") else str(status_filter)
+            status_str = enum_value(status_filter)
             db_accounts = [a for a in db_accounts if a.status == status_str]
 
         # Apply sandbox filter if requested
@@ -230,8 +227,6 @@ def list_accounts_raw(
         ListAccountsResponse with accessible accounts.
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_accounts_impl(req, identity)
 
@@ -254,9 +249,7 @@ def _generate_account_name(brand_domain: str, operator: str, brand_id: str | Non
 
 def _enum_to_str(val: Any) -> str | None:
     """Extract string value from an enum or return as-is. Returns None for None."""
-    if val is None:
-        return None
-    return val.value if hasattr(val, "value") else str(val)
+    return enum_value(val)
 
 
 def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
@@ -355,7 +348,7 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
     """
     from datetime import datetime, timedelta
 
-    from adcp.types.generated_poc.account.sync_accounts_response import Setup  # TODO: no stable alias in adcp.types
+    from adcp.types import Setup  # SDK 5.7: moved from sync_accounts_response to adcp.types
 
     if mode == "credit_review":
         return Setup(
@@ -382,7 +375,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
     for tld in reserved_tlds:
         if brand_domain.endswith(tld):
             return [
-                Error(
+                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
                     code="VALIDATION_ERROR",
                     message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
                     f"and cannot be used for account provisioning.",
@@ -413,7 +406,7 @@ def _check_billing_policy(
 
     if billing_val not in supported:
         return [
-            Error(
+            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
                 code="BILLING_NOT_SUPPORTED",
                 message=f"Billing model '{billing_val}' is not supported by this seller. "
                 f"Supported models: {', '.join(supported)}.",
@@ -427,8 +420,24 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     """Extract natural key components from a sync request account entry.
 
     Returns (brand_domain, brand_id, operator, sandbox).
+
+    Raises:
+        AdCPValidationError: if the entry omits ``brand``. SDK 5.7's
+            ``SyncAccountsRequest.accounts`` is ``list[Accounts | Accounts3]``;
+            the ``Accounts3`` (account-reference / settings-update) arm makes
+            ``brand`` optional, so a brandless entry parses with ``brand=None``.
+            The pinned 3.1 spec (sync-accounts-request.json) marks each entry
+            ``required: ["brand", "operator", "billing"]``, so a brandless
+            entry must be a clean buyer-correctable 400 — not an unguarded
+            ``None.domain`` AttributeError (which fell through to a 500).
     """
     brand = entry.brand
+    if brand is None:
+        raise AdCPValidationError(
+            "Each account entry must include 'brand', 'operator', and 'billing'; "
+            "the account-reference (settings-update) form is not supported by this seller.",
+            recovery="correctable",
+        )
     brand_domain = brand.domain
     brand_id = None
     if hasattr(brand, "brand_id") and brand.brand_id is not None:
@@ -463,16 +472,17 @@ async def _sync_accounts_impl(
     if req is None:
         req = SyncAccountsRequest(accounts=[], idempotency_key=str(uuid.uuid4()))
 
-    # BR-RULE-055: sync requires auth
-    if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        raise AdCPAuthenticationError("Authentication required: sync_accounts requires a valid auth token.")
+    # BR-RULE-055: sync requires auth (consistent with list_accounts). require_principal_id
+    # first so the canonical auth message surfaces for a missing/anonymous token; require_identity
+    # then narrows the type for _check_billing_policy below.
+    principal_id = require_principal_id(identity, context=req.context)
+    identity = require_identity(identity, context=req.context)
+    tenant = require_tenant(identity, context=req.context)
+    tenant_id = tenant["tenant_id"]
 
     # Validate non-empty accounts array
     if not req.accounts:
         raise AdCPValidationError("accounts array must not be empty — at least one account is required.")
-
-    tenant_id = identity.tenant_id
-    principal_id = identity.principal_id
     dry_run = bool(req.dry_run)
     delete_missing = bool(req.delete_missing)
 
@@ -583,8 +593,7 @@ async def _sync_accounts_impl(
                 # (BR-RULE-037) — do NOT fall back to approval_mode.
                 # Resolved BEFORE the dry_run branch so previews reflect what a real
                 # create would return (BR-RULE-062).
-                tenant = identity.tenant if identity else None
-                approval_mode = tenant.get("account_approval_mode") if tenant else None
+                approval_mode = tenant.get("account_approval_mode")
                 setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
                 initial_status = "pending_approval" if setup else "active"
 
@@ -737,7 +746,5 @@ async def sync_accounts_raw(
         SyncAccountsResponse with per-account action results.
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
     return await _sync_accounts_impl(req, identity)

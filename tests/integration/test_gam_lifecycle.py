@@ -12,6 +12,7 @@ import pytest
 
 from src.adapters.constants import UPDATE_ACTIONS
 from src.adapters.google_ad_manager import GoogleAdManager
+from src.core.exceptions import AdCPAuthorizationError, AdCPCapabilityNotSupportedError
 from src.core.schemas import Principal
 
 
@@ -110,7 +111,12 @@ class TestGAMOrderLifecycleIntegration:
 
     @pytest.mark.requires_db
     def test_lifecycle_workflow_validation(self, test_principals, gam_config):
-        """Test lifecycle action workflows with business validation (AdCP 2.4 compliant)."""
+        """Test lifecycle action workflows with business validation.
+
+        After the error-emission architecture migration, the GAM adapter raises typed AdCPError subclasses for
+        unsupported actions and authorization failures. Only ``approve_order``,
+        ``activate_order``, and ``update_package_budget`` are supported.
+        """
         with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
             # Test regular user with different actions
             regular_adapter = GoogleAdManager(
@@ -123,37 +129,32 @@ class TestGAMOrderLifecycleIntegration:
                 tenant_id="test",
             )
 
-            # Actions that should work for regular users
-            allowed_actions = ["submit_for_approval", "archive_order"]
-            for action in allowed_actions:
-                response = regular_adapter.update_media_buy(
+            # submit_for_approval and archive_order are NOT supported by GAM.
+            unsupported_actions = ["submit_for_approval", "archive_order"]
+            for action in unsupported_actions:
+                with pytest.raises(AdCPCapabilityNotSupportedError, match=f"{action}|not supported"):
+                    regular_adapter.update_media_buy(
+                        media_buy_id="12345",
+                        action=action,
+                        package_id=None,
+                        budget=None,
+                        today=datetime.now(UTC),
+                    )
+
+            # approve_order is admin-only — non-admin gets AdCPAuthorizationError.
+            with pytest.raises(AdCPAuthorizationError, match="admin"):
+                regular_adapter.update_media_buy(
                     media_buy_id="12345",
-                    action=action,
+                    action="approve_order",
                     package_id=None,
                     budget=None,
                     today=datetime.now(UTC),
                 )
-                # ``submit_for_approval`` and ``archive_order`` are documented
-                # as user-permitted in ``allowed_actions`` but the GAM dry-run
-                # adapter currently rejects them with UNSUPPORTED_FEATURE; the
-                # helper pins this drift so an adapter fix forces re-evaluation.
-                _assert_unsupported_feature_for_action(response, action)
 
-            # Admin-only action should fail for regular user
-            response = regular_adapter.update_media_buy(
-                media_buy_id="12345",
-                action="approve_order",
-                package_id=None,
-                budget=None,
-                today=datetime.now(UTC),
-            )
-            # adcp v1.2.1: Error response has errors field
-            assert hasattr(response, "errors"), "Should be UpdateMediaBuyError with errors"
-            assert response.errors is not None and len(response.errors) > 0
-            assert response.errors[0].code == "AUTH_REQUIRED"
-            # Note: Error variant doesn't have buyer_ref field in adcp v1.2.1
-
-            # Admin user should be able to approve
+            # Admin user passes the admin_only_actions gate, but approve_order has
+            # no dedicated handler in the adapter so it falls through to the
+            # AdCPCapabilityNotSupportedError path. Documenting current behavior:
+            # the admin gate exists but no implementation backs it.
             admin_adapter = GoogleAdManager(
                 config=gam_config,
                 principal=test_principals["gam_admin"],
@@ -163,16 +164,14 @@ class TestGAMOrderLifecycleIntegration:
                 dry_run=True,
                 tenant_id="test",
             )
-            response = admin_adapter.update_media_buy(
-                media_buy_id="12345",
-                action="approve_order",
-                package_id=None,
-                budget=None,
-                today=datetime.now(UTC),
-            )
-            # GAM dry-run also rejects ``approve_order`` for admin principals
-            # — same UNSUPPORTED_FEATURE drift as the loop above. Pin it.
-            _assert_unsupported_feature_for_action(response, "approve_order")
+            with pytest.raises(AdCPCapabilityNotSupportedError, match="approve_order|not supported"):
+                admin_adapter.update_media_buy(
+                    media_buy_id="12345",
+                    action="approve_order",
+                    package_id=None,
+                    budget=None,
+                    today=datetime.now(UTC),
+                )
 
     def test_guaranteed_line_item_classification(self):
         """Test line item type classification logic with real data structures."""
@@ -204,7 +203,13 @@ class TestGAMOrderLifecycleIntegration:
 
     @pytest.mark.requires_db
     def test_activation_validation_with_guaranteed_items(self, test_principals, gam_config):
-        """Test activation validation blocking guaranteed line items (AdCP 2.4 compliant)."""
+        """Test activation validation blocking guaranteed line items.
+
+        After the error-emission architecture migration, ``activate_order`` raises AdCPCapabilityNotSupportedError
+        when there are no guaranteed items (the code path only handles the
+        guaranteed-items case explicitly). With guaranteed items it returns
+        a workflow step in the success response.
+        """
         with patch("src.adapters.google_ad_manager.GoogleAdManager._init_client"):
             adapter = GoogleAdManager(
                 config=gam_config,
@@ -216,19 +221,16 @@ class TestGAMOrderLifecycleIntegration:
                 tenant_id="test",
             )
 
-            # Test activation with non-guaranteed items (should succeed)
+            # Test activation with non-guaranteed items — no special handling, raises.
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(False, [])):
-                response = adapter.update_media_buy(
-                    media_buy_id="12345",
-                    action="activate_order",
-                    package_id=None,
-                    budget=None,
-                    today=datetime.now(UTC),
-                )
-                # ``activate_order`` is rejected upfront by GAM dry-run before
-                # the ``_check_order_has_guaranteed_items`` patch can branch.
-                # Same UNSUPPORTED_FEATURE drift; same helper pins it.
-                _assert_unsupported_feature_for_action(response, "activate_order")
+                with pytest.raises(AdCPCapabilityNotSupportedError, match="activate_order|not supported"):
+                    adapter.update_media_buy(
+                        media_buy_id="12345",
+                        action="activate_order",
+                        package_id=None,
+                        budget=None,
+                        today=datetime.now(UTC),
+                    )
 
             # Test activation with guaranteed items (should create workflow step)
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(True, ["STANDARD"])):

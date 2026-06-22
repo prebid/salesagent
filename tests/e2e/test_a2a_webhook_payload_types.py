@@ -23,6 +23,7 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.e2e._webhook_capture import run_webhook_capture_server
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
 
 
@@ -180,33 +181,8 @@ class WebhookPayloadCapture(BaseHTTPRequestHandler):
 @pytest.fixture
 def webhook_capture_server():
     """Start a local HTTP server to capture webhook payloads."""
-    # Clear any previous captures
-    WebhookPayloadCapture.received_payloads.clear()
-
-    # Find an available port
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("0.0.0.0", 0))
-    port = s.getsockname()[1]
-    s.close()
-
-    # Start server on all interfaces so it's reachable from Docker container
-    server = HTTPServer(("0.0.0.0", port), WebhookPayloadCapture)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    # Use localhost in URL - the MCP server's protocol_webhook_service
-    # rewrites it to host.docker.internal
-    webhook_url = f"http://localhost:{port}/webhook"
-
-    yield {
-        "url": webhook_url,
-        "server": server,
-        "received": WebhookPayloadCapture.received_payloads,
-    }
-
-    server.shutdown()
-    server.server_close()
-    WebhookPayloadCapture.received_payloads.clear()
+    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_payloads) as info:
+        yield info
 
 
 class TestA2AWebhookPayloadTypes:

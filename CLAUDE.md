@@ -106,20 +106,35 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
 | Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
+| Pre-commit no additional_deps | No `additional_dependencies` in `.pre-commit-config.yaml` (ADR-001) | `test_architecture_pre_commit_no_additional_deps.py` |
+| Pre-commit hook count | Commit-stage hooks stay within D27 ceiling (≤12) | `test_architecture_pre_commit_hook_count.py` |
+| No tenant.config access | Per-field tenant columns, not legacy `tenant.config` | `test_architecture_no_tenant_config.py` |
+| JSONType columns | JSON DB columns use `JSONType`, not plain `JSON` | `test_architecture_jsontype_columns.py` |
+| No defensive RootModel | No `hasattr(x, "root")` without `# noqa: rootmodel` | `test_architecture_no_defensive_rootmodel.py` |
+| Import usage in src/ | Classes/functions used in `src/` must be imported | `test_architecture_import_usage.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
-- Every allowlisted violation has a `# FIXME(salesagent-xxxx)` comment at the source location
+- Every allowlisted violation has a `# FIXME(#<gh-issue>)` comment at the source location — reference a GitHub issue/PR number, never a local beads id (beads ids don't resolve for outside contributors)
 - When you fix a violation, remove it from the allowlist (the stale-entry test will remind you)
 
 ---
 
 ## AdCP Spec Version
 
-This project targets AdCP spec **3.0.1** via the `adcp==4.3.0` Python SDK. See
+This project targets AdCP spec **3.1.0-beta.3** via the `adcp==5.7.0` Python SDK. See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
 and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
 fails on pin drift.
+
+### Spec-Grounding Gate (MANDATORY before implementing protocol behavior)
+
+**Any change to AdCP/protocol BEHAVIOR** — a tool's request/response contract, error emission, idempotency, governance, or capabilities — **must cite, before code is written, the authoritative spec section + version that mandates it, plus the conformance storyboard step that grades it** (or note "ungraded"). Record the citation in the PR description and/or the planning note.
+
+- **Which version is authoritative:** the version the repo currently PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
+- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): prose at `dist/docs/<version>/building/implementation/*.mdx`; the graded, executable contract at `dist/compliance/<version>/*.yaml`. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec.
+- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the spec prose + storyboard has produced an entire feature built inverse to the spec. The spec is the contract; everything else is derived.
+- **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec; this complements the pin-drift guard above. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
 
 ---
 

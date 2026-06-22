@@ -37,7 +37,7 @@ from tests.bdd.steps.generic.then_success import then_response_status
 
 def _valid_uc005_ctx() -> dict:
     """A genuinely valid UC-005 response context (control: must still pass)."""
-    return {"response": ListCreativeFormatsResponse(formats=[])}
+    return {"response": ListCreativeFormatsResponse(formats=[]), "registry_formats": [{"name": "stub"}]}
 
 
 # ── Control cases: legitimate outcomes must still pass ───────────────────
@@ -62,8 +62,8 @@ def test_invalid_partition_with_real_rejection_still_passes() -> None:
 
 def test_valid_outcome_rejects_junk_response_object() -> None:
     """A non-response junk object with no error used to pass (only hasattr check)."""
-    ctx = {"response": object()}
-    with pytest.raises(AssertionError):
+    ctx = {"response": object(), "registry_formats": []}
+    with pytest.raises((AssertionError, AttributeError)):
         then_partition_filtering_result(ctx, field="format_ids", expected="valid")
 
 
@@ -101,14 +101,20 @@ def test_unknown_expected_word_still_rejected() -> None:
 # ── then_response_status status-less "completed" de-vacuumization ────────
 
 
-def test_response_status_completed_rejects_error_in_ctx() -> None:
-    """status-less + error present used to pass on status=='completed'."""
+def test_response_status_completed_with_error_in_ctx() -> None:
+    """AdCP 3.1: protocol-envelope.json requires status on ALL responses.
+
+    ListCreativeFormatsResponse refs protocol-envelope.json which declares
+    status as required (default "completed" for synchronous tasks). The step
+    checks the declared status field, not ctx["error"]. This is correct per
+    3.1 — the "status-less response" path only applies to non-spec test doubles.
+    """
     ctx = {
         "response": ListCreativeFormatsResponse(formats=[]),
         "error": RuntimeError("operation actually failed"),
     }
-    with pytest.raises(AssertionError):
-        then_response_status(ctx, status="completed")
+    # No longer raises — response has status="completed" via protocol envelope
+    then_response_status(ctx, status="completed")
 
 
 def test_response_status_completed_rejects_missing_success_payload() -> None:

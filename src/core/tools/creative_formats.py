@@ -2,13 +2,21 @@
 
 This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [valid-type] on lines ~98, ~236: SDK asset class unions (ImageFormatAsset |
+  VideoFormatAsset | ...) are dynamically resolved type factories; mypy cannot
+  validate the union. Permanent until upstream ships StrEnum.
 """
 
+import asyncio
+import concurrent.futures
 import logging
 import time
 from collections.abc import Sequence
 from typing import Annotated, TypeVar
 
+# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
 from adcp.types import (
     AssetContentType,
@@ -31,7 +39,8 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -54,8 +63,10 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error
 
 
@@ -95,7 +106,7 @@ _ASSET_TYPE_TO_CLASS: dict[str, type] = {
 
 def _make_asset(
     asset_id: str, asset_type: str, required: bool
-) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:
+) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:  # type: ignore[valid-type]
     """Build the correct Assets variant for a given asset type string."""
     cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
     return cls(
@@ -122,9 +133,7 @@ def build_list_creative_formats_request(
     context: ContextObject | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
-    asset_types_strs = (
-        [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
-    )
+    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
     return ListCreativeFormatsRequest(
         format_ids=format_ids,
         output_format_ids=output_format_ids,
@@ -159,39 +168,25 @@ def _list_creative_formats_impl(
 
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
-    tenant = identity.tenant if identity else None
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    tenant = require_tenant(identity, context=req.context)
 
     # Get formats from all registered creative agents via registry
-    import asyncio
-
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
 
-    # Decision: docs/design/error-propagation-in-format-discovery.md
-    # Registry creation failure → return empty formats + errors (FD-ERR-03)
     try:
         registry = get_creative_agent_registry()
+    except AdCPError:
+        raise
     except Exception as e:
-        from adcp.types import Error as AdCPResponseError
-
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
-        return ListCreativeFormatsResponse(
-            formats=[],
-            errors=[
-                AdCPResponseError(
-                    code="SERVICE_UNAVAILABLE",
-                    message=f"Creative agent registry initialization failed: {e}",
-                )
-            ],
+        raise AdCPServiceUnavailableError(
+            f"Creative agent registry initialization failed: {e}",
             context=req.context,
-        )
+        ) from e
 
     # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
     try:
         loop = asyncio.get_running_loop()
-        import concurrent.futures
-
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(
                 lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
@@ -233,7 +228,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[
+                        assets_list: list[  # type: ignore[valid-type]
                             ImageFormatAsset
                             | VideoFormatAsset
                             | AudioFormatAsset
@@ -342,7 +337,7 @@ def _list_creative_formats_impl(
         # Normalize requested asset types to string values for comparison.
         # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
         # Format assets now use plain string literals, so must compare using .value not str(enum).
-        requested_types = {at.value if hasattr(at, "value") else str(at) for at in req.asset_types}
+        requested_types = {enum_value(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
 
     # Filter by dimension constraints
@@ -566,7 +561,5 @@ def list_creative_formats_raw(
         ListCreativeFormatsResponse with all available formats
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_creative_formats_impl(req, identity)

@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
-from src.core.database.db_config import DatabaseConfig
+from src.core.database.db_config import DatabaseConfig, int_env
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +88,9 @@ def get_engine():
             raise ValueError("Only PostgreSQL is supported. Use DATABASE_URL=postgresql://...")
 
         # Get timeout configuration from environment
-        query_timeout = int(os.environ.get("DATABASE_QUERY_TIMEOUT", "30"))  # 30s default
-        connect_timeout = int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "10"))  # 10s default
-        pool_timeout = int(os.environ.get("DATABASE_POOL_TIMEOUT", "30"))  # 30s default
+        query_timeout = int_env("DATABASE_QUERY_TIMEOUT", "30")  # 30s default
+        connect_timeout = int_env("DATABASE_CONNECT_TIMEOUT", "10")  # 10s default
+        pool_timeout = int_env("DATABASE_POOL_TIMEOUT", "30")  # 30s default
 
         # Detect PgBouncer usage (typically port 6543)
         # PgBouncer requires different pooling strategy since it manages connections
@@ -118,11 +118,14 @@ def get_engine():
             )
         else:
             logger.info("Direct PostgreSQL connection - using standard connection pool settings")
-            # Direct PostgreSQL settings (no PgBouncer)
+            # Direct PostgreSQL settings (no PgBouncer).
+            # DB_POOL_SIZE / DB_MAX_OVERFLOW env vars allow CI to tune the pool
+            # down (e.g. DB_POOL_SIZE=4 DB_MAX_OVERFLOW=8) without code changes,
+            # preventing postgres max_connections exhaustion in GHA runners (D40).
             _engine = create_engine(
                 connection_string,
-                pool_size=10,  # Base connections in pool
-                max_overflow=20,  # Additional connections beyond pool_size
+                pool_size=int_env("DB_POOL_SIZE", "10"),
+                max_overflow=int_env("DB_MAX_OVERFLOW", "20"),
                 pool_timeout=pool_timeout,  # Seconds to wait for connection from pool
                 pool_recycle=3600,  # Recycle connections after 1 hour
                 pool_pre_ping=True,  # Test connections before use

@@ -26,6 +26,7 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -34,6 +35,17 @@ from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import CircuitBreakerMixin
+
+
+class _LogCaptureHandler(logging.Handler):
+    """Captures formatted log records into a list for assertion in tests."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.records: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(self.format(record))
 
 
 class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
@@ -62,6 +74,25 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._service: WebhookDeliveryService | None = None
+        self._log_handler: _LogCaptureHandler | None = None
+        self.captured_logs: list[str] = []
+
+    def __enter__(self) -> CircuitBreakerEnv:
+        result = super().__enter__()
+        # Attach log capture to the webhook delivery service logger
+        self._log_handler = _LogCaptureHandler()
+        webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
+        webhook_logger.addHandler(self._log_handler)
+        self.captured_logs = self._log_handler.records
+        return result  # type: ignore[return-value]
+
+    def __exit__(self, *exc: object) -> bool:
+        # Remove log capture handler
+        if self._log_handler is not None:
+            webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
+            webhook_logger.removeHandler(self._log_handler)
+            self._log_handler = None
+        return super().__exit__(*exc)
 
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests

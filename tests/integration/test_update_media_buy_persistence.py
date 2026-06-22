@@ -20,7 +20,7 @@ from src.core.database.models import (
 from src.core.database.models import (
     Principal as ModelPrincipal,
 )
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
+from src.core.exceptions import AdCPAuthenticationError, AdCPMediaBuyNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse
 from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -178,7 +178,7 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
         token=test_tenant_setup["token"],
     )
 
-    # media_buy_id that doesn't exist should raise AdCPNotFoundError
-    with pytest.raises(AdCPNotFoundError, match="not found"):
+    # media_buy_id that doesn't exist should raise AdCPMediaBuyNotFoundError
+    with pytest.raises(AdCPMediaBuyNotFoundError, match="nonexistent_ref"):
         req = UpdateMediaBuyRequest(media_buy_id="nonexistent_ref")
         _update_media_buy_impl(req=req, identity=identity)

@@ -8,6 +8,7 @@ from factory.alchemy import SQLAlchemyModelFactory
 from src.core.database.models import Creative, CreativeAssignment
 
 from .core import TenantFactory
+from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
 
@@ -31,7 +32,7 @@ class CreativeFactory(SQLAlchemyModelFactory):
     agent_url = "https://creative.adcontextprotocol.org"
     format = "display_300x250"
     status = "pending"
-    data = factory.LazyFunction(lambda: {"assets": {"banner": {"url": "https://example.com/banner.png"}}})
+    data = factory.LazyFunction(lambda: {"assets": build_assets(image_spec("banner"))})
 
     class Params:
         """Traits for common creative configurations."""

@@ -1653,7 +1653,7 @@ class TestPublisherDomainsPortfolio:
         )
         # Extract domains from publisher_properties (portfolio assembly logic)
         domains = sorted(
-            pp.root.publisher_domain if hasattr(pp, "root") else pp.publisher_domain
+            pp.root.publisher_domain if hasattr(pp, "root") else pp.publisher_domain  # noqa: rootmodel
             for pp in product.publisher_properties
         )
         assert domains == ["news.example.com", "sports.example.com"]

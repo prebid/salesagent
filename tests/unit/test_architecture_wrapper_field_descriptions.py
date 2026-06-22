@@ -77,6 +77,7 @@ class TestMcpWrapperFieldDescriptions:
     """MCP wrapper scalar params must have Field(description=...)."""
 
     @pytest.mark.parametrize("module_path,func_name", MCP_WRAPPERS)
+    @pytest.mark.arch_guard
     def test_scalar_params_have_descriptions(self, module_path: str, func_name: str):
         """Every scalar param in MCP wrappers must have a Field description."""
         import importlib

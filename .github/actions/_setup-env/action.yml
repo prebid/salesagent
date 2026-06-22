@@ -1,0 +1,18 @@
+name: Setup Python and uv environment
+description: Install Python dependencies via uv with cache.
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/_install-uv
+
+    - name: Cache uv dependencies
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.cache/uv
+          .venv
+        key: ${{ runner.os }}-uv-v4-py${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock') }}
+
+    - name: Install dependencies
+      shell: bash
+      run: uv sync --group dev

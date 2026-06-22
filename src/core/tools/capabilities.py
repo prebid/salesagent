@@ -24,13 +24,16 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Portfolio,
     PublisherDomain,
     SupportedProtocol,
+    # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
     Targeting,
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_identity
+from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -89,21 +92,20 @@ def _get_adcp_capabilities_impl(
         return GetAdcpCapabilitiesResponse(
             adcp=Adcp(
                 major_versions=[MajorVersion(root=3)],
-                idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+                idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
             ),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
-    assert identity is not None
+    identity = require_identity(identity, context=req.context if req else None)
 
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")
 
     # Log activity
-    if identity:
-        log_tool_activity(identity, "get_adcp_capabilities")
+    log_tool_activity(identity, "get_adcp_capabilities")
 
     # Get adapter to determine channels and capabilities
     primary_channels: list[MediaChannel] = []
@@ -255,14 +257,14 @@ def _get_adcp_capabilities_impl(
     # The runner gates scenarios by specialism, not by `supported_protocols` alone.
     #
     # We declare the specialism even though `pending_creatives_to_start` and
-    # `invalid_transitions` are not yet fully green. The CI storyboard job is
-    # advisory (see `.github/workflows/test.yml`), so those scenario failures
-    # don't block merge — and the public declaration forces prioritization of
-    # the remaining gaps instead of hiding them.
+    # `invalid_transitions` are not yet fully green. Storyboard compliance runs
+    # are advisory — no required CI job executes them — so those scenario
+    # failures don't block merge, and the public declaration forces
+    # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=3)],
-            idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+            idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
         ),
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
@@ -297,7 +299,7 @@ async def get_adcp_capabilities(
     response = _get_adcp_capabilities_impl(req, identity)
 
     # Build human-readable summary
-    protocols = [p.value if hasattr(p, "value") else str(p) for p in response.supported_protocols]
+    protocols = [enum_value(p) for p in response.supported_protocols]
     summary_parts = [
         f"AdCP v{response.adcp.major_versions[0].root} Capabilities",
         f"Supported protocols: {', '.join(protocols)}",
@@ -308,7 +310,7 @@ async def get_adcp_capabilities(
         if portfolio.description:
             summary_parts.append(f"Portfolio: {portfolio.description}")
         if portfolio.primary_channels:
-            channels = [c.value if hasattr(c, "value") else str(c) for c in portfolio.primary_channels]
+            channels = [enum_value(c) for c in portfolio.primary_channels]
             summary_parts.append(f"Channels: {', '.join(channels)}")
 
     summary = "\n".join(summary_parts)

@@ -14,6 +14,10 @@ import ast
 import glob
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
@@ -57,6 +61,11 @@ def _discover_integration_test_files() -> list[str]:
     Scans tests/integration*/, tests/admin/, and tests/e2e/ for test_*.py and
     conftest.py files. These suites all exercise real DB state and must use
     factories, not inline session.add() / get_db_session() in test bodies.
+
+    Also scans every module under tests/helpers/. Shared DB-seed helpers there are
+    not named test_*.py but must follow the same factory-only rule, so that new
+    session.add() debt in helper code is caught at the source rather than hidden
+    behind a module the guard never reads.
     """
     roots = ("tests/integration*", "tests/admin", "tests/e2e")
     test_files: list[str] = []
@@ -64,7 +73,8 @@ def _discover_integration_test_files() -> list[str]:
     for root in roots:
         test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
-    return sorted(set(test_files + conftest_files))
+    helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
+    return sorted(set(test_files + conftest_files + helper_files))
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
@@ -405,9 +415,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_upsert_existing_creative"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_media_buy_assignments"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_validate_creatives_missing_required_fields"),
-    # tests/integration/test_error_paths.py
-    ("tests/integration/test_error_paths.py", "test_tenant_minimal"),
-    ("tests/integration/test_error_paths.py", "test_tenant_with_principal"),
     # tests/integration/test_gam_automation_focused.py
     ("tests/integration/test_gam_automation_focused.py", "test_tenant_data"),
     # tests/integration/test_get_products_database_integration.py — migrated to factories
@@ -516,17 +523,16 @@ def _find_impl_functions_with_db_session(file_path: str) -> list[tuple[str, str,
             continue
 
         # Check all calls inside this function for get_db_session
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                func = child.func
-                # Match: get_db_session()
-                if isinstance(func, ast.Name) and func.id == "get_db_session":
-                    violations.append((file_path, node.name, child.lineno))
-                    break  # One violation per function is enough
-                # Match: database_session.get_db_session()
-                if isinstance(func, ast.Attribute) and func.attr == "get_db_session":
-                    violations.append((file_path, node.name, child.lineno))
-                    break
+        for child in iter_call_expressions(node):
+            func = child.func
+            # Match: get_db_session()
+            if isinstance(func, ast.Name) and func.id == "get_db_session":
+                violations.append((file_path, node.name, child.lineno))
+                break  # One violation per function is enough
+            # Match: database_session.get_db_session()
+            if isinstance(func, ast.Attribute) and func.attr == "get_db_session":
+                violations.append((file_path, node.name, child.lineno))
+                break
 
     return violations
 
@@ -547,20 +553,19 @@ def _find_session_add_in_tests(file_path: str) -> list[tuple[str, str, int]]:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
 
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                func = child.func
-                # Match: session.add(...) or *.add(...)
-                if isinstance(func, ast.Attribute) and func.attr == "add":
-                    # Check it's likely a session (common var names)
-                    if isinstance(func.value, ast.Name) and func.value.id in (
-                        "session",
-                        "db_session",
-                        "mock_session",
-                        "s",
-                    ):
-                        violations.append((file_path, node.name, child.lineno))
-                        break  # One violation per function is enough
+        for child in iter_call_expressions(node):
+            func = child.func
+            # Match: session.add(...) or *.add(...)
+            if isinstance(func, ast.Attribute) and func.attr == "add":
+                # Check it's likely a session (common var names)
+                if isinstance(func.value, ast.Name) and func.value.id in (
+                    "session",
+                    "db_session",
+                    "mock_session",
+                    "s",
+                ):
+                    violations.append((file_path, node.name, child.lineno))
+                    break  # One violation per function is enough
 
     return violations
 
@@ -572,6 +577,7 @@ class TestImplNoDirectDbSession:
     repositories and call typed methods, not raw session operations.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_get_db_session_in_impl(self):
         """No _impl function calls get_db_session() outside the allowlist."""
         all_violations = []
@@ -593,6 +599,7 @@ class TestImplNoDirectDbSession:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()
@@ -600,15 +607,11 @@ class TestImplNoDirectDbSession:
             for f, fn, _line in _find_impl_functions_with_db_session(file_path):
                 all_violations.add((f, fn))
 
-        stale = IMPL_SESSION_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            IMPL_SESSION_ALLOWLIST,
+            fix_hint="Remove fixed entries from IMPL_SESSION_ALLOWLIST.",
+        )
 
 
 class TestIntegrationTestsNoInlineSessionAdd:
@@ -618,6 +621,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
     not scattered across test bodies as raw ORM model construction.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_session_add_in_tests(self):
         """No test function calls session.add() outside the allowlist."""
         all_violations = []
@@ -642,6 +646,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()
@@ -649,12 +654,8 @@ class TestIntegrationTestsNoInlineSessionAdd:
             for f, fn, _line in _find_session_add_in_tests(file_path):
                 all_violations.add((f, fn))
 
-        stale = INTEGRATION_SESSION_ADD_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            INTEGRATION_SESSION_ADD_ALLOWLIST,
+            fix_hint="Remove fixed entries from INTEGRATION_SESSION_ADD_ALLOWLIST.",
+        )

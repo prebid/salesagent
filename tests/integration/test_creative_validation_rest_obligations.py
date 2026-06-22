@@ -10,8 +10,8 @@ Covers: salesagent-e2u, salesagent-axm, salesagent-dd6, salesagent-46w, salesage
 from __future__ import annotations
 
 import pytest
-from adcp.types import CreativeAction
 
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import (
     CreativeFormatsEnv,
     CreativeListEnv,
@@ -51,7 +51,7 @@ class TestMissingFormatIdRejectedThroughImpl:
                         "creative_id": "c_no_format",
                         "name": "Missing Format Creative",
                         # format_id intentionally omitted
-                        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                        "assets": build_assets(image_spec("banner")),
                     }
                 ],
             )
@@ -61,7 +61,7 @@ class TestMissingFormatIdRejectedThroughImpl:
         assert len(response.creatives) == 1
         result = response.creatives[0]
         assert result.creative_id == "c_no_format"
-        assert result.action == CreativeAction.failed
+        assert result.action == "failed"
         assert result.errors is not None
         assert len(result.errors) > 0
         error_msgs = [e.message if hasattr(e, "message") else str(e) for e in result.errors]
@@ -97,13 +97,13 @@ class TestCreativeIdsScopeFiltering:
                         "creative_id": "c_included",
                         "name": "Should Be Included",
                         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-                        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+                        "assets": build_assets(image_spec("banner")),
                     },
                     {
                         "creative_id": "c_excluded",
                         "name": "Should Be Excluded",
                         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-                        "assets": {"banner": {"url": "https://example.com/other.png"}},
+                        "assets": build_assets(image_spec("banner")),
                     },
                 ],
                 creative_ids=["c_included"],  # Only process c_included

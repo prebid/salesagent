@@ -11,18 +11,26 @@ import uuid
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPError,
+    AdCPServiceUnavailableError,
+    AdCPValidationError,
+)
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
 from adcp.types import ContextObject
-from adcp.types.generated_poc.core.signal_id import SignalId, SignalId18  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.signal_id import (
+    SignalId,
+    SignalId5,
+)  # SDK 5.7: SignalId18 → SignalId5 (same fields: agent_url, id, source)
 from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
 
-from src.core.auth import get_principal_object
+from src.core.auth import get_principal_object, require_identity, require_principal_id, require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ActivateSignalResponse,
@@ -32,11 +40,12 @@ from src.core.schemas import (
     SignalDeployment,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.transport_helpers import resolve_identity_from_context
 
 
 def _agent_signal_id(segment_id: str) -> SignalId:
     """Build a SignalId for an agent-native signal."""
-    return SignalId(SignalId18(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
+    return SignalId(SignalId5(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
 
 
 def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricingOption]:
@@ -62,10 +71,8 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     _ = identity.principal_id if identity else None
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    assert identity is not None, "identity is required for signals"
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    identity = require_identity(identity, context=req.context)
+    tenant = require_tenant(identity, context=req.context)
 
     # Mock implementation - in production, this would query from a signal provider
     # or the ad server's available audience segments
@@ -198,8 +205,6 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     Returns:
         ToolResult with GetSignalsResponse data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
     identity = resolve_identity_from_context(context, require_valid_token=False)
     response = await _get_signals_impl(req, identity)
     return ToolResult(content=str(response), structured_content=response)
@@ -226,22 +231,14 @@ async def _activate_signal_impl(
     """
     start_time = time.time()
 
-    # Authentication required for signal activation
-    principal_id = identity.principal_id if identity else None
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    if not identity or not identity.tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    identity = require_identity(identity, context=context)
+    principal_id = require_principal_id(identity, context=context)
+    require_tenant(identity, context=context)
 
     # Get the Principal object with ad server mappings
-    if not principal_id:
-        raise AdCPAuthenticationError("Authentication required for signal activation")
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
 
-    # Apply testing hooks
-    if not identity:
-        raise AdCPValidationError("Context required for signal activation", recovery="terminal")
-    testing_ctx = identity.testing_context if identity else AdCPTestContext()
+    testing_ctx = identity.testing_context or AdCPTestContext()
     campaign_info = {"endpoint": "activate_signal", "signal_id": signal_agent_segment_id}
     # Note: apply_testing_hooks modifies response data dict, not called here as no response yet
 
@@ -256,55 +253,31 @@ async def _activate_signal_impl(
         activation_success = True
         requires_approval = signal_agent_segment_id.startswith("premium_")
 
-        from src.core.schemas import Error
-
         if requires_approval:
-            # Create a human task for approval - return error response
-            errors = [
-                Error(
-                    code="VALIDATION_ERROR",
-                    message=f"Signal {signal_agent_segment_id} requires manual approval before activation",
-                )
-            ]
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details=None,
-                errors=errors,
+            raise AdCPValidationError(
+                f"Signal {signal_agent_segment_id} requires manual approval before activation",
                 context=context,
             )
-        elif activation_success:
-            # Success - return activation details
-            decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details={
-                    "decisioning_platform_segment_id": decisioning_platform_segment_id,
-                    "estimated_activation_duration_minutes": 15.0,
-                    "status": "processing",
-                },
-                errors=None,
-                context=context,
-            )
-        else:
-            # Failure
-            errors = [Error(code="SERVICE_UNAVAILABLE", message="Signal provider unavailable")]
-            return ActivateSignalResponse(
-                signal_id=signal_agent_segment_id,
-                activation_details=None,
-                errors=errors,
-                context=context,
-            )
+        if not activation_success:
+            raise AdCPServiceUnavailableError("Signal provider unavailable", context=context)
 
-    except Exception as e:
-        logger.error(f"Error activating signal {signal_agent_segment_id}: {e}")
-        from src.core.schemas import Error
-
+        decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
         return ActivateSignalResponse(
             signal_id=signal_agent_segment_id,
-            activation_details=None,
-            errors=[Error(code="SERVICE_UNAVAILABLE", message=str(e))],
+            activation_details={
+                "decisioning_platform_segment_id": decisioning_platform_segment_id,
+                "estimated_activation_duration_minutes": 15.0,
+                "status": "processing",
+            },
+            errors=None,
             context=context,
         )
+
+    except AdCPError:
+        raise
+    except Exception as e:
+        logger.error("Error activating signal %s: %s", signal_agent_segment_id, e)
+        raise AdCPAdapterError(str(e), context=context) from e
 
 
 async def activate_signal(
@@ -328,8 +301,6 @@ async def activate_signal(
     Returns:
         ToolResult with ActivateSignalResponse data
     """
-    from src.core.transport_helpers import resolve_identity_from_context
-
     identity = resolve_identity_from_context(ctx)
     response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
     return ToolResult(content=str(response), structured_content=response)
@@ -353,8 +324,6 @@ async def get_signals_raw(
         GetSignalsResponse containing matching signals
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return await _get_signals_impl(req, identity)
 
@@ -383,7 +352,5 @@ async def activate_signal_raw(
         ActivateSignalResponse with activation status
     """
     if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
         identity = resolve_identity_from_context(ctx)
     return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)

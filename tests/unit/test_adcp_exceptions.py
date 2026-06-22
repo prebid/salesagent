@@ -9,6 +9,7 @@ Validates that:
 beads: salesagent-b61l.11
 """
 
+import pytest
 from starlette.testclient import TestClient
 
 # ---------------------------------------------------------------------------
@@ -98,6 +99,63 @@ class TestExceptionHierarchy:
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 410
         assert exc.error_code == "INVALID_STATE"
+
+    def test_idempotency_conflict_error(self):
+        """AdCPIdempotencyConflictError must be a 409 conflict with code IDEMPOTENCY_CONFLICT."""
+        from src.core.exceptions import AdCPConflictError, AdCPError, AdCPIdempotencyConflictError
+
+        exc = AdCPIdempotencyConflictError("idempotency_key reused with a different payload")
+        assert isinstance(exc, AdCPConflictError)
+        assert isinstance(exc, AdCPError)
+        assert exc.status_code == 409
+        assert exc.error_code == "IDEMPOTENCY_CONFLICT"
+
+    def test_idempotency_conflict_wire_envelope(self):
+        """The two-layer envelope carries IDEMPOTENCY_CONFLICT + correctable in both layers.
+
+        Correctable per the AdCP 3.0.1 prose example and storyboard expectation:
+        the buyer can resend the original bytes or mint a fresh key.
+        """
+        from src.core.exceptions import AdCPIdempotencyConflictError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPIdempotencyConflictError("dup key"))
+        assert env["adcp_error"]["code"] == "IDEMPOTENCY_CONFLICT"
+        assert env["adcp_error"]["recovery"] == "correctable"
+        assert env["errors"][0]["code"] == "IDEMPOTENCY_CONFLICT"
+
+    def test_idempotency_expired_error(self):
+        """AdCPIdempotencyExpiredError must be a 409 conflict with code IDEMPOTENCY_EXPIRED."""
+        from src.core.exceptions import AdCPConflictError, AdCPError, AdCPIdempotencyExpiredError
+
+        exc = AdCPIdempotencyExpiredError("replay window has expired")
+        assert isinstance(exc, AdCPConflictError)
+        assert isinstance(exc, AdCPError)
+        assert exc.status_code == 409
+        assert exc.error_code == "IDEMPOTENCY_EXPIRED"
+
+    def test_idempotency_expired_wire_envelope(self):
+        """The two-layer envelope carries IDEMPOTENCY_EXPIRED + correctable in both layers.
+
+        Correctable, matching the sibling IDEMPOTENCY_CONFLICT and the 3.0.1
+        error-code.json enum description: the buyer agent recovers autonomously
+        (a natural-key existence check, then accept the prior result or mint a
+        fresh key). ``terminal`` is reserved for conditions needing human action.
+        """
+        from src.core.exceptions import AdCPIdempotencyExpiredError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPIdempotencyExpiredError("stale key"))
+        assert env["adcp_error"]["code"] == "IDEMPOTENCY_EXPIRED"
+        assert env["adcp_error"]["recovery"] == "correctable"
+        assert env["errors"][0]["code"] == "IDEMPOTENCY_EXPIRED"
+
+    def test_rate_limit_retry_after_rides_both_envelope_layers(self):
+        """retry_after is a first-class Error field — both layers carry it."""
+        from src.core.exceptions import AdCPRateLimitError, build_two_layer_error_envelope
+
+        env = build_two_layer_error_envelope(AdCPRateLimitError("slow down", retry_after=42))
+        assert env["adcp_error"]["code"] == "RATE_LIMITED"
+        assert env["adcp_error"]["retry_after"] == 42
+        assert env["errors"][0]["retry_after"] == 42
 
     def test_budget_exhausted_error(self):
         """AdCPBudgetExhaustedError must have status_code=422."""
@@ -200,6 +258,18 @@ class TestRecoveryClassification:
         exc = AdCPPackageNotFoundError("package pkg_xyz not found")
         assert exc.recovery == "correctable"
 
+    def test_context_not_found_error_wire_contract(self):
+        """AdCPContextNotFoundError → 404, SESSION_NOT_FOUND, correctable, passthrough wire code."""
+        from src.core.exceptions import AdCPContextNotFoundError, translate_error_code
+
+        exc = AdCPContextNotFoundError("Context not found: ctx_x", field="context_id")
+        assert exc.status_code == 404
+        assert exc.error_code == "SESSION_NOT_FOUND"
+        assert exc.recovery == "correctable"
+        # SESSION_NOT_FOUND is a standard SDK code → passes through untranslated to the wire.
+        assert translate_error_code(exc.error_code) == "SESSION_NOT_FOUND"
+        assert exc.field == "context_id"
+
     def test_rate_limit_error_defaults_to_transient(self):
         """AdCPRateLimitError defaults to recovery='transient'."""
         from src.core.exceptions import AdCPRateLimitError
@@ -219,6 +289,18 @@ class TestRecoveryClassification:
         from src.core.exceptions import AdCPConflictError
 
         exc = AdCPConflictError("duplicate idempotency key")
+        assert exc.recovery == "correctable"
+
+    def test_idempotency_conflict_defaults_to_correctable(self):
+        """AdCPIdempotencyConflictError is recovery='correctable'.
+
+        The buyer can fix the conflict — resend the original bytes under the
+        same key, or mint a fresh key for the new payload (AdCP 3.0.1 prose
+        example + storyboard expectation).
+        """
+        from src.core.exceptions import AdCPIdempotencyConflictError
+
+        exc = AdCPIdempotencyConflictError("dup key, different payload")
         assert exc.recovery == "correctable"
 
     def test_gone_error_defaults_to_correctable(self):
@@ -296,6 +378,106 @@ class TestRecoveryClassification:
 from tests.helpers import assert_envelope_shape  # noqa: E402
 
 
+@pytest.fixture(scope="module")
+def exc_handler_test_app():
+    """Minimal isolated FastAPI app with AdCPError exception handler.
+
+    Uses a dedicated app (not the global production app) so tests are
+    ordering-independent: with pytest-randomly the global app may already have
+    admin catch-all mounts installed via lifespan, which would swallow routes
+    added dynamically after startup.
+    """
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+    from starlette.requests import Request
+
+    from src.core.exceptions import (
+        AdCPAdapterError,
+        AdCPAuthenticationError,
+        AdCPBudgetExhaustedError,
+        AdCPConflictError,
+        AdCPContextNotFoundError,
+        AdCPCreativeNotFoundError,
+        AdCPError,
+        AdCPFormatNotFoundError,
+        AdCPGoneError,
+        AdCPNotFoundError,
+        AdCPServiceUnavailableError,
+        AdCPTaskNotFoundError,
+        AdCPValidationError,
+        build_two_layer_error_envelope,
+    )
+
+    _app = FastAPI()
+
+    @_app.exception_handler(AdCPError)
+    async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=build_two_layer_error_envelope(exc),
+        )
+
+    @_app.get("/test-exc/validation")
+    def raise_validation():
+        raise AdCPValidationError("test validation error")
+
+    @_app.get("/test-exc/auth")
+    def raise_auth():
+        raise AdCPAuthenticationError("bad token")
+
+    @_app.get("/test-exc/notfound")
+    def raise_not_found():
+        raise AdCPNotFoundError("resource gone")
+
+    @_app.get("/test-exc/context-not-found")
+    def raise_context_not_found():
+        raise AdCPContextNotFoundError("Context not found: ctx_x")
+
+    @_app.get("/test-exc/creative-not-found")
+    def raise_creative_not_found():
+        raise AdCPCreativeNotFoundError("Creative not found: cr_x")
+
+    @_app.get("/test-exc/format-not-found")
+    def raise_format_not_found():
+        raise AdCPFormatNotFoundError("Unknown format_id 'display_300x250'")
+
+    @_app.get("/test-exc/task-not-found")
+    def raise_task_not_found():
+        raise AdCPTaskNotFoundError("Task nonexistent not found")
+
+    @_app.get("/test-exc/adapter")
+    def raise_adapter():
+        raise AdCPAdapterError("GAM down")
+
+    @_app.get("/test-exc/conflict")
+    def raise_conflict():
+        raise AdCPConflictError("duplicate key")
+
+    @_app.get("/test-exc/gone")
+    def raise_gone():
+        raise AdCPGoneError("proposal expired")
+
+    @_app.get("/test-exc/budget")
+    def raise_budget():
+        raise AdCPBudgetExhaustedError("budget limit reached")
+
+    @_app.get("/test-exc/unavailable")
+    def raise_unavailable():
+        raise AdCPServiceUnavailableError("product temporarily unavailable")
+
+    @_app.get("/test-exc/envelope")
+    def raise_with_details():
+        raise AdCPValidationError("bad", details={"field": "x"})
+
+    @_app.get("/test-exc/with-context")
+    def raise_with_context():
+        from adcp.types import ContextObject
+
+        raise AdCPValidationError("bad", context=ContextObject(correlation_id="trace-xyz"))
+
+    return _app
+
+
 class TestFastAPIExceptionHandlers:
     """Verify FastAPI exception handlers return correct HTTP responses.
 
@@ -308,39 +490,26 @@ class TestFastAPIExceptionHandlers:
         }
     """
 
-    def test_validation_error_returns_400(self):
+    def test_validation_error_returns_400(self, exc_handler_test_app):
         """AdCPValidationError raised in a route must return 400."""
-        from src.app import app
-        from src.core.exceptions import AdCPValidationError
-
-        # Add a temporary test route that raises
-        @app.get("/test-exc/validation")
-        def raise_validation():
-            raise AdCPValidationError("test validation error")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/validation")
         assert response.status_code == 400
-        assert_envelope_shape(response.json(), "VALIDATION_ERROR", message_substr="test validation error")
+        assert_envelope_shape(
+            response.json(), "VALIDATION_ERROR", recovery="correctable", message_substr="test validation error"
+        )
 
-    def test_authentication_error_returns_401(self):
+    def test_authentication_error_returns_401(self, exc_handler_test_app):
         """AdCPAuthenticationError raised in a route must return 401."""
-        from src.app import app
-        from src.core.exceptions import AdCPAuthenticationError
-
-        @app.get("/test-exc/auth")
-        def raise_auth():
-            raise AdCPAuthenticationError("bad token")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
         # AdCPAuthenticationError.error_code = "AUTH_TOKEN_INVALID" (spec STANDARD code,
         # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_TOKEN_INVALID, not
         # AUTH_REQUIRED (which is for AdCPAuthorizationError).
-        assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID")
+        assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID", recovery="terminal")
 
-    def test_not_found_error_returns_404(self):
+    def test_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
 
         The base ``AdCPNotFoundError`` carries the internal ``NOT_FOUND`` code,
@@ -348,101 +517,98 @@ class TestFastAPIExceptionHandlers:
         wire stays spec-compliant. Status 404 is preserved. Production code
         should prefer specific subclasses (AdCPMediaBuyNotFoundError, etc.).
         """
-        from src.app import app
-        from src.core.exceptions import AdCPNotFoundError
-
-        @app.get("/test-exc/notfound")
-        def raise_not_found():
-            raise AdCPNotFoundError("resource gone")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/notfound")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST")
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="terminal")
 
-    def test_adapter_error_returns_502(self):
+    def test_context_not_found_error_returns_404(self, exc_handler_test_app):
+        """AdCPContextNotFoundError raised in a route must return 404 with SESSION_NOT_FOUND.
+
+        SESSION_NOT_FOUND is a standard SDK code (passthrough, not in
+        ERROR_CODE_MAPPING). recovery=correctable: the buyer can supply a valid
+        context_id or omit it for a fresh context.
+        """
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
+        response = client.get("/test-exc/context-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "SESSION_NOT_FOUND", recovery="correctable")
+
+    def test_creative_not_found_error_returns_404(self, exc_handler_test_app):
+        """AdCPCreativeNotFoundError → 404, wire INVALID_REQUEST, correctable.
+
+        The internal CREATIVE_NOT_FOUND code translates to INVALID_REQUEST at the
+        boundary (ERROR_CODE_MAPPING). recovery=correctable distinguishes it from
+        the base AdCPNotFoundError (terminal) — that override is the regression this pins.
+        """
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
+        response = client.get("/test-exc/creative-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+
+    def test_format_not_found_error_returns_404(self, exc_handler_test_app):
+        """AdCPFormatNotFoundError → 404, wire INVALID_REQUEST, correctable.
+
+        FORMAT_NOT_FOUND translates to INVALID_REQUEST at the boundary;
+        recovery=correctable distinguishes it from the base (terminal).
+        """
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
+        response = client.get("/test-exc/format-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+
+    def test_task_not_found_error_returns_404(self, exc_handler_test_app):
+        """AdCPTaskNotFoundError → 404, wire INVALID_REQUEST, correctable.
+
+        TASK_NOT_FOUND translates to INVALID_REQUEST at the boundary;
+        recovery=correctable distinguishes it from the base (terminal).
+        """
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
+        response = client.get("/test-exc/task-not-found")
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+
+    def test_adapter_error_returns_502(self, exc_handler_test_app):
         """AdCPAdapterError raised in a route must return 502."""
-        from src.app import app
-        from src.core.exceptions import AdCPAdapterError
-
-        @app.get("/test-exc/adapter")
-        def raise_adapter():
-            raise AdCPAdapterError("GAM down")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/adapter")
         assert response.status_code == 502
-        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE")
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
-    def test_conflict_error_returns_409(self):
+    def test_conflict_error_returns_409(self, exc_handler_test_app):
         """AdCPConflictError raised in a route must return 409."""
-        from src.app import app
-        from src.core.exceptions import AdCPConflictError
-
-        @app.get("/test-exc/conflict")
-        def raise_conflict():
-            raise AdCPConflictError("duplicate key")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        assert_envelope_shape(response.json(), "CONFLICT")
+        assert_envelope_shape(response.json(), "CONFLICT", recovery="correctable")
 
-    def test_gone_error_returns_410(self):
+    def test_gone_error_returns_410(self, exc_handler_test_app):
         """AdCPGoneError raised in a route must return 410."""
-        from src.app import app
-        from src.core.exceptions import AdCPGoneError
-
-        @app.get("/test-exc/gone")
-        def raise_gone():
-            raise AdCPGoneError("proposal expired")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/gone")
         assert response.status_code == 410
-        assert_envelope_shape(response.json(), "INVALID_STATE")
+        assert_envelope_shape(response.json(), "INVALID_STATE", recovery="correctable")
 
-    def test_budget_exhausted_error_returns_422(self):
+    def test_budget_exhausted_error_returns_422(self, exc_handler_test_app):
         """AdCPBudgetExhaustedError raised in a route must return 422."""
-        from src.app import app
-        from src.core.exceptions import AdCPBudgetExhaustedError
-
-        @app.get("/test-exc/budget")
-        def raise_budget():
-            raise AdCPBudgetExhaustedError("budget limit reached")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/budget")
         assert response.status_code == 422
-        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED")
+        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED", recovery="correctable")
 
-    def test_service_unavailable_error_returns_503(self):
+    def test_service_unavailable_error_returns_503(self, exc_handler_test_app):
         """AdCPServiceUnavailableError raised in a route must return 503."""
-        from src.app import app
-        from src.core.exceptions import AdCPServiceUnavailableError
-
-        @app.get("/test-exc/unavailable")
-        def raise_unavailable():
-            raise AdCPServiceUnavailableError("product temporarily unavailable")
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/unavailable")
         assert response.status_code == 503
-        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE")
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
-    def test_error_response_has_two_layer_envelope(self):
+    def test_error_response_has_two_layer_envelope(self, exc_handler_test_app):
         """Error responses use the spec-compliant two-layer envelope shape."""
-        from src.app import app
-        from src.core.exceptions import AdCPValidationError
-
-        @app.get("/test-exc/envelope")
-        def raise_with_details():
-            raise AdCPValidationError("bad", details={"field": "x"})
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/envelope")
         body = response.json()
-        assert_envelope_shape(body, "VALIDATION_ERROR")
+        assert_envelope_shape(body, "VALIDATION_ERROR", recovery="correctable")
         # Both layers carry recovery
         assert body["adcp_error"]["recovery"] == "correctable"
         assert body["errors"][0]["recovery"] == "correctable"
@@ -450,18 +616,9 @@ class TestFastAPIExceptionHandlers:
         assert body["adcp_error"]["details"] == {"field": "x"}
         assert body["errors"][0]["details"] == {"field": "x"}
 
-    def test_error_response_echoes_context(self):
+    def test_error_response_echoes_context(self, exc_handler_test_app):
         """When raised with context, the envelope echoes it (spec 3.0.0)."""
-        from adcp.types import ContextObject
-
-        from src.app import app
-        from src.core.exceptions import AdCPValidationError
-
-        @app.get("/test-exc/with-context")
-        def raise_with_context():
-            raise AdCPValidationError("bad", context=ContextObject(correlation_id="trace-xyz"))
-
-        client = TestClient(app, raise_server_exceptions=False)
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/with-context")
         body = response.json()
         assert body["context"] == {"correlation_id": "trace-xyz"}
@@ -481,17 +638,19 @@ class TestNoDeadA2AMap:
         """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), (
+        msg = (
             "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
         )
+        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), msg
 
     def test_no_to_a2a_error_code_in_exceptions(self):
         """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
         import src.core.exceptions as exc_module
 
-        assert not hasattr(exc_module, "to_a2a_error_code"), (
+        msg = (
             "to_a2a_error_code() is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
         )
+        assert not hasattr(exc_module, "to_a2a_error_code"), msg
 
 
 # ---------------------------------------------------------------------------
@@ -583,3 +742,110 @@ class TestErrorCodeWireTranslation:
         exc = AdCPError("slow down")
         exc.error_code = "RATE_LIMIT_EXCEEDED"
         assert exc.to_adcp_error()["errors"][0]["code"] == "RATE_LIMIT_EXCEEDED"
+
+
+class TestIterConcreteSubclasses:
+    """Lock the contract of AdCPError.iter_concrete_subclasses().
+
+    The wire-code -> HTTP-status table (_build_error_code_to_status) and the
+    error-code compliance tests depend on this walk visiting every transitive
+    subclass exactly once. The two consumer tests iterate it but never pin the
+    transitivity / dedup / self-exclusion behavior, so a regression there would
+    go unnoticed.
+    """
+
+    def test_yields_transitive_descendants_once_excluding_cls(self):
+        """Generic walk: transitive, deduplicated across diamonds, never yields cls."""
+        from src.core.exceptions import AdCPError
+
+        # Exercise the underlying function with a local root so AdCPError's real
+        # subclass tree stays untouched — subclassing AdCPError here would leak
+        # these throwaway classes into every other test that enumerates it.
+        walk = AdCPError.iter_concrete_subclasses.__func__
+
+        class _Base: ...
+
+        class _Mid(_Base): ...
+
+        class _Leaf(_Mid): ...
+
+        class _Other(_Base): ...
+
+        class _Diamond(_Mid, _Other): ...  # reachable via both _Mid and _Other
+
+        result = list(walk(_Base))
+
+        # Transitive: the grandchild (_Leaf) and the diamond are reached, not
+        # just the direct children.
+        assert set(result) == {_Mid, _Leaf, _Other, _Diamond}
+        # Deduplicated despite two parent paths to _Diamond.
+        assert result.count(_Diamond) == 1
+        # Never yields the class it was called on.
+        assert _Base not in result
+
+    def test_real_tree_is_transitive_and_excludes_base(self):
+        """On the real hierarchy: a two-level-deep subclass is yielded, the base is not."""
+        from src.core.exceptions import AdCPError, AdCPProductNotFoundError
+
+        concrete = set(AdCPError.iter_concrete_subclasses())
+
+        # AdCPError -> AdCPNotFoundError -> AdCPProductNotFoundError (transitive).
+        assert AdCPProductNotFoundError in concrete
+        assert AdCPError not in concrete
+
+    def test_skips_abstract_bases_yields_concrete_descendants(self):
+        """Abstract bases are walked through but not yielded — the 'concrete' promise."""
+        import abc
+
+        from src.core.exceptions import AdCPError
+
+        walk = AdCPError.iter_concrete_subclasses.__func__
+
+        class _Root: ...
+
+        class _AbstractMid(_Root, abc.ABC):
+            @abc.abstractmethod
+            def handle(self) -> None: ...
+
+        class _Concrete(_AbstractMid):
+            def handle(self) -> None: ...
+
+        result = list(walk(_Root))
+
+        assert _Concrete in result  # concrete descendant of an abstract base is yielded
+        assert _AbstractMid not in result  # the abstract base itself is skipped
+
+
+class TestRetryAfterSerializerParity:
+    """retry_after rides every serializer the docstring claims is in sync.
+
+    The two-layer envelope builder already emitted it; the flat ``to_dict``
+    and SDK ``to_adcp_error`` shapes dropped it — a future flat-serializer
+    caller would silently lose the client's backoff hint.
+    """
+
+    def test_to_dict_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        assert exc.to_dict()["retry_after"] == 7
+
+    def test_to_dict_omits_absent_retry_after(self):
+        from src.core.exceptions import AdCPValidationError
+
+        exc = AdCPValidationError("bad input")
+        assert "retry_after" not in exc.to_dict()
+
+    def test_to_adcp_error_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        payload = exc.to_adcp_error()
+        assert payload["errors"][0]["retry_after"] == 7
+
+    def test_envelope_builder_still_emits_retry_after(self):
+        from src.core.exceptions import AdCPRateLimitError, build_two_layer_error_envelope
+
+        exc = AdCPRateLimitError("slow down", retry_after=7)
+        envelope = build_two_layer_error_envelope(exc)
+        assert envelope["adcp_error"]["retry_after"] == 7

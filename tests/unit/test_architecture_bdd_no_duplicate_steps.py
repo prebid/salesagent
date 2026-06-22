@@ -16,6 +16,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Threshold: flag when N or more functions share the same body
@@ -30,9 +32,7 @@ _ALLOWED_DUPLICATES: set[str] = {
     "given_registry_format_no_disclosure",
     "given_registry_format_no_output_ids",
     "given_registry_format_no_input_ids",
-    # FIXME(salesagent-ebb5): identical buyer_ref assertions across uc003/uc019/uc026
-    "then_response_has_buyer_ref",
-    "then_response_buyer_ref",
+    # FIXME(salesagent-ebb5): identical buyer_ref assertions across uc019/uc026
     "then_buyer_refs_for_correlation",
     "then_package_buyer_ref",
     # FIXME(salesagent-ebb5): pass-body stubs in uc019/uc026 pending implementation
@@ -117,6 +117,7 @@ def _scan_bdd_steps() -> list[tuple[str, list[str]]]:
 class TestBddNoDuplicateSteps:
     """Structural guard: step functions must not have identical bodies."""
 
+    @pytest.mark.arch_guard
     def test_no_excessive_duplicate_step_bodies(self):
         """No more than 2 step functions should share the same implementation.
 

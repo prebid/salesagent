@@ -22,6 +22,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 OBLIGATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "test-obligations"
 INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration"
 UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
@@ -161,6 +163,7 @@ def _load_allowlist() -> set[str]:
 class TestObligationCoverage:
     """Structural guard: behavioral obligations must have test coverage."""
 
+    @pytest.mark.arch_guard
     def test_no_new_uncovered_behavioral_obligations(self):
         """Every behavioral obligation has a test or is in the allowlist.
 
@@ -181,6 +184,7 @@ class TestObligationCoverage:
             + "\n".join(f"  {oid}" for oid in sorted(uncovered_and_not_allowed))
         )
 
+    @pytest.mark.arch_guard
     def test_known_uncovered_are_still_obligations(self):
         """Every allowlist entry must reference a real obligation ID.
 
@@ -196,6 +200,7 @@ class TestObligationCoverage:
             + "\n".join(f"  {oid}" for oid in sorted(phantom))
         )
 
+    @pytest.mark.arch_guard
     def test_known_uncovered_not_already_covered(self):
         """If an obligation is covered by a test, remove it from the allowlist.
 
@@ -211,6 +216,7 @@ class TestObligationCoverage:
             f"Remove these from obligation_coverage_allowlist.json:\n" + "\n".join(f"  {oid}" for oid in sorted(stale))
         )
 
+    @pytest.mark.arch_guard
     def test_all_scenarios_have_obligation_ids(self):
         """Every ``#### Scenario:`` in UC/BR-UC docs must have an ``**Obligation ID**`` tag.
 
@@ -233,6 +239,7 @@ class TestObligationCoverage:
             f"Run: python scripts/tag_obligation_ids.py\n" + "\n".join(untagged)
         )
 
+    @pytest.mark.arch_guard
     def test_no_duplicate_obligation_ids(self):
         """Obligation IDs must be unique across all docs."""
         seen: dict[str, list[str]] = {}
@@ -247,6 +254,7 @@ class TestObligationCoverage:
             f"  {oid}: {', '.join(files)}" for oid, files in sorted(duplicates.items())
         )
 
+    @pytest.mark.arch_guard
     def test_tests_reference_valid_obligations(self):
         """``Covers:`` tags in tests must reference real obligation IDs."""
         all_ids = _get_all_obligation_ids()
@@ -258,6 +266,7 @@ class TestObligationCoverage:
             + "\n".join(f"  {oid}" for oid in sorted(invalid))
         )
 
+    @pytest.mark.arch_guard
     def test_obligation_count_documented(self):
         """Track the total obligation and coverage counts for monitoring."""
         all_ids = _get_all_obligation_ids()

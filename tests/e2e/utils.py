@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import time
 
@@ -74,24 +75,13 @@ except Exception as e:
     exit(1)
 """
 
-    try:
-        # We need to determine the container name/service.
-        # Based on docker-compose.yml, the service is 'adcp-server'.
-        # We use the same environment variables strategy as conftest.py to find the container.
+    def _direct_db_update(prior_exc: Exception | None) -> None:
+        """Update the media buy straight against the server DB (live_server params).
 
-        cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", update_script]
-
-        # Pass current environment to ensure COMPOSE_PROJECT_NAME etc are preserved
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        print(result.stdout)
-
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to execute DB update inside container: {e}")
-        print(f"Stdout: {e.stdout}")
-        print(f"Stderr: {e.stderr}")
-
-        # Fallback: Try connecting directly if docker execution fails (e.g. if running without docker-compose)
-        print("Attempting fallback direct connection...")
+        In-network the runner reaches the server DB by service name (postgres:5432
+        /adcp, via postgres_params); on the host path this is the fallback when the
+        in-container exec fails.
+        """
         try:
             if "postgres_params" in live_server:
                 params = live_server["postgres_params"]
@@ -118,7 +108,23 @@ except Exception as e:
             )
             conn.commit()
             conn.close()
-            print("Fallback direct update successful")
+            print("Direct DB approval update successful")
         except Exception as ex:
-            print(f"Fallback failed: {ex}")
-            raise e
+            print(f"Direct DB update failed: {ex}")
+            raise prior_exc if prior_exc else ex
+
+    # Host path: pytest runs on the host and cannot reach the container DB
+    # directly, so exec the update inside the adcp-server container. In-network
+    # there is no docker-compose binary and the runner CAN reach the server DB by
+    # service name — go straight to the direct update (mirrors the conftest seed).
+    if shutil.which("docker-compose"):
+        try:
+            cmd = ["docker-compose", "exec", "-T", "adcp-server", "python", "-c", update_script]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            print(result.stdout)
+        except subprocess.CalledProcessError as e:
+            print(f"In-container DB update failed: {e}; stdout={e.stdout!r} stderr={e.stderr!r}")
+            print("Attempting fallback direct connection...")
+            _direct_db_update(e)
+    else:
+        _direct_db_update(None)

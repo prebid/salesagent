@@ -519,11 +519,8 @@ class TestUpdateMediaBuyCreativeAssignments:
                 }
             ],
         )
-        update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
-
-        assert hasattr(update_result, "errors") and update_result.errors
-        error_messages = " ".join(str(e).lower() for e in update_result.errors)
-        assert "placement" in error_messages or "not found" in error_messages or "invalid" in error_messages
+        with pytest.raises(AdCPValidationError, match="placement"):
+            _update_media_buy_impl(req=update_req, identity=mb_identity)
 
 
 # ---------------------------------------------------------------------------
@@ -689,10 +686,10 @@ class TestGetMediaBuysResponseFields:
     @pytest.mark.parametrize(
         ("persisted_status", "expected"),
         [
-            ("completed", MediaBuyStatus.completed),
-            ("paused", MediaBuyStatus.paused),
-            ("rejected", MediaBuyStatus.rejected),
-            ("canceled", MediaBuyStatus.canceled),
+            ("completed", "completed"),
+            ("paused", "paused"),
+            ("rejected", "rejected"),
+            ("canceled", "canceled"),
         ],
     )
     @pytest.mark.asyncio
@@ -765,7 +762,9 @@ class TestGetMediaBuysResponseFields:
         )
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
-        assert mb_response.status == expected, (
+        # SDK 5.7: MediaBuyStatus is plain Enum, not StrEnum; normalize for comparison
+        actual_status = mb_response.status.value if hasattr(mb_response.status, "value") else str(mb_response.status)
+        assert actual_status == expected, (
             f"Persisted status {persisted_status!r} must be authoritative; "
             f"got {mb_response.status} for a buy whose flight window covers today"
         )
@@ -797,12 +796,8 @@ class TestCreateMediaBuyPrincipalResolution:
         )
         req = _make_create_request()
 
-        result = await _create_media_buy_impl(req=req, identity=identity)
-
-        assert result.status == "failed"
-        assert hasattr(result.response, "errors")
-        error_messages = " ".join(e.message.lower() for e in result.response.errors)
-        assert "not found" in error_messages or "principal" in error_messages
+        with pytest.raises(AdCPAuthenticationError, match="nonexistent_principal_xyz"):
+            await _create_media_buy_impl(req=req, identity=identity)
 
 
 class TestCreateMediaBuyFullRoundtrip:

@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-020 Build Creative
   As a Buyer (Human or AI Agent)
@@ -183,6 +183,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F1: Operation failed
     # POST-F2: Error explains asset incompatibility
     # POST-F3: Suggestion advises providing compatible assets
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-ext-b-width-no-height @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Invalid manifest - width provided without height in format_id
@@ -204,7 +205,7 @@ Feature: BR-UC-020 Build Creative
     And the Buyer Agent provides a creative_manifest with brief containing compliance.required_disclosures with position "footer"
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
-    And the error code should be "COMPLIANCE_UNSATISFIED"
+    And the error code should be "CREATIVE_REJECTED"
     And the error message should identify the disclosure that cannot be rendered
     And the error should include "field" pointing to the unsatisfied disclosure path
     And the error should include "details" with disclosure_text and position
@@ -214,6 +215,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F1: Operation failed
     # POST-F2: Error identifies unsatisfied disclosure
     # POST-F3: Suggestion advises compatible format or position change
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-ext-c-mcp @extension @ext-c @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: Compliance unsatisfied - single disclosure unsatisfiable via MCP
@@ -221,7 +223,7 @@ Feature: BR-UC-020 Build Creative
     And the Buyer Agent provides a creative_manifest with brief containing compliance.required_disclosures with position "footer"
     When the Buyer Agent calls build_creative MCP tool with the request
     Then the operation should fail
-    And the error code should be "COMPLIANCE_UNSATISFIED"
+    And the error code should be "CREATIVE_REJECTED"
     And the error message should identify the disclosure that cannot be rendered
     And the error should include "field" pointing to the unsatisfied disclosure path
     And the error should include "details" with disclosure_text and position
@@ -231,6 +233,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F1: Operation failed
     # POST-F2: Error identifies unsatisfied disclosure
     # POST-F3: Suggestion advises compatible format or position change
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-ext-c-multiple @extension @ext-c @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Compliance unsatisfied - multiple disclosures with one unsatisfiable
@@ -239,7 +242,7 @@ Feature: BR-UC-020 Build Creative
     And one disclosure requires position "prominent" and another requires position "footer"
     When the Buyer Agent sends a build_creative request
     Then the operation should fail with the entire request rejected
-    And the error code should be "COMPLIANCE_UNSATISFIED"
+    And the error code should be "CREATIVE_REJECTED"
     And the error message should identify the unsatisfied footer disclosure
     And the error should include "suggestion" field
     And the suggestion should contain "format that supports"
@@ -254,7 +257,7 @@ Feature: BR-UC-020 Build Creative
     And the creative agent at the agent_url is unreachable (connection refused)
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
-    And the error code should be "CREATIVE_AGENT_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error message should contain "unreachable" or "unavailable"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
@@ -263,6 +266,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F1: Operation failed
     # POST-F2: Error explains creative agent is temporarily unavailable
     # POST-F3: Suggestion advises retrying after delay
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-ext-d-mcp @extension @ext-d @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: Creative agent unavailable - connection refused via MCP
@@ -270,7 +274,7 @@ Feature: BR-UC-020 Build Creative
     And the creative agent at the agent_url is unreachable (connection refused)
     When the Buyer Agent calls build_creative MCP tool with the request
     Then the operation should fail
-    And the error code should be "CREATIVE_AGENT_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error message should contain "unreachable" or "unavailable"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
@@ -279,6 +283,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F1: Operation failed
     # POST-F2: Error explains creative agent is temporarily unavailable
     # POST-F3: Suggestion advises retrying after delay
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-ext-d-timeout @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Creative agent unavailable - timeout during delegation
@@ -286,7 +291,7 @@ Feature: BR-UC-020 Build Creative
     And the creative agent at the agent_url times out (30s default)
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
-    And the error code should be "CREATIVE_AGENT_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error message should contain "timed out"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
@@ -295,6 +300,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F1: Operation failed
     # POST-F2: Error explains timeout
     # POST-F3: Suggestion advises retrying
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-ext-d-malformed @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Creative agent unavailable - non-parseable response from agent
@@ -302,7 +308,7 @@ Feature: BR-UC-020 Build Creative
     And the creative agent returns a response that cannot be parsed as BuildCreativeResponse
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
-    And the error code should be "CREATIVE_AGENT_UNAVAILABLE"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error message should contain "response" or "parse"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
@@ -310,6 +316,129 @@ Feature: BR-UC-020 Build Creative
     # POST-F1: Operation failed
     # POST-F2: Error explains malformed response
     # POST-F3: Suggestion advises retrying
+
+  @T-UC-020-ext-e-quota-exceeded @extension @ext-e @error @post-f1 @post-f2 @post-f3
+  Scenario: Account quota exceeded - billable build rejected before delegation
+    Given the Buyer sends a build_creative request with an account reference for a build the creative agent charges for
+    And the account has exhausted its build quota
+    When the Buyer Agent sends the build_creative request
+    Then the operation should fail without delegating to the creative agent
+    And the error code should be "QUOTA_EXCEEDED"
+    And the error should include "field" pointing to "account"
+    And the error should include "suggestion" field
+    And the suggestion should contain "quota"
+    And the error recovery should be "correctable"
+    # POST-F1: Operation failed
+    # POST-F2: Error explains the account quota constraint
+    # POST-F3: Suggestion advises raising quota or omitting billable options
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-ext-e-entitlement-denied @extension @ext-e @error @post-f1 @post-f2 @post-f3
+  Scenario: Account entitlement denied - no applicable pricing option
+    Given the Buyer sends a build_creative request with an account reference for a build the creative agent charges for
+    And no rate-card pricing option applies to the account
+    When the Buyer Agent sends the build_creative request
+    Then the operation should fail without delegating to the creative agent
+    And the error code should be "ENTITLEMENT_DENIED"
+    And the error should include "field" pointing to "account"
+    And the error should include "suggestion" field
+    And the suggestion should contain "entitlement"
+    And the error recovery should be "correctable"
+    # POST-F1: Operation failed
+    # POST-F2: Error explains the account entitlement constraint
+    # POST-F3: Suggestion advises enabling entitlement
+
+  @T-UC-020-ext-f-atomic-failure @extension @ext-f @error @post-f1 @post-f2 @post-f3
+  Scenario: Multi-format build fails atomically - no partial manifests
+    Given the Buyer sends a build_creative request with target_format_ids listing multiple formats
+    And at least one requested format cannot be produced
+    When the Buyer Agent sends the build_creative request
+    Then the operation should fail with a single error response
+    And the response should not contain a creative_manifests array
+    And no partial manifests should be returned
+    And the error code should be "FORMAT_MISMATCH" or "BUILD_FAILED"
+    And the error message should identify which requested format failed
+    And the error should include "suggestion" field
+    And the error recovery should be "correctable"
+    # POST-F1: Operation failed atomically (no partial manifests)
+    # POST-F2: Error identifies which requested format(s) could not be produced
+    # POST-F3: Suggestion advises correcting or removing the failing format(s)
+
+  @T-UC-020-ext-g-async-submitted @extension @ext-g @async @post-s5
+  Scenario: Build queued asynchronously - submitted task envelope returned
+    Given the build cannot be confirmed synchronously due to a slow generative pipeline
+    When the Buyer Agent sends the build_creative request
+    Then the response should have status "submitted" and a task_id
+    And the response should not contain creative_manifest or creative_manifests inline
+    # POST-S5: Buyer holds a task_id to poll tasks/get or receive a completion webhook
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-ext-g-async-working @extension @ext-g @async
+  Scenario: Async build reports working progress while running
+    Given a build_creative task was accepted with status "submitted" and a task_id
+    When the Buyer polls tasks/get for the task_id during generation
+    Then the task status should be "working"
+    And the task should report progress with current_step and total_steps
+    # SM-001: submitted -> working
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-ext-g-async-input-required @extension @ext-g @async
+  Scenario: Async build pauses for required creative direction
+    Given a build_creative task is in "working" status
+    And the build needs creative direction or brand-guideline approval
+    When the Buyer polls tasks/get for the task_id
+    Then the task status should be "input-required"
+    And the task should report a reason for the required input
+    And the build should resume once the Buyer supplies input
+    # SM-001: working -> input-required -> working
+
+  @T-UC-020-ext-h-replay @extension @ext-h @happy-path @post-s1 @post-s6
+  Scenario: Idempotency replay - retry with same key returns prior outcome
+    Given a prior build_creative completed for an idempotency_key
+    And the Buyer retries with the same idempotency_key and an unchanged payload
+    When the Buyer Agent sends the build_creative request
+    Then the seller should return the original outcome shape unchanged
+    And no new creative should be generated
+    And no duplicate vendor_cost should be charged
+    # POST-S1: Buyer receives the prior creative manifest(s) or prior task handle
+    # POST-S6: No duplicate charge on the retry
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-ext-h-conflict @extension @ext-h @error @BR-RULE-211
+  Scenario: Idempotency conflict - same key, divergent payload
+    Given a prior completed build_creative exists for an idempotency_key
+    And the Buyer reuses the same idempotency_key with a divergent canonical payload
+    When the Buyer Agent sends the build_creative request
+    Then the operation should fail
+    And the error code should be "IDEMPOTENCY_CONFLICT"
+    And the error recovery should be "correctable"
+    And the error should include "suggestion" field
+    And no new creative should be generated
+    # BR-RULE-211 INV-3: divergent payload under reused key -> IDEMPOTENCY_CONFLICT
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-ext-h-in-flight @extension @ext-h @error @BR-RULE-211
+  Scenario: Idempotency in-flight - same key while first request still running
+    Given a build_creative request under an idempotency_key is still in flight
+    And the Buyer issues a second request with the same idempotency_key
+    When the Buyer Agent sends the build_creative request
+    Then the operation may fail with error code "IDEMPOTENCY_IN_FLIGHT"
+    And the error should include "retry_after" field
+    And the error should include "suggestion" field
+    And the error recovery should be "transient"
+    # BR-RULE-211 INV-4: in-flight first call -> IDEMPOTENCY_IN_FLIGHT (transient)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-ext-h-expired @extension @ext-h @error @BR-RULE-211
+  Scenario: Idempotency expired - cached response evicted past replay TTL
+    Given an idempotency_key was recorded previously
+    And the cached response has expired past replay_ttl_seconds
+    When the Buyer retries with the same idempotency_key
+    Then the operation should fail
+    And the error code should be "IDEMPOTENCY_EXPIRED"
+    And the error recovery should be "correctable"
+    And the error should include "suggestion" field
+    # BR-RULE-211 INV-5: TTL-expired key -> IDEMPOTENCY_EXPIRED; buyer must natural-key check before fresh key
 
   @T-UC-020-inv-155-1-holds @invariant @BR-RULE-155
   Scenario: BR-RULE-155 INV-1 holds - target_format_id present
@@ -319,15 +448,16 @@ Feature: BR-UC-020 Build Creative
     # BR-RULE-155 INV-1: target_format_id is present
 
   @T-UC-020-inv-155-1-violated @invariant @BR-RULE-155 @error
-  Scenario: BR-RULE-155 INV-1 violated - target_format_id absent
-    Given the Buyer omits target_format_id from the request
+  Scenario: BR-RULE-155 INV-1 violated - neither target format selector present
+    Given the Buyer omits both target_format_id and target_format_ids from the request
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
-    And the error code should be "TARGET_FORMAT_ID_REQUIRED"
+    And the error code should be "TARGET_FORMAT_REQUIRED"
     And the error should include "suggestion" field
     And the suggestion should contain "target_format_id"
     # POST-F3: Suggestion for recovery
-    # BR-RULE-155 INV-1: target_format_id is absent -> rejected
+    # BR-RULE-155 INV-1: neither target_format_id nor target_format_ids present -> rejected
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-inv-155-2-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-2 violated - agent_url absent in target_format_id
@@ -399,6 +529,80 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-6: dimension < 1 -> rejected
 
+  @T-UC-020-inv-155-1-both-violated @invariant @BR-RULE-155 @error
+  Scenario: BR-RULE-155 INV-1 violated - both target format selectors present
+    Given the Buyer provides both a target_format_id and a target_format_ids array
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail
+    And the error code should be "TARGET_FORMAT_MUTUALLY_EXCLUSIVE"
+    And the error should include "suggestion" field
+    And the suggestion should contain "exactly one"
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-155 INV-1: target_format_id and target_format_ids are mutually exclusive -> rejected
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-155-7-violated @invariant @BR-RULE-155 @error
+  Scenario: BR-RULE-155 INV-7 violated - idempotency_key absent
+    Given the Buyer omits idempotency_key from the request
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail
+    And the error code should be "IDEMPOTENCY_KEY_REQUIRED"
+    And the error should include "suggestion" field
+    And the suggestion should contain "idempotency_key"
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-155 INV-7: idempotency_key is the sole required top-level field -> rejected when absent
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-155-8-violated @invariant @BR-RULE-155 @error
+  Scenario: BR-RULE-155 INV-8 violated - idempotency_key fails length or pattern
+    Given the Buyer provides an idempotency_key of 15 characters
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail
+    And the error code should be "IDEMPOTENCY_KEY_INVALID_FORMAT"
+    And the error message should contain "16"
+    And the error should include "suggestion" field
+    And the suggestion should contain "16"
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-155 INV-8: idempotency_key must match ^[A-Za-z0-9_.:-]{16,255}$ -> rejected
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-155-9-violated @invariant @BR-RULE-155 @error
+  Scenario: BR-RULE-155 INV-9 violated - target_format_ids present but empty
+    Given the Buyer provides a target_format_ids array with zero elements
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail
+    And the error code should be "TARGET_FORMAT_IDS_EMPTY"
+    And the error should include "suggestion" field
+    And the suggestion should contain "at least one"
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-155 INV-9: target_format_ids requires minItems 1 -> rejected when empty
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-155-10-violated @invariant @BR-RULE-155 @error
+  Scenario: BR-RULE-155 INV-10 violated - retrieval by creative_id without concept_id
+    Given the Buyer supplies a creative_id for retrieval mode
+    And the creative agent cannot guarantee a globally-unique creative_id
+    And the Buyer omits concept_id
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail
+    And the error code should be "CONCEPT_ID_REQUIRED"
+    And the error should include "suggestion" field
+    And the suggestion should contain "concept_id"
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-155 INV-10: concept_id required to disambiguate a retrieved creative -> rejected
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-155-11-violated @invariant @BR-RULE-155 @error
+  Scenario: BR-RULE-155 INV-11 violated - item_limit below minimum
+    Given the Buyer provides an item_limit of 0
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail
+    And the error code should be "ITEM_LIMIT_INVALID"
+    And the error should include "suggestion" field
+    And the suggestion should contain "integer >= 1"
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-155 INV-11: item_limit must be an integer >= 1 -> rejected
+
   @T-UC-020-inv-156-1-holds @invariant @BR-RULE-156
   Scenario: BR-RULE-156 INV-1 holds - output format_id matches request
     Given the Buyer requests build_creative with target_format_id id "display_300x250" and agent_url "https://creative.example.com"
@@ -434,6 +638,38 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-156 INV-3: output agent_url differs -> system-level error
 
+  @T-UC-020-inv-156-4-holds @invariant @BR-RULE-156
+  Scenario: BR-RULE-156 INV-4 holds - multi-format response has one manifest per requested format
+    Given the Buyer requests build_creative with target_format_ids ["display_300x250", "display_728x90", "native_feed"]
+    And the creative agent successfully generates all requested formats
+    When the build_creative response is received
+    Then the response should contain a creative_manifests array with exactly 3 manifests
+    And each requested format should have exactly one matching manifest with no duplicates or extras
+    # BR-RULE-156 INV-4: multi-format -> exactly one manifest per requested format
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-156-5-holds @invariant @BR-RULE-156
+  Scenario: BR-RULE-156 INV-5 holds - multi-format response order matches request order
+    Given the Buyer requests build_creative with target_format_ids ["display_300x250", "display_728x90"]
+    And the creative agent successfully generates all requested formats
+    When the build_creative response is received
+    Then creative_manifests[0].format_id.id should equal "display_300x250"
+    And creative_manifests[1].format_id.id should equal "display_728x90"
+    # BR-RULE-156 INV-5: creative_manifests order corresponds to target_format_ids request order
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-156-6-violated @invariant @BR-RULE-156 @error
+  Scenario: BR-RULE-156 INV-6 violated - manifest format_id matches no requested target
+    Given the Buyer requests build_creative with target_format_ids ["display_300x250", "display_728x90"]
+    And the creative agent produces a manifest whose format_id matches no requested target
+    When the system validates the creative agent response
+    Then the operation should fail with a system-level error
+    And the error code should be "FORMAT_MISMATCH"
+    And the error message should contain "does not match"
+    And the error should include "suggestion" field
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-156 INV-6: each manifest format_id must match one of the requested target_format_ids
+
   @T-UC-020-inv-157-1-holds @invariant @BR-RULE-157
   Scenario: BR-RULE-157 INV-1 holds - all disclosures satisfiable
     Given the Buyer has a brief asset with required_disclosures requiring position "prominent"
@@ -449,11 +685,13 @@ Feature: BR-UC-020 Build Creative
     And the target format does not support "footer" position
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
-    And the error code should be "COMPLIANCE_UNSATISFIED"
+    And the error code should be "CREATIVE_REJECTED"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format that supports"
     # POST-F3: Suggestion for recovery
-    # BR-RULE-157 INV-2: any disclosure unsatisfiable -> entire request fails
+    # BR-RULE-157 INV-2: any disclosure unsatisfiable -> entire request fails with CREATIVE_REJECTED (correctable)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-inv-157-3-holds @invariant @BR-RULE-157
   Scenario: BR-RULE-157 INV-3 holds - no brief asset, compliance check skipped
@@ -469,13 +707,13 @@ Feature: BR-UC-020 Build Creative
     And the target format does not support "footer" position
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
-    And the error code should be "COMPLIANCE_UNSATISFIED"
+    And the error code should be "CREATIVE_REJECTED"
     And the error should include "details" with the disclosure_text, position, and reason
     And the error should include "field" pointing to the specific disclosure
     And the error should include "suggestion" field
     And the suggestion should contain "format that supports"
     # POST-F3: Suggestion for recovery
-    # BR-RULE-157 INV-4: failure identifies specific unsatisfied disclosure
+    # BR-RULE-157 INV-4: failure identifies specific unsatisfied disclosure (CREATIVE_REJECTED)
 
   @T-UC-020-inv-158-1-holds @invariant @BR-RULE-158
   Scenario: BR-RULE-158 INV-1 holds - brand domain resolvable
@@ -574,14 +812,6 @@ Feature: BR-UC-020 Build Creative
     And the response should not contain an errors field
     # BR-RULE-018 INV-1: success -> no errors field
 
-  @T-UC-020-inv-018-2-holds @invariant @BR-RULE-018
-  Scenario: BR-RULE-018 INV-2 holds - error response has no success fields
-    Given the build_creative request fails validation
-    When the build_creative response is received
-    Then the response should contain an errors array with at least one entry
-    And the response should not contain a creative_manifest field
-    # BR-RULE-018 INV-2: failure -> errors array, no success fields
-
   @T-UC-020-inv-018-3-violated @invariant @BR-RULE-018 @error
   Scenario: BR-RULE-018 INV-3 violated - response with both success and error is invalid
     Given the creative agent returns a response with both creative_manifest and errors
@@ -592,183 +822,100 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-018 INV-3: both success and error -> schema violation
 
-  @T-UC-020-partition-request @partition @build_creative_request_structure
-  Scenario Outline: Request structure validation - <partition>
-    Given the Buyer prepares a build_creative request matching partition "<partition>"
+  @T-UC-020-inv-018-9-holds @invariant @BR-RULE-018
+  Scenario: BR-RULE-018 INV-9 holds - synchronous build_creative response is exactly one shape
+    Given the creative agent returns a synchronous build_creative response
+    When the BuildCreativeResponse is validated against schema
+    Then the response should match exactly one of single-format success, multi-format success, or terminal failure
+    And the terminal-failure shape should not carry creative_manifest, creative_manifests, or status "submitted"
+    # BR-RULE-018 INV-9: synchronous build_creative -> exactly one of three shapes
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-018-10-violated @invariant @BR-RULE-018 @error
+  Scenario: BR-RULE-018 INV-10 violated - multi-format build is not atomic
+    Given the Buyer requests build_creative with target_format_ids for multiple formats
+    And one requested format cannot be produced
+    When the build_creative response is received
+    Then the response should be the terminal-error shape with an errors array
+    And the response should not contain a creative_manifests array
+    And no partial manifests should be returned
+    And the error should include "suggestion" field
+    # POST-F3: Suggestion for recovery
+    # BR-RULE-018 INV-10: multi-format is all-or-none -> no partial creative_manifests
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-inv-018-11-holds @invariant @BR-RULE-018
+  Scenario: BR-RULE-018 INV-11 holds - submitted envelope defers the manifest
+    Given the build cannot be confirmed synchronously
+    When the build_creative response is received
+    Then the response should have status "submitted" and a task_id
+    And the response should not contain creative_manifest or creative_manifests inline
+    And advisory non-blocking errors may accompany the submitted envelope
+    # BR-RULE-018 INV-11: submitted envelope -> manifest deferred to completion artifact
+
+  @T-UC-020-inv-211-8-holds @invariant @BR-RULE-211
+  Scenario: BR-RULE-211 INV-8 holds - identical-key replay returns cached outcome without re-charge
+    Given a prior completed build_creative exists for (seller, account, idempotency_key)
+    And the Buyer retries with the same idempotency_key and an identical canonical payload
     When the Buyer Agent sends the build_creative request
-    Then the <outcome>
+    Then the seller should return the prior creative_manifest(s) unchanged
+    And no new creative should be generated
+    And no additional vendor_cost should accrue
+    # BR-RULE-211 INV-8: build_creative identical-key replay -> cached outcome, no re-generate, no re-charge
 
-    Examples: Valid partitions
-      | partition                  | outcome                                                    |
-      | minimal_request            | request should pass validation and produce a creative       |
-      | full_request               | request should pass validation and produce a creative       |
-      | with_dimensions            | request should pass validation and produce a creative       |
-      | with_duration              | request should pass validation and produce a creative       |
-      | with_brand_and_brand_id    | request should pass validation and produce a creative       |
-      | generation_mode            | request should pass validation and produce a creative       |
+  @T-UC-020-cost-disclosure-present @post-s6 @cost
+  Scenario: Cost disclosure present when the creative agent charges
+    Given the creative agent charges for the build
+    When the build_creative response is received
+    Then the response should include vendor_cost and currency
+    And the response should include pricing_option_id
+    And the response should include a consumption breakdown
+    # POST-S6: Buyer knows the cost applied (vendor_cost, currency, pricing_option_id)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
-    Examples: Invalid partitions
-      | partition                  | outcome                                                                            |
-      | missing_target_format_id   | operation should fail with error "TARGET_FORMAT_ID_REQUIRED" and suggestion         |
-      | width_without_height       | operation should fail with error "FORMAT_ID_DIMENSION_INCOMPLETE" and suggestion    |
-      | height_without_width       | operation should fail with error "FORMAT_ID_DIMENSION_INCOMPLETE" and suggestion    |
-      | invalid_id_pattern         | operation should fail with error "FORMAT_ID_INVALID_FORMAT" and suggestion          |
-      | zero_width                 | operation should fail with error "FORMAT_ID_DIMENSION_INVALID" and suggestion       |
-      | missing_agent_url          | operation should fail with error "AGENT_URL_REQUIRED" and suggestion                |
-      | missing_format_id          | operation should fail with error "FORMAT_ID_REQUIRED" and suggestion                |
+  @T-UC-020-cost-disclosure-absent @post-s6 @cost
+  Scenario: Cost disclosure omitted for a free build
+    Given the creative agent does not charge for the build
+    When the build_creative response is received
+    Then the response should be a successful BuildCreativeResponse
+    And the response should omit the cost-disclosure fields
+    # POST-S6: free build -> economic fields absent
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
-  @T-UC-020-boundary-request @boundary @build_creative_request_structure
-  Scenario Outline: Request structure boundary - <boundary_point>
-    Given the Buyer prepares a build_creative request at boundary "<boundary_point>"
-    When the Buyer Agent sends the build_creative request
-    Then the <outcome>
+  @T-UC-020-preview-supported @post-s7 @preview
+  Scenario: Inline preview requested and supported - preview renders returned
+    Given the Buyer sends a build_creative request with include_preview true
+    And the creative agent supports inline preview for the target format
+    When the build_creative response is received
+    Then the response should include preview renders
+    # POST-S7: Buyer receives preview renders without a separate round trip
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
-    Examples: Boundary values
-      | boundary_point                                           | outcome                                                                            |
-      | target_format_id present with agent_url + id             | request should pass validation and produce a creative                               |
-      | target_format_id absent (null)                           | operation should fail with error "TARGET_FORMAT_ID_REQUIRED" and suggestion         |
-      | width=1 and height=1 (minimum valid dimensions)          | request should pass validation and produce a creative                               |
-      | width=0 and height=250 (below minimum)                   | operation should fail with error "FORMAT_ID_DIMENSION_INVALID" and suggestion       |
-      | width=300 and height absent (co-dependency violated)     | operation should fail with error "FORMAT_ID_DIMENSION_INCOMPLETE" and suggestion    |
-      | height=250 and width absent (co-dependency violated)     | operation should fail with error "FORMAT_ID_DIMENSION_INCOMPLETE" and suggestion    |
-      | id='display_300x250' (valid alphanumeric)                | request should pass validation and produce a creative                               |
-      | id='display 300x250!' (invalid pattern)                  | operation should fail with error "FORMAT_ID_INVALID_FORMAT" and suggestion          |
-      | agent_url absent in target_format_id                     | operation should fail with error "AGENT_URL_REQUIRED" and suggestion                |
-      | duration_ms=1 (minimum valid duration)                   | request should pass validation and produce a creative                               |
+  @T-UC-020-preview-failed @post-s7 @preview
+  Scenario: Inline preview requested but generation fails - preview_error explains why
+    Given the Buyer sends a build_creative request with include_preview true
+    And preview generation fails while the build itself succeeds
+    When the build_creative response is received
+    Then the response should include a creative_manifest
+    And the response should include a preview_error explaining the preview failure
+    # POST-S7: preview generation failure surfaces a preview_error, manifest still returned
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
-  @T-UC-020-partition-output-format @partition @output_format_matching
-  Scenario Outline: Output format matching validation - <partition>
-    Given the Buyer sends a build_creative request with target_format_id
-    And the creative agent produces a response matching partition "<partition>"
-    When the system validates the response
-    Then the <outcome>
-
-    Examples: Valid partitions
-      | partition                    | outcome                                                            |
-      | exact_match                  | response should be accepted as valid                               |
-      | exact_match_with_dimensions  | response should be accepted as valid                               |
-
-    Examples: Invalid partitions
-      | partition             | outcome                                                                    |
-      | id_mismatch           | operation should fail with error "FORMAT_MISMATCH" and suggestion          |
-      | agent_url_mismatch    | operation should fail with error "FORMAT_MISMATCH" and suggestion          |
-      | dimension_mismatch    | operation should fail with error "FORMAT_MISMATCH" and suggestion          |
-
-  @T-UC-020-boundary-output-format @boundary @output_format_matching
-  Scenario Outline: Output format matching boundary - <boundary_point>
-    Given the Buyer sends a build_creative request
-    And the creative agent produces a response at boundary "<boundary_point>"
-    When the system validates the response
-    Then the <outcome>
-
-    Examples: Boundary values
-      | boundary_point                                                 | outcome                                                                   |
-      | output format_id exactly equals request target_format_id       | response should be accepted as valid                                      |
-      | output format_id.id differs from request target_format_id.id   | operation should fail with error "FORMAT_MISMATCH" and suggestion         |
-      | output format_id.agent_url differs from request                | operation should fail with error "FORMAT_MISMATCH" and suggestion         |
-      | output format_id has different dimensions than requested       | operation should fail with error "FORMAT_MISMATCH" and suggestion         |
-
-  @T-UC-020-partition-compliance @partition @compliance_hard_fail
-  Scenario Outline: Compliance hard-fail validation - <partition>
-    Given the Buyer prepares a build_creative request matching compliance partition "<partition>"
-    When the Buyer Agent sends the build_creative request
-    Then the <outcome>
-
-    Examples: Valid partitions
-      | partition                     | outcome                                                   |
-      | no_disclosures                | request should succeed without compliance check            |
-      | all_disclosures_satisfied     | request should succeed with all disclosures rendered       |
-      | no_brief_asset                | request should succeed without compliance check            |
-
-    Examples: Invalid partitions
-      | partition                              | outcome                                                                         |
-      | single_disclosure_unsatisfied          | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
-      | multiple_disclosures_some_unsatisfied  | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
-      | position_unsupported_by_format         | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
-
-  @T-UC-020-boundary-compliance @boundary @compliance_hard_fail
-  Scenario Outline: Compliance hard-fail boundary - <boundary_point>
-    Given the Buyer prepares a build_creative request at compliance boundary "<boundary_point>"
-    When the Buyer Agent sends the build_creative request
-    Then the <outcome>
-
-    Examples: Boundary values
-      | boundary_point                                        | outcome                                                                         |
-      | no brief asset present                                | request should succeed without compliance check                                 |
-      | brief with no compliance section                      | request should succeed without compliance check                                 |
-      | brief with empty required_disclosures array           | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
-      | single disclosure that is satisfiable                 | request should succeed with disclosure rendered                                 |
-      | single disclosure that is unsatisfiable               | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
-      | multiple disclosures, all satisfiable                 | request should succeed with all disclosures rendered                             |
-      | multiple disclosures, one unsatisfiable               | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
-
-  @T-UC-020-partition-brand @partition @brand_resolution
-  Scenario Outline: Brand resolution validation - <partition>
-    Given the Buyer prepares a build_creative request matching brand partition "<partition>"
-    When the Buyer Agent sends the build_creative request
-    Then the <outcome>
-
-    Examples: Valid partitions
-      | partition               | outcome                                                                  |
-      | no_brand                | request should succeed without brand context                             |
-      | single_brand_domain     | request should succeed with brand identity resolved                      |
-      | house_of_brands         | request should succeed with specific brand from portfolio resolved       |
-
-    Examples: Invalid partitions
-      | partition                  | outcome                                                                             |
-      | invalid_domain_pattern     | operation should fail with error "BRAND_DOMAIN_INVALID_FORMAT" and suggestion        |
-      | domain_not_resolvable      | operation should fail with error "BRAND_NOT_FOUND" and suggestion                   |
-
-  @T-UC-020-boundary-brand @boundary @brand_resolution
-  Scenario Outline: Brand resolution boundary - <boundary_point>
-    Given the Buyer prepares a build_creative request at brand boundary "<boundary_point>"
-    When the Buyer Agent sends the build_creative request
-    Then the <outcome>
-
-    Examples: Boundary values
-      | boundary_point                                             | outcome                                                                             |
-      | brand absent (null/omitted)                                | request should succeed without brand context                                        |
-      | brand with valid single-brand domain                       | request should succeed with brand identity resolved                                 |
-      | brand with valid domain + brand_id                         | request should succeed with specific brand resolved                                 |
-      | brand with domain containing uppercase letters             | operation should fail with error "BRAND_DOMAIN_INVALID_FORMAT" and suggestion        |
-      | brand with domain that has no /.well-known/brand.json      | operation should fail with error "BRAND_NOT_FOUND" and suggestion                   |
-
-  @T-UC-020-partition-provenance @partition @ai_provenance
-  Scenario Outline: AI provenance validation - <partition>
-    Given a build_creative response is produced matching provenance partition "<partition>"
-    When the system validates the response
-    Then the <outcome>
-
-    Examples: Valid partitions
-      | partition               | outcome                                                    |
-      | full_provenance         | response should be accepted with complete provenance       |
-      | minimal_provenance      | response should be accepted with minimal provenance        |
-      | provenance_with_c2pa    | response should be accepted with C2PA credentials          |
-
-    Examples: Invalid partitions
-      | partition                | outcome                                                                         |
-      | provenance_absent        | operation should fail with error "PROVENANCE_REQUIRED" and suggestion            |
-      | ai_tool_missing_name     | operation should fail with error "AI_TOOL_NAME_REQUIRED" and suggestion          |
-
-  @T-UC-020-boundary-provenance @boundary @ai_provenance
-  Scenario Outline: AI provenance boundary - <boundary_point>
-    Given a build_creative response is produced at provenance boundary "<boundary_point>"
-    When the system validates the response
-    Then the <outcome>
-
-    Examples: Boundary values
-      | boundary_point                                           | outcome                                                                         |
-      | provenance present with digital_source_type and ai_tool  | response should be accepted as valid                                            |
-      | provenance present with only digital_source_type         | response should be accepted as valid                                            |
-      | provenance absent on AI-generated output                 | operation should fail with error "PROVENANCE_REQUIRED" and suggestion            |
-      | ai_tool present but name missing                         | operation should fail with error "AI_TOOL_NAME_REQUIRED" and suggestion          |
+  @T-UC-020-preview-not-requested @post-s7 @preview
+  Scenario: Inline preview not requested - no preview field
+    Given the Buyer sends a build_creative request without include_preview
+    When the build_creative response is received
+    Then the response should be a successful BuildCreativeResponse
+    And the response should not include a preview field
+    # POST-S7: preview opt-out -> no preview field
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account build_creative produces simulated output with sandbox flag
     Given the request targets a sandbox account
     And a valid target_format_id referencing an available creative format
     When the Buyer Agent sends a build_creative request
-    Then the response status should be "completed"
+    Then the response should be a successful BuildCreativeResponse
     And the response should include sandbox equals true
     And no real AI generation API calls should have been billed
     And no real billing records should have been created
@@ -776,15 +923,17 @@ Feature: BR-UC-020 Build Creative
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account build_creative response does not include sandbox flag
     Given the request targets a production account
     And a valid target_format_id referencing an available creative format
     When the Buyer Agent sends a build_creative request
-    Then the response status should be "completed"
+    Then the response should be a successful BuildCreativeResponse
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
 
   @T-UC-020-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid format returns real validation error
@@ -796,3 +945,84 @@ Feature: BR-UC-020 Build Creative
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
 
+  @T-UC-020-boundary-sandbox-response @boundary @sandbox @br-rule-209
+  Scenario Outline: Sandbox response semantics boundary -- <boundary_point>
+    Given the request targets <account_kind>
+    And a valid target_format_id referencing an available creative format
+    When the Buyer Agent sends a build_creative request
+    Then <outcome>
+    # v3.1: sandbox response-flag boundaries for build_creative (BR-RULE-209 INV-4/INV-5).
+    #       Cross-operation sandbox boundaries (list_accounts filter, sync_accounts request item,
+    #       capability declaration, media-buy budget) belong to UC-010/UC-011 features.
+
+    Examples: Boundary values
+      | boundary_point                                   | account_kind                            | outcome                                          |
+      | sandbox: true in response (sandbox account)      | a sandbox account                       | the response should include sandbox equals true  |
+      | sandbox absent in response (production account)  | a production account                    | the response should not include a sandbox field  |
+      | sandbox: false in response (explicit production) | a production account with sandbox false | the response should include sandbox equals false |
+
+  @T-UC-020-creative-variable-preserved @v3-1 @creative-variable
+  Scenario: build_creative preserves declared CreativeVariable entries from source manifest
+    Given the request targets a production account
+    And a source creative_manifest declaring a CreativeVariable with variable_id "headline_text" and variable_type "text"
+    And a valid target_format_id referencing an available creative format
+    When the Buyer Agent sends a build_creative request
+    Then the response should be a successful BuildCreativeResponse
+    And the output creative_manifest should include a CreativeVariable with variable_id "headline_text" and variable_type "text"
+    # POST-S1: output ready for serve-time DCO population
+    # POST-S3: declared variables retained alongside required assets
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-creative-variable-required-flag @v3-1 @creative-variable
+  Scenario: build_creative preserves required flag on CreativeVariable
+    Given the request targets a production account
+    And a source creative_manifest declaring a CreativeVariable with required true
+    And a valid target_format_id referencing an available creative format
+    When the Buyer Agent sends a build_creative request
+    Then the response should be a successful BuildCreativeResponse
+    And the output CreativeVariable should retain required equal to true
+    # POST-S1: serve-time substitution contract preserved across build
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/build-creative-request.json
+
+  @T-UC-020-creative-variable-invalid-type @v3-1 @creative-variable @ext-b
+  Scenario: build_creative rejects CreativeVariable with invalid variable_type
+    Given the request targets a production account
+    And a source creative_manifest declaring a CreativeVariable with variable_type "geometry"
+    And a valid target_format_id referencing an available creative format
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail with a schema validation error
+    And the error code should be "CREATIVE_VALUE_NOT_ALLOWED"
+    And the error should identify the invalid variable_type
+    And the error should include "suggestion" field
+    And the suggestion should contain "variable_type"
+    # POST-F2: variable_type enum enforced (text|image|video|audio|url|number|boolean|color|date)
+    # POST-F3: field path points at variable_type + recovery suggestion present
+
+  @T-UC-020-creative-rejected-details @v3-1 @error-details @creative-rejected @ext-c
+  Scenario: CREATIVE_REJECTED error returns policy reference and rejection reasons
+    Given the request targets a production account
+    And a creative_brief whose compliance.required_disclosures cannot be satisfied in the target format
+    When the Buyer Agent sends a build_creative request
+    Then the operation should fail
+    And the error code should be "CREATIVE_REJECTED"
+    And the error details should include policy_id and a non-empty reasons array
+    And the error details should include a policy_url where the full policy can be reviewed
+    And the error should include "suggestion" field
+    And the suggestion should contain "policy_url"
+    # POST-F2: rejection rationale is structured, not free text
+    # POST-F3: buyer knows what to revise via the suggestion + policy_url
+
+  @T-UC-020-storyboard-build-vast-tag-from-synced-creative @storyboard-v3.1 @v3-1 @build-from-library @vast
+  Scenario: Build a VAST-compatible serving tag from a synced video creative referenced by creative_id
+    Given a video creative has been synced to the library with creative_id "video_30s_trail_pro"
+    When the Buyer Agent sends build_creative referencing the creative_id and a target_format_id with id "vast_30s"
+    Then the response should be schema-valid against build-creative-response.json
+    And the response should carry a serving tag compatible with the VAST target_format_id
+    And the response should reference the originating creative_id
+    # creative_lifecycle build_video_tag: the buyer references an existing
+    # creative_id from a prior sync_creatives call (not an inline creative_brief)
+    # and asks the platform to build a serving tag in a target_format_id like
+    # vast_30s. The platform produces a VAST-compatible tag the buyer can
+    # traffic to ad servers. This anchors the post-sync build flow as distinct
+    # from inline pure-generation scenarios.
+    # build_video_tag: post-sync build by creative_id produces a target-format serving tag

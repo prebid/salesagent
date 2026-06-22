@@ -9,6 +9,7 @@ These tests verify that:
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import Enum
 
 import pytest
 from adcp.types import CreativePolicy
@@ -55,6 +56,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     Product as ProductSchema,
 )
+from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
 
 
 class TestSchemaMatchesLibrary:
@@ -120,24 +122,21 @@ class TestSchemaMatchesLibrary:
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         # product_selectors — internal-only field (not in AdCP spec)
+        # push_notification_config — in JSON schema but not yet in adcp library's
+        #   GetProductsWholesaleRequest (library gap); declared locally per Pattern #1
         # buying_mode and account are now in the library (adcp 3.9) but overridden locally
         # (buying_mode widened to str|None, account made optional)
-        local_extensions = {"product_selectors"}
+        local_extensions = {"product_selectors", "push_notification_config"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )
 
-        # GetMediaBuyDeliveryRequest - local extends library with spec fields
+        # GetMediaBuyDeliveryRequest - local now matches library exactly
+        # (SDK 5.7 provides time_granularity, include_window_breakdown,
+        # include_package_daily_breakdown — no local extensions needed)
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        # adcp library lags the spec: time_granularity + include_window_breakdown
-        # are defined in get-media-buy-delivery-request.json but not yet in the
-        # adcp library's GetMediaBuyDeliveryRequest (gh-#1299). Declared locally
-        # via Pattern #1 (extend library type) until the library catches up.
-        local_extensions: set[str] = {"time_granularity", "include_window_breakdown"}
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
-        )
+        assert lib_fields == local_fields, f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
 
         # Document known drift for other schemas (to be fixed)
         # These assertions document the current state and will fail when fixed
@@ -649,6 +648,7 @@ class TestAdCPContract:
             start_time=start_time,
             end_time=end_time,
             po_number="PO-12345",  # Optional per spec
+            idempotency_key="unit-test-key-adcp-create-mb",
         )
 
         # Verify AdCP requirements
@@ -847,15 +847,10 @@ class TestAdCPContract:
             creative_id="test_creative_123",
             name="Test AdCP Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets={
-                "banner_image": {
-                    "url": "https://example.com/creative.jpg",
-                    "width": 300,
-                    "height": 250,
-                    "asset_type": "image",
-                },
-                "click_url": {"url": "https://example.com/landing", "url_type": "clickthrough"},
-            },
+            assets=build_assets(
+                image_spec("banner_image", url="https://example.com/creative.jpg"),
+                url_spec("click_url", url="https://example.com/landing", url_type="clickthrough"),
+            ),
             tags=["display", "banner"],
             # Internal fields (optional, added by sales agent)
             principal_id="test_principal",
@@ -1379,15 +1374,10 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets={
-                "banner_image": {
-                    "url": "https://example.com/creative.jpg",
-                    "width": 300,
-                    "height": 250,
-                    "asset_type": "image",
-                },
-                "click_url": {"url": "https://example.com/click", "url_type": "clickthrough"},
-            },
+            assets=build_assets(
+                image_spec("banner_image", url="https://example.com/creative.jpg"),
+                url_spec("click_url", url="https://example.com/click", url_type="clickthrough"),
+            ),
             tags=["sports", "premium"],
             # Internal fields (added by sales agent during processing)
             principal_id="principal_456",
@@ -1584,10 +1574,11 @@ class TestAdCPContract:
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per adcp 4.3 library schema)
+        # Verify all spec fields are present (per adcp 5.7 library schema)
         spec_fields = {
             "account",
             "adcp_major_version",
+            "adcp_version",
             "context",
             "ext",
             "fields",
@@ -1595,10 +1586,13 @@ class TestAdCPContract:
             "include_assignments",
             "include_items",
             "include_pricing",
+            "include_purged",
             "include_snapshot",
             "include_variables",
+            "include_webhook_activity",
             "pagination",
             "sort",
+            "webhook_activity_limit",
         }
         assert set(adcp_response.keys()) == spec_fields, f"Fields should match spec: {set(adcp_response.keys())}"
 
@@ -1609,14 +1603,9 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative 1",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets={
-                "banner_image": {
-                    "url": "https://example.com/creative1.jpg",
-                    "width": 300,
-                    "height": 250,
-                    "asset_type": "image",
-                }
-            },
+            assets=build_assets(
+                image_spec("banner_image", url="https://example.com/creative1.jpg", width=300, height=250)
+            ),
             tags=["sports"],
             # Internal fields
             principal_id="principal_1",
@@ -1630,14 +1619,9 @@ class TestAdCPContract:
             variants=[],
             name="Test Creative 2",
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_1280x720"),
-            assets={
-                "video_file": {
-                    "url": "https://example.com/creative2.mp4",
-                    "width": 1280,
-                    "height": 720,
-                    "asset_type": "video",
-                }
-            },
+            assets=build_assets(
+                video_spec("video_file", url="https://example.com/creative2.mp4", width=1280, height=720)
+            ),
             tags=["premium"],
             # Internal fields
             principal_id="principal_1",
@@ -1840,7 +1824,7 @@ class TestAdCPContract:
         # Verify optional status field (AdCP PR #77 - MCP Status System)
         # Status field is optional and only present when explicitly set
         if "status" in adcp_response:
-            assert isinstance(adcp_response["status"], str), "status must be string when present"
+            assert isinstance(adcp_response["status"], (str, Enum)), "status must be string/enum when present"
 
         # Verify specific field types and constraints
         assert isinstance(adcp_response["products"], list), "products must be array"
@@ -1859,10 +1843,9 @@ class TestAdCPContract:
         assert empty_adcp_response["products"] == [], "Empty products list should be empty array"
         # Verify __str__() provides appropriate empty message
         assert str(empty_response) == "No products matched your requirements."
-        # Allow 2 or 3 fields (status is optional and may not be present, message removed)
-        assert len(empty_adcp_response) >= 2 and len(empty_adcp_response) <= 3, (
-            f"GetProductsResponse should have 2-3 fields (status optional), got {len(empty_adcp_response)}"
-        )
+        # SDK 5.7 protocol envelope includes cache_scope, replayed, status as defaults
+        assert "products" in empty_adcp_response, "products field must be present"
+        assert "errors" in empty_adcp_response, "errors field must be present"
 
     def test_list_creative_formats_response_adcp_compliance(self):
         """Test that ListCreativeFormatsResponse complies with AdCP list-creative-formats-response schema."""
@@ -2496,12 +2479,11 @@ class TestAdCPContract:
         status = TaskStatus.from_operation_state("unknown_operation")
         assert status == TaskStatus.UNKNOWN
 
-        # Test that response schemas no longer have status field (moved to protocol envelope)
-        # Per AdCP PR #113, status is handled at transport layer via ProtocolEnvelope
+        # SDK 5.7: status is part of the protocol envelope (always present as default)
+        # Per AdCP PR #113, status was moved to protocol envelope — SDK 5.7 includes it
         response = GetProductsResponse(products=[])
-
         data = response.model_dump()
-        assert "status" not in data  # Status field removed from domain models
+        assert "products" in data  # Domain field present
 
     def test_package_excludes_internal_fields(self):
         """Test that Package model_dump excludes internal fields from AdCP responses.
@@ -2556,6 +2538,7 @@ class TestAdCPContract:
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
             end_time=end_date,
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
+            idempotency_key="unit-test-key-asap-start-time",
         )
 
         # Verify asap is accepted (library wraps in StartTiming on some SDK versions)
@@ -2598,6 +2581,7 @@ class TestAdCPContract:
             start_time=start_date,
             end_time=end_date,
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
+            idempotency_key="unit-test-key-datetime-start",
         )
 
         # Verify datetime is still accepted (library wraps in StartTiming on some SDK versions)
@@ -2678,6 +2662,7 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
             end_time=end_date,
+            idempotency_key="unit-test-key-brand-inline",
         )
 
         # Verify brand is properly stored
@@ -2698,6 +2683,7 @@ class TestAdCPContract:
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
             end_time=end_date,
+            idempotency_key="unit-test-key-brand-and-brand-id",
         )
 
         # Verify brand fields

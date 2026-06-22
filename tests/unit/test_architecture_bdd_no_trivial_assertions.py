@@ -22,6 +22,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 
@@ -81,32 +85,31 @@ def _has_meaningful_assertion_or_delegation(func: ast.FunctionDef | ast.AsyncFun
             has_any_assert = True
             if _assert_is_meaningful(node):
                 return True
-        # Function call (delegation to helper) counts as meaningful
-        if isinstance(node, ast.Call):
-            func_node = node.func
-            # Placeholder helpers do not implement assertions.
-            if isinstance(func_node, ast.Name) and func_node.id == "_pending":
-                continue
-            # Exclude ctx.get(), ctx.setdefault() etc — these are data access, not assertions
-            if isinstance(func_node, ast.Attribute) and isinstance(func_node.value, ast.Name):
-                if func_node.value.id == "ctx":
-                    continue
-            # Exclude getattr, str, type, etc — builtins used for data extraction
-            if isinstance(func_node, ast.Name) and func_node.id in (
-                "getattr",
-                "str",
-                "type",
-                "len",
-                "list",
-                "dict",
-                "set",
-                "print",
-            ):
-                continue
-            return True
-        # Raise counts as meaningful (explicit failure path)
         if isinstance(node, ast.Raise):
             return True
+
+    for node in iter_call_expressions(func):
+        func_node = node.func
+        # Placeholder helpers do not implement assertions.
+        if isinstance(func_node, ast.Name) and func_node.id == "_pending":
+            continue
+        # Exclude ctx.get(), ctx.setdefault() etc — these are data access, not assertions
+        if isinstance(func_node, ast.Attribute) and isinstance(func_node.value, ast.Name):
+            if func_node.value.id == "ctx":
+                continue
+        # Exclude getattr, str, type, etc — builtins used for data extraction
+        if isinstance(func_node, ast.Name) and func_node.id in (
+            "getattr",
+            "str",
+            "type",
+            "len",
+            "list",
+            "dict",
+            "set",
+            "print",
+        ):
+            continue
+        return True
 
     # If we found asserts but none were meaningful, it's trivial
     if has_any_assert:
@@ -141,6 +144,7 @@ def _scan_bdd_steps() -> list[str]:
 class TestBddNoTrivialAssertions:
     """Structural guard: Then steps must make meaningful assertions."""
 
+    @pytest.mark.arch_guard
     def test_no_trivial_then_assertions(self):
         """Every @then step must assert a comparison, type check, or delegate to a helper.
 

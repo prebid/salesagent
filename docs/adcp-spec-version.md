@@ -1,20 +1,20 @@
 # AdCP Spec Version
 
-Prebid Sales Agent targets **AdCP spec version 3.0.1**.
+Prebid Sales Agent targets **AdCP spec version 3.1.0-beta.3**.
 
 ## Verifying the current target
 
 ```python
 import adcp
-adcp.get_adcp_spec_version()  # "3.0.1"
-adcp.get_adcp_sdk_version()   # "4.3.0"
+adcp.get_adcp_spec_version()  # "3.1.0-beta.3"
+adcp.get_adcp_sdk_version()   # "5.7.0"
 ```
 
 ## Why this version
 
-The `adcp` Python SDK is pinned in `pyproject.toml` to `==4.3.0`. SDK 4.3.0
-is code-generated from AdCP spec 3.0.1 and ships Pydantic models that encode
-that spec version's request/response shapes.
+The `adcp` Python SDK is pinned in `pyproject.toml` to `==5.7.0`. SDK 5.7.0
+is code-generated from AdCP spec 3.1.0-beta.3 and ships Pydantic models that
+encode that spec version's request/response shapes.
 
 The SDK-to-spec mapping (verified via each wheel's bundled `ADCP_VERSION`
 file):
@@ -24,7 +24,8 @@ file):
 | 4.3.x | 3.0.1 |
 | 4.4.x | 3.0.5 |
 | 4.5.x – 4.6.x | 3.0.5 |
-| 5.x.x | 3.0.7 |
+| 5.0.x – 5.6.x | 3.0.7 |
+| 5.7.x | 3.1.0-beta.3 |
 | 6.x (beta) | 3.1.0-beta |
 
 To check what spec version any installed SDK release targets:
@@ -36,7 +37,7 @@ uv run python -c "import adcp; print(adcp.get_adcp_spec_version())"
 ## CI guard
 
 `tests/unit/test_adcp_spec_version.py` asserts the installed SDK targets
-`3.0.1`. A pin shift will fail this test, forcing a deliberate update
+`3.1.0-beta.3`. A pin shift will fail this test, forcing a deliberate update
 across `pyproject.toml`, the test's `EXPECTED_SPEC_VERSION` constant, and
 this document.
 

@@ -7,12 +7,14 @@ to ensure our A2A server properly handles the evolving AdCP spec.
 """
 
 import logging
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
 from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatus
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, create_a2a_text_message
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -360,6 +362,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],  # Use product_id per AdCP spec
@@ -427,6 +430,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],
@@ -871,14 +875,7 @@ class TestA2ASkillInvocation:
                         "creative_id": "creative_test_1",
                         "name": "Test Creative",
                         "format_id": "display_300x250",
-                        "assets": {
-                            "asset_1": {
-                                "asset_type": "image",
-                                "url": "https://example.com/creative.jpg",
-                                "width": 300,
-                                "height": 250,
-                            }
-                        },
+                        "assets": build_assets(image_spec("asset_1", url="https://example.com/creative.jpg")),
                     }
                 ]
             }

@@ -7,7 +7,10 @@ F-08 — Min-spend parity: package budget updates honor currency_limit.min_packa
 
 from decimal import Decimal
 
-from src.core.schemas import Budget, UpdateMediaBuyError
+import pytest
+
+from src.core.exceptions import AdCPBudgetExceededError, AdCPBudgetTooLowError
+from src.core.schemas import Budget
 from src.core.tools.media_buy_update import MAX_CAMPAIGN_BUDGET
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
 
@@ -22,13 +25,10 @@ def test_max_campaign_budget_constant_is_ten_million() -> None:
 
 
 def test_extreme_budget_rejected() -> None:
-    """Budget exceeding MAX_CAMPAIGN_BUDGET must return UpdateMediaBuyError."""
+    """Budget exceeding MAX_CAMPAIGN_BUDGET must raise AdCPBudgetExceededError."""
     with MediaBuyUpdateEnv() as env:
-        result = env.call_impl(budget=Budget(total=888_888_888, currency="USD"))
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert result.errors
-    assert result.errors[0].code == "BUDGET_EXCEEDED"
+        with pytest.raises(AdCPBudgetExceededError):
+            env.call_impl(budget=Budget(total=888_888_888, currency="USD"))
 
 
 # ---------------------------------------------------------------------------
@@ -60,11 +60,8 @@ def test_package_budget_uses_currency_limit_repository() -> None:
         env.set_media_buy(currency="EUR")
         env.set_currency_limit(min_package_budget=Decimal("100"))
 
-        result = env.call_impl(packages=[{"package_id": "pkg-1", "budget": 50.0}])
+        with pytest.raises(AdCPBudgetTooLowError):
+            env.call_impl(packages=[{"package_id": "pkg-1", "budget": 50.0}])
 
         env.mock["uow"].return_value.currency_limits.get_for_currency.assert_called_with("EUR")
         env.mock["uow"].return_value.session.scalars.assert_not_called()
-
-    assert isinstance(result, UpdateMediaBuyError)
-    assert result.errors
-    assert result.errors[0].code == "BUDGET_TOO_LOW"

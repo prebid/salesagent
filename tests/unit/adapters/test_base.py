@@ -69,6 +69,7 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
 
     request = CreateMediaBuyRequest(
         brand={"domain": "sports.example.com"},  # Required per AdCP spec
+        idempotency_key="unit-test-key-mockbase-0001",
         packages=packages,  # AdCP v2.2.0: packages required
         start_time=start_time,
         end_time=end_time,

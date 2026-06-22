@@ -8,18 +8,10 @@ import asyncio
 import concurrent.futures
 import json
 import logging
-from enum import Enum
 
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_enum_value(value: str | Enum) -> str:
-    """Return the string value of an enum member, or the string itself."""
-    if isinstance(value, Enum):
-        return str(value.value)
-    return str(value)
 
 
 def run_async_in_sync_context(coroutine):
@@ -99,6 +91,41 @@ def safe_parse_json_field(field_value, field_name="field", default=None):
     else:
         logger.warning(f"Unexpected type for {field_name}: {type(field_value)}")
         return default if default is not None else {}
+
+
+def first_validation_error_field(validation_error: ValidationError) -> str | None:
+    """Return the bracket-notation field path of the first Pydantic error, or ``None``.
+
+    Lets a transport boundary attach a structured ``field`` to the
+    ``AdCPValidationError`` it raises, so the wire envelope carries the offending
+    field path (e.g. ``packages[0].budget``) instead of only the rendered message.
+    List indices render as ``[i]`` so the boundary-derived path matches the
+    hand-rolled ``field=`` strings raised inside the _impl layer (``packages[].budget``).
+    """
+    errors = validation_error.errors()
+    if not errors:
+        return None
+    parts: list[str] = []
+    for loc in errors[0]["loc"]:
+        if isinstance(loc, int):
+            parts.append(f"[{loc}]")
+        elif parts:
+            parts.append(f".{loc}")
+        else:
+            parts.append(str(loc))
+    return "".join(parts)
+
+
+def package_field_path(attr: str) -> str:
+    """Bracket-notation field path for a per-package field in an _impl-layer error.
+
+    Mirrors the list notation of :func:`first_validation_error_field` but without a
+    concrete index: the _impl layer validates the package collection as a whole and
+    raises ``packages[].budget`` / ``packages[].package_id`` / ``packages[].product_id``,
+    while the boundary-derived path carries the offending index (``packages[0].budget``).
+    Centralizing the prefix here stops the hand-rolled literals from drifting apart.
+    """
+    return f"packages[].{attr}"
 
 
 def format_validation_error(validation_error: ValidationError, context: str = "request") -> str:

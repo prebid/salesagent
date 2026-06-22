@@ -4,13 +4,14 @@ Covers the vulnerability where list_tasks / get_task / complete_task accepted
 requests that had a resolved tenant (via localhost fallback) but no principal_id.
 An unauthenticated caller could read or mutate workflow task state.
 
-The fix: all three _impl functions now check identity.is_authenticated
-immediately after the tenant check.
+The fix: all three functions enforce an authenticated principal via
+require_principal_id (after the tenant check), which raises AdCPAuthenticationError
+when principal_id is missing.
 """
 
 import pytest
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
+from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.task_management import complete_task, get_task, list_tasks
 
@@ -122,8 +123,11 @@ async def test_get_task_authenticated_proceeds_past_auth_check(
     mocker: pytest.FixtureRequest,
 ) -> None:
     """Authenticated identity must pass the auth check and proceed to DB access."""
+
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
-    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
+    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError(
+        "Task step-999 not found"
+    )
 
     with pytest.raises(AdCPNotFoundError, match="not found"):
         await get_task(task_id="step-999", identity=_identity_with_principal())
@@ -134,8 +138,11 @@ async def test_complete_task_authenticated_proceeds_past_auth_check(
     mocker: pytest.FixtureRequest,
 ) -> None:
     """Authenticated identity must pass the auth check and proceed to DB access."""
+
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
-    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id.return_value = None
+    mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError(
+        "Task step-999 not found"
+    )
 
     with pytest.raises(AdCPNotFoundError, match="not found"):
         await complete_task(task_id="step-999", identity=_identity_with_principal())

@@ -1,15 +1,21 @@
-.PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
+.PHONY: setup quality quality-ci quality-full pre-pr lint-fix lint typecheck test-fast test-full
 .PHONY: test-stack-up test-stack-down test-all test-cov test-entity
 .PHONY: test-int test-bdd test-e2e
 
 setup:
 	uv run python scripts/setup-dev.py
 
-quality:
+quality-ci:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
 	uv run python .pre-commit-hooks/check_code_duplication.py
+	uv run python .pre-commit-hooks/check-gam-auth-support.py
+	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
+	uv run python .pre-commit-hooks/check_roundtrip_tests.py
+
+quality:
+	$(MAKE) quality-ci
 	uv run pytest tests/unit/ -x
 
 quality-full:

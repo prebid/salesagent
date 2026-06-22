@@ -21,9 +21,22 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Generator
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+
+# Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
+# to the separate server, so in-process mock injection (set_registry_formats /
+# set_adapter_response / account billing-state fixtures) is invisible to it and
+# the scenario cannot pass. xfail(strict=False)'d by exact nodeid in the
+# collection hook. Regenerate from a clean in-network e2e_rest run. See the beads
+# ledger task. File lives next to this conftest.
+_E2E_REST_KNOWN_FAILURES: frozenset[str] = frozenset(
+    line.strip()
+    for line in (Path(__file__).parent / "e2e_rest_known_failures.txt").read_text().splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+)
 
 if TYPE_CHECKING:
     pass
@@ -43,6 +56,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
+    "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
@@ -87,6 +101,21 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
 
 def pytest_configure(config: pytest.Config) -> None:
     """Register BDD tag markers dynamically."""
+    # Guard: BDD_E2E_ENABLED is incompatible with xdist. Under -n>0 the e2e_rest
+    # transport is silently dropped at collection (the worker's
+    # pytest_generate_tests never appends it), so the suite goes green WITHOUT
+    # ever running the 5th transport. The ctx fixture's hard-error can't catch
+    # this — collection never happens. Turn the silent drop into a hard error.
+    # In-network bdd already pins BDD_XDIST_N=0 (docker-compose.e2e.yml). (#1420)
+    if os.environ.get("BDD_E2E_ENABLED") == "true":
+        numprocesses = getattr(config.option, "numprocesses", None)
+        if numprocesses not in (None, 0, "0"):
+            raise pytest.UsageError(
+                f"BDD_E2E_ENABLED=true is incompatible with xdist (-n {numprocesses!r}): "
+                "the e2e_rest transport is silently dropped at collection and the suite "
+                "passes without ever running it. Run serially — set BDD_XDIST_N=0."
+            )
+
     import pathlib
 
     features_dir = pathlib.Path(__file__).parent / "features"
@@ -212,6 +241,14 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
     "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
+    # Missing-required-field (idempotency_key) validation error lacks a structured
+    # suggestion on every transport: format_validation_error (validation_helpers.py)
+    # returns a message string only, so the AdCPValidationError carries details=None.
+    # VALIDATION_ERROR code + the missing-field reference are correct (those Then
+    # steps pass); only `the error should include "suggestion" field` fails. The
+    # replay sibling (T-UC-002-v31-idempotency-replay) is fully wired and passing —
+    # this entry covers solely the suggestion spec-production gap.
+    "T-UC-002-v31-idempotency-missing": "missing idempotency_key VALIDATION_ERROR lacks suggestion field — spec-production gap",
     # FIXME(salesagent-9vgz.17): optimization_goals not in adcp v3.6.0 or production schemas
     # PackageRequest(extra='forbid') rejects the field with generic validation error,
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
@@ -372,6 +409,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
+
+        # uc005 list_creative_formats filters are NOT transmitted over e2e_rest:
+        # build_rest_body() returns {} (stale — ListCreativeFormatsBody declares
+        # the fields, but the harness drops them; tracked separately). So the live
+        # server never observes these filters/validations and the in-process
+        # strict markers cannot hold over e2e_rest. Mark strict=False (tolerate
+        # either outcome) until build_rest_body transmits the route-body fields.
+        # NOT retirements — type is still in the pin (04f59d2d5); disclosure
+        # uniqueItems is a separate production gap. (salesagent-7fye / -95kz)
+        uc005_filter_e2e_untestable = {
+            # type filter — also removed from the 5.7 SDK (pin retains it)
+            "T-UC-005-inv-031-1-violated",
+            "T-UC-005-partition-type-filter",
+            "T-UC-005-boundary-type-filter",
+            # disclosure_positions duplicate — prod also lacks the pin's uniqueItems
+            "T-UC-005-partition-disclosure",
+            "T-UC-005-boundary-disclosure",
+        }
+        uc005_filter_e2e_reason = (
+            "e2e_rest: uc005 filter not transmitted (build_rest_body returns {}); filter/validation "
+            "untestable over e2e_rest until the harness sends route-body fields"
+        )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
         # When steps dispatch through harness (blanket xfail removed).
@@ -622,6 +681,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Selective xfail for parametrized scenarios
             for tag, substrings, reason in _SELECTIVE_XFAIL:
                 if tag in marker_names:
+                    if is_e2e_rest and tag in uc005_filter_e2e_untestable:
+                        # tolerate either outcome — see uc005_filter_e2e_reason (salesagent-7fye)
+                        item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
+                        break
                     if any(s in item.nodeid for s in substrings):
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break  # tag matched — skip remaining selective entries
@@ -660,6 +723,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
             if tag in marker_names:
+                if is_e2e_rest and tag in uc005_filter_e2e_untestable:
+                    # tolerate either outcome — see uc005_filter_e2e_reason (salesagent-7fye)
+                    item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
+                    break
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
 
@@ -918,30 +985,39 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004: additional xfails for features needing production enhancements
         # FIXME(salesagent-a0o): These require production changes, not BDD wiring.
         _UC004_XFAIL_ADDITIONAL: dict[str, tuple[str, bool]] = {
-            # FIXME(salesagent-afq): _impl doesn't echo attribution_window in response
-            "T-UC-004-attr-supported": ("attribution_window echo not implemented in _impl", True),
-            "T-UC-004-attr-unsupported": ("attribution_window platform default not implemented in _impl", True),
+            # Delivery response reports a date-derived status (media_buy_delivery.py
+            # status computation casts to a Literal that excludes the pending_* states),
+            # so a pending_start buy reports "active". The adcp MediaBuyDelivery.status
+            # enum includes pending_start/pending_creatives/pending — surfacing the
+            # persisted pre-serving status is an unimplemented production change.
+            "T-UC-004-status-pending-legacy-alias": (
+                "delivery response does not surface persisted pending_start status, though "
+                "the adcp MediaBuyDelivery.status enum includes it (production gap)",
+                True,
+            ),
+            # T-UC-004-attr-supported: resolved — steps now assert attribution_window model and echo
+            # T-UC-004-attr-unsupported: resolved — xfail now in step function for specific production gap
             # T-UC-004-attr-echo: resolved — vvx9 + ral2 fixed enum→str handling
             # T-UC-004-attr-omitted: resolved — vvx9 + ral2 fixed enum→str handling
-            "T-UC-004-attr-campaign-valid": ("attribution_window campaign window not implemented in _impl", True),
+            # T-UC-004-attr-campaign-valid: resolved — _impl now resolves campaign unit to days
             # campaign unit interval validation: _impl doesn't validate attribution_window
             "T-UC-004-attr-campaign-invalid": (
-                "attribution_window campaign unit validation not implemented in _impl",
+                # INV-5 IS implemented (_validate_attribution_window raises VALIDATION_ERROR);
+                # the in-process request path drops attribution_window.post_click (#1462) so it
+                # can't fire there. Reason corrected per PR #1420 reviewer nit.
+                "attribution_window campaign INV-5 can't fire in-process — request path drops post_click (#1462)",
                 True,
             ),
             # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
-            "T-UC-004-dim-sortby-valid": (
-                "sort_by metric: str(SortMetric.clicks) != 'clicks' — needs .value in _impl",
-                True,
-            ),
+            # T-UC-004-dim-sortby-valid: resolved — sort_by now works in _impl
             # Graduated: T-UC-004-dim-sortby-fallback (impl, mcp, rest pass — only a2a still fails)
-            # FIXME(salesagent-b2v): _impl only supports by_placement, not by_device_type/by_geo/truncation
+            # FIXME(#1376): _impl only supports by_placement, not by_device_type/by_geo/truncation
             "T-UC-004-dim-supported": ("by_device_type breakdown not implemented in _impl (only by_placement)", True),
             "T-UC-004-dim-truncated": ("truncation flags (by_*_truncated) not implemented in _impl", True),
             "T-UC-004-dim-complete": ("by_device_type_truncated flag not implemented in _impl", True),
-            "T-UC-004-dim-geo-system": ("by_geo breakdown not implemented in _impl", True),
-            "T-UC-004-dim-geo-postal": ("by_geo breakdown not implemented in _impl", True),
-            "T-UC-004-dim-multi": ("by_geo/by_device_type breakdowns not implemented in _impl", True),
+            # T-UC-004-dim-geo-system: resolved — by_geo now populated by _impl
+            # T-UC-004-dim-geo-postal: resolved — by_geo now populated by _impl
+            "T-UC-004-dim-multi": ("by_device_type breakdown not implemented on PackageDelivery (by_geo works)", True),
             # Partial-success Error model lacks suggestion field and rich messages
             "T-UC-004-ext-a": ("partial-success Error needs suggestion field + authentication in message", True),
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
@@ -967,21 +1043,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                 break
 
-        # Graduated: T-UC-004-dim-sortby-fallback — impl, mcp, rest pass; only a2a fails
-        if "T-UC-004-dim-sortby-fallback" in marker_names and is_a2a:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="sort_by fallback: A2A transport drops by_placement from response — serialization gap",
-                    strict=False,
-                )
-            )
+        # Graduated: T-UC-004-dim-sortby-fallback — all transports pass.
+        # A2A previously dropped by_placement; that serialization gap is fixed.
+        # Verified: the scenario passes with by_placement present and sorted by
+        # spend (then_placement_sorted_fallback asserts values == sorted(values,
+        # reverse=True); inline pytest.xfail guards the vacuous case), so the
+        # pass is real, not a weakened assertion.
 
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
             (
+                # The generic `requests delivery metrics with {request_params}` step
+                # shadows the specific `with status_filter "X"` step and parses only
+                # the key=value form, so the `status_filter "X"` value is dropped and
+                # the filter defaults to "active". Every non-active value therefore
+                # returns the active buy and fails the "only buys with status X" check.
+                # pending_creatives/pending_start are the v3.1 additions of this same
+                # known step-shadowing gap (pending_activation was stale — not a real
+                # MediaBuyStatus value). Fixing the generic step is tracked separately
+                # and would graduate this whole family.
                 "T-UC-004-filter",
-                {"pending_activation", "rejected", "canceled", "paused", "completed"},
-                "status_filter for non-active statuses not mapped in _impl",
+                {"rejected", "canceled", "paused", "completed", "pending_creatives", "pending_start"},
+                "status_filter for non-active values is dropped by the generic request_params step "
+                "(shadows the specific status_filter step), so the filter defaults to active",
             ),
             (
                 "T-UC-004-filter-default",
@@ -1029,21 +1113,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            (
-                "T-UC-004-partition-attribution",
-                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
-                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # GRADUATED (removed): T-UC-004-partition-attribution interval_zero /
+            # interval_negative / invalid_unit / invalid_model — the attribution_window
+            # reference now asserts the wire envelope (error "INVALID_REQUEST" with
+            # suggestion), which a2a/mcp/rest emit, closing the old reconstructed-path
+            # C4 gap. campaign_interval_not_one is xfailed separately below (#1462,
+            # post_click dropped in the in-process request path).
             (
                 "T-UC-004-boundary-reporting-dims",
                 {"geo with geo_level=metro but no system"},
                 "AdCP spec defines metro/postal_area system requirement only in field description; no validator. See docs/test-debt-bdd-strict-markers.md item C10.",
             ),
-            (
-                "T-UC-004-boundary-attribution",
-                {"unit=campaign with interval=2"},
-                "AdCP Duration spec defines 'interval=1 when unit=campaign' only in description; no validator. Same gap as T-UC-004-attr-campaign-invalid. See docs/test-debt-bdd-strict-markers.md item C10.",
-            ),
+            # GRADUATED (removed): T-UC-004-boundary-attribution "unit=campaign with
+            # interval=2" — BR-RULE-092 INV-5 is now enforced by the _validate_attribution_window
+            # check in _get_media_buy_delivery_impl (returns INVALID_REQUEST on all
+            # transports), so the description-only C10 gap is closed.
             # reporting-dims / attribution boundary invalid-rows: Pydantic DOES
             # reject these (missing geo_level / limit>=1 / enum), but the
             # error is not normalized to AdCPError(INVALID_REQUEST) at the
@@ -1369,10 +1453,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # genuinely PASS on all transports; NO strict=True entry needed
             # (same shape as the reconciled date-range valid rows).
         ]
-        for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
-            if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
-                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-                break
+        # e2e_rest items must NOT be marked by this loop. Its row substrings use
+        # bare transport prefixes ("rest-…", not the "[rest-" bracket guard at :402),
+        # so a "rest-…" row substring-matches an "[e2e_rest-…]" nodeid and would stamp
+        # a strict=True in-process "impl passes" reason onto e2e_rest items —
+        # contradicting the ledger's non-strict policy and, once e2e_rest reaches the
+        # real boundary and passes (e.g. INVALID_REQUEST now emitted), turning the pass
+        # into a spurious strict-XPASS failure. e2e_rest xfails are owned by the
+        # dedicated tripwire blocks (~:1490/:1517) and the ledger collapse. (PR #1420)
+        if not is_e2e_rest:
+            for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
+                if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
 
         # UC-004 boundary scenarios: strict=False because some examples pass.
         # Invalid boundary values SHOULD fail validation but production doesn't validate.
@@ -1392,18 +1485,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
 
-        # Graduated: T-UC-004-boundary-credentials — impl passes invalid examples,
-        # rest passes valid examples. A2A and MCP still fail on all examples.
-        if "T-UC-004-boundary-credentials" in marker_names:
-            _cred_invalid = any(s in nodeid for s in ("31 chars (rejected)", "Unknown auth scheme"))
-            _cred_valid = any(s in nodeid for s in ("Bearer scheme", "HMAC-SHA256 scheme", "credentials = 32 chars"))
-            _cred_passes = (is_impl and _cred_invalid) or (is_rest and _cred_valid)
-            if not _cred_passes:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="webhook credentials boundary: validation gaps on this transport", strict=False
-                    )
-                )
+        # Graduated: T-UC-004-boundary-credentials — the When now validates the real
+        # AdCP reporting_webhook Authentication at the create_media_buy boundary
+        # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
         # Graduated: T-UC-004-boundary-ownership — impl-"differs" and rest-"matches" pass
         # Remaining failures: impl-matches, a2a-both, mcp-both, rest-differs
@@ -1434,8 +1518,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="reporting_dimensions boundary: validation gaps on some transports", strict=False
                     )
                 )
-            # Graduated: e2e_rest invalid reporting_dimensions examples now return 500
-            # (not empty body), so the test handles them correctly.
+            # Graduated: e2e_rest invalid reporting_dimensions schema violations now
+            # return 400 INVALID_REQUEST (the RequestValidationError handler in
+            # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
+            # handles them.
 
         # Graduated: T-UC-004-boundary-sampling — "Not provided" passes everywhere;
         # "random"/"failures_only" pass on rest only; "Unknown string" passes on impl only.
@@ -1489,33 +1575,56 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # Graduated: T-UC-004-boundary-attribution — valid examples now pass on ALL transports.
-        # Invalid examples: most fail on a2a/mcp/rest; "campaign with interval=2" fails
-        # on ALL 4 transports (production doesn't validate interval>1 for campaign unit).
-        if "T-UC-004-boundary-attribution" in marker_names:
-            _aw_invalid_all = {"interval=0", "unit=weeks", "model=last_click"}
-            _aw_invalid_all_transports = {"unit=campaign with interval=2"}
-            _aw_is_invalid_all = any(s in nodeid for s in _aw_invalid_all)
-            _aw_is_invalid_all_transports = any(s in nodeid for s in _aw_invalid_all_transports)
-            # Graduated: valid examples now pass on all transports (impl/a2a/mcp/rest).
-            # Only invalid examples still need xfails.
-            if _aw_is_invalid_all and (is_a2a or is_mcp or is_rest):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="attribution_window boundary: production gaps on this transport", strict=False
-                    )
+        # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
+        # in-process — when only end_date is given, production defaults start to
+        # today-30d, not the media buy creation date the Then-step asserts. The
+        # _UC004_GENUINE_XFAIL_ROWS loop is gated to in-process only (see :1422),
+        # so e2e_rest needs its own strict tripwire. Deterministic: the live
+        # server reliably returns today-30d. Retire when Gap G40 is closed.
+        if is_e2e_rest and "T-UC-004-daterange-end-only" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: Gap G40 — start defaults to today-30d, not media buy creation date",
+                    strict=True,
                 )
-            elif _aw_is_invalid_all_transports:
-                # "campaign with interval=2": production accepts it on all transports
-                # — spec says must be 1, production doesn't validate
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="attribution_window boundary: campaign unit interval=2 not validated — spec-production gap",
-                        strict=False,
-                    )
+            )
+
+        # attribution_window REFERENCE (clean scenario->step->harness path): the Examples
+        # name the exact error code (error "VALIDATION_ERROR" — the schema-canonical code
+        # for value/enum/range/business-rule violations; reconciled from the earlier
+        # INVALID_REQUEST mis-pin per the AdCP graded error-compliance storyboard), the
+        # step asserts it on the harness wire envelope. interval=0 / unit=weeks /
+        # model=last_click PASS on a2a/mcp/rest (VALIDATION_ERROR). The one remaining gap
+        # is "campaign with interval=2": INV-5 can't fire because the in-process request
+        # path drops attribution_window.post_click (#1462). e2e_rest parses the body
+        # server-side, so it is NOT marked here (it asserts for real).
+        _aw_campaign_invalid = (
+            "T-UC-004-boundary-attribution" in marker_names and "unit=campaign with interval=2" in nodeid
+        )
+        _aw_partition_campaign = (
+            "T-UC-004-partition-attribution" in marker_names and "campaign_interval_not_one" in nodeid
+        )
+        # #1462: the request path drops attribution_window.post_click, so the validation
+        # never sees the window and the call succeeds instead of being rejected. This
+        # manifests transport-/shape-specifically: campaign interval=2 on the in-process
+        # transports, and EVERY error row of the partition shape over e2e_rest. The
+        # boundary shape over e2e_rest is unaffected (it asserts for real and passes).
+        _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
+        _hits_1462 = ((_aw_campaign_invalid or _aw_partition_campaign) and (is_a2a or is_mcp or is_rest)) or (
+            _aw_partition_error and is_e2e_rest
+        )
+        if _hits_1462:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="attribution_window: validation can't fire — the request path drops "
+                    "attribution_window.post_click (#1462)",
+                    strict=True,
                 )
-            # Graduated: e2e_rest invalid attribution_window examples now return 500
-            # (not empty body), so the test handles them correctly.
+            )
+            # Graduated: e2e_rest invalid attribution_window schema violations now
+            # return 400 INVALID_REQUEST (the RequestValidationError handler in
+            # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
+            # handles them.
 
         # Graduated: T-UC-004-boundary-account — transport-aware.
         # "account_id present"/"brand + operator" (valid): fail on mcp/rest only.
@@ -1596,8 +1705,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
-            # Graduated: e2e_rest invalid status_filter examples now return 500
-            # (not empty body), so the test handles them correctly.
+            # Graduated: e2e_rest invalid status_filter (unknown enum value) now
+            # returns 400 INVALID_REQUEST (the RequestValidationError handler in
+            # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
+            # handles it.
             # adcp 3.12: pending_activation renamed to pending_start — feature file
             # still uses old name, schema rejects it as unknown enum value.
             if "pending_activation" in nodeid or "all 6 statuses" in nodeid:
@@ -1608,18 +1719,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # adcp 3.12: buyer_refs removed — "both provided" resolution tests
-        # send both media_buy_ids and buyer_refs, but buyer_refs no longer exists.
+        # adcp 5.7 SDK dropped buyer_refs (excised from the pin since 3.0.0) — the
+        # "both provided" resolution scenario sends both media_buy_ids and buyer_refs,
+        # but buyer_refs no longer exists, so the scenario is obsolete. strict=False
+        # tolerates it (in-process xfails, e2e_rest xpasses) until PR #1417 retires the
+        # obligation + feature rows upstream. (salesagent-uw8f)
         if "T-UC-004-boundary-resolution" in marker_names and "both provided" in nodeid:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="adcp 3.12: buyer_refs removed — 'both provided' resolution test is obsolete",
-                    strict=True,
+                    reason="adcp 5.7 SDK dropped buyer_refs — 'both provided' resolution test is obsolete "
+                    "(retirement owned by PR #1417)",
+                    strict=False,
                 )
             )
 
-        # Graduated: e2e_rest media_buy_resolution "empty array" now returns 500
-        # (not empty body), so the test handles it correctly.
+        # Graduated: e2e_rest media_buy_resolution "empty array" now returns a
+        # structured AdCP error envelope (not a raw 500/empty body), so the
+        # wire-envelope assertion handles it.
 
         # e2e_rest: principal_ownership "differs from owner" — ownership check not enforced
         # through REST layer; test succeeds when it should fail (strict=True xfail).
@@ -1631,12 +1747,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # e2e_rest: sort_by_metric_not_available — no by_placement breakdown in e2e_rest response
+        # e2e_rest: sort_by_metric_not_available — the spend-fallback needs injected
+        # by_placement data, but the injector (_inject_placement_data) is in-process
+        # mock state invisible to the live server, so the fallback is untestable over
+        # e2e_rest (the buyer-facing assertions pass without exercising it). strict=False
+        # tolerates the hollow pass; wiring the injector so a2a/mcp/rest genuinely test
+        # it is the follow-up. (salesagent-04im)
         if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="e2e_rest: by_placement breakdown not present in REST response — sort_by fallback untestable",
-                    strict=True,
+                    reason="e2e_rest: by_placement injection is in-process-only (invisible to live server) — "
+                    "sort_by spend-fallback untestable over e2e_rest",
+                    strict=False,
                 )
             )
 
@@ -1667,11 +1789,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "reporting_dimensions validation not implemented — production accepts invalid configs",
             ),
-            # attribution_window: production doesn't validate interval<=0, invalid unit/model, campaign interval
+            # attribution_window: validation IS implemented (SDK model enum/range +
+            # _validate_attribution_window for campaign INV-5, emitting VALIDATION_ERROR),
+            # but the in-process request path drops attribution_window.post_click (#1462)
+            # so it can't fire in-process; e2e_rest parses the body server-side and asserts
+            # for real. (Reason corrected per PR #1420 reviewer nit; not "not implemented".)
             (
                 "T-UC-004-partition-attribution",
                 {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
-                "attribution_window validation not implemented — production accepts invalid configs",
+                "attribution_window validation can't fire in-process — request path drops post_click (#1462)",
             ),
             # daily breakdown: production doesn't validate non-boolean values
             (
@@ -1718,18 +1844,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
-        # Graduated: T-UC-004-partition-credentials — impl passes invalid examples,
-        # rest passes valid examples. A2A and MCP still fail on all examples.
-        if "T-UC-004-partition-credentials" in marker_names:
-            _pcred_invalid = any(s in nodeid for s in ("credentials_too_short", "unknown_scheme"))
-            _pcred_valid = any(s in nodeid for s in ("hmac_sha256", "bearer_auth", "credentials_at_minimum"))
-            _pcred_passes = (is_impl and _pcred_invalid) or (is_rest and _pcred_valid)
-            if not _pcred_passes:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="webhook credentials partition: validation gaps on this transport", strict=False
-                    )
-                )
+        # Graduated: T-UC-004-partition-credentials — the When now validates the real
+        # AdCP reporting_webhook Authentication at the create_media_buy boundary
+        # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
         # Graduated: T-UC-004-partition-sampling — "not_provided" passes all transports;
         # valid named methods (random, stratified, recent, failures_only) pass on REST only.
@@ -2361,6 +2478,39 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
             item.add_marker(pytest.mark.admin)
 
+        # ── E2E_REST ledger + non-strict policy ──────────────────────
+        # The e2e_rest transport dispatches over real HTTP to a separate server,
+        # so scenarios relying on in-process mock injection can't pass. xfail the
+        # known ones (ledger) as non-strict — e2e is environment-dependent, so a
+        # ledger xpass must not fail CI. Authored strict=True markers (the #1270
+        # validation tripwires at ~1475/~1502) are PRESERVED by the collapse
+        # below, so a real production fix still surfaces as a strict xpass.
+        if is_e2e_rest:
+            if nodeid in _E2E_REST_KNOWN_FAILURES:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: mock-incompatible scenario (tests/bdd/e2e_rest_known_failures.txt)",
+                        strict=False,
+                    )
+                )
+            # Collapse the e2e_rest xfail markers into ONE, but PRESERVE authored
+            # strictness: if any source marker is strict=True (the #1270 validation
+            # tripwires at ~1475/~1502), the collapsed marker stays strict so a
+            # production fix surfaces as a strict xpass instead of being silently
+            # swallowed. Ledger-only items carry only non-strict markers, so they
+            # stay non-strict — an environment-dependent xpass must not fail CI.
+            xfails = [m for m in item.own_markers if m.name == "xfail"]
+            if xfails:
+                strict = next((m for m in xfails if m.kwargs.get("strict", False)), None)
+                chosen = strict or xfails[0]
+                item.own_markers = [m for m in item.own_markers if m.name != "xfail"]
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason=chosen.kwargs.get("reason", "e2e_rest xfail"),
+                        strict=strict is not None,
+                    )
+                )
+
     # ── Single-transport optimization for strict xfails ──────────────
     # Scenarios that xfail(strict=True) on ALL transports waste 3/4 of
     # their runtime running the same failure path on mcp/rest/a2a after
@@ -2420,6 +2570,15 @@ _IMPL_ONLY: set[tuple[str, str]] = {
     ("UC-002", "account"),
 }
 
+# UC-002 idempotency scenarios wired to MediaBuyCreateEnv (run a real
+# create_media_buy across all 4 transports). Only these two @idempotency-key
+# tags are live; the rest stay blanket-xfailed in _harness_env until their
+# production gaps + steps are wired.
+_UC002_IDEMPOTENCY_WIRED: set[str] = {
+    "T-UC-002-v31-idempotency-replay",
+    "T-UC-002-v31-idempotency-missing",
+}
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -2455,8 +2614,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         if any(t.startswith(tag_prefix) for t in marker_names) and required_tag in marker_names:
             return
 
-    transports = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
-    ids = ["impl", "a2a", "mcp", "rest"]
+    # IMPL sunsetted: it adds no coverage the wire transports don't, and it has no
+    # wire envelope (so it can't participate in error-envelope assertions). The four
+    # truthful transports are a2a/mcp/rest + e2e_rest (added below when enabled).
+    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["a2a", "mcp", "rest"]
 
     if os.environ.get("BDD_E2E_ENABLED") == "true":
         transports.append(Transport.E2E_REST)
@@ -2465,18 +2627,102 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
 
 
+@pytest.fixture(scope="session")
+def e2e_stack():
+    """Detect the live E2E stack; return an E2EConfig or None (never skips here).
+
+    Reads E2E_BASE_URL / E2E_POSTGRES_URL (set by the in-network runner /
+    run_all_tests via tox pass_env). Health-checks base_url so non-e2e transports
+    still run when the stack is absent (returns None). For an e2e_* transport a
+    None here is a hard ERROR (the ctx fixture raises) — never a skip, because
+    e2e_* is only parametrized when BDD_E2E_ENABLED=true, so a missing stack means
+    an explicitly-requested transport could not run. The RestE2EDispatcher reads
+    config off the env, never the environment.
+    """
+    import httpx
+
+    from tests.harness.transport import E2EConfig
+
+    base_url = os.environ.get("E2E_BASE_URL")
+    postgres_url = os.environ.get("E2E_POSTGRES_URL")
+    if not base_url:
+        return None
+    try:
+        resp = httpx.get(f"{base_url}/health", timeout=5)
+        resp.raise_for_status()
+    except Exception:
+        return None
+    if not postgres_url:
+        postgres_url = (
+            f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
+        )
+    return E2EConfig(base_url=base_url, postgres_url=postgres_url)
+
+
+def _reset_e2e_db(e2e_config) -> None:
+    """Flush the live server DB to a clean baseline before an e2e scenario.
+
+    Live-server e2e shares ONE database and the server process commits
+    independently, so the transaction-rollback isolation the in-process
+    transports get (via the per-test integration_db) is impossible here. Instead
+    TRUNCATE every data table CASCADE so each scenario's harness setup recreates
+    exactly the rows it needs into a clean DB. The server reads the DB live, so it
+    observes the reset immediately. alembic_version is preserved (schema stays).
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(e2e_config.postgres_url)
+    try:
+        with engine.begin() as conn:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+                    )
+                )
+            ]
+            if tables:
+                joined = ", ".join(f'"{t}"' for t in tables)
+                conn.execute(text(f"TRUNCATE TABLE {joined} RESTART IDENTITY CASCADE"))
+    finally:
+        engine.dispose()
+
+
 @pytest.fixture()
-def ctx(request: pytest.FixtureRequest) -> dict:
+def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
     """Per-scenario mutable context shared across Given/When/Then steps.
 
     When parametrized by pytest_generate_tests, ``request.param`` is a
     Transport enum injected as ctx["transport"]. Transport-specific
     scenarios (tagged @rest/@mcp/@a2a) are NOT parametrized and get
     an empty ctx (When steps handle dispatch explicitly).
+
+    For an e2e_* transport, stash the live-stack E2EConfig in ctx so
+    ``_harness_env`` passes it to the harness env (which then binds factories to
+    the server's DB and dispatches over real HTTP). Skip if the stack is absent.
     """
     d: dict = {}
     if hasattr(request, "param"):
         d["transport"] = request.param
+        t = request.param
+        if hasattr(t, "value") and str(t.value).startswith("e2e_"):
+            if e2e_stack is None:
+                # e2e_* transports are only parametrized when BDD_E2E_ENABLED=true
+                # (see pytest_generate_tests), so reaching here means e2e was
+                # EXPLICITLY requested but the live stack could not be reached. That
+                # is a hard ERROR, never a skip: a skipped e2e test masks the fact
+                # that the transport never ran, turning a non-executed test into a
+                # false green (No Quiet Failures / Test Integrity).
+                base_url = os.environ.get("E2E_BASE_URL")
+                cause = "E2E_BASE_URL is unset" if not base_url else f"{base_url}/health failed"
+                raise RuntimeError(
+                    f"BDD_E2E_ENABLED=true but the live E2E stack is unreachable ({cause}). "
+                    "The e2e_rest transport cannot run. Start the in-network stack "
+                    "(run_all_tests.sh) or unset BDD_E2E_ENABLED to run the in-process "
+                    "transports only. Refusing to skip — a skipped e2e test is a false green."
+                )
+            d["e2e_config"] = e2e_stack
     return d
 
 
@@ -2547,6 +2793,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     """
     uc = _detect_uc(request)
 
+    # E2E shares one live DB across all scenarios; flush it to a clean baseline so
+    # this scenario's harness setup starts fresh (no cross-scenario tenant_id
+    # collisions). No-op for the in-process transports (they use per-test DBs).
+    if ctx.get("e2e_config") is not None:
+        _reset_e2e_db(ctx["e2e_config"])
+
     if uc == "UC-002":
         marker_names = {m.name for m in request.node.iter_markers()}
         if "account" in marker_names:
@@ -2554,21 +2806,42 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_account import MediaBuyAccountEnv
 
-            with MediaBuyAccountEnv() as env:
+            with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
+                yield
+        elif marker_names & _UC002_IDEMPOTENCY_WIRED:
+            # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
+            # real create_media_buy through every transport (the replay scenario
+            # creates once, then sends the same key again to exercise the
+            # production replay path). Only the two wired tags go live here; the
+            # remaining @idempotency-key scenarios (in-flight, expired, conflict,
+            # pattern, canonical) stay blanket-xfailed below until their
+            # production gaps + steps are wired.
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
                 yield
         else:
             pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if "account" in marker_names:
-            # Account resolution through CreativeSyncEnv — exercises the full
-            # sync_creatives transport wrappers which call enrich_identity_with_account()
+        if "account" in marker_names or "creative-invariant" in marker_names:
+            # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
+            # @account scenarios drive account resolution (enrich_identity_with_account());
+            # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
+            # response invariants (e.g. all-failed still returns the success variant).
             request.getfixturevalue("integration_db")
             from tests.harness.creative_sync import CreativeSyncEnv
 
-            with CreativeSyncEnv() as env:
+            with CreativeSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2578,7 +2851,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        with CreativeFormatsEnv() as env:
+        with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
 
@@ -2590,14 +2863,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.account_list import AccountListEnv
 
-            with AccountListEnv() as env:
+            with AccountListEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         elif harness_type == "sync":
             request.getfixturevalue("integration_db")
             from tests.harness.account_sync import AccountSyncEnv
 
-            with AccountSyncEnv() as env:
+            with AccountSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -2617,7 +2890,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv() as env:
+        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
 
@@ -2632,7 +2905,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # _ensure_media_buy_in_db creates media buys owned by the
             # scenario's "owner" (usually "buyer-001"), and _impl filters
             # by the identity's principal. They must match.
-            with DeliveryPollEnv(principal_id="buyer-001") as env:
+            with DeliveryPollEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
                 tenant, principal = env.setup_default_data()
                 ctx["env"] = env
                 ctx["db_tenant"] = tenant
@@ -2642,7 +2915,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.delivery_webhook import WebhookEnv
 
-            with WebhookEnv() as env:
+            with WebhookEnv(e2e_config=ctx.get("e2e_config")) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -2650,7 +2923,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
-            with CircuitBreakerEnv() as env:
+            with CircuitBreakerEnv(e2e_config=ctx.get("e2e_config")) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -2660,7 +2933,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv() as env:
+        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
             yield
     else:

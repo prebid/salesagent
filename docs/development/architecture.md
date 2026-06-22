@@ -324,7 +324,7 @@ Used for:
 ```yaml
 services:
   postgres:
-    image: postgres:16
+    image: postgres:17-alpine
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

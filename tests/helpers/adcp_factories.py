@@ -7,6 +7,7 @@ instead of manually constructing objects to avoid validation errors.
 All factories use sensible defaults for required fields and accept overrides for customization.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -18,6 +19,7 @@ from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adc
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
+from tests.factories.creative_asset import build_assets, image_spec
 
 
 def create_test_product(
@@ -471,7 +473,9 @@ def create_test_creative_asset(
         creative_id: Creative identifier
         name: Human-readable creative name
         format_id: FormatId object or string
-        assets: Assets dict keyed by asset_role. Defaults to {"primary": {"url": "https://example.com/creative.jpg"}}
+        assets: Assets dict keyed by asset_role; each value is a list of
+            discriminated-union asset objects (SDK 5.7 shape). Defaults to a
+            single image asset under the "primary" role.
         **kwargs: Additional optional fields (inputs, tags, approved, etc.)
 
     Returns:
@@ -481,14 +485,17 @@ def create_test_creative_asset(
         creative = create_test_creative_asset(
             creative_id="creative_001",
             format_id="video_1920x1080",
-            assets={"primary": {"url": "https://cdn.example.com/video.mp4", "mime_type": "video/mp4"}}
+            assets=build_assets(image_spec("primary", url="https://cdn.example.com/banner.png"))
         )
     """
     if isinstance(format_id, str):
         format_id = create_test_format_id(format_id)
 
     if assets is None:
-        assets = {"primary": {"url": "https://example.com/creative.jpg"}}
+        # SDK 5.7: assets values must be lists of discriminated-union asset
+        # models (asset_type tag), not bare dicts. Build the list shape via the
+        # AssetSpec mechanism instead of hand-rolling the shape.
+        assets = build_assets(image_spec("primary", url="https://example.com/creative.jpg"))
 
     return CreativeAsset(creative_id=creative_id, name=name, format_id=format_id, assets=assets, **kwargs)
 
@@ -668,6 +675,9 @@ def create_test_media_buy_request_dict(
         "packages": packages,
         "start_time": start_time,
         "end_time": end_time,
+        # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
+        # original response instead of creating a new buy). Override via kwargs.
+        "idempotency_key": f"test-key-{uuid.uuid4().hex}",
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)
@@ -921,177 +931,3 @@ def create_test_db_product_with_pricing(
     )
 
     return product, pricing
-
-
-def setup_error_test_tenant_chain(
-    session: Any,
-    *,
-    tenant_id: str,
-    principal_id: str,
-    access_token: str,
-    product_id: str,
-    subdomain: str,
-    tenant_name: str = "Error Test Tenant",
-    advertiser_id: str = "mock_adv",
-    format_id: str = "display_300x250",
-) -> dict[str, Any]:
-    """Create the full tenant/principal/product chain for error-emission tests.
-
-    Shared helper used by integration tests that exercise the error pipeline
-    (test_a2a_error_responses, test_mcp_error_envelope, etc.). Replaces ad-hoc
-    setup blocks that violated the DRY invariant. Wipes any prior state for
-    the given tenant_id, then creates a fresh tenant, principal, product,
-    pricing option, and required setup data (currency limit, property tag,
-    etc.).
-
-    Args:
-        session: Active SQLAlchemy session (caller owns commit/rollback).
-        tenant_id: Tenant identifier.
-        principal_id: Principal identifier.
-        access_token: Auth token for the principal.
-        product_id: Product identifier.
-        subdomain: Tenant subdomain.
-        tenant_name: Human-readable tenant name.
-        advertiser_id: Mock advertiser_id for platform_mappings.
-        format_id: Format ID for the product (paired with test agent_url).
-
-    Returns:
-        Dict with shape ``{"tenant": <Tenant>, "principal": <Principal>,
-        "product": <Product>, "tenant_dict": <dict>}``. ``tenant_dict`` is
-        ready to pass to ``set_current_tenant()``.
-    """
-    from datetime import UTC, datetime
-
-    from sqlalchemy import delete
-
-    from src.core.database.models import CurrencyLimit, PricingOption
-    from src.core.database.models import Principal as ModelPrincipal
-    from src.core.database.models import Product as ModelProduct
-    from src.core.database.models import Tenant as ModelTenant
-    from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
-
-    now = datetime.now(UTC)
-
-    # Wipe prior state for this tenant_id (idempotent setup)
-    session.execute(delete(PricingOption).where(PricingOption.tenant_id == tenant_id))
-    session.execute(delete(ModelPrincipal).where(ModelPrincipal.tenant_id == tenant_id))
-    session.execute(delete(ModelProduct).where(ModelProduct.tenant_id == tenant_id))
-    session.execute(delete(CurrencyLimit).where(CurrencyLimit.tenant_id == tenant_id))
-    session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == tenant_id))
-    session.commit()
-
-    # Tenant — human_review_required=False so synchronous flows reach the validators
-    tenant = ModelTenant(
-        tenant_id=tenant_id,
-        name=tenant_name,
-        subdomain=subdomain,
-        ad_server="mock",
-        is_active=True,
-        human_review_required=False,
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(tenant)
-    session.flush()
-
-    add_required_setup_data(session, tenant_id)
-
-    product = create_test_product_with_pricing(
-        session=session,
-        tenant_id=tenant_id,
-        product_id=product_id,
-        name=f"{tenant_name} Product",
-        description="Product for error-emission tests",
-        pricing_model="CPM",
-        rate="10.0",
-        is_fixed=True,
-        min_spend_per_package="1000.0",
-        format_ids=[{"id": format_id, "agent_url": "https://test.example.com"}],
-        delivery_type="guaranteed",
-        targeting_template={},
-    )
-
-    principal = ModelPrincipal(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        name=f"{tenant_name} Principal",
-        access_token=access_token,
-        platform_mappings={"mock": {"advertiser_id": advertiser_id}},
-    )
-    session.add(principal)
-    session.commit()
-
-    tenant_dict = {
-        "tenant_id": tenant_id,
-        "name": tenant_name,
-        "subdomain": subdomain,
-        "ad_server": "mock",
-        "human_review_required": False,
-    }
-    return {
-        "tenant": tenant,
-        "principal": principal,
-        "product": product,
-        "tenant_dict": tenant_dict,
-    }
-
-
-def make_real_tenant_identity(
-    *,
-    tenant_id: str,
-    principal_id: str,
-    access_token: str,
-    product_id: str,
-    subdomain: str,
-    tenant_name: str = "Error Test Tenant",
-    advertiser_id: str = "mock_adv",
-    protocol: str = "mcp",
-):
-    """Build a fully-resolved real-DB ``ResolvedIdentity`` for error-emission tests.
-
-    Convenience wrapper that opens a DB session, calls
-    ``setup_error_test_tenant_chain``, sets the current tenant context,
-    constructs a ``ResolvedIdentity`` bound to the seeded principal, and
-    yields it. Intended to be the body of test fixtures so they can be
-    one-liners.
-
-    Yields:
-        ``ResolvedIdentity`` instance pointing at the freshly-seeded tenant.
-
-    Example:
-        @pytest.fixture
-        def my_tenant_setup(integration_db):
-            yield from make_real_tenant_identity(
-                tenant_id="my_test",
-                principal_id="my_principal",
-                access_token="my_token",
-                product_id="my_product",
-                subdomain="my",
-            )
-    """
-    from src.core.config_loader import set_current_tenant
-    from src.core.database.database_session import get_db_session
-    from src.core.resolved_identity import ResolvedIdentity
-
-    with get_db_session() as session:
-        result = setup_error_test_tenant_chain(
-            session,
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            access_token=access_token,
-            product_id=product_id,
-            subdomain=subdomain,
-            tenant_name=tenant_name,
-            advertiser_id=advertiser_id,
-        )
-
-        set_current_tenant(result["tenant_dict"])
-
-        identity = ResolvedIdentity(
-            principal_id=principal_id,
-            tenant_id=tenant_id,
-            tenant=result["tenant_dict"],
-            auth_token=access_token,
-            protocol=protocol,
-        )
-        yield identity

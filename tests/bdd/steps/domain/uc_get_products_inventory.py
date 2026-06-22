@@ -15,6 +15,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require_response
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
@@ -51,9 +52,9 @@ def _get_first_prop(ctx: dict) -> Any:
     product = ctx["first_product"]
     pp = product.publisher_properties
     assert pp is not None, "publisher_properties is None"
-    assert len(pp) >= 1, "publisher_properties is empty"
+    assert pp, "publisher_properties is empty"
     inner = pp[0]
-    return inner.root if hasattr(inner, "root") else inner
+    return inner.root
 
 
 # ── Given steps ─────────────────────────────────────────────────────
@@ -114,17 +115,20 @@ def given_profile_with_selection_type(ctx: dict, tags: str, domain: str, st: str
 
 @given(parsers.parse('an inventory profile with property_ids "{ids}" for domain "{domain}" and legacy fields'))
 def given_profile_legacy(ctx: dict, ids: str, domain: str) -> None:
-    """Create profile with property_ids plus legacy extra fields that should be stripped."""
+    """Create profile with property_ids plus legacy extra fields that are preserved."""
     tenant = ctx["tenant"]
+    legacy_fields = {
+        "property_name": "Legacy Name",
+        "property_type": "website",
+        "identifiers": ["old_id"],
+    }
     ctx["profile"] = InventoryProfileFactory(
         tenant=tenant,
         publisher_properties=[
             {
                 "publisher_domain": domain,
                 "property_ids": [ids],
-                "property_name": "Legacy Name",
-                "property_type": "website",
-                "identifiers": ["old_id"],
+                **legacy_fields,
             }
         ],
     )
@@ -154,12 +158,18 @@ def when_request_products(ctx: dict) -> None:
 
 @then("the response contains at least one product")
 def then_has_products(ctx: dict) -> None:
-    """Assert the response has at least one product."""
+    """Assert the response has exactly the product created in the Given step."""
     assert "error" not in ctx, f"Request failed: {ctx.get('error')}"
-    response = ctx["response"]
+    response = _require_response(ctx)
+    expected = ctx["product"]
     assert response.products is not None, "Response has no products"
-    assert len(response.products) >= 1, f"Expected >= 1 product, got {len(response.products)}"
-    ctx["first_product"] = response.products[0]
+    assert len(response.products) == 1, f"Expected 1 product, got {len(response.products)}"
+    actual = response.products[0]
+    assert actual.product_id == expected.product_id, (
+        f"Expected product_id={expected.product_id!r}, got {actual.product_id!r}"
+    )
+    assert actual.name == expected.name, f"Expected name={expected.name!r}, got {actual.name!r}"
+    ctx["first_product"] = actual
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))
@@ -178,7 +188,7 @@ def then_has_property_ids(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     ids = getattr(inner, "property_ids", None) or (inner.get("property_ids") if isinstance(inner, dict) else None)
     assert ids is not None, "property_ids is None"
-    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]
+    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]  # noqa: rootmodel
     assert expected in id_strings, f"Expected {expected!r} in property_ids, got {id_strings}"
 
 
@@ -188,7 +198,7 @@ def then_has_property_tags(ctx: dict, expected: str) -> None:
     inner = _get_first_prop(ctx)
     tags = getattr(inner, "property_tags", None) or (inner.get("property_tags") if isinstance(inner, dict) else None)
     assert tags is not None, "property_tags is None"
-    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]
+    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]  # noqa: rootmodel
     assert expected in tag_strings, f"Expected {expected!r} in property_tags, got {tag_strings}"
 
 

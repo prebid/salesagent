@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-023 Sync Product Catalogs
   As a Buyer
@@ -15,6 +15,8 @@ Feature: BR-UC-023 Sync Product Catalogs
   #   POST-S6: Buyer has purged buyer-managed catalogs not in the request when delete_missing is true
   #   POST-S7: Application context from the request is echoed unchanged in the response
   #   POST-S8: For async operations, Buyer receives progress updates and knows when input is required
+  #   POST-S9: For queued operations, Buyer receives a submitted task envelope (status=submitted, task_id) resolvable via tasks/get or webhook
+  #   POST-S10: A retried sync with the same idempotency_key does not double-apply changes or re-fire side effects (at-most-once)
   #   POST-F1: System state is unchanged on complete operation failure
   #   POST-F2: Buyer knows what failed and the specific error code with recovery classification
   #   POST-F3: Application context is still echoed when possible
@@ -22,10 +24,11 @@ Feature: BR-UC-023 Sync Product Catalogs
   #
   # Rules: BR-RULE-043 (context echo), BR-RULE-132 (capability gate), BR-RULE-172 (upsert semantics),
   #   BR-RULE-173 (catalog validation), BR-RULE-174 (delete missing), BR-RULE-175 (feed management),
-  #   BR-RULE-176 (selectors/attribution), BR-RULE-177 (response structure), BR-RULE-178 (async lifecycle)
+  #   BR-RULE-176 (selectors/attribution), BR-RULE-177 (response structure), BR-RULE-178 (async lifecycle),
+  #   BR-RULE-211 (idempotency at-most-once / replay)
   # Extensions: A (discovery), B (dry run), C (delete missing), D (ACCOUNT_NOT_FOUND),
   #   E (INVALID_REQUEST), F (UNSUPPORTED_FEATURE), G (AUTH_REQUIRED), H (RATE_LIMITED),
-  #   I (SERVICE_UNAVAILABLE), J (async input required)
+  #   I (SERVICE_UNAVAILABLE), J (async input required), K (submitted async task), L (idempotent replay)
   # Error codes: AUTH_REQUIRED, ACCOUNT_NOT_FOUND, INVALID_REQUEST, UNSUPPORTED_FEATURE,
   #   RATE_LIMITED, SERVICE_UNAVAILABLE
 
@@ -52,6 +55,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S1: Per-catalog action report (created)
     # POST-S3: Platform-assigned ID and item counts
     # POST-S7: Application context echoed unchanged
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
     Examples:
       | transport |
@@ -69,6 +73,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "feed-001" has changes including "name"
     # POST-S1: Per-catalog action report (updated)
     # POST-S4: Changes list shows what was modified
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-main-mixed @main-flow @post-s1 @post-s3
   Scenario: Sync catalogs -- mixed upsert (create and update in one request)
@@ -82,6 +87,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "existing-feed" has action "updated" or "unchanged"
     And the catalog result for "new-feed" has action "created"
     # POST-S1: Per-catalog action reports for both catalogs
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-main-item-review @main-flow @post-s3 @post-s4
   Scenario: Sync catalogs -- platform performs item-level review
@@ -109,6 +115,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "bad-feed" includes per-catalog errors
     # POST-S1: Per-catalog action results
     # POST-F4: Individual failure does not prevent other catalogs from processing
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-main-scoped @main-flow @post-s1
   Scenario: Sync catalogs -- catalog_ids filter limits sync scope
@@ -162,6 +169,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S5: Buyer previews changes without applying
     # POST-F1: System state unchanged (dry-run)
     # POST-S7: Application context echoed
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-b-validation @extension @ext-b @happy-path @post-s5
   Scenario: Dry run mode -- validation errors reported without state change
@@ -187,6 +195,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S1: Per-catalog action reports include deleted catalogs
     # POST-S6: Buyer-managed catalogs not in request are purged
     # POST-S7: Context echoed
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-c-seller-safe @extension @ext-c @invariant @BR-RULE-174
   Scenario: Delete missing -- seller-managed catalogs are never deleted
@@ -198,6 +207,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     Then the catalog result for "new-catalog" has action "created"
     And seller-managed catalogs "seller-A" and "seller-B" remain unchanged
     # BR-RULE-174 INV-3: Seller-managed catalogs are never deleted
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-c-false @extension @ext-c @invariant @BR-RULE-174
   Scenario: Delete missing false -- no catalogs deleted
@@ -279,6 +289,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "url" or "items"
     # POST-F2: URL/items mutual exclusivity violated
     # BR-RULE-173 INV-3
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-invalid-type @extension @ext-e @error @post-f2
   Scenario: Invalid request -- catalog type not in enum
@@ -291,6 +302,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "type"
     # POST-F2: Catalog type not in 13-value enum
     # BR-RULE-173 INV-2
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-mapping-xor @extension @ext-e @error @post-f2
   Scenario: Invalid request -- feed field mapping has both feed_field and value
@@ -303,6 +315,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "feed_field" or "value"
     # POST-F2: Mapping feed_field XOR value constraint violated
     # BR-RULE-175 INV-2
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-target-xor @extension @ext-e @error @post-f2
   Scenario: Invalid request -- feed field mapping has both catalog_field and asset_group_id
@@ -315,6 +328,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "catalog_field" or "asset_group_id"
     # POST-F2: Mapping catalog_field XOR asset_group_id constraint violated
     # BR-RULE-175 INV-3
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-gtin @extension @ext-e @error @post-f2
   Scenario: Invalid request -- GTIN with invalid format
@@ -327,6 +341,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "GTIN" or "numeric"
     # POST-F2: GTIN pattern violated (must be 8-14 numeric digits)
     # BR-RULE-176 INV-3
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-e-strict @extension @ext-e @error @post-f2
   Scenario: Invalid request -- strict validation mode fails entire sync on any error
@@ -340,6 +355,29 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "validation"
     # POST-F2: Strict mode -- single catalog error fails entire operation
     # BR-RULE-172 INV-5
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-ext-e-idempotency-missing @extension @ext-e @error @post-f1 @post-f2
+  Scenario: Invalid request -- idempotency_key is missing
+    When the Buyer Agent sends a sync_catalogs request without an idempotency_key
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
+    And the error should include "suggestion" field
+    And the suggestion should contain "idempotency_key"
+    # POST-F1: system state unchanged (idempotency_key is a required top-level field in v3.1)
+    # POST-F2: idempotency_key missing -> INVALID_REQUEST
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-ext-e-idempotency-too-short @extension @ext-e @error @post-f2
+  Scenario: Invalid request -- idempotency_key shorter than minimum length
+    When the Buyer Agent sends a sync_catalogs request with idempotency_key "short-key"
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
+    And the error should include "suggestion" field
+    And the suggestion should contain "idempotency_key"
+    # POST-F2: idempotency_key minLength=16 (pattern ^[A-Za-z0-9_.:-]{16,255}$) violated
 
   @T-UC-023-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario: Unsupported feature -- catalog_management capability not declared
@@ -419,8 +457,11 @@ Feature: BR-UC-023 Sync Product Catalogs
     When the Buyer Agent sends a sync_catalogs request with 50 catalogs
     Then the response is a SyncCatalogsAsyncResponseSubmitted
     And the submitted response includes the request context
+    And the submitted response has status "submitted"
+    And the submitted response includes a task_id
     # POST-S8: Buyer receives submitted acknowledgment
-    # BR-RULE-178 INV-1: sync operation queued
+    # BR-RULE-178 INV-1: sync operation queued -> status submitted + required task_id
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
 
   @T-UC-023-ext-j-working @extension @ext-j @async @post-s8
   Scenario: Async lifecycle -- working progress with catalog and item counts
@@ -458,6 +499,39 @@ Feature: BR-UC-023 Sync Product Catalogs
     Then the system sends async updates via the configured webhook URL
     And the webhook notification includes the task status
     # BR-RULE-178 INV-6: webhook sent on completion or input-required
+
+  @T-UC-023-ext-k @extension @ext-k @async @post-s9
+  Scenario: Submitted async task -- queued sync returns task handle with results deferred
+    Given the sync_catalogs operation must be processed asynchronously
+    When the Buyer Agent sends a sync_catalogs request that is queued for batch ingestion
+    Then the response is a SyncCatalogsSubmitted with status "submitted"
+    And the submitted response includes a task_id
+    And the submitted response does not contain a catalogs array
+    And the request context is echoed in the response
+    And the Buyer Agent can resolve final per-catalog results via tasks/get with the task_id
+    # POST-S9: submitted task envelope; per-catalog results resolved via tasks/get or webhook
+    # BR-RULE-177 INV-7: queued -> status submitted + task_id, per-result data deferred
+
+  @T-UC-023-ext-l @extension @ext-l @idempotency @happy-path @post-s10 @post-s1
+  Scenario: Idempotent replay -- duplicate idempotency_key returns original result without re-applying
+    Given the Buyer Agent previously synced a catalog "feed-100" with idempotency_key "idem-abc-00000001"
+    When the Buyer Agent re-sends the same sync_catalogs request with idempotency_key "idem-abc-00000001"
+    Then the response is the original recorded SyncCatalogsSuccess result
+    And the catalog "feed-100" is not upserted a second time
+    And no additional audit events are emitted for the retry
+    And no additional platform review is triggered for the retry
+    # POST-S10: at-most-once -- retry does not double-apply or re-fire side effects
+    # POST-S1: replayed response reports the same per-catalog actions as the original
+    # BR-RULE-211 INV-2: matching key + identical payload -> original response, no new state
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-ext-l-different-account @extension @ext-l @idempotency @happy-path @post-s1
+  Scenario: Idempotent replay -- same idempotency_key on a different account is a new execution
+    Given the Buyer Agent previously synced a catalog with idempotency_key "idem-xyz-00000001" on account "acct-A"
+    When the Buyer Agent sends a sync_catalogs request with idempotency_key "idem-xyz-00000001" on account "acct-B"
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog is processed as a new execution
+    # BR-RULE-211 INV-1: dedup key scoped to (seller, account, idempotency_key); different account -> new execution
 
   @T-UC-023-partition-upsert @partition @upsert-semantics
   Scenario Outline: Upsert semantics partition validation -- <partition>
@@ -723,6 +797,9 @@ Feature: BR-UC-023 Sync Product Catalogs
       | dry_run=true in success response               | dry_run request                                    | Buyer Agent sends dry_run sync                       | response has dry_run true                            |
       | item_count=0 (minimum)                         | catalog with no items ingested                     | Buyer Agent syncs empty catalog                      | item_count 0 is valid                                |
       | Catalog result with item_issues array          | platform flags items                               | Buyer Agent syncs catalog with reviewed items        | item_issues array present with per-item details      |
+      | Response with status=submitted + task_id (submitted branch) | sync queued for async ingestion       | Buyer Agent sends sync_catalogs                      | response has status submitted and task_id, no catalogs |
+      | Submitted branch with task_id omitted          | N/A (structural invariant)                         | system constructs response                           | never occurs (task_id required when status=submitted) |
+      | Submitted branch carrying catalogs             | N/A (structural invariant)                         | system constructs response                           | never occurs (oneOf forbids catalogs on submitted)  |
 
   @T-UC-023-partition-async @partition @async-lifecycle
   Scenario Outline: Async lifecycle partition validation -- <partition>
@@ -768,6 +845,8 @@ Feature: BR-UC-023 Sync Product Catalogs
       | reason=FEED_ACCESS (last enum value)        | platform cannot access feed          | system sends input-required with FEED_ACCESS             | valid reason code                                    |
       | reason=UNKNOWN_REASON                       | N/A                                  | system sends input-required with UNKNOWN_REASON          | invalid (not in enum)                                |
       | submitted state (minimal payload)           | async processing queued              | Buyer Agent receives submitted acknowledgment            | valid submitted response with context                |
+      | submitted state (status + required task_id) | async processing queued              | Buyer Agent receives submitted acknowledgment            | valid submitted response with status and task_id     |
+      | submitted state missing task_id             | N/A (structural invariant)           | system constructs submitted envelope                     | invalid (task_id required when status=submitted)     |
 
   @T-UC-023-inv-172-1 @invariant @BR-RULE-172
   Scenario: BR-RULE-172 INV-1 holds -- existing catalog matched by catalog_id is updated
@@ -943,6 +1022,15 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "feed-001" has changes array listing modified fields
     # BR-RULE-177 INV-6: action=updated -> changes array present
 
+  @T-UC-023-inv-177-7 @invariant @BR-RULE-177
+  Scenario: BR-RULE-177 INV-7 holds -- queued operation returns submitted envelope with task_id
+    Given the sync_catalogs operation is queued for async processing
+    When the Buyer Agent sends a valid sync_catalogs request
+    Then the response has status "submitted"
+    And the response includes a task_id
+    And the response does not contain a catalogs array
+    # BR-RULE-177 INV-7: queued -> status submitted + task_id; per-result data deferred to completion artifact
+
   @T-UC-023-inv-178-4 @invariant @BR-RULE-178
   Scenario: BR-RULE-178 INV-4 holds -- working percentage between 0 and 100
     Given a sync_catalogs operation is in async working state
@@ -1037,3 +1125,275 @@ Feature: BR-UC-023 Sync Product Catalogs
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
 
+  @T-UC-023-type-app @typed-catalog @app-item @post-s1
+  Scenario: Sync app-type catalog with inline app items
+    Given the account has no catalog with catalog_id "app-feed-001"
+    When the Buyer Agent syncs a catalog with type "app" and items [{"app_id":"puzzlequest-ios","name":"Puzzle Quest: Match 3","platform":"ios","bundle_id":"com.acmegames.puzzlequest","apple_id":"1234567890","price":{"amount":0,"currency":"USD"}}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "app-feed-001" has action "created"
+    And the catalog result for "app-feed-001" includes a platform_id
+    And the catalog result for "app-feed-001" includes item_count
+    # POST-S1: typed app catalog upsert returns created action
+    # POST-S3: platform_id and item_count present on typed catalog
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-app-invalid-platform @typed-catalog @app-item @error
+  Scenario: App item with platform outside enum is rejected
+    When the Buyer Agent syncs a catalog with type "app" and items [{"app_id":"x","name":"X","platform":"windows"}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "platform"
+    # BR-RULE-173: typed item field-enum validation (app platform: ios|android)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-destination @typed-catalog @destination-item @post-s1
+  Scenario: Sync destination-type catalog with inline destinations
+    Given the account has no catalog with catalog_id "dest-feed-001"
+    When the Buyer Agent syncs a catalog with type "destination" and items [{"destination_id":"barcelona","name":"Barcelona","country":"ES","location":{"lat":41.3874,"lng":2.1686},"destination_type":"urban","price":{"amount":399,"currency":"EUR"}}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "dest-feed-001" has action "created"
+    And the catalog result for "dest-feed-001" includes item_count
+    # POST-S1: typed destination catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-destination-invalid-country @typed-catalog @destination-item @error
+  Scenario: Destination item with non ISO-3166-1 alpha-2 country is rejected
+    When the Buyer Agent syncs a catalog with type "destination" and items [{"destination_id":"x","name":"X","country":"ESP"}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "country"
+    # BR-RULE-173: destination country must match ^[A-Z]{2}$
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-education @typed-catalog @education-item @post-s1
+  Scenario: Sync education-type catalog with inline programs
+    Given the account has no catalog with catalog_id "edu-feed-001"
+    When the Buyer Agent syncs a catalog with type "education" and items [{"program_id":"uva-msc-cs-2025","name":"MSc Computer Science","school":"University of Amsterdam","degree_type":"master","modality":"in_person","price":{"amount":2314,"currency":"EUR","period":"year"}}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "edu-feed-001" has action "created"
+    And the catalog result for "edu-feed-001" includes item_count
+    # POST-S1: typed education catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-education-invalid-degree @typed-catalog @education-item @error
+  Scenario: Education item with degree_type outside enum is rejected
+    When the Buyer Agent syncs a catalog with type "education" and items [{"program_id":"x","name":"X","school":"Y","degree_type":"phd"}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "degree_type"
+    # BR-RULE-173: education degree_type enum (certificate|associate|bachelor|master|doctorate|professional|bootcamp)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-flight @typed-catalog @flight-item @post-s1
+  Scenario: Sync flight-type catalog with inline routes
+    Given the account has no catalog with catalog_id "flight-feed-001"
+    When the Buyer Agent syncs a catalog with type "flight" and items [{"flight_id":"ams-jfk-summer","origin":{"airport_code":"AMS","city":"Amsterdam"},"destination":{"airport_code":"JFK","city":"New York"},"airline":"KLM","price":{"amount":449,"currency":"EUR"}}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "flight-feed-001" has action "created"
+    And the catalog result for "flight-feed-001" includes item_count
+    # POST-S1: typed flight catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-flight-invalid-airport @typed-catalog @flight-item @error
+  Scenario: Flight item with non-IATA airport_code is rejected
+    When the Buyer Agent syncs a catalog with type "flight" and items [{"flight_id":"x","origin":{"airport_code":"AMST"},"destination":{"airport_code":"JFK"}}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "airport_code"
+    # BR-RULE-173: flight airport_code must match IATA pattern ^[A-Z]{3}$
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-hotel @typed-catalog @hotel-item @post-s1
+  Scenario: Sync hotel-type catalog with inline properties
+    Given the account has no catalog with catalog_id "hotel-feed-001"
+    When the Buyer Agent syncs a catalog with type "hotel" and items [{"hotel_id":"grand-amsterdam","name":"Grand Hotel Amsterdam","location":{"lat":52.3676,"lng":4.9041},"star_rating":5,"price":{"amount":289,"currency":"EUR","period":"night"},"check_in_time":"15:00","check_out_time":"11:00"}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "hotel-feed-001" has action "created"
+    And the catalog result for "hotel-feed-001" includes item_count
+    # POST-S1: typed hotel catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-hotel-invalid-star-rating @typed-catalog @hotel-item @error
+  Scenario: Hotel item with star_rating outside 1-5 range is rejected
+    When the Buyer Agent syncs a catalog with type "hotel" and items [{"hotel_id":"x","name":"X","location":{"lat":0,"lng":0},"star_rating":6}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "star_rating"
+    # BR-RULE-173: hotel star_rating bounded integer 1-5
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-job @typed-catalog @job-item @post-s1
+  Scenario: Sync job-type catalog with inline postings
+    Given the account has no catalog with catalog_id "job-feed-001"
+    When the Buyer Agent syncs a catalog with type "job" and items [{"job_id":"eng-sr-2025-042","title":"Senior Software Engineer","company_name":"Acme Corp","description":"Lead our platform team.","location":"Amsterdam, NL","employment_type":"full_time","experience_level":"senior","salary":{"min":80000,"max":110000,"currency":"EUR","period":"year"}}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "job-feed-001" has action "created"
+    And the catalog result for "job-feed-001" includes item_count
+    # POST-S1: typed job catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-job-invalid-employment-type @typed-catalog @job-item @error
+  Scenario: Job item with employment_type outside enum is rejected
+    When the Buyer Agent syncs a catalog with type "job" and items [{"job_id":"x","title":"X","company_name":"Y","description":"Z","employment_type":"volunteer"}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "employment_type"
+    # BR-RULE-173: job employment_type enum (full_time|part_time|contract|temporary|internship|freelance)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-real-estate @typed-catalog @real-estate-item @post-s1
+  Scenario: Sync real-estate-type catalog with inline listings
+    Given the account has no catalog with catalog_id "re-feed-001"
+    When the Buyer Agent syncs a catalog with type "real_estate" and items [{"listing_id":"ams-jordaan-3br","title":"Spacious 3BR Apartment in Jordaan","address":{"city":"Amsterdam","country":"NL"},"price":{"amount":650000,"currency":"EUR"},"property_type":"apartment","listing_type":"for_sale","bedrooms":3,"bathrooms":1,"area":{"value":95,"unit":"sqm"}}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "re-feed-001" has action "created"
+    And the catalog result for "re-feed-001" includes item_count
+    # POST-S1: typed real-estate catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-real-estate-invalid-listing-type @typed-catalog @real-estate-item @error
+  Scenario: Real estate item with listing_type outside enum is rejected
+    When the Buyer Agent syncs a catalog with type "real_estate" and items [{"listing_id":"x","title":"X","address":{"city":"Y"},"listing_type":"for_lease"}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "listing_type"
+    # BR-RULE-173: real_estate listing_type enum (for_sale|for_rent)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-store @typed-catalog @store-item @post-s1
+  Scenario: Sync store-type catalog with inline locations and catchments
+    Given the account has no catalog with catalog_id "store-feed-001"
+    When the Buyer Agent syncs a catalog with type "store" and items [{"store_id":"amsterdam-flagship","name":"Amsterdam Flagship","location":{"lat":52.3676,"lng":4.9041},"catchments":[{"catchment_id":"walk","travel_time":{"value":10,"unit":"min"},"transport_mode":"walking"},{"catchment_id":"drive","travel_time":{"value":15,"unit":"min"},"transport_mode":"driving"}]}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "store-feed-001" has action "created"
+    And the catalog result for "store-feed-001" includes item_count
+    # POST-S1: typed store catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-store-radius-catchment @typed-catalog @store-item @post-s1
+  Scenario: Sync store catalog with radius-based catchment
+    Given the account has no catalog with catalog_id "store-feed-radius"
+    When the Buyer Agent syncs a catalog with type "store" and items [{"store_id":"warehouse-east","name":"East Warehouse","location":{"lat":52.2942,"lng":4.9581},"catchments":[{"catchment_id":"local","radius":{"value":10,"unit":"km"}}]}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "store-feed-radius" has action "created"
+    # Catchment radius mode (catchment.json oneOf branch 2)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-store-geojson-catchment @typed-catalog @store-item @post-s1
+  Scenario: Sync store catalog with pre-computed GeoJSON catchment
+    Given the account has no catalog with catalog_id "store-feed-geojson"
+    When the Buyer Agent syncs a catalog with type "store" and items [{"store_id":"brooklyn-heights","name":"Brooklyn Heights","location":{"lat":40.6960,"lng":-73.9936},"catchments":[{"catchment_id":"trade-area","geometry":{"type":"Polygon","coordinates":[[[-74.01,40.68],[-73.97,40.68],[-73.97,40.71],[-74.01,40.71],[-74.01,40.68]]]}}]}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "store-feed-geojson" has action "created"
+    # Catchment GeoJSON mode (catchment.json oneOf branch 3)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-store-catchment-conflict @typed-catalog @store-item @error
+  Scenario: Store catchment with both radius and travel_time is rejected
+    When the Buyer Agent syncs a catalog with type "store" and items [{"store_id":"x","name":"X","location":{"lat":0,"lng":0},"catchments":[{"catchment_id":"bad","radius":{"value":5,"unit":"km"},"travel_time":{"value":10,"unit":"min"},"transport_mode":"walking"}]}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "catchment"
+    # BR-RULE-173: catchment.json oneOf -- exactly one of travel_time+transport_mode, radius, geometry
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-vehicle @typed-catalog @vehicle-item @post-s1
+  Scenario: Sync vehicle-type catalog with inline inventory
+    Given the account has no catalog with catalog_id "vehicle-feed-001"
+    When the Buyer Agent syncs a catalog with type "vehicle" and items [{"vehicle_id":"dlr-2024-civic-001","title":"2024 Honda Civic EX Sedan","make":"Honda","model":"Civic","year":2024,"trim":"EX","price":{"amount":28500,"currency":"USD"},"condition":"new","body_style":"sedan","transmission":"cvt","fuel_type":"gasoline"}]
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the catalog result for "vehicle-feed-001" has action "created"
+    And the catalog result for "vehicle-feed-001" includes item_count
+    # POST-S1: typed vehicle catalog upsert returns created action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-vehicle-invalid-condition @typed-catalog @vehicle-item @error
+  Scenario: Vehicle item with condition outside enum is rejected
+    When the Buyer Agent syncs a catalog with type "vehicle" and items [{"vehicle_id":"x","title":"X","make":"Y","model":"Z","year":2024,"condition":"refurbished"}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "condition"
+    # BR-RULE-173: vehicle condition enum (new|used|certified_pre_owned)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-price-invalid-currency @typed-catalog @price @error
+  Scenario: Typed item with non ISO-4217 currency on price is rejected
+    When the Buyer Agent syncs a catalog with type "hotel" and items [{"hotel_id":"x","name":"X","location":{"lat":0,"lng":0},"price":{"amount":100,"currency":"euros"}}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "currency"
+    # BR-RULE-173: price.currency must match ^[A-Z]{3}$ across all typed items (S36)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-price-negative-amount @typed-catalog @price @error
+  Scenario: Typed item with negative price amount is rejected
+    When the Buyer Agent syncs a catalog with type "vehicle" and items [{"vehicle_id":"x","title":"X","make":"Y","model":"Z","year":2024,"price":{"amount":-100,"currency":"USD"}}]
+    Then the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    And the suggestion should contain "amount"
+    # BR-RULE-173: price.amount minimum 0 (S36)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-catalogs-request.json
+
+  @T-UC-023-type-mixed-verticals @typed-catalog @post-s1
+  Scenario: Sync multiple typed catalogs of different verticals in one request
+    Given the account has no catalog with catalog_id "hotel-mix"
+    And the account has no catalog with catalog_id "flight-mix"
+    And the account has no catalog with catalog_id "vehicle-mix"
+    When the Buyer Agent syncs catalogs of mixed types:
+    | catalog_id    | type    |
+    | hotel-mix     | hotel   |
+    | flight-mix    | flight  |
+    | vehicle-mix   | vehicle |
+    Then the response is a SyncCatalogsSuccess with a catalogs array
+    And the response contains 3 catalog results
+    And every catalog result includes action from enum [created, updated, unchanged, failed, deleted]
+    # POST-S1: independent typed catalogs processed together
+    # BR-RULE-177: catalogs array variant retains per-catalog action enum across types
+
+  @T-UC-023-boundary-typed-item @boundary @typed-catalog
+  Scenario Outline: Typed catalog item boundary validation -- <boundary_point>
+    When the Buyer Agent syncs a catalog with a typed item where <input>
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                              | input                                                       | outcome                                                  |
+      | price.amount = 0 (minimum)                  | price.amount is 0 with currency "USD"                       | catalog accepted                                         |
+      | price.amount = -0.01                        | price.amount is -0.01 with currency "USD"                   | error "INVALID_REQUEST" with suggestion                  |
+      | currency = 'USD'                            | price.currency is "USD" (3 uppercase, ISO 4217)             | catalog accepted                                         |
+      | currency = 'usd' (lowercase)                | price.currency is "usd"                                     | error "INVALID_REQUEST" with suggestion                  |
+      | vehicle.year = 1900 (minimum)               | vehicle.year is 1900                                        | catalog accepted                                         |
+      | vehicle.year = 1899                         | vehicle.year is 1899                                        | error "INVALID_REQUEST" with suggestion                  |
+      | flight airport_code = 'AMS' (3 uppercase)   | flight origin airport_code is "AMS"                         | catalog accepted                                         |
+      | flight airport_code = 'ams' (lowercase)     | flight origin airport_code is "ams"                         | error "INVALID_REQUEST" with suggestion                  |
+      | catchment with exactly one method (radius)  | store catchment supplies only a radius                      | catalog accepted                                         |
+      | catchment with two methods                  | store catchment supplies both radius and geometry           | error "INVALID_REQUEST" with suggestion                  |
+      | catchment with zero methods                 | store catchment supplies none of travel_time/radius/geometry | error "INVALID_REQUEST" with suggestion                 |
+      | travel_time present, transport_mode absent  | store catchment supplies travel_time without transport_mode | error "INVALID_REQUEST" with suggestion                  |
+
+  @T-UC-023-boundary-idempotency-replay @boundary @idempotency
+  Scenario Outline: Idempotency replay boundary validation -- <boundary_point>
+    Given <setup>
+    When the Buyer Agent sends a sync_catalogs request with that idempotency_key
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                                                | setup                                                                    | outcome                                                                  |
+      | key absent (field omitted)                                                    | the request omits the required idempotency_key                           | error "INVALID_REQUEST" with suggestion                                  |
+      | key present, no prior record for (seller, account, key)                       | no prior record exists for this (seller, account, key)                   | request processed normally as a first execution                          |
+      | key present, prior record exists, payload byte-identical                      | a prior completed sync exists with a byte-identical canonical payload     | the cached response is returned unchanged                                |
+      | sync_catalogs: key present, prior feed sync exists, payload identical (retry after timeout) | a prior feed sync exists with an identical payload, retried after a timeout | prior sync outcome returned, no audit events re-emitted, no platform review re-triggered |
+      | key present, prior record exists, payload has one field changed               | a prior record exists but one payload field differs                       | error "IDEMPOTENCY_CONFLICT" with suggestion                             |
+      | key present, prior record exists, payload has all fields changed              | a prior record exists but every payload field differs                     | error "IDEMPOTENCY_CONFLICT" with suggestion                             |
+      | key present, prior request still in flight (not yet committed)                | the first request under this key is still being processed                 | error "IDEMPOTENCY_IN_FLIGHT" with suggestion                            |
+      | key present, prior record exists, replay arrives exactly at replay_ttl_seconds boundary | a prior record exists and the replay arrives exactly at the replay_ttl_seconds boundary | error "IDEMPOTENCY_EXPIRED" with suggestion                  |

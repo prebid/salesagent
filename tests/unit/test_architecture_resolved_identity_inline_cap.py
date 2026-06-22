@@ -26,6 +26,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import iter_call_expressions
+
 # Per-file caps for inline ``ResolvedIdentity(...)`` constructions in
 # ``tests/`` (excluding ``test_a2a*.py`` files — those are zero-tolerance
 # under ``test_architecture_a2a_test_uses_factory``). Caps frozen at the
@@ -34,9 +38,9 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/bdd/steps/domain/uc004_delivery.py": 2,
     "tests/bdd/steps/domain/uc011_accounts.py": 2,
     "tests/factories/principal.py": 1,
-    "tests/helpers/adcp_factories.py": 1,
     "tests/integration/conftest.py": 1,
     "tests/integration/test_account_resolution_error_codes.py": 1,
+    "tests/integration/test_create_media_buy_behavioral.py": 3,
     "tests/integration/test_create_media_buy_v24.py": 5,
     "tests/integration/test_creative_assignment_principal_id.py": 1,
     "tests/integration/test_creative_lifecycle_mcp.py": 2,
@@ -65,12 +69,11 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/integration/test_update_media_buy_persistence.py": 1,
     "tests/unit/test_adcp_25_creative_management.py": 1,
     "tests/unit/test_auth_consistency.py": 3,
-    "tests/unit/test_auth_context_middleware_population.py": 1,
+    "tests/unit/test_auth_context_middleware_population.py": 0,
     "tests/unit/test_auth_requirements.py": 6,
     "tests/unit/test_authorized_properties_behavioral.py": 2,
     "tests/unit/test_brand_manifest_policy.py": 1,
     "tests/unit/test_context_management.py": 1,
-    "tests/unit/test_create_media_buy_behavioral.py": 4,
     "tests/unit/test_delivery.py": 2,
     "tests/unit/test_delivery_poll_behavioral.py": 3,
     "tests/unit/test_dry_run_no_persistence.py": 1,
@@ -88,7 +91,7 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/unit/test_resolved_identity.py": 7,
     "tests/unit/test_rest_api_endpoints.py": 1,
     "tests/unit/test_rest_api_products.py": 1,
-    "tests/unit/test_rest_depends_auth.py": 3,
+    "tests/unit/test_rest_depends_auth.py": 2,
     "tests/unit/test_rest_tenant_resolution.py": 2,
     "tests/unit/test_sync_creatives_a2a_account.py": 1,
     "tests/unit/test_sync_creatives_async_fix.py": 3,
@@ -120,13 +123,12 @@ def _count_inline_resolved_identity(filepath: Path) -> list[int]:
     except (OSError, SyntaxError):
         return []
     lines: list[int] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-                lines.append(node.lineno)
-            elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-                lines.append(node.lineno)
+    for node in iter_call_expressions(tree):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
+            lines.append(node.lineno)
+        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
+            lines.append(node.lineno)
     return lines
 
 
@@ -148,6 +150,7 @@ from tests.unit._per_file_cap_guard import (
 )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_inline_sites_within_caps() -> None:
     """Sister guard to ``test_architecture_a2a_test_uses_factory`` — the A2A guard
     enforces zero on A2A test files; this guard caps non-A2A test files at
@@ -164,6 +167,7 @@ def test_resolved_identity_inline_sites_within_caps() -> None:
     )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_capped_files_still_exist() -> None:
     """Stale-cap detection — every capped file path must still exist on disk."""
     assert_capped_files_still_exist(
@@ -173,6 +177,7 @@ def test_resolved_identity_capped_files_still_exist() -> None:
     )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_caps_only_shrink() -> None:
     """If a file has fewer inline sites than its cap, lower the cap to match."""
     assert_caps_only_shrink(

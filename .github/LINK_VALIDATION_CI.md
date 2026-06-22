@@ -15,16 +15,19 @@ Automatic link validation tests run as part of the integration test suite in Git
 
 ## CI Configuration
 ```yaml
-# .github/workflows/test.yml
-integration-tests:
+# .github/workflows/ci.yml (Integration (other) shard excerpt)
+integration-other:
   runs-on: ubuntu-latest
   services:
     postgres:
-      image: postgres:15
+      image: postgres:17-alpine
   steps:
-    - name: Run integration tests
-      run: |
-        uv run pytest tests/integration/ -v --cov=. -m "not requires_server and not skip_ci"
+    - uses: ./.github/actions/_setup-env
+    - uses: ./.github/actions/_postgres
+    - uses: ./.github/actions/_pytest
+      with:
+        paths: tests/integration/
+        extra_args: -m "not requires_server and not skip_ci and not creative and not product and not media_buy and not delivery and not transport and not auth and not tenant and not adapter and not inventory and not schema and not admin and not architecture and not targeting and not workflow and not policy and not agent"
 ```
 
 ## Tests Included

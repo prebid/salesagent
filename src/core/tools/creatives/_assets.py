@@ -1,4 +1,8 @@
-"""Creative asset helpers: URL extraction and data building."""
+"""Creative asset helpers: attribute extraction, URL/text extraction, data building.
+
+All pure data-extraction helpers for creative assets live here. This avoids
+scattering the same RootModel-unwrapping logic across multiple modules.
+"""
 
 import logging
 from typing import Any
@@ -7,6 +11,99 @@ from adcp.types import CreativeAsset
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared RootModel unwrapping
+# ---------------------------------------------------------------------------
+
+
+def _extract_attr_from_asset_value(asset: Any, *attr_names: str) -> str | None:
+    """Extract a named attribute from an SDK 5.7 asset value.
+
+    SDK 5.7 wraps asset slot values in an ``Assets`` RootModel containing a
+    ``list[AssetVariant]`` where each ``AssetVariant`` is itself a RootModel
+    proxying the concrete typed asset.
+
+    This helper walks three paths in priority order:
+    1. **dict** -- legacy/test code that passes plain dicts.
+    2. **RootModel** -- unwrap ``.root`` to get the variant list, then check
+       the first variant's inner ``.root`` object and the variant itself.
+    3. **Plain object** -- pre-5.7 single-asset models.
+
+    Multiple *attr_names* are tried left-to-right (e.g. ``"content", "text"``);
+    the first truthy value wins.
+    """
+    # Dict path
+    if isinstance(asset, dict):
+        for attr in attr_names:
+            val = asset.get(attr)
+            if val:
+                return str(val)
+        return None
+
+    # RootModel path: Assets → list[AssetVariant] → concrete asset
+    items = getattr(asset, "root", None)
+    if isinstance(items, list) and items:
+        first = items[0]
+        # AssetVariant is also a RootModel wrapping the concrete asset
+        inner = getattr(first, "root", first)
+        for attr in attr_names:
+            val = getattr(inner, attr, None) or getattr(first, attr, None)
+            if val:
+                return str(val)
+        return None
+
+    # Plain object (e.g. a single asset model, not wrapped in list)
+    for attr in attr_names:
+        val = getattr(asset, attr, None)
+        if val:
+            return str(val)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Concrete extractors (thin wrappers)
+# ---------------------------------------------------------------------------
+
+
+def _extract_url_from_asset_value(asset: Any) -> str | None:
+    """Extract a URL from an asset value (dict, RootModel/list, or object)."""
+    return _extract_attr_from_asset_value(asset, "url")
+
+
+def _extract_text_from_asset_value(asset: Any) -> str | None:
+    """Extract text content from an SDK 5.7 asset value.
+
+    Tries ``content`` first, then ``text`` (TextAsset uses ``content``,
+    some legacy payloads use ``text``).
+    """
+    return _extract_attr_from_asset_value(asset, "content", "text")
+
+
+def _extract_message_from_assets(creative: CreativeAsset) -> str | None:
+    """Extract message/brief/prompt from creative assets using role priority.
+
+    Checks 'message', 'brief', 'prompt' roles in priority order.
+    Falls through to inputs[0].context_description if no asset role matches.
+    Returns None when no message is found.
+    """
+    if creative.assets:
+        for role, asset in creative.assets.items():
+            if role in ["message", "brief", "prompt"]:
+                text = _extract_text_from_asset_value(asset)
+                if text:
+                    return text
+
+    if creative.inputs:
+        inputs = creative.inputs or []
+        if inputs:
+            first_input = inputs[0]
+            if isinstance(first_input, dict):
+                return first_input.get("context_description")
+            return getattr(first_input, "context_description", None)
+
+    return None
 
 
 def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
@@ -31,14 +128,14 @@ def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
     for priority_key in ["main", "image", "video", "creative", "content"]:
         if priority_key in assets:
             asset = assets[priority_key]
-            url = asset.get("url") if isinstance(asset, dict) else getattr(asset, "url", None)
+            url = _extract_url_from_asset_value(asset)
             if url:
                 logger.debug(f"[sync_creatives] Extracted URL from assets.{priority_key}.url")
                 return str(url)
 
     # Priority 2: First available asset URL
     for asset_id, asset_data in assets.items():
-        asset_url = asset_data.get("url") if isinstance(asset_data, dict) else getattr(asset_data, "url", None)
+        asset_url = _extract_url_from_asset_value(asset_data)
         if asset_url:
             logger.debug(f"[sync_creatives] Extracted URL from assets.{asset_id}.url (fallback)")
             return str(asset_url)

@@ -4,7 +4,26 @@ These tests verify that our unified MCP client can connect to real MCP servers
 and handle various scenarios (auth, retries, errors, etc.).
 """
 
+import socket
+
 import pytest
+
+
+def _host_reachable(host: str, port: int = 443, timeout: float = 2.0) -> bool:
+    """Check if an external host is reachable (DNS + TCP)."""
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except (OSError, TimeoutError):
+        return False
+
+
+_audience_agent_reachable = _host_reachable("audience-agent.fly.dev")
+skip_no_audience_agent = pytest.mark.skipif(
+    not _audience_agent_reachable,
+    reason="audience-agent.fly.dev is not reachable",
+)
 
 from src.core.utils.mcp_client import (
     MCPConnectionError,
@@ -82,6 +101,7 @@ class TestCreateMCPClient:
             assert "list_creative_formats" in tool_names
 
     @pytest.mark.skip_ci
+    @skip_no_audience_agent
     async def test_connect_to_audience_agent(self):
         """Can connect to audience/signals agent."""
         agent_url = "https://audience-agent.fly.dev"
@@ -184,6 +204,7 @@ class TestURLHandling:
     """Test that URL handling respects user input."""
 
     @pytest.mark.skip_ci
+    @skip_no_audience_agent
     async def test_respects_user_url_exactly(self):
         """Client uses the exact URL provided by user (no modifications)."""
         # Audience agent is at base URL (no path)

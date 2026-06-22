@@ -24,7 +24,11 @@ beads: salesagent-beq4
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
 from tests.unit._bdd_guard_helpers import iter_then_functions
 
 # ── Allowlists (ratcheting — may only shrink) ───────────────────────────
@@ -32,55 +36,14 @@ from tests.unit._bdd_guard_helpers import iter_then_functions
 # Every allowlisted violation MUST have a # FIXME(salesagent-beq4) comment
 # at the source location.
 
-_HASATTR_ALLOWLIST: set[str] = {
-    # FIXME(salesagent-beq4): replace hasattr with value assertion
-    "bdd/steps/domain/uc003_update_media_buy.py:783 then_implementation_date_null",
-    "bdd/steps/domain/uc003_update_media_buy.py:793 then_implementation_date_not_null",
-    "bdd/steps/domain/uc004_delivery.py:1584 then_has_deliveries_field",
-    "bdd/steps/domain/uc011_accounts.py:451 then_accounts_array_count",
-    "bdd/steps/domain/uc011_accounts.py:535 then_empty_accounts",
-    "bdd/steps/domain/uc011_accounts.py:589 then_accounts_from_first_page",
-    "bdd/steps/domain/uc011_accounts.py:1015 then_has_accounts_array",
-    "bdd/steps/domain/uc011_accounts.py:1033 then_response_is_success_variant",
-    "bdd/steps/domain/uc011_accounts.py:1042 then_each_error_has_code_message",
-    # FIXME(salesagent-beq4): replace hasattr with value assertion
-}
+_HASATTR_ALLOWLIST: set[str] = set()
+# All hasattr violations fixed (salesagent-bkh)
 
 _GETATTR_EXISTENCE_ALLOWLIST: set[str] = set()
-# FIXME(salesagent-beq4): all getattr-existence violations fixed
+# All getattr-existence violations fixed (salesagent-bkh)
 
-_COUNT_ONLY_ALLOWLIST: set[str] = {
-    "bdd/steps/generic/then_success.py:24 then_response_status",
-    "bdd/steps/generic/then_payload.py:153 then_referral_fields",
-    "bdd/steps/generic/then_payload.py:208 then_format_assets",
-    # FIXME(salesagent-beq4): replace count-only check with element-level assertion
-    "bdd/steps/domain/uc004_delivery.py:1112 then_has_metrics",
-    "bdd/steps/domain/uc004_delivery.py:1133 then_has_packages",
-    "bdd/steps/domain/uc004_delivery.py:1163 then_has_mb_status",
-    "bdd/steps/domain/uc004_delivery.py:1385 then_exponential_backoff",
-    "bdd/steps/domain/uc004_delivery.py:1400 then_retry_with_backoff",
-    "bdd/steps/domain/uc004_delivery.py:1675 then_packages_include_breakdown",
-    "bdd/steps/domain/uc004_delivery.py:1702 then_packages_limited",
-    "bdd/steps/domain/uc004_delivery.py:1734 then_packages_include_field",
-    "bdd/steps/domain/uc004_delivery.py:1747 then_packages_include_two",
-    "bdd/steps/domain/uc011_accounts.py:512 then_other_statuses_excluded",
-    "bdd/steps/domain/uc011_accounts.py:589 then_accounts_from_first_page",
-    "bdd/steps/domain/uc011_accounts.py:1083 then_all_accounts_action",
-    "bdd/steps/domain/uc011_accounts.py:1099 then_failed_has_errors",
-    "bdd/steps/domain/uc011_accounts.py:1476 then_account_in_db",
-    "bdd/steps/domain/uc011_accounts.py:2010 then_governance_agents_stored",
-    "bdd/steps/domain/uc026_package_media_buy.py:1636 then_package_has_id",
-    "bdd/steps/domain/uc026_package_media_buy.py:1676 then_package_default_formats",
-    "bdd/steps/domain/uc026_package_media_buy.py:1710 then_package_formats_to_provide",
-    "bdd/steps/domain/uc026_package_media_buy.py:1822 then_package_all_fields",
-    "bdd/steps/domain/uc026_package_media_buy.py:2282 then_new_pkg_in_mb",
-    "bdd/steps/domain/uc026_package_media_buy.py:2315 then_new_pkg_created",
-    "bdd/steps/generic/then_media_buy.py:76 then_response_has_packages",
-    "bdd/steps/generic/then_media_buy.py:812 then_response_has_success_fields",
-    "bdd/steps/generic/then_payload.py:117 then_has_referrals",
-    # FIXME(salesagent-beq4): replace count-only check with element-level assertion
-    "bdd/steps/domain/uc_get_products_inventory.py:156 then_has_products",
-}
+_COUNT_ONLY_ALLOWLIST: set[str] = set()
+# All count-only violations fixed (salesagent-bkh)
 
 # Pattern 4 has zero current violations — purely regression prevention.
 _CTX_ERROR_FALLBACK_ALLOWLIST: set[str] = set()
@@ -247,55 +210,18 @@ def _find_ctx_error_fallback(
     return False
 
 
-# ── Scan orchestrator ────────────────────────────────────────────────────
-
-
-def _scan_pattern(
-    detector: object,
-    allowlist: set[str],
-    pattern_label: str,
-) -> tuple[list[str], list[str]]:
-    """Run a detector across all Then steps.
-
-    Returns (new_violations, stale_allowlist_entries).
-    """
-    new_violations = []
-    seen_in_allowlist = set()
-
-    for key, func in iter_then_functions():
-        if detector(func):  # type: ignore[operator]
-            if key in allowlist:
-                seen_in_allowlist.add(key)
-            else:
-                new_violations.append(f"{key} [{pattern_label}]")
-
-    stale = sorted(allowlist - seen_in_allowlist)
-    return new_violations, stale
-
-
 # ── Assertion helper ──────────────────────────────────────────────────────
 
 
-def _assert_no_violations(
-    detector: object,
+def _assert_allowlist_matches(
+    detector: Callable[[ast.FunctionDef | ast.AsyncFunctionDef], bool],
     allowlist: set[str],
-    pattern_label: str,
-    allowlist_name: str,
+    *,
+    fix_hint: str,
 ) -> None:
-    """Run a pattern scan and assert no new violations / no stale allowlist entries."""
-    new_violations, stale = _scan_pattern(detector, allowlist, pattern_label)
-    errors = []
-    if new_violations:
-        errors.append(
-            f"Found {len(new_violations)} new {pattern_label} violation(s):\n"
-            + "\n".join(f"  {v}" for v in new_violations)
-        )
-    if stale:
-        errors.append(
-            f"Stale allowlist entries (violations were fixed — remove from "
-            f"{allowlist_name}):\n" + "\n".join(f"  {s}" for s in stale)
-        )
-    assert not errors, "\n\n".join(errors)
+    """Run a detector across all Then steps and compare against the ratcheting allowlist."""
+    found = {key for key, func in iter_then_functions() if detector(func)}
+    assert_violations_match_allowlist(found, allowlist, fix_hint=fix_hint)
 
 
 # ── Test class ───────────────────────────────────────────────────────────
@@ -308,48 +234,53 @@ class TestBddAssertionStrength:
     assertions in BDD Then steps.
     """
 
+    @pytest.mark.arch_guard
     def test_no_assert_hasattr(self) -> None:
         """``assert hasattr(obj, attr)`` is always True on Pydantic models.
 
         Use ``assert obj.field is not None`` to check population, or
         ``assert obj.field == expected`` to check correctness.
         """
-        _assert_no_violations(_find_assert_hasattr, _HASATTR_ALLOWLIST, "assert-hasattr", "_HASATTR_ALLOWLIST")
+        _assert_allowlist_matches(
+            _find_assert_hasattr,
+            _HASATTR_ALLOWLIST,
+            fix_hint="Use assert obj.field is not None or assert obj.field == expected.",
+        )
 
+    @pytest.mark.arch_guard
     def test_no_getattr_existence_only(self) -> None:
         """``assert getattr(obj, attr, None) is not None`` proves presence, not correctness.
 
         Replace with ``assert obj.field == expected_value``.
         """
-        _assert_no_violations(
+        _assert_allowlist_matches(
             _find_getattr_existence_only,
             _GETATTR_EXISTENCE_ALLOWLIST,
-            "getattr-existence-only",
-            "_GETATTR_EXISTENCE_ALLOWLIST",
+            fix_hint="Replace with assert obj.field == expected_value.",
         )
 
+    @pytest.mark.arch_guard
     def test_no_count_only_assertions(self) -> None:
         """``assert len(items) > 0`` proves existence, not correctness.
 
         Use element-level assertions (``assert items[0].id == expected``)
         or set comparisons (``assert {i.id for i in items} == expected_ids``).
         """
-        _assert_no_violations(
+        _assert_allowlist_matches(
             _find_count_only_assertion,
             _COUNT_ONLY_ALLOWLIST,
-            "count-only",
-            "_COUNT_ONLY_ALLOWLIST",
+            fix_hint="Use element-level assertions or set comparisons.",
         )
 
+    @pytest.mark.arch_guard
     def test_no_ctx_error_fallback(self) -> None:
         """``if ctx.get("error"): return`` checks test harness, not production code.
 
         Then steps must assert on the actual response payload, not bail
         out early when the test harness recorded an error.
         """
-        _assert_no_violations(
+        _assert_allowlist_matches(
             _find_ctx_error_fallback,
             _CTX_ERROR_FALLBACK_ALLOWLIST,
-            "ctx-error-fallback",
-            "_CTX_ERROR_FALLBACK_ALLOWLIST",
+            fix_hint="Then steps must assert on the production response, not ctx.get('error').",
         )

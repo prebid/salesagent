@@ -3,6 +3,7 @@
 Tests the full flow: create product with pricing_options → get products → create media buy.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -288,6 +289,7 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_fixed",
@@ -323,6 +325,7 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_auction",
@@ -359,6 +362,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_auction",
@@ -387,7 +391,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         await _create_media_buy_impl(req=request, identity=identity)
 
     exc = excinfo.value
-    assert exc.details == {"error_code": "PRICING_ERROR"}
+    assert exc.error_code == "VALIDATION_ERROR"
     msg = exc.message.lower()
     assert "below floor price" in msg or "floor" in msg
 
@@ -398,6 +402,7 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_cpcv",
@@ -433,6 +438,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_cpcv",
@@ -460,7 +466,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         await _create_media_buy_impl(req=request, identity=identity)
 
     exc = excinfo.value
-    assert exc.details == {"error_code": "PRICING_ERROR"}
+    assert exc.error_code == "VALIDATION_ERROR"
     msg = exc.message.lower()
     assert "below minimum spend" in msg or "minimum" in msg
 
@@ -471,6 +477,7 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_multi",
@@ -506,6 +513,7 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
+        idempotency_key=f"int-key-{uuid.uuid4().hex}",
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_fixed",  # Only offers CPM
@@ -533,6 +541,6 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         await _create_media_buy_impl(req=request, identity=identity)
 
     exc = excinfo.value
-    assert exc.details == {"error_code": "PRICING_ERROR"}
+    assert exc.error_code == "VALIDATION_ERROR"
     msg = exc.message.lower()
     assert "does not offer" in msg or "pricing" in msg

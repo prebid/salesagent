@@ -2,7 +2,7 @@
 
 This serializer is the single source of truth for AdCP spec-compliant
 two-layer error responses. Boundary translators (MCP, A2A, REST) and
-ContextManager.fail_workflow_step_for_exception all call this so wire
+ContextManager.audit_workflow_step_failure all call this so wire
 responses and persisted workflow_step.response_data share the same shape.
 
 The two-layer model is normative since AdCP spec 3.0.0 (error-handling.mdx).
@@ -11,6 +11,8 @@ adcp_error.code; missing either layer triggers MCP_ERROR synthesis.
 """
 
 from __future__ import annotations
+
+import json
 
 from src.core.exceptions import (
     AdCPError,
@@ -41,8 +43,8 @@ class TestEnvelopeShape:
         """Internal error_code is translated through ERROR_CODE_MAPPING.
 
         NOT_FOUND is an INTERNAL_CODES entry mapped to INVALID_REQUEST (a
-        spec STANDARD code). AUTH_TOKEN_INVALID is itself a STANDARD code so
-        passes through unchanged — it is not in ERROR_CODE_MAPPING.
+        spec STANDARD code). AUTH_TOKEN_INVALID passes through unchanged — it is
+        not in ERROR_CODE_MAPPING.
         """
         exc = AdCPError("resource gone")
         exc.error_code = "NOT_FOUND"
@@ -148,8 +150,11 @@ class TestContextEcho:
             payload = exc.to_adcp_error()
             envelope = build_two_layer_error_envelope(exc)
 
-            assert flat["context"] == envelope["context"]
-            assert payload["errors"][0]["details"]["context"] == envelope["context"]
+            # Byte-level comparison (matches TestWireBytesIdenticalAcrossTransports)
+            # rather than dict-equality, so a serialization-shape regression is caught.
+            envelope_bytes = json.dumps(envelope["context"], sort_keys=True)
+            assert json.dumps(flat["context"], sort_keys=True) == envelope_bytes
+            assert json.dumps(payload["errors"][0]["details"]["context"], sort_keys=True) == envelope_bytes
 
 
 class TestRestAndA2AReconstructionAgree:
@@ -316,9 +321,8 @@ class TestTypedSubclasses:
             # _default_error_code is the class-level identity slot
             # (option-A refactor, salesagent-fnk9). error_code is an instance
             # attribute set in __init__ from this default.
-            assert cls._default_error_code == expected_code, (
-                f"{class_name}._default_error_code={cls._default_error_code!r}, expected {expected_code!r}"
-            )
+            msg = f"{class_name}._default_error_code={cls._default_error_code!r}, expected {expected_code!r}"
+            assert cls._default_error_code == expected_code, msg
             assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"
 
 
@@ -375,14 +379,31 @@ class TestWireBytesIdenticalAcrossTransports:
         exc = AdCPValidationError("budget must be positive", field="budget")
         rest_bytes = self._rest_envelope_bytes(exc)
         a2a_bytes = self._a2a_envelope_bytes(exc)
-        assert rest_bytes == a2a_bytes, (
+        msg = (
             f"REST and A2A envelopes drifted apart for AdCPValidationError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
         )
+        assert rest_bytes == a2a_bytes, msg
 
     def test_not_found_error_envelope_matches_across_transports(self):
         exc = AdCPNotFoundError("media buy missing")
         rest_bytes = self._rest_envelope_bytes(exc)
         a2a_bytes = self._a2a_envelope_bytes(exc)
-        assert rest_bytes == a2a_bytes, (
-            f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
-        )
+        msg = f"REST and A2A envelopes drifted apart for AdCPNotFoundError:\n  REST: {rest_bytes}\n  A2A : {a2a_bytes}"
+        assert rest_bytes == a2a_bytes, msg
+
+
+class TestMalformedContextFailsOpen:
+    """The serializer must fail open on a malformed context: log + drop it, never
+    raise. A raise inside the boundary translator would shadow the buyer's original
+    error (the reason _serialize_context returns None instead of raising TypeError).
+    """
+
+    def test_non_model_context_is_dropped_not_raised(self):
+        # context is neither a dict nor a Pydantic BaseModel.
+        exc = AdCPValidationError("bad budget", context=object())
+
+        envelope = build_two_layer_error_envelope(exc)  # must not raise
+
+        assert "context" not in envelope, "malformed context must be dropped, not serialized"
+        assert envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
+        assert envelope["errors"][0]["code"] == "VALIDATION_ERROR"

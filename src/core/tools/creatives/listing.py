@@ -19,9 +19,10 @@ from pydantic import Field as PydanticField
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
-from src.core.helpers import log_tool_activity
+from src.core.exceptions import AdCPValidationError
+from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
@@ -32,6 +33,18 @@ from src.core.tool_context import ToolContext
 from src.core.validation_helpers import format_validation_error
 
 logger = logging.getLogger(__name__)
+
+
+def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
+    """Merge a structured CreativeFilters model into flat params (flat take precedence).
+
+    The model->dict conversion lives in this helper rather than inside the _impl
+    because it is internal request normalization, not the wire serialization that
+    the no-model_dump-in-_impl guard targets.
+    """
+    if filters:
+        return {**filters.model_dump(exclude_none=True), **flat_params}
+    return flat_params
 
 
 def _list_creatives_impl(
@@ -139,8 +152,7 @@ def _list_creatives_impl(
         filters_dict["media_buy_ids"] = effective_media_buy_ids
 
     # Merge structured filters with flat params (flat params take precedence)
-    if filters:
-        filters_dict = {**filters.model_dump(exclude_none=True), **filters_dict}
+    filters_dict = _merge_structured_filters(filters, filters_dict)
 
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
@@ -179,15 +191,11 @@ def _list_creatives_impl(
     # Authentication - REQUIRED (creatives contain sensitive data)
     # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
     # which are principal-specific and must be access-controlled
-    principal_id = identity.principal_id if identity else None
-    if not principal_id:
-        raise AdCPAuthenticationError("Missing x-adcp-auth header")
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    assert identity is not None, "identity is required for listing creatives"
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
+    # require_identity narrows the type for the tenant lookup below.
+    principal_id = require_principal_id(identity, context=context)
+    identity = require_identity(identity, context=context)
+    tenant = require_tenant(identity, context=context)
 
     creatives = []
     total_count = 0
@@ -429,16 +437,16 @@ async def list_creatives(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Pass typed Pydantic models directly (no model_dump conversion needed)
-    fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
+    fields_list = [enum_value(f) for f in fields] if fields else None
 
     # Structured sort and pagination are AdCP spec params; _impl is built around flat
     # equivalents (sort_by/sort_order, page/limit). Coerce structured forms to flat
     # at the boundary so spec-compliant payloads are honored instead of silently dropped.
     if sort is not None:
         if sort.field is not None:
-            sort_by = sort.field.value if hasattr(sort.field, "value") else str(sort.field)
+            sort_by = enum_value(sort.field)
         if sort.direction is not None:
-            sort_order = sort.direction.value if hasattr(sort.direction, "value") else str(sort.direction)
+            sort_order = enum_value(sort.direction)
     if pagination is not None and pagination.max_results is not None:
         limit = pagination.max_results
 

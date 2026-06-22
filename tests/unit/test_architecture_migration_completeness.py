@@ -15,13 +15,16 @@ beads: salesagent-t735
 
 import ast
 
-from tests.unit._migration_helpers import (
+import pytest
+
+from scripts.ci.migration_helpers import (
     MIGRATIONS_DIR,
-    get_migration_files,
     is_empty_body,
     is_merge_migration,
+    iter_migration_trees,
     parse_function,
 )
+from tests.unit._architecture_helpers import iter_call_expressions
 
 # Alembic operations that modify schema structure
 SCHEMA_OPS = {
@@ -58,12 +61,10 @@ KNOWN_DOWNGRADE_COVERAGE_GAPS = {
 }
 
 
-def _extract_table_names(node: ast.FunctionDef) -> set[str]:
+def _extract_table_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """Extract table names referenced in op.XXX() calls."""
     tables = set()
-    for child in ast.walk(node):
-        if not isinstance(child, ast.Call):
-            continue
+    for child in iter_call_expressions(node):
         func = child.func
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             if func.value.id == "op" and func.attr in SCHEMA_OPS:
@@ -78,18 +79,13 @@ def _extract_table_names(node: ast.FunctionDef) -> set[str]:
 class TestMigrationCompleteness:
     """Every non-merge migration must have non-empty upgrade() and downgrade()."""
 
+    @pytest.mark.arch_guard
     def test_non_merge_migrations_have_upgrade(self):
         """Every non-merge migration must define a non-empty upgrade() function."""
         missing = []
         empty = []
 
-        for path in get_migration_files():
-            source = path.read_text()
-            try:
-                tree = ast.parse(source, filename=str(path))
-            except SyntaxError:
-                continue
-
+        for path, tree in iter_migration_trees():
             if is_merge_migration(tree):
                 continue
 
@@ -107,19 +103,14 @@ class TestMigrationCompleteness:
 
         assert not violations, "Migration completeness violations:\n" + "\n".join(f"  {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_non_merge_migrations_have_downgrade(self):
         """Every non-merge migration must define a non-empty downgrade() function."""
         missing = []
         empty = []
 
-        for path in get_migration_files():
+        for path, tree in iter_migration_trees():
             if path.name in KNOWN_EMPTY_DOWNGRADE:
-                continue
-
-            source = path.read_text()
-            try:
-                tree = ast.parse(source, filename=str(path))
-            except SyntaxError:
                 continue
 
             if is_merge_migration(tree):
@@ -139,6 +130,7 @@ class TestMigrationCompleteness:
 
         assert not violations, "Migration completeness violations:\n" + "\n".join(f"  {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_downgrade_covers_upgrade_tables(self):
         """downgrade() must reference the same tables as upgrade().
 
@@ -147,14 +139,8 @@ class TestMigrationCompleteness:
         """
         gaps = []
 
-        for path in get_migration_files():
+        for path, tree in iter_migration_trees():
             if path.name in KNOWN_DOWNGRADE_COVERAGE_GAPS:
-                continue
-
-            source = path.read_text()
-            try:
-                tree = ast.parse(source, filename=str(path))
-            except SyntaxError:
                 continue
 
             if is_merge_migration(tree):
@@ -181,6 +167,7 @@ class TestMigrationCompleteness:
             + "\n\nEvery table modified in upgrade() should be referenced in downgrade()."
         )
 
+    @pytest.mark.arch_guard
     def test_known_empty_downgrades_still_exist(self):
         """Stale allowlist detection for KNOWN_EMPTY_DOWNGRADE."""
         stale = []
@@ -202,6 +189,7 @@ class TestMigrationCompleteness:
 
         assert not stale, "Stale entries in KNOWN_EMPTY_DOWNGRADE:\n" + "\n".join(f"  {s}" for s in stale)
 
+    @pytest.mark.arch_guard
     def test_known_downgrade_gaps_still_exist(self):
         """Stale allowlist detection — remove entries when fixed."""
         stale = []

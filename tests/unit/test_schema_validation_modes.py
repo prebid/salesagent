@@ -32,6 +32,7 @@ _VALID_CMR_DATA = {
     "packages": [{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test"}],
     "start_time": "2025-02-15T00:00:00Z",
     "end_time": "2025-02-28T23:59:59Z",
+    "idempotency_key": "unit-test-key-cmr-shared-data",
 }
 
 _VALID_PACKAGE_DATA = {"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test"}

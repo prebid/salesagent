@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Security audit — SINGLE SOURCE OF TRUTH for the ignored-vulnerabilities list.
-# Both ./run_all_tests.sh and .github/workflows/test.yml call this script, so
+# Both ./run_all_tests.sh and .github/workflows/ci.yml call this script, so
 # the list cannot drift between local and CI.
 #
 # Ignored advisories (each documented with rationale):
@@ -25,27 +25,14 @@
 #     unflagged across runs as the upstream record gets re-curated, hence
 #     ``--allow-unused-ignores`` below.
 #
-# - GHSA-cqp8-fcvh-x7r3 / CVE-2026-46678: pydantic-ai arbitrary code execution
-#     via unsafe deserialization. Fixed in pydantic-ai >= 1.99.0. Upgrading
-#     requires pulling in pydantic-ai 1.100.0 which also upgrades fastmcp to
-#     3.3.1 — and fastmcp 3.3.1 removed the top-level FastMCP re-export that
-#     our codebase depends on. A coordinated pydantic-ai + fastmcp migration is
-#     tracked in issue #1234 (PR 2 scope). Until that lands, this advisory is
-#     suppressed here. The vulnerability is exploitable only through attacker-
-#     controlled model output passed to pydantic-ai's agent evaluation path,
-#     which is not exposed in this codebase's current feature set.
-#     TODO(#1234-pr2): remove this entry once pydantic-ai >= 1.99.0 lands.
-#
-# - PYSEC-2026-161: starlette 0.50.0 vulnerability. Fixed in starlette >= 1.0.1.
-#     Upgrade blocked: fastapi 0.128.0 constrains starlette < 1.0.0, and
-#     mcp/fastmcp also pins starlette via their own constraints. Requires a
-#     coordinated fastapi + starlette upgrade tracked in issue #1234 (PR 2 scope).
-#     TODO(#1234-pr2): remove once fastapi + starlette upgrade lands.
-#
 # Previously ignored, now resolved by real dep bumps (kept here as a record):
 # - GHSA-7gcm-g887-7qv7 (protobuf DoS) — resolved by bumping protobuf to 6.33.6.
 # - GHSA-5239-wwwm-4pmq (Pygments AdlLexer ReDoS) — resolved by bumping
 #   Pygments to 2.20.0.
+# - GHSA-cqp8-fcvh-x7r3 / CVE-2026-46678: pydantic-ai RCE via unsafe deserialization.
+#   Resolved: pydantic-ai-slim bumped to >=1.99.0; fastmcp kept at <3.3.0 (PR 2 of #1234).
+# - PYSEC-2026-161: starlette 0.50.0 BadHost / CVE-2026-48710.
+#   Resolved: fastapi bumped to >=0.133.0 (starlette 1.0+ support) (PR 2 of #1234).
 #
 # ``--allow-unused-ignores`` keeps the build resilient: an ignored advisory
 # that the upstream database temporarily un-flags must not flip the suite
@@ -57,4 +44,5 @@ set -euo pipefail
 
 source "$(dirname "$0")/security-ignored-vulns.sh"
 
-exec uvx uv-secure --ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores "$@"
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+exec uvx uv-secure --ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores "$@" "$PROJECT_ROOT/uv.lock"

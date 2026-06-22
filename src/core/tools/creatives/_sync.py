@@ -9,8 +9,8 @@ from adcp import PushNotificationConfig
 from adcp.types import ContextObject, CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -74,22 +74,12 @@ def _sync_creatives_impl(
 
     start_time = time.time()
 
-    # Authentication
-    principal_id = identity.principal_id if identity else None
-
-    # CRITICAL: principal_id is required for creative sync (NOT NULL in database)
-    if not principal_id:
-        raise AdCPAuthenticationError(
-            "Authentication required: Missing or invalid x-adcp-auth header. "
-            "Creative sync requires authentication to associate creatives with an advertiser principal."
-        )
-
-    # Tenant context is resolved at the transport boundary (resolve_identity_from_context).
-    # By the time we reach _impl, identity.tenant is a fully-populated TenantContext.
-    assert identity is not None, "identity is required for creative sync"
-    tenant = identity.tenant
-    if not tenant:
-        raise AdCPAuthenticationError("No tenant context available")
+    # Authentication — principal_id is required for creative sync (NOT NULL in database).
+    # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
+    # require_identity narrows the type. Tenant is resolved at the transport boundary.
+    principal_id = require_principal_id(identity, context=context)
+    identity = require_identity(identity, context=context)
+    tenant = require_tenant(identity, context=context)
 
     # Track actions per creative for AdCP-compliant response
 
@@ -243,7 +233,7 @@ def _sync_creatives_impl(
                         )
 
                         # Handle failed updates
-                        if update_result.action == CreativeAction.failed:
+                        if update_result.action == "failed":
                             failed_creatives.append(
                                 {
                                     "creative_id": existing_creative.creative_id,
@@ -256,7 +246,7 @@ def _sync_creatives_impl(
                             continue
 
                         # Track counts
-                        if update_result.action == CreativeAction.updated:
+                        if update_result.action == "updated":
                             updated_count += 1
                         else:
                             unchanged_count += 1
@@ -279,7 +269,7 @@ def _sync_creatives_impl(
                             creatives_needing_approval.append(creative_info)
 
                         # Add provenance warning if applicable
-                        if provenance_warning and update_result.action != CreativeAction.failed:
+                        if provenance_warning and update_result.action != "failed":
                             update_result.warnings.append(provenance_warning)
                             # Flag for review when provenance is missing
                             existing_creative.status = "pending_review"
@@ -303,7 +293,7 @@ def _sync_creatives_impl(
                         )
 
                         # Handle failed creates
-                        if create_result.action == CreativeAction.failed:
+                        if create_result.action == "failed":
                             creative_id = creative.creative_id or "unknown"
                             failed_creatives.append(
                                 {
@@ -332,7 +322,7 @@ def _sync_creatives_impl(
                             creatives_needing_approval.append(creative_info)
 
                         # Add provenance warning if applicable
-                        if provenance_warning and create_result.action != CreativeAction.failed:
+                        if provenance_warning and create_result.action != "failed":
                             create_result.warnings.append(provenance_warning)
                             needs_approval = True
 

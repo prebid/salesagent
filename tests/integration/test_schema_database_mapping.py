@@ -75,6 +75,10 @@ class TestSchemaFieldMapping:
             "measurement_terms",  # Measurement terms from adcp 4.3 spec
             "cancellation_policy",  # Cancellation policy from adcp 4.3 spec
             "performance_standards",  # Performance standards from adcp 4.3 spec
+            # AdCP 5.7+ fields - inherited from library Product, not yet stored in database
+            "format_options",  # Format option config from adcp 5.7 spec
+            "vendor_metric_optimization",  # Vendor metric optimization from adcp 5.7 spec
+            "allowed_actions",  # Allowed buyer actions from adcp 5.7 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)
@@ -416,7 +420,7 @@ class TestSchemaFieldMapping:
                 assert validated_product.product_id == "validation_test_001"
                 # adcp 2.14.0+ uses RootModel wrapper - access via .root
                 pricing = validated_product.pricing_options[0]
-                pricing_inner = pricing.root if hasattr(pricing, "root") else pricing
+                pricing_inner = pricing.root
                 assert pricing_inner.rate == 7.25
                 assert pricing_inner.pricing_model == "cpm"
             except Exception as e:

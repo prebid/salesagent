@@ -11,6 +11,7 @@ All tests in this file use float budget format per AdCP v2.2.0 spec:
 - Currency is determined by PricingOption, not Package
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -56,7 +57,7 @@ class TestDuplicateProductValidation:
                 return_value=mock_tenant,
             ),
             patch(
-                "src.core.tools.media_buy_create.get_principal_object",
+                "src.core.auth.get_principal_object",
                 return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
             ),
             patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
@@ -85,6 +86,7 @@ class TestDuplicateProductValidation:
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
+                idempotency_key=f"int-key-{uuid.uuid4().hex}",
             )
             with pytest.raises(AdCPValidationError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=identity)
@@ -94,9 +96,8 @@ class TestDuplicateProductValidation:
             error_msg = exc.message
             assert "duplicate" in error_msg.lower(), f"Error should mention 'duplicate': {error_msg}"
             assert "prod_test_1" in error_msg, f"Error should mention 'prod_test_1': {error_msg}"
-            assert "each product can only be used once" in error_msg.lower(), (
-                f"Error should say 'each product can only be used once': {error_msg}"
-            )
+            msg = f"Error should say 'each product can only be used once': {error_msg}"
+            assert "each product can only be used once" in error_msg.lower(), msg
 
     @pytest.mark.asyncio
     async def test_multiple_duplicate_products_all_listed(self, integration_db):
@@ -127,7 +128,7 @@ class TestDuplicateProductValidation:
                 return_value=mock_tenant,
             ),
             patch(
-                "src.core.tools.media_buy_create.get_principal_object",
+                "src.core.auth.get_principal_object",
                 return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
             ),
             patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
@@ -166,6 +167,7 @@ class TestDuplicateProductValidation:
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
+                idempotency_key=f"int-key-{uuid.uuid4().hex}",
             )
             with pytest.raises(AdCPValidationError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=identity)
@@ -236,6 +238,7 @@ class TestDuplicateProductValidation:
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
+                idempotency_key=f"int-key-{uuid.uuid4().hex}",
             )
             with pytest.raises((ValueError, Exception)) as exc_info:
                 await _create_media_buy_impl(req=req)

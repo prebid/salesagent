@@ -12,6 +12,7 @@ from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
+from pydantic import BaseModel
 from rich.console import Console
 from sqlalchemy import select
 
@@ -20,6 +21,7 @@ from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
+from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -336,7 +338,7 @@ class ContextManager(DatabaseManager):
         finally:
             session.close()
 
-    def fail_workflow_step_for_exception(self, step_id: str, exc: Exception) -> None:
+    def audit_workflow_step_failure(self, step_id: str, exc: Exception) -> None:
         """Mark a workflow step failed with the spec two-layer envelope as ``response_data``.
 
         The webhook delivery path at ``_send_push_notifications`` emits
@@ -395,24 +397,24 @@ class ContextManager(DatabaseManager):
                 step_id,
             )
 
-    def audit_step_failure_if_present(self, step: WorkflowStep | None, exc: Exception) -> None:
+    def audit_workflow_step_failure_if_present(self, step: WorkflowStep | None, exc: Exception) -> None:
         """Mark ``step`` as failed if it exists; do not re-raise.
 
-        Standalone variant of :py:meth:`audit_step_failure` for callers
+        Standalone variant of :py:meth:`audit_workflow_step_failure_ctx` for callers
         that need to interleave additional observability (e.g., Slack
         notification on the untyped branch in ``_create_media_buy_impl``)
         between the workflow-step audit and the re-raise. The caller
         re-raises explicitly.
 
-        ``fail_workflow_step_for_exception`` is internally wrapped in
+        ``audit_workflow_step_failure`` is internally wrapped in
         try/except so a DB hiccup during audit cannot shadow the original
         exception when the caller re-raises.
         """
         if step is not None:
-            self.fail_workflow_step_for_exception(step.step_id, exc)
+            self.audit_workflow_step_failure(step.step_id, exc)
 
     @contextmanager
-    def audit_step_failure(self, get_step: "Callable[[], WorkflowStep | None]") -> Iterator[None]:
+    def audit_workflow_step_failure_ctx(self, get_step: "Callable[[], WorkflowStep | None]") -> Iterator[None]:
         """Context manager: mark the workflow step as failed if any exception escapes the block.
 
         Single source of truth for "what happens when an _impl owning a
@@ -427,15 +429,47 @@ class ContextManager(DatabaseManager):
         when it may still be ``None``.
 
         Re-raises the original exception unchanged. Delegates the actual
-        audit work to :py:meth:`audit_step_failure_if_present` so the two
+        audit work to :py:meth:`audit_workflow_step_failure_if_present` so the two
         public APIs (context manager + standalone helper) share the same
         underlying call.
         """
         try:
             yield
         except Exception as exc:
-            self.audit_step_failure_if_present(get_step(), exc)
+            self.audit_workflow_step_failure_if_present(get_step(), exc)
             raise
+
+    def audit_workflow_step_result(
+        self,
+        step_id: str,
+        response_obj: BaseModel,
+        *,
+        status: str = "completed",
+        error_message: str | None = None,
+        add_comment: dict[str, str] | None = None,
+        request_obj: BaseModel | None = None,
+    ) -> None:
+        """Persist a workflow step's result, serializing the response inside ContextManager.
+
+        Owns the ``model_dump`` that the update-media-buy ``_impl`` previously
+        open-coded as ``update_workflow_step(..., response_data=<obj>.model_dump(mode="json"))``,
+        keeping serialization in the persistence layer (the no-model_dump-in-_impl
+        boundary). ``status`` reflects the outcome — ``"completed"`` for a success
+        result, ``"failed"`` for an adapter-returned error variant,
+        ``"requires_approval"`` for a pending-approval step. ``request_obj``, when
+        given, is serialized under the ``request_data`` key so the approval step
+        records the originating request alongside the response.
+        """
+        response_data = response_obj.model_dump(mode="json")
+        if request_obj is not None:
+            response_data["request_data"] = request_obj.model_dump(mode="json")
+        self.update_workflow_step(
+            step_id,
+            status=status,
+            response_data=response_data,
+            error_message=error_message,
+            add_comment=add_comment,
+        )
 
     def mark_human_needed(
         self,
@@ -805,13 +839,21 @@ class ContextManager(DatabaseManager):
                         f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
                     )
 
-                    # Build webhook payload based on protocol type
+                    # Build webhook payload based on protocol type.
+                    # task_type_str is the ORIGINAL action label — it keys the
+                    # delivery-webhook guards + audit log and must NOT be rewritten
+                    # by the SDK fallback (salesagent-yi3s). wire_task_type is the
+                    # validated COPY passed to the SDK payload builder.
                     task_type_str = step.tool_name or mapping.action or "unknown"
                     protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
                     try:
                         status_enum = GeneratedTaskStatus(new_status)
                     except ValueError:
                         status_enum = GeneratedTaskStatus.unknown
+
+                    # SDK 5.7 validates task_type against TaskType enum; coerce a
+                    # COPY for the payload while leaving task_type_str untouched.
+                    wire_task_type = validate_webhook_task_type(task_type_str)
 
                     payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
                     if protocol == "a2a":
@@ -822,10 +864,13 @@ class ContextManager(DatabaseManager):
                             result=step.response_data or {},
                         )
                     else:
-                        # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
-                        # McpWebhookPayload instead of dict[str, Any] for proper type safety
-                        mcp_payload_dict = create_mcp_webhook_payload(step.step_id, status_enum, step.response_data)
-                        payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
+                        # SDK 5.7: returns McpWebhookPayload directly
+                        payload = create_mcp_webhook_payload(
+                            task_id=step.step_id,
+                            status=status_enum,
+                            task_type=wire_task_type,
+                            result=step.response_data,
+                        )
 
                     metadata: dict[str, Any] = {
                         "task_type": task_type_str,

@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts.bdd_traceability_schema import BDDTraceabilityMapping
@@ -110,6 +111,7 @@ def _get_all_obligation_ids() -> set[str]:
 class TestBDDObligationSync:
     """Structural guard: BDD features and obligation docs must stay in sync."""
 
+    @pytest.mark.arch_guard
     def test_bdd_scenarios_have_traceability_entries(self):
         """Every Scenario in tests/bdd/features/ must have a traceability entry.
 
@@ -141,6 +143,7 @@ class TestBDDObligationSync:
             + "\n".join(f"  {sid} (in {scenario_ids[sid]})" for sid in sorted(missing))
         )
 
+    @pytest.mark.arch_guard
     def test_traceability_mapped_obligations_exist(self):
         """Every mapped entry in traceability must reference a real obligation ID.
 
@@ -170,6 +173,7 @@ class TestBDDObligationSync:
             f"referencing non-existent obligation IDs:\n" + "\n".join(invalid)
         )
 
+    @pytest.mark.arch_guard
     def test_traceability_has_no_phantom_scenarios(self):
         """Every adcp_scenario_id in traceability must exist in a compiled feature file.
 
@@ -205,6 +209,7 @@ class TestBDDObligationSync:
             + "\n\nRemove stale entries or re-run compile_bdd.py."
         )
 
+    @pytest.mark.arch_guard
     def test_compiled_features_have_generation_stamps(self):
         """Every .feature file must start with a compile_bdd.py generation stamp.
 
@@ -232,6 +237,7 @@ class TestBDDObligationSync:
             f"Unrecognized:\n" + "\n".join(missing_stamp)
         )
 
+    @pytest.mark.arch_guard
     def test_traceability_yaml_validates(self):
         """bdd-traceability.yaml must validate against the Pydantic schema.
 

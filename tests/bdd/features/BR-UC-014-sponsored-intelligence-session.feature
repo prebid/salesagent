@@ -1,5 +1,5 @@
-# Generated from adcp-req @ c7db1f45d4bc00989d25b3d3c8e9b4a360f41e1b on 2026-05-20T22:25:32Z
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py
+# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-014 Sponsored Intelligence Session
   As a Buyer
@@ -20,14 +20,14 @@ Feature: BR-UC-014 Sponsored Intelligence Session
   #   POST-F3: When a session is not found, the error references the provided session_id
   #   POST-F4: When an offering is unavailable, the error includes the reason and may suggest alternatives
   #
-  # Rules: BR-RULE-095..104 (10 rules, 37 invariants)
+  # Rules: BR-RULE-095..104 + BR-RULE-286/287/288 (13 rules, 55 invariants — v3.1; BR-RULE-286 widened to cover si_send_message required fields, INV-5..7 added)
   # Extensions: A (initiate session), B (send message), C (terminate session),
   #   D (SESSION_NOT_FOUND), E (OFFER_UNAVAILABLE), F (CAPABILITY_UNSUPPORTED),
-  #   G (RATE_LIMITED), H (SESSION_ALREADY_TERMINATED)
+  #   G (RATE_LIMITED), H (SESSION_TERMINATED)
   # Error codes: session_not_found, offer_unavailable, capability_unsupported, rate_limited,
-  #   session_already_terminated, CONTEXT_PII_DETECTED, CONSENT_GRANTED_REQUIRED,
+  #   SESSION_TERMINATED, INTENT_PII_DETECTED, CONSENT_GRANTED_REQUIRED,
   #   CONSENT_SCOPE_REQUIRED, IDENTITY_CONSENT_CONFLICT, CAPABILITY_UNSUPPORTED,
-  #   SESSION_STATUS_INVALID, HANDOFF_REQUIRED, SESSION_ALREADY_TERMINATED,
+  #   SESSION_STATUS_INVALID, HANDOFF_REQUIRED, SESSION_TERMINATED,
   #   MESSAGE_CONTENT_REQUIRED, SESSION_ID_REQUIRED, TERMINATION_REASON_INVALID,
   #   TERMINATION_REASON_REQUIRED, ACP_HANDOFF_REQUIRED, PRODUCT_LIMIT_TOO_LOW,
   #   PRODUCT_LIMIT_TOO_HIGH, UI_ELEMENT_TYPE_INVALID, UI_ELEMENT_DATA_REQUIRED,
@@ -52,6 +52,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response contains matching_products array with total_matching count
     # POST-S1: Buyer knows offering availability and can view details and products
     # POST-S7: Buyer received offering_token for session continuity
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
     Examples:
       | transport |
@@ -78,57 +79,58 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the response may contain alternative_offering_ids array
     # POST-S1: Buyer knows offering is unavailable with reason
 
-  @T-UC-014-004 @main-flow @get-offering @post-s1
-  Scenario: Get offering -- anonymous context with no PII is accepted
-    Given a valid offering "shoes-fall" exists and is available
-    When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and context "mens size 14 near Cincinnati"
-    Then the response contains available true
-    And the context was processed without PII violation
-    # POST-S1: Anonymous offering check succeeds
-
   @T-UC-014-005 @ext-a @initiate-session @happy-path @post-s2 @post-s8
   Scenario: Initiate session -- consent granted with full capabilities
     Given a valid offering has been checked and an offering_token received
     And the host supports conversational, voice, and product_card components
-    When the Buyer Agent sends si_initiate_session with context "I want to explore flight options" and identity with consent_granted true and consent_scope ["name", "email"] and supported_capabilities
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-flight-1234567890123456", intent "I want to explore flight options", and identity with consent_granted true and consent_scope ["name", "email"] and supported_capabilities
     Then the response contains a unique session_id
+    And the response contains session_status "active"
     And the response contains negotiated_capabilities with the intersection of host and brand capabilities
     And negotiated_capabilities includes conversational modality as true
     And the response contains an initial brand response with message text
     # POST-S2: Active session with unique ID and negotiated capabilities
     # POST-S8: Capabilities are intersection of host and brand
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-006 @ext-a @initiate-session @happy-path @post-s2 @post-s8
   Scenario: Initiate session -- consent denied with anonymous session
     Given the Buyer is authenticated with a valid principal_id
-    When the Buyer Agent sends si_initiate_session with context "explore shoes" and identity with consent_granted false and anonymous_session_id "anon-abc123"
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-shoes-1234567890123456", intent "explore shoes", and identity with consent_granted false and anonymous_session_id "anon-abc123"
     Then the response contains a unique session_id
+    And the response contains session_status "active"
     And the session is created anonymously without user data
     And negotiated_capabilities includes conversational modality as true
     # POST-S2: Anonymous session created
     # POST-S8: At least conversational baseline negotiated
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-007 @ext-a @initiate-session @happy-path @post-s8
   Scenario: Initiate session -- no supported_capabilities yields conversational baseline only
-    When the Buyer Agent sends si_initiate_session with context "browse products" and identity with consent_granted false without supported_capabilities
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-browse-1234567890123456", intent "browse products", and identity with consent_granted false without supported_capabilities
     Then the response contains a unique session_id
+    And the response contains session_status "active"
     And negotiated_capabilities contains only conversational modality
     And negotiated_capabilities does not include voice, video, or avatar
     # POST-S8: Only conversational baseline when host omits capabilities
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-008 @ext-a @initiate-session @happy-path @post-s2
   Scenario: Initiate session -- with valid offering_token recalls prior context
     Given the Buyer Agent previously received offering_token "opq-xyz" from si_get_offering within TTL
     When the Buyer Agent sends si_initiate_session with offering_token "opq-xyz"
     Then the session is created with offering context recalled
+    And the response contains session_status "active"
     And the brand agent can reference prior product listings
     # POST-S2: Session with offering context
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-009 @ext-a @initiate-session @happy-path @post-s2 @degradation
   Scenario: Initiate session -- expired offering_token degrades gracefully
     Given the Buyer Agent has an expired offering_token "opq-expired"
     When the Buyer Agent sends si_initiate_session with offering_token "opq-expired"
     Then the session is created successfully without offering context
+    And the response contains session_status "active"
     And no error is returned for the expired token
     # POST-S2: Session proceeds without offering context (graceful degradation)
 
@@ -190,42 +192,51 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an active SI session exists with session_id "sess-abc123"
     When the Buyer Agent sends si_terminate_session with session_id "sess-abc123" and reason "handoff_transaction"
     Then the response contains terminated true
+    And the response contains session_status "complete"
     And the response contains acp_handoff with checkout_url and checkout_token
     And the response may contain follow_up suggestions
     # POST-S5: Session terminated successfully
     # POST-S6: ACP handoff data for checkout
     # BR-RULE-100 INV-1: handoff_transaction requires acp_handoff
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-017 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- user_exit without ACP handoff
     Given an active SI session exists with session_id "sess-abc123"
     When the Buyer Agent sends si_terminate_session with session_id "sess-abc123" and reason "user_exit"
     Then the response contains terminated true
+    And the response contains session_status "terminated"
     And the response does not contain acp_handoff
     And the response may contain follow_up suggestions
     # POST-S5: Session terminated (no commerce handoff)
     # BR-RULE-100 INV-2: non-transaction reason has no ACP data
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-018 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- handoff_complete without ACP handoff
     Given an active SI session exists with session_id "sess-abc123"
     When the Buyer Agent sends si_terminate_session with session_id "sess-abc123" and reason "handoff_complete"
     Then the response contains terminated true
+    And the response contains session_status "complete"
     And the response does not contain acp_handoff
     # POST-S5: Session terminated with handoff_complete
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-019 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- session_timeout
     Given an active SI session exists with session_id "sess-abc123"
     When the Buyer Agent sends si_terminate_session with session_id "sess-abc123" and reason "session_timeout"
     Then the response contains terminated true
+    And the response contains session_status "terminated"
     # POST-S5: Session terminated due to timeout
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-020 @terminate-session @happy-path @post-s5
   Scenario: Terminate session -- host_terminated with cause
     Given an active SI session exists with session_id "sess-abc123"
     When the Buyer Agent sends si_terminate_session with session_id "sess-abc123" and reason "host_terminated" and termination_context with cause "policy_violation"
     Then the response contains terminated true
+    And the response contains session_status "terminated"
     # POST-S5: Session terminated by host
 
   @T-UC-014-021 @extension @ext-d @error @post-f1 @post-f2 @post-f3
@@ -323,67 +334,71 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     # --- Extension H: SESSION_ALREADY_TERMINATED ---
 
   @T-UC-014-028 @extension @ext-h @error @post-f1 @post-f2
-  Scenario: Send message to terminated session -- SESSION_ALREADY_TERMINATED
+  Scenario: Send message to terminated session -- SESSION_TERMINATED
     Given a session exists with session_id "sess-done" in terminated state
     When the Buyer Agent sends si_send_message with session_id "sess-done" and message "hello again"
     Then the operation should fail
-    And the error code should be "session_already_terminated"
+    And the error code should be "SESSION_TERMINATED"
     And the error message should contain "terminated"
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
-    And the response contains session_status "complete"
     # POST-F1: System state unchanged
-    # POST-F2: Error code session_already_terminated
+    # POST-F2: Error code SESSION_TERMINATED
     # BR-RULE-098 INV-4: Message to terminal session rejected
+    # v3.1: Terminated sessions return error codes (no synthetic session_status on the error path), per si-send-message-response schema description.
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
   @T-UC-014-029 @extension @ext-h @error @post-f1 @post-f2
-  Scenario: Send message to complete session -- SESSION_ALREADY_TERMINATED
+  Scenario: Send message to complete session -- SESSION_TERMINATED
     Given a session exists with session_id "sess-complete" in complete state
     When the Buyer Agent sends si_send_message with session_id "sess-complete" and message "one more question"
     Then the operation should fail
-    And the error code should be "session_already_terminated"
+    And the error code should be "SESSION_TERMINATED"
     And the error message should contain "ended"
     And the error should include "suggestion" field
     And the suggestion should contain "si_initiate_session"
     # POST-F1: System state unchanged
     # POST-F2: Complete session also rejects messages
 
-  @T-UC-014-part-offering-pii @partition @offering-pii @br-rule-095
-  Scenario Outline: Offering PII partition validation - <partition>
+  @T-UC-014-part-intent-pii @partition @offering-pii @br-rule-095 @schema-v3.1
+  Scenario Outline: Offering intent PII partition validation - <partition>
     Given a valid offering exists and is available
-    When the Buyer Agent sends si_get_offering with offering_id "test-offer" and context <context_value>
+    When the Buyer Agent sends si_get_offering with offering_id "test-offer" and intent <intent_value>
     Then <outcome>
 
     Examples: Valid partitions
-      | partition         | context_value                        | outcome                                                 |
-      | context_absent    |                                      | the offering lookup succeeds                            |
-      | anonymous_context | "mens size 14 near Cincinnati"       | the offering lookup succeeds                            |
-      | location_only     | "shoes available in Ohio"             | the offering lookup succeeds                            |
+      | partition          | intent_value                          | outcome                          |
+      | intent_absent      |                                       | the offering lookup succeeds     |
+      | both_absent        |                                       | the offering lookup succeeds     |
+      | anonymous_intent   | "looking for running shoes size 10"   | the offering lookup succeeds     |
 
     Examples: Invalid partitions
-      | partition                  | context_value                          | outcome                                                                          |
-      | context_with_email         | "find shoes for john@example.com"      | error "CONTEXT_PII_DETECTED" with suggestion "Remove PII from the context"       |
-      | context_with_phone         | "order for 555-123-4567"               | error "CONTEXT_PII_DETECTED" with suggestion "Remove PII from the context"       |
-      | context_with_name_and_address | "deliver to John Smith at 123 Main St" | error "CONTEXT_PII_DETECTED" with suggestion "Remove PII from the context"    |
+      | partition                  | intent_value                                  | outcome                                                                       |
+      | intent_with_email          | "find shoes for john@example.com"             | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"      |
+      | intent_with_phone          | "order something and call 555-123-4567"       | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"      |
+      | intent_with_name_and_address | "deliver to John Smith at 123 Main St"      | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"      |
 
-  @T-UC-014-bound-offering-pii @boundary @offering-pii @br-rule-095
-  Scenario Outline: Offering PII boundary validation - <boundary_point>
+  @T-UC-014-bound-intent-pii @boundary @offering-pii @br-rule-095 @schema-v3.1
+  Scenario Outline: Offering intent PII boundary validation - <boundary_point>
     Given a valid offering exists and is available
-    When the Buyer Agent sends si_get_offering with offering_id "test-offer" and context <context_value>
+    When the Buyer Agent sends si_get_offering with offering_id "test-offer" and intent <intent_value>
     Then <outcome>
 
     Examples: Boundary values
-      | boundary_point                               | context_value                          | outcome                                                                    |
-      | context is null/absent                       |                                        | the offering lookup succeeds                                               |
-      | context is empty string                      | ""                                     | the offering lookup succeeds                                               |
-      | context with generic intent (no PII)         | "mens size 14 near Cincinnati"         | the offering lookup succeeds                                               |
-      | context containing email pattern             | "find shoes for john@example.com"      | error "CONTEXT_PII_DETECTED" with suggestion "Remove PII from the context" |
-      | context containing phone pattern             | "order for 555-123-4567"               | error "CONTEXT_PII_DETECTED" with suggestion "Remove PII from the context" |
-      | context containing full name + street address | "deliver to John Smith at 123 Main St" | error "CONTEXT_PII_DETECTED" with suggestion "Remove PII from the context" |
+      | boundary_point                                          | intent_value                                  | outcome                                                                    |
+      | intent is null/absent                                   |                                               | the offering lookup succeeds                                               |
+      | intent is empty string                                  | ""                                            | the offering lookup succeeds                                               |
+      | intent with generic description (no PII)                | "looking for winter coats size L"             | the offering lookup succeeds                                               |
+      | intent with generic free-text (no PII)                  | "looking for running shoes size 11"           | the offering lookup succeeds                                               |
+      | both intent and context are null/absent                 |                                               | the offering lookup succeeds                                               |
+      | context is empty string, intent absent                  | ""                                            | the offering lookup succeeds                                               |
+      | intent containing email pattern                         | "find jacket for jane@example.com"            | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"   |
+      | intent containing phone pattern                         | "call me 555-987-6543 about jackets"          | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"   |
+      | intent containing full name + street address            | "send to Jane Roe at 9 Park Ave"              | error "INTENT_PII_DETECTED" with suggestion "Remove PII from the intent"   |
 
   @T-UC-014-part-identity-consent @partition @identity-consent @br-rule-096
   Scenario Outline: Identity consent partition validation - <partition>
-    When the Buyer Agent sends si_initiate_session with context "explore products" and identity matching <partition>
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-part-1234567890123456", intent "explore products", and identity matching <partition>
     Then <outcome>
 
     Examples: Valid partitions
@@ -400,7 +415,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
 
   @T-UC-014-bound-identity-consent @boundary @identity-consent @br-rule-096
   Scenario Outline: Identity consent boundary validation - <boundary_point>
-    When the Buyer Agent sends si_initiate_session with context "explore products" and identity at boundary <boundary_point>
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-bound-1234567890123456", intent "explore products", and identity at boundary <boundary_point>
     Then <outcome>
 
     Examples: Boundary values
@@ -455,12 +470,16 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | pending_handoff_transaction  | session_status is pending_handoff with handoff type transaction     |
       | pending_handoff_complete     | session_status is pending_handoff with handoff type complete        |
       | complete_session             | conversation naturally concluded and no more messages accepted      |
+      | terminated_session           | session ended due to timeout, error, or explicit host/user action; no further activity accepted |
 
     Examples: Invalid partitions
       | partition                           | outcome                                                                                                |
       | unknown_status                      | error "SESSION_STATUS_INVALID" with suggestion "Use only the enumerated session status values"          |
       | pending_handoff_no_handoff_object   | error "HANDOFF_REQUIRED" with suggestion "Include a handoff object"                                    |
-      | message_to_complete_session         | error "SESSION_ALREADY_TERMINATED" with suggestion "Start a new session with si_initiate_session"      |
+      | message_to_complete_session         | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"      |
+      | message_to_terminated_session       | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"      |
+      | message_to_terminal_session         | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"      |
+      | missing_session_status_on_response  | response-schema violation rejected by host                                                              |
 
   @T-UC-014-bound-session-lifecycle @boundary @session-lifecycle @br-rule-098
   Scenario Outline: Session lifecycle boundary validation - <boundary_point>
@@ -473,9 +492,12 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | session_status = 'active'                              | conversation continues                                                                            |
       | session_status = 'pending_handoff' with handoff object | pending_handoff accepted with handoff data                                                        |
       | session_status = 'complete'                            | no more messages accepted                                                                         |
+      | session_status = 'terminated'                          | session ended due to timeout/error/policy/host action; no further activity accepted                |
       | session_status = unknown value                         | error "SESSION_STATUS_INVALID" with suggestion "Use only the enumerated session status values"     |
       | session_status = 'pending_handoff' without handoff object | error "HANDOFF_REQUIRED" with suggestion "Include a handoff object"                             |
-      | send_message to complete session                       | error "SESSION_ALREADY_TERMINATED" with suggestion "Start a new session with si_initiate_session"  |
+      | send_message to complete session                       | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"  |
+      | send_message to terminated session                     | error "SESSION_TERMINATED" with suggestion "Start a new session with si_initiate_session"  |
+      | initiate/send_message response omits session_status    | response-schema violation rejected by host                                                         |
 
   @T-UC-014-part-message-content @partition @message-content @br-rule-099
   Scenario Outline: Message content partition validation - <partition>
@@ -688,23 +710,24 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Then the offering lookup succeeds without PII validation
     # BR-RULE-095 INV-1: context absent → no PII check
 
-  @T-UC-014-inv-095-2 @invariant @br-rule-095
-  Scenario: BR-RULE-095 INV-2 holds -- anonymous context without PII proceeds
+  @T-UC-014-inv-095-2 @invariant @br-rule-095 @schema-v3.1
+  Scenario: BR-RULE-095 INV-2 holds -- anonymous intent without PII proceeds
     Given a valid offering "shoes-fall" exists and is available
-    When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and context "mens running shoes size 10"
+    When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and intent "mens running shoes size 10"
     Then the offering lookup succeeds
-    # BR-RULE-095 INV-2: context without PII → proceeds
+    # BR-RULE-095 INV-2: intent without PII → proceeds (v3.1: NL surface is `intent`; `context` is opaque envelope)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
 
-  @T-UC-014-inv-095-3 @invariant @br-rule-095 @error
-  Scenario: BR-RULE-095 INV-3 violated -- context with PII rejected
+  @T-UC-014-inv-095-4 @invariant @br-rule-095 @error @schema-v3.1
+  Scenario: BR-RULE-095 INV-4 violated -- intent with PII rejected
     Given a valid offering "shoes-fall" exists and is available
-    When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and context "shoes for john@example.com at 123 Main St"
+    When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and intent "shoes for john@example.com at 123 Main St"
     Then the operation should fail
-    And the error code should be "CONTEXT_PII_DETECTED"
+    And the error code should be "INTENT_PII_DETECTED"
     And the error message should contain "personally identifiable information"
     And the error should include "suggestion" field
     And the suggestion should contain "Remove PII"
-    # BR-RULE-095 INV-3: PII in context → rejected
+    # BR-RULE-095 INV-4: PII in intent → rejected (v3.1 NEW intent surface)
 
   @T-UC-014-inv-096-1 @invariant @br-rule-096
   Scenario: BR-RULE-096 INV-1 holds -- consent granted with scope transmits user data
@@ -805,11 +828,32 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given an SI session with session_id "sess-ended" in terminated state
     When the Buyer Agent sends si_send_message with session_id "sess-ended" and message "hello"
     Then the operation should fail
-    And the error code should be "SESSION_ALREADY_TERMINATED"
+    And the error code should be "SESSION_TERMINATED"
     And the error message should contain "terminated"
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
-    # BR-RULE-098 INV-4: terminal session rejects messages
+    # BR-RULE-098 INV-4: terminal session (complete OR terminated) rejects messages
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-098-5 @invariant @br-rule-098 @schema-v3.1
+  Scenario: BR-RULE-098 INV-5 holds -- terminated state distinct from complete
+    Given an SI session with session_id "sess-host-end" was ended by host action with reason "host_terminated"
+    When the host inspects the session_status
+    Then the session_status should be "terminated"
+    And the session_status should not be "complete"
+    And no further activity should be accepted on session_id "sess-host-end"
+    # BR-RULE-098 INV-5: terminated (involuntary/forced end) is distinct from complete (natural successful end)
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-098-6 @invariant @br-rule-098 @error @schema-v3.1
+  Scenario: BR-RULE-098 INV-6 violated -- initiate response omits session_status
+    Given a brand agent that returns an si_initiate_session response without session_status
+    When the Buyer Agent receives the response
+    Then the response should be rejected as schema-invalid
+    And the validation error should reference the missing "session_status" field
+    And the error should include "suggestion" field
+    And the suggestion should contain "session_status"
+    # BR-RULE-098 INV-6: session_status is required on the si_initiate_session response (newly required in v3.1) and on the si_send_message response (carried over from v3.0.0-rc.1)
 
   @T-UC-014-inv-099-1 @invariant @br-rule-099
   Scenario: BR-RULE-099 INV-1 holds -- message present makes request valid
@@ -1095,21 +1139,9 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     # POST-F2: Error explains missing required field
     # PRE-BIZ1: offering_id is required
 
-  @T-UC-014-031 @extension @ext-a @error @precondition @post-f1 @post-f2
-  Scenario: Initiate session with missing context -- validation error
-    When the Buyer Agent sends si_initiate_session without context and with valid identity
-    Then the operation should fail
-    And the error code should be "CONTEXT_REQUIRED"
-    And the error message should contain "context"
-    And the error should include "suggestion" field
-    And the suggestion should contain "context"
-    # POST-F1: System state unchanged
-    # POST-F2: Error explains missing required field
-    # PRE-BIZ2: context is required for initiate_session
-
   @T-UC-014-032 @extension @ext-a @error @precondition @post-f1 @post-f2
   Scenario: Initiate session with missing identity -- validation error
-    When the Buyer Agent sends si_initiate_session with context "explore shoes" but no identity object
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-noid-1234567890123456" and intent "explore shoes" but no identity object
     Then the operation should fail
     And the error code should be "IDENTITY_REQUIRED"
     And the error message should contain "identity"
@@ -1176,3 +1208,405 @@ Feature: BR-UC-014 Sponsored Intelligence Session
       | subscribe_updates   |
       | none                |
 
+  @T-UC-014-si-catalog-vocabulary @a2ui @si-catalog @partition @br-rule-103
+  Scenario Outline: SI standard catalog component vocabulary -- <component_type>
+    Given an active SI session with session_id "sess-cat"
+    When the brand response declares a surface with catalogId "si-standard"
+    And the surface contains a component of type "<component_type>"
+    Then <outcome>
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+    Examples: Standard catalog components (must render)
+      | component_type     | outcome                                              |
+      | Text               | the component is rendered by the host                |
+      | Button             | the component is rendered by the host                |
+      | Link               | the component is rendered by the host                |
+      | Image              | the component is rendered by the host                |
+      | Card               | the component is rendered by the host                |
+      | ProductCard        | the component is rendered by the host                |
+      | List               | the component is rendered by the host                |
+      | Row                | the component is rendered by the host                |
+      | Column             | the component is rendered by the host                |
+      | IntegrationAction  | the component is rendered by the host                |
+      | AppHandoff         | the component is rendered by the host                |
+
+    Examples: Extension components (must not be load-bearing)
+      | component_type     | outcome                                                                                  |
+      | CustomBrandWidget  | the host may render via fallback but core flow must not depend on this component         |
+      | ExtensionVideo3D   | the host may render via fallback but core flow must not depend on this component         |
+
+  @T-UC-014-si-catalog-id-const @a2ui @si-catalog @boundary @br-rule-103
+  Scenario: SI catalog identifier must equal "si-standard"
+    Given an active SI session with session_id "sess-cat-id"
+    When the brand response declares a surface with catalogId "si-experimental"
+    Then the surface is rejected with error "UI_ELEMENT_TYPE_INVALID"
+    And the error code should be "UI_ELEMENT_TYPE_INVALID"
+    And the error message references catalogId
+    # BR-RULE-103: catalog identifier is a const in the SI standard catalog schema
+
+  @T-UC-014-user-action-roundtrip @a2ui @user-action @happy-path @post-s3 @br-rule-099
+  Scenario: User action event drives the next surface via si_send_message
+    Given an active SI session with session_id "sess-ua-001"
+    And the previous brand response rendered a surface with surfaceId "surf-1" containing a Button with componentId "btn-add-to-cart"
+    When the host posts a user-action with surfaceId "surf-1", componentId "btn-add-to-cart", and action name "add_to_cart"
+    And the user-action context resolves bound-value "/products/0/sku" to "SKU-42"
+    And the Buyer Agent sends si_send_message with session_id "sess-ua-001" and an action_response carrying that user-action
+    Then the response contains a brand reply message
+    And the response contains session_status "active"
+    And the brand agent's next surface reflects the "add_to_cart" intent
+    # POST-S3: Buyer receives next conversational turn driven by the user action
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-offering-anchors-session @offering @initiate-session @happy-path @post-s2 @br-rule-095
+  Scenario: Offering anchors si_initiate_session via offering_token continuity
+    Given a valid offering "delta-flights-summer" exists in the brand catalog
+    And the offering is active and available
+    And the Buyer Agent received an offering_token from si_get_offering for "delta-flights-summer"
+    When the Buyer Agent sends si_initiate_session with that offering_token, idempotency_key "uuid-anchor-1234567890123456", intent "explore destinations", and identity with consent_granted false
+    Then the response contains a session_id
+    And the session is anchored to offering_id "delta-flights-summer"
+    And the negotiated capabilities are scoped to the offering's brand agent
+    # POST-S2: Buyer has an active session anchored to a specific offering
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-offering-expired-blocks-session @offering @initiate-session @error @br-rule-095
+  Scenario: Expired offering blocks session establishment
+    Given the current time is "2026-05-21T12:00:00Z"
+    And an offering "winter-sale-2025" exists with valid_to "2026-03-31T23:59:59Z"
+    When the Buyer Agent sends si_initiate_session with offering_id "winter-sale-2025"
+    Then the operation should fail
+    And the error code should be "OFFER_UNAVAILABLE"
+    And the error message should contain the offering_id "winter-sale-2025"
+    And the error should include "suggestion" field
+    # Expired offering cannot anchor a new session
+
+  @T-UC-014-storyboard-baseline-session-id-roundtrip @storyboard-v3.1 @v3-1 @baseline-conformance @session-id-roundtrip
+  Scenario: SI baseline conformance -- session_id roundtrips from initiate through send_message to terminate
+    Given the Buyer Agent calls si_get_offering for offering_id "novamotors_conversational_v1"
+    And the si_get_offering response is schema-valid against si-get-offering-response.json
+    When the Buyer Agent calls si_initiate_session with intent "User is researching electric vehicles for long road trips"
+    Then the si_initiate_session response should be schema-valid against si-initiate-session-response.json
+    And the response should carry a platform-assigned session_id
+    When the Buyer Agent calls si_send_message with the captured session_id and a user message
+    Then the si_send_message response should be schema-valid against si-send-message-response.json
+    And the session_id sent on si_send_message should match the value captured from si_initiate_session
+    When the Buyer Agent calls si_terminate_session with the captured session_id and reason "handoff_complete"
+    Then the si_terminate_session response should be schema-valid against si-terminate-session-response.json
+    And the session_id sent on si_terminate_session should match the value captured from si_initiate_session
+    # si_baseline storyboard exercises the four-call lifecycle:
+    #   si_get_offering -> si_initiate_session (returns session_id) ->
+    #   si_send_message (echoes session_id) -> si_terminate_session (confirms session_id).
+    # The runner captures session_id from initiate and asserts it on every subsequent
+    # call. A platform that fabricates a fresh session_id between calls breaks the
+    # buyer's session-tracking contract.
+    # si_baseline: platform-assigned session_id roundtrips unchanged across the lifecycle
+
+  @T-UC-014-inv-286-1 @invariant @br-rule-286 @schema-v3.1
+  Scenario: BR-RULE-286 INV-1 holds -- all required fields present allows session initiation
+    Given a Buyer Agent prepared to initiate an SI session
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-abc-1234567890123456", intent "find running shoes", and identity with consent_granted true
+    Then the request proceeds to identity and consent processing
+    And a session is created with a unique session_id
+    # BR-RULE-286 INV-1: all three required fields present → proceeds
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-286-2 @invariant @br-rule-286 @error @schema-v3.1
+  Scenario: BR-RULE-286 INV-2 violated -- idempotency_key missing rejected
+    Given a Buyer Agent prepared to initiate an SI session
+    When the Buyer Agent sends si_initiate_session without idempotency_key but with intent "find shoes" and identity
+    Then the operation should fail
+    And the error code should be "IDEMPOTENCY_KEY_REQUIRED"
+    And the error message should contain "idempotency_key"
+    And the error should include "suggestion" field
+    And the suggestion should contain "UUID"
+    # BR-RULE-286 INV-2: idempotency_key absent → IDEMPOTENCY_KEY_REQUIRED
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-286-3 @invariant @br-rule-286 @error @schema-v3.1
+  Scenario: BR-RULE-286 INV-3 violated -- intent missing rejected
+    Given a Buyer Agent prepared to initiate an SI session
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-def-1234567890123456" and identity but without intent
+    Then the operation should fail
+    And the error code should be "INTENT_REQUIRED"
+    And the error message should contain "intent"
+    And the error should include "suggestion" field
+    And the suggestion should contain "natural-language"
+    # BR-RULE-286 INV-3: intent absent → INTENT_REQUIRED
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-286-4 @invariant @br-rule-286 @error @schema-v3.1
+  Scenario: BR-RULE-286 INV-4 violated -- identity missing rejected
+    Given a Buyer Agent prepared to initiate an SI session
+    When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-ghi-1234567890123456" and intent "find shoes" but without identity
+    Then the operation should fail
+    And the error code should be "IDENTITY_REQUIRED"
+    And the error message should contain "identity"
+    And the error should include "suggestion" field
+    And the suggestion should contain "consent_granted"
+    # BR-RULE-286 INV-4: identity absent → IDENTITY_REQUIRED
+
+  @T-UC-014-part-initiate-required @partition @initiate-required @br-rule-286 @schema-v3.1
+  Scenario Outline: SI initiate required-fields partition validation - <partition>
+    Given a Buyer Agent prepared to initiate an SI session
+    When the Buyer Agent sends si_initiate_session matching <partition>
+    Then <outcome>
+
+    Examples: Valid partitions
+      | partition              | outcome                                                                          |
+      | all_required_present   | the request proceeds to identity and consent processing                          |
+
+    Examples: Invalid partitions
+      | partition                  | outcome                                                                                                              |
+      | idempotency_key_missing    | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"        |
+      | intent_missing             | error "INTENT_REQUIRED" with suggestion "Include intent as a natural-language description"                            |
+      | identity_missing           | error "IDENTITY_REQUIRED" with suggestion "Include the identity object with at minimum consent_granted"               |
+      | all_required_missing       | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"        |
+
+  @T-UC-014-bound-initiate-required @boundary @initiate-required @br-rule-286 @schema-v3.1
+  Scenario Outline: SI initiate required-fields boundary validation - <boundary_point>
+    Given a Buyer Agent prepared to initiate an SI session
+    When the Buyer Agent sends si_initiate_session at boundary <boundary_point>
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                                  | outcome                                                                                                      |
+      | all three required fields present                               | the request proceeds                                                                                         |
+      | idempotency_key absent, intent + identity present               | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key" |
+      | intent absent, idempotency_key + identity present               | error "INTENT_REQUIRED" with suggestion "Include intent as a natural-language description"                    |
+      | identity absent, idempotency_key + intent present               | error "IDENTITY_REQUIRED" with suggestion "Include the identity object with at minimum consent_granted"       |
+      | all three required fields absent                                | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key" |
+
+  @T-UC-014-inv-287-1 @invariant @br-rule-287 @schema-v3.1
+  Scenario: BR-RULE-287 INV-1 holds -- HTTPS checkout_url is accepted for checkout
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff with checkout_url "https://brand.example/checkout" and checkout_token "opq_abc123"
+    When the host validates the acp_handoff
+    Then the host may open the checkout_url to initiate checkout
+    # BR-RULE-287 INV-1: HTTPS scheme + valid URI → host MAY open
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-287-2 @invariant @br-rule-287 @error @schema-v3.1
+  Scenario: BR-RULE-287 INV-2 violated -- non-HTTPS checkout_url rejected
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff with checkout_url "http://brand.example/checkout" and checkout_token "opq_abc123"
+    When the host validates the acp_handoff
+    Then the validation should fail
+    And the error code should be "CHECKOUT_URL_NOT_HTTPS"
+    And the error message should contain "HTTPS"
+    And the error should include "suggestion" field
+    # BR-RULE-287 INV-2: non-HTTPS scheme → CHECKOUT_URL_NOT_HTTPS
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-287-3 @invariant @br-rule-287 @error @schema-v3.1
+  Scenario: BR-RULE-287 INV-3 violated -- malformed checkout_url rejected
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff with checkout_url "not a url" and checkout_token "opq_abc123"
+    When the host validates the acp_handoff
+    Then the validation should fail
+    And the error code should be "CHECKOUT_URL_INVALID"
+    And the error message should contain "valid URI"
+    And the error should include "suggestion" field
+    # BR-RULE-287 INV-3: syntactically invalid URI → CHECKOUT_URL_INVALID
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-287-4 @invariant @br-rule-287 @schema-v3.1
+  Scenario: BR-RULE-287 INV-4 holds -- checkout_token treated as opaque
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff with checkout_url "https://brand.example/checkout" and checkout_token "opq_token_xyz_789"
+    When the host forwards the handoff to the checkout endpoint
+    Then the host should pass checkout_token verbatim without parsing, decoding, or modification
+    # BR-RULE-287 INV-4: checkout_token is opaque → host passes verbatim
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-287-5 @invariant @br-rule-287 @schema-v3.1
+  Scenario: BR-RULE-287 INV-5 holds -- future expires_at allows checkout
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff with checkout_url "https://brand.example/checkout", checkout_token "opq_abc123", and expires_at a future ISO 8601 timestamp
+    When the host validates the acp_handoff
+    Then the host should initiate checkout before the expires_at time
+    # BR-RULE-287 INV-5: future ISO 8601 expires_at → host SHOULD initiate before
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-287-6 @invariant @br-rule-287 @error @schema-v3.1
+  Scenario: BR-RULE-287 INV-6 violated -- past or malformed expires_at rejected
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff with checkout_url "https://brand.example/checkout", checkout_token "opq_abc123", and expires_at "2020-01-01T00:00:00Z"
+    When the host validates the acp_handoff
+    Then the validation should fail
+    And the error code should be "HANDOFF_EXPIRES_AT_INVALID"
+    And the error message should contain "future ISO 8601"
+    And the error should include "suggestion" field
+    # BR-RULE-287 INV-6: past or malformed expires_at → HANDOFF_EXPIRES_AT_INVALID
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-287-7 @invariant @br-rule-287 @schema-v3.1
+  Scenario: BR-RULE-287 INV-7 holds -- payload may carry structured checkout context
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff with checkout_url "https://brand.example/checkout" and payload containing product_id "sku_42" and price 1999
+    When the host validates the acp_handoff
+    Then the host may use payload as a structured alternative to checkout_token
+    And both checkout_token and payload may be present in the same response
+    # BR-RULE-287 INV-7: payload is structured alternative; either-or-both allowed
+
+  @T-UC-014-part-acp-handoff-shape @partition @acp-handoff-shape @br-rule-287 @schema-v3.1
+  Scenario Outline: SI ACP handoff shape partition validation - <partition>
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff matching <partition>
+    When the host validates the acp_handoff shape
+    Then <outcome>
+
+    Examples: Valid partitions
+      | partition              | outcome                                                                                              |
+      | well_formed_full       | the handoff is well-formed (HTTPS url, opaque token, structured payload, future expires_at)           |
+      | token_only             | the handoff is well-formed (HTTPS url + opaque token, no payload, no expires_at)                      |
+      | payload_only           | the handoff is well-formed (HTTPS url + structured payload, no token)                                 |
+      | with_future_expiry     | the handoff is well-formed (HTTPS url + token + future expires_at)                                    |
+
+    Examples: Invalid partitions
+      | partition                       | outcome                                                                                                                                                       |
+      | checkout_url_http_scheme        | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"                                                            |
+      | checkout_url_non_https_scheme   | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"                                                            |
+      | checkout_url_malformed          | error "CHECKOUT_URL_INVALID" with suggestion "Brand agent must return a well-formed URI per RFC 3986"                                                          |
+      | expires_at_in_past              | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at"                                                        |
+      | expires_at_malformed            | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at"                                                        |
+
+  @T-UC-014-bound-acp-handoff-shape @boundary @acp-handoff-shape @br-rule-287 @schema-v3.1
+  Scenario Outline: SI ACP handoff shape boundary validation - <boundary_point>
+    Given an SI session is terminated with reason "handoff_transaction"
+    And the brand agent returns acp_handoff at boundary <boundary_point>
+    When the host validates the acp_handoff shape
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                                          | outcome                                                                                              |
+      | checkout_url = 'https://brand.example/checkout' (lowercase https scheme)              | the handoff is well-formed                                                                          |
+      | checkout_url = 'HTTPS://brand.example/checkout' (case-insensitive scheme per RFC 3986) | the handoff is well-formed                                                                         |
+      | checkout_url = 'http://brand.example/checkout' (plain HTTP)                           | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"  |
+      | checkout_url = 'ftp://brand.example/checkout' (non-HTTPS scheme)                      | error "CHECKOUT_URL_NOT_HTTPS" with suggestion "Brand agent must return an HTTPS checkout endpoint"  |
+      | checkout_url = 'not a url' (malformed)                                                | error "CHECKOUT_URL_INVALID" with suggestion "Brand agent must return a well-formed URI per RFC 3986" |
+      | expires_at = future ISO 8601 timestamp (e.g., now + 15 minutes)                       | the handoff is well-formed                                                                          |
+      | expires_at = past ISO 8601 timestamp (e.g., '2020-01-01T00:00:00Z')                   | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at" |
+      | expires_at = 'tomorrow' (not ISO 8601)                                                | error "HANDOFF_EXPIRES_AT_INVALID" with suggestion "Brand agent must emit a future ISO 8601 expires_at" |
+      | payload present, checkout_token absent (payload as alternative)                       | the handoff is well-formed                                                                          |
+      | payload + checkout_token both present (both alternatives in one response)             | the handoff is well-formed                                                                          |
+
+  @T-UC-014-inv-288-1 @invariant @br-rule-288 @schema-v3.1
+  Scenario: BR-RULE-288 INV-1 holds -- bound value matching exactly one variant is well-formed
+    Given an A2UI component property requires a bound value
+    When the bound value is { "literalString": "Hello" }
+    Then the value is well-formed and the host renders the literal
+    # BR-RULE-288 INV-1: value matches exactly one of the 5 oneOf variants → well-formed
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-288-2 @invariant @br-rule-288 @error @schema-v3.1
+  Scenario: BR-RULE-288 INV-2 violated -- bound value with multiple variant keys rejected
+    Given an A2UI component property requires a bound value
+    When the bound value is { "literalString": "x", "literalNumber": 1 }
+    Then the value is malformed
+    And the error code should be "BOUND_VALUE_MALFORMED"
+    And the error should include "suggestion" field
+    And the suggestion should contain "single oneOf variant"
+    # BR-RULE-288 INV-2: multiple variant keys present → BOUND_VALUE_MALFORMED
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-288-3 @invariant @br-rule-288 @error @schema-v3.1
+  Scenario: BR-RULE-288 INV-3 violated -- empty or extra-key bound value rejected
+    Given an A2UI component property requires a bound value
+    When the bound value is { } (empty object)
+    Then the value is malformed
+    And the error code should be "BOUND_VALUE_MALFORMED"
+    And the error should include "suggestion" field
+    # BR-RULE-288 INV-3: empty object or additionalProperties violation → BOUND_VALUE_MALFORMED
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
+
+  @T-UC-014-inv-288-4 @invariant @br-rule-288 @error @schema-v3.1
+  Scenario: BR-RULE-288 INV-4 violated -- path paired with literalNumber rejected
+    Given an A2UI component property requires a bound value
+    When the bound value is { "literalNumber": 5, "path": "/foo" }
+    Then the value is malformed
+    And the error code should be "BOUND_VALUE_MALFORMED"
+    And the error should include "suggestion" field
+    And the suggestion should contain "literalString"
+    # BR-RULE-288 INV-4: only literalString + path is a defined variant; other literal+path pairings → BOUND_VALUE_MALFORMED
+
+  @T-UC-014-part-bound-value-oneof @partition @bound-value-oneof @br-rule-288 @schema-v3.1
+  Scenario Outline: A2UI bound value oneOf partition validation - <partition>
+    Given an A2UI component property requires a bound value
+    When the bound value matches <partition>
+    Then <outcome>
+
+    Examples: Valid partitions
+      | partition                   | outcome                                                       |
+      | literal_string_only         | the value is well-formed (host renders the literal string)     |
+      | literal_number_only         | the value is well-formed (host renders the literal number)     |
+      | literal_boolean_only        | the value is well-formed (host renders the literal boolean)    |
+      | path_only                   | the value is well-formed (host binds the path)                 |
+      | literal_string_with_path    | the value is well-formed (default literal plus binding)        |
+
+    Examples: Invalid partitions
+      | partition                   | outcome                                                                                                                       |
+      | multiple_variants           | error "BOUND_VALUE_MALFORMED" with suggestion "Remove conflicting keys so the value matches a single oneOf variant"           |
+      | empty_object                | error "BOUND_VALUE_MALFORMED" with suggestion "Provide one of the defined oneOf variants"                                     |
+      | unknown_key                 | error "BOUND_VALUE_MALFORMED" with suggestion "Do not include keys outside the chosen variant"                                |
+      | invalid_literal_with_path   | error "BOUND_VALUE_MALFORMED" with suggestion "Pair path only with literalString"                                             |
+
+  @T-UC-014-bound-bound-value-oneof @boundary @bound-value-oneof @br-rule-288 @schema-v3.1
+  Scenario Outline: A2UI bound value oneOf boundary validation - <boundary_point>
+    Given an A2UI component property requires a bound value
+    When the bound value is at boundary <boundary_point>
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                              | outcome                                                                                                         |
+      | { "literalString": "Hello" }                                | the value is well-formed                                                                                        |
+      | { "literalNumber": 0 }                                      | the value is well-formed                                                                                        |
+      | { "literalBoolean": false }                                 | the value is well-formed                                                                                        |
+      | { "path": "/products/0/title" }                             | the value is well-formed                                                                                        |
+      | { "literalString": "Loading…", "path": "/products/0/title" } | the value is well-formed                                                                                     |
+      | { "literalString": "x", "literalBoolean": true }            | error "BOUND_VALUE_MALFORMED" with suggestion "Remove conflicting keys so the value matches a single oneOf variant" |
+      | {}                                                          | error "BOUND_VALUE_MALFORMED" with suggestion "Provide one of the defined oneOf variants"                       |
+      | { "literalNumber": 5, "path": "/foo" }                      | error "BOUND_VALUE_MALFORMED" with suggestion "Pair path only with literalString"                               |
+
+  @T-UC-014-bound-idempotency-key @boundary @idempotency-key @br-rule-286 @schema-v3.1
+  Scenario Outline: SI idempotency_key boundary validation - <boundary_point>
+    Given a Buyer Agent prepared to call a mutating SI operation
+    When the request includes idempotency_key at boundary <boundary_point>
+    Then <outcome>
+
+    Examples: Boundary values
+      | boundary_point                                                                              | outcome                                                                                                          |
+      | idempotency_key absent from si_initiate_session_request                                     | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"   |
+      | idempotency_key absent from si_send_message_request                                         | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Generate a fresh UUID v4 and include it as idempotency_key"   |
+      | empty string (length 0)                                                                     | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                            |
+      | length 15 (min - 1)                                                                         | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                            |
+      | length 16 (min, inclusive)                                                                  | the request is accepted (idempotency_key is well-formed)                                                         |
+      | length 17 (min + 1)                                                                         | the request is accepted                                                                                          |
+      | length 254 (max - 1)                                                                        | the request is accepted                                                                                          |
+      | length 255 (max, inclusive)                                                                 | the request is accepted (idempotency_key is well-formed)                                                         |
+      | length 256 (max + 1)                                                                        | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                            |
+      | valid length, disallowed character (e.g. space)                                             | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
+      | valid length, disallowed character (e.g. /)                                                 | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |
+      | fresh UUID v4 (36 chars, valid pattern)                                                     | the request is accepted (idempotency_key is well-formed)                                                         |
+      | idempotency_key matches an already-processed key on si_initiate or si_send_message          | the original response is returned (at-most-once mutation; no new session/turn created)                            |
+
+  @T-UC-014-part-idempotency-key @partition @idempotency-key @br-rule-286 @schema-v3.1
+  Scenario Outline: SI idempotency_key partition validation - <partition>
+    Given a Buyer Agent prepared to call a mutating SI operation
+    When the request includes idempotency_key matching <partition>
+    Then <outcome>
+
+    Examples: Valid partitions
+      | partition         | outcome                                                                                                  |
+      | fresh_uuid        | the request is accepted (fresh UUID v4 idempotency_key is well-formed)                                   |
+      | typical_valid     | the request is accepted (16-255 chars matching ^[A-Za-z0-9_.:-]+$)                                       |
+      | boundary_min      | the request is accepted (exactly 16 characters, at minimum length)                                       |
+      | boundary_max      | the request is accepted (exactly 255 characters, at maximum length)                                      |
+      | replayed_key      | the original response is returned (at-most-once mutation; no new session/turn created)                    |
+
+    Examples: Invalid partitions
+      | partition           | outcome                                                                                                        |
+      | missing_key         | error "IDEMPOTENCY_KEY_REQUIRED" with suggestion "Provide a client-generated idempotency_key (fresh UUID v4)" |
+      | empty_string        | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
+      | too_short_key       | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
+      | too_long_key        | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Use a fresh UUID v4"                                          |
+      | pattern_violation   | error "IDEMPOTENCY_KEY_INVALID" with suggestion "Remove spaces, slashes, and any characters outside [A-Za-z0-9_.:-]" |

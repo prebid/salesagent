@@ -1,5 +1,10 @@
 """Creative Agent Registry for dynamic format discovery per AdCP v2.4.
 
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [valid-type] on lines ~179, ~192: ImageFormatAsset | VideoFormatAsset union
+  annotation. SDK asset classes are dynamically resolved type factories; mypy
+  cannot validate the union. Permanent until upstream ships StrEnum.
+
 This module provides:
 1. Creative agent registry (system defaults + tenant-specific)
 2. Dynamic format discovery via MCP
@@ -26,6 +31,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+# FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
@@ -176,7 +182,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
     # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
     # ImageFormatAsset = image, VideoFormatAsset = video. Pass asset_type as plain string (not enum).
     if asset_type == "video":
-        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(
+        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(  # type: ignore[valid-type]
             item_type="individual",
             asset_id="primary",
             asset_type="video",
@@ -189,7 +195,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
             asset_type="image",
             required=True,
         )
-    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]
+    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]  # type: ignore[valid-type]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(

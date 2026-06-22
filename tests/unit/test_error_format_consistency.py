@@ -47,6 +47,7 @@ class TestMCPErrorShapes:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-001",
         )
 
         with pytest.raises(AdCPAuthRequiredError) as exc_info:
@@ -79,9 +80,8 @@ class TestMCPErrorShapes:
         # missing brand.domain field. We don't pin on a specific code because
         # Pydantic v2's error codes vary by union/discriminator path.
         error_msg = str(exc_info.value)
-        assert "packages" in error_msg or "domain" in error_msg, (
-            f"Pydantic error should reference the malformed field, got: {error_msg}"
-        )
+        field_referenced = "packages" in error_msg or "domain" in error_msg
+        assert field_referenced, f"Pydantic error should reference the malformed field, got: {error_msg}"
 
     @pytest.mark.asyncio
     async def test_auth_error_raises_validation_error(self):
@@ -95,6 +95,7 @@ class TestMCPErrorShapes:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-002",
         )
 
         # _create_media_buy_impl requires identity; passing None triggers AdCPAuthenticationError
@@ -104,8 +105,9 @@ class TestMCPErrorShapes:
         assert "Identity is required" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_not_found_principal_returns_error_response(self):
-        """MCP _create_media_buy_impl returns error response for non-existent principal."""
+    async def test_not_found_principal_raises_auth_error(self):
+        """MCP _create_media_buy_impl raises AdCPAuthenticationError for non-existent principal."""
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
@@ -116,6 +118,7 @@ class TestMCPErrorShapes:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-003",
         )
 
         identity = ResolvedIdentity(
@@ -128,17 +131,10 @@ class TestMCPErrorShapes:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
+            patch("src.core.auth.get_principal_object", return_value=None),
         ):
-            result = await _create_media_buy_impl(req=req, identity=identity)
-
-        # Should return a CreateMediaBuyResult with error response
-        assert hasattr(result, "response")
-        response = result.response
-        assert hasattr(response, "errors")
-        assert response.errors is not None
-        assert len(response.errors) > 0
-        assert response.errors[0].code == "AUTH_REQUIRED"
+            with pytest.raises(AdCPAuthenticationError, match="nonexistent"):
+                await _create_media_buy_impl(req=req, identity=identity)
 
 
 class TestA2AErrorShapes:
@@ -366,6 +362,7 @@ class TestCrossTransportErrorConsistency:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-004",
         )
 
         # MCP path: missing identity — raises AdCPValidationError (transport-agnostic)
@@ -447,11 +444,14 @@ class TestCrossTransportErrorConsistency:
 
     @pytest.mark.asyncio
     async def test_nonexistent_principal_error_consistent(self):
-        """Both transports handle non-existent principal the same way.
+        """Both transports handle non-existent principal via the same typed AdCPAuthenticationError.
 
-        The _create_media_buy_impl function returns a CreateMediaBuyError when
-        principal is not found. This result flows through both transports.
+        The _create_media_buy_impl function raises AdCPAuthenticationError when the
+        principal is not found; this verifies build_two_layer_error_envelope — the
+        helper every transport boundary delegates to — maps it to AUTH_TOKEN_INVALID.
+        The live A2A wire shape for this path is pinned by test_a2a_error_responses.
         """
+        from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import CreateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
@@ -462,6 +462,7 @@ class TestCrossTransportErrorConsistency:
             packages=[],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
+            idempotency_key="unit-test-key-errfmt-005",
         )
 
         identity = ResolvedIdentity(
@@ -474,27 +475,17 @@ class TestCrossTransportErrorConsistency:
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value={"tenant_id": "test"}),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.tools.media_buy_create.get_principal_object", return_value=None),
+            patch("src.core.auth.get_principal_object", return_value=None),
         ):
-            # Shared impl returns the same result regardless of transport
-            result = await _create_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPAuthenticationError, match="ghost_principal") as exc_info:
+                await _create_media_buy_impl(req=req, identity=identity)
 
-        # The result contains an error response with authentication_error code
-        response = result.response
-        assert hasattr(response, "errors")
-        assert response.errors is not None
-        assert len(response.errors) > 0
-        error = response.errors[0]
-
-        assert error.code == "AUTH_REQUIRED"
-        assert "not found" in error.message.lower()
-
-        # When this flows through A2A's _serialize_for_a2a, it becomes:
-        serialized = AdCPRequestHandler._serialize_for_a2a(response)
-        assert serialized["success"] is False, "Serialized response must have success=False"
-        assert "errors" in serialized
-        assert len(serialized["errors"]) > 0
-        assert serialized["errors"][0]["code"] == "AUTH_REQUIRED"
+        # The boundary translator (called by every transport wrapper) produces
+        # the same two-layer envelope for this typed exception.
+        envelope = build_two_layer_error_envelope(exc_info.value)
+        assert envelope["adcp_error"]["code"] == "AUTH_TOKEN_INVALID"
+        assert envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
+        assert "not found" in envelope["adcp_error"]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_unknown_skill_only_affects_a2a(self):
@@ -742,8 +733,10 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes used by our exception classes
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
+        "INVALID_REQUEST",  # SDK standard: AdCPInvalidRequestError (semantically-invalid value)
         "AUTH_TOKEN_INVALID",  # AdCP spec: invalid/missing auth token (AdCPAuthenticationError)
         "AUTH_REQUIRED",  # SDK standard: authorisation (AdCPAuthorizationError)
+        "POLICY_VIOLATION",  # SDK standard: AdCPPolicyViolationError (content/advertising policy block)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
         "ACCOUNT_AMBIGUOUS",  # adcp-req: Natural key matches multiple accounts (BR-RULE-080)
@@ -759,8 +752,24 @@ class TestErrorCodeVocabularyConsistency:
         # SDK standard codes added by the error-emission-architecture substrate.
         "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
+        "PRODUCT_NOT_FOUND",  # SDK standard: AdCPProductNotFoundError
+        "SESSION_NOT_FOUND",  # SDK standard: AdCPContextNotFoundError (unresolvable context_id)
+        "CREATIVE_NOT_FOUND",  # Internal: AdCPCreativeNotFoundError (wire → INVALID_REQUEST)
+        "FORMAT_NOT_FOUND",  # Internal: AdCPFormatNotFoundError (wire → INVALID_REQUEST)
+        "TASK_NOT_FOUND",  # Internal: AdCPTaskNotFoundError (wire → INVALID_REQUEST)
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
+        "IDEMPOTENCY_CONFLICT",  # SDK standard: AdCPIdempotencyConflictError
+        "IDEMPOTENCY_EXPIRED",  # SDK standard: AdCPIdempotencyExpiredError
+        # Adapter-taxonomy codes (internal; wire → SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING)
+        "WORKFLOW_CREATION_FAILED",  # Internal: AdCPWorkflowError
+        "ACTIVATION_WORKFLOW_FAILED",  # Internal: AdCPActivationWorkflowError
+        "LINE_ITEM_CREATION_FAILED",  # Internal: AdCPLineItemError
+        "GAM_UPDATE_FAILED",  # Internal: AdCPGamUpdateError
+        "PARTIAL_FAILURE",  # Internal: AdCPBulkUpdateError
+        # Mock-adapter business-outcome codes (internal; wire → standard via ERROR_CODE_MAPPING)
+        "MEDIA_BUY_REJECTED",  # Internal: AdCPMediaBuyRejectedError (wire → POLICY_VIOLATION)
+        "INVENTORY_UNAVAILABLE",  # Internal: AdCPInventoryUnavailableError (wire → PRODUCT_UNAVAILABLE)
         # Advisory-on-success Pattern A codes (no dedicated exception subclass —
         # construction sites use Error(code=...) inside success envelopes).
         "CREATIVE_REJECTED",

@@ -18,7 +18,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import CreativeAction
 from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
     Reason,
     SyncCreativesInputRequired,
@@ -34,6 +33,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.harness import CreativeSyncEnv
+from tests.helpers.creative_test_helpers import creative_payload
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -42,14 +42,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 def _creative(**overrides) -> dict:
     """Minimal creative dict for testing."""
-    defaults = {
-        "creative_id": "c_async_1",
-        "name": "Async Lifecycle Test",
-        "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-        "assets": {"banner": {"url": "https://example.com/banner.png"}},
-    }
-    defaults.update(overrides)
-    return defaults
+    return creative_payload(
+        **{
+            "creative_id": "c_async_1",
+            "name": "Async Lifecycle Test",
+            "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+            **overrides,
+        }
+    )
 
 
 class TestAsyncSubmittedLifecycle:
@@ -81,7 +81,7 @@ class TestAsyncSubmittedLifecycle:
 
             # Creative was created successfully
             assert len(result.creatives) == 1
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             # Verify DB state: creative is in pending_review (queued for review = submitted)
             with get_db_session() as session:
@@ -90,13 +90,14 @@ class TestAsyncSubmittedLifecycle:
                 assert db_creative.status == "pending_review"
 
             # Verify AdCP async submitted schema can represent this state
-            submitted = SyncCreativesSubmitted(context=None, ext=None)
+            # SDK 5.7: task_id is now required on SyncCreativesSubmitted
+            submitted = SyncCreativesSubmitted(task_id="test-task-1", context=None, ext=None)
             assert "context" in SyncCreativesSubmitted.model_fields
             assert "ext" in SyncCreativesSubmitted.model_fields
 
-            # Can be constructed with no args (all optional per spec)
-            empty = SyncCreativesSubmitted()
-            assert empty.context is None
+            # task_id is required; verify with a value
+            s2 = SyncCreativesSubmitted(task_id="test-task-2")
+            assert s2.context is None
 
             # Serialization roundtrip
             data = submitted.model_dump()
@@ -141,7 +142,7 @@ class TestAsyncWorkingLifecycle:
 
             # Creative was created successfully
             assert len(result.creatives) == 1
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             # Verify DB state: creative is pending_review (AI review in progress = working)
             with get_db_session() as session:
@@ -199,7 +200,7 @@ class TestAsyncInputRequiredLifecycle:
 
             # Creative was created successfully
             assert len(result.creatives) == 1
-            assert result.creatives[0].action == CreativeAction.created
+            assert result.creatives[0].action == "created"
 
             # Verify DB state: creative needs human input
             with get_db_session() as session:
