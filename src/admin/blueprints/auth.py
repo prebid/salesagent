@@ -906,12 +906,6 @@ def gam_authorize(tenant_id):
             flash("Tenant not found", "error")
             return redirect(url_for("auth.login"))
 
-    # Check OAuth configuration
-    oauth = current_app.oauth if hasattr(current_app, "oauth") else None
-    if not oauth:
-        flash("OAuth not configured. Please contact your administrator.", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
-
     try:
         # Get GAM OAuth configuration
         from src.core.config import get_gam_oauth_config

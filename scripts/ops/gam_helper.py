@@ -1,9 +1,11 @@
-"""Helper functions for Google Ad Manager OAuth integration."""
+"""Helper functions for Google Ad Manager authentication and client creation."""
 
 import logging
 
 from googleads import ad_manager
+from sqlalchemy import select
 
+from src.adapters.gam.auth import GAMAuthManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 
@@ -12,14 +14,12 @@ logger = logging.getLogger(__name__)
 
 def get_ad_manager_client_for_tenant(tenant_id: str) -> ad_manager.AdManagerClient | None:
     """
-    Get a Google Ad Manager client for a specific tenant using OAuth credentials.
+    Get a Google Ad Manager client for a specific tenant.
 
-    This function:
-    1. Retrieves the tenant's GAM configuration (network code, refresh token, etc.)
-    2. Gets the OAuth client credentials from superadmin config
-    3. Creates OAuth2 credentials using the refresh token
-    4. Returns an initialized AdManagerClient
+    Supports both OAuth (refresh token) and service account authentication,
+    determined by the tenant's adapter config (gam_auth_method field).
 
+    
     Args:
         tenant_id: The tenant ID to get the client for
 
@@ -28,74 +28,46 @@ def get_ad_manager_client_for_tenant(tenant_id: str) -> ad_manager.AdManagerClie
 
     Raises:
         ValueError: If required configuration is missing
-        Exception: If OAuth token refresh fails
+        Exception: If credential creation or token refresh fails
     """
-    # Get tenant and adapter config
     with get_db_session() as db_session:
-        # Get tenant
-        tenant = db_session.query(Tenant).filter_by(tenant_id=tenant_id).first()
+        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not tenant:
             raise ValueError(f"Tenant {tenant_id} not found")
 
         tenant_name = tenant.name
-        ad_server = tenant.ad_server
 
-        if ad_server != "google_ad_manager":
-            raise ValueError(f"Tenant {tenant_id} is not configured for Google Ad Manager (using {ad_server})")
+        if tenant.ad_server != "google_ad_manager":
+            raise ValueError(f"Tenant {tenant_id} is not configured for Google Ad Manager (using {tenant.ad_server})")
 
-        # Get adapter config
-        adapter_config = (
-            db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager").first()
-        )
+        adapter_config = db_session.scalars(
+            select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
+        ).first()
         if not adapter_config:
             raise ValueError(f"No adapter configuration found for tenant {tenant_id}")
 
         gam_network_code = adapter_config.gam_network_code
-        gam_refresh_token = adapter_config.gam_refresh_token
-
-        # Validate required GAM fields
         if not gam_network_code:
             raise ValueError(f"GAM network code not configured for tenant {tenant_id}")
-        if not gam_refresh_token:
-            raise ValueError(f"GAM refresh token not configured for tenant {tenant_id}")
 
-        # Get OAuth client credentials from validated configuration
-        try:
-            from src.core.config import get_gam_oauth_config
-            from src.core.logging_config import oauth_structured_logger
-            from src.core.oauth_retry import create_oauth_client_with_retry
+        auth_method = adapter_config.gam_auth_method or "oauth"
 
-            gam_config = get_gam_oauth_config()
-            client_id = gam_config.client_id
-            client_secret = gam_config.client_secret
-
-            # Log configuration load
-            oauth_structured_logger.log_gam_oauth_config_load(
-                success=True, client_id_prefix=client_id[:20] + "..." if len(client_id) > 20 else client_id
-            )
-
-        except Exception as e:
-            oauth_structured_logger.log_gam_oauth_config_load(success=False, error=str(e))
-            raise ValueError(f"GAM OAuth configuration error: {str(e)}") from e
+        if auth_method == "service_account":
+            if not adapter_config.gam_service_account_json:
+                raise ValueError(f"GAM service account JSON not configured for tenant {tenant_id}")
+            auth_config: dict = {"service_account_json": adapter_config.gam_service_account_json}
+        else:
+            if not adapter_config.gam_refresh_token:
+                raise ValueError(f"GAM refresh token not configured for tenant {tenant_id}")
+            auth_config = {"refresh_token": adapter_config.gam_refresh_token}
 
     try:
-        # Create GoogleAds OAuth2 client with retry logic
-        oauth2_client = create_oauth_client_with_retry(
-            client_id=client_id, client_secret=client_secret, refresh_token=gam_refresh_token
-        )
-
-        # Log successful client creation
-        oauth_structured_logger.log_gam_client_creation(success=True)
-        logger.info(f"Created OAuth2 client for tenant {tenant_id}")
-
-        # Create and return the Ad Manager client
+        oauth2_client = GAMAuthManager(auth_config).get_credentials()
         client = ad_manager.AdManagerClient(
             oauth2_client, f"AdCP-Sales-Agent-{tenant_name}", network_code=gam_network_code
         )
-
-        logger.info(f"Successfully created GAM client for tenant {tenant_id} (network: {gam_network_code})")
+        logger.info(f"Created GAM client for tenant {tenant_id} (auth={auth_method}, network={gam_network_code})")
         return client
-
     except Exception as e:
         logger.error(f"Failed to create GAM client for tenant {tenant_id}: {str(e)}")
         raise
@@ -206,9 +178,9 @@ def get_gam_config_for_tenant(tenant_id: str) -> dict | None:
         A dict with GAM configuration, or None if not configured
     """
     with get_db_session() as db_session:
-        adapter_config = (
-            db_session.query(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager").first()
-        )
+        adapter_config = db_session.scalars(
+            select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
+        ).first()
 
         if not adapter_config:
             return None
@@ -216,6 +188,8 @@ def get_gam_config_for_tenant(tenant_id: str) -> dict | None:
         return {
             "network_code": adapter_config.gam_network_code,
             "has_refresh_token": bool(adapter_config.gam_refresh_token),
+            "auth_method": adapter_config.gam_auth_method or "oauth",
+            "has_service_account": bool(adapter_config.gam_service_account_json),
             "company_id": adapter_config.advertiser_id if hasattr(adapter_config, "advertiser_id") else None,
             "trafficker_id": adapter_config.gam_trafficker_id,
             "manual_approval_required": adapter_config.gam_manual_approval_required,
