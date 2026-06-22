@@ -911,9 +911,13 @@ Feature: BR-UC-005 Discover Creative Formats
       | dooh          | valid    |
       | not_provided  | valid    |
 
-    Examples: Invalid partitions
+    # Type filter REMOVED in adcp 3.12 — ListCreativeFormatsRequest has no
+    # 'type' field, so every value dispatches unfiltered and production returns
+    # the full catalog. The former 'unknown_value -> invalid' rejection no longer
+    # exists; reconciled to valid (success). salesagent-33r0.
+    Examples: Formerly-invalid partitions (filter removed in 3.12, now valid)
       | partition      | expected |
-      | unknown_value  | invalid  |
+      | unknown_value  | valid    |
 
   @T-UC-005-partition-agent-asset @UC-005-MAIN-MCP-22 @partition @creative_agent_asset_type
   Scenario Outline: Creative agent asset type partition - <partition>
@@ -943,12 +947,15 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent queries creative agent formats at type boundary "<boundary_point>"
     Then the creative agent type handling should be <expected>
 
+    # Type filter REMOVED in adcp 3.12 — no 'type' field on the request, so
+    # 'native' dispatches unfiltered like every other value; production no longer
+    # rejects it. Reconciled to valid (success). salesagent-33r0.
     Examples:
       | boundary_point                                                  | expected |
       | audio (first enum value)                                        | valid    |
       | dooh (last enum value)                                          | valid    |
       | Not provided (no filter)                                        | valid    |
-      | native (valid in media-buy variant but not in creative agent)   | invalid  |
+      | native (valid in media-buy variant but not in creative agent)   | valid    |
 
   @T-UC-005-boundary-agent-asset @UC-005-MAIN-MCP-22 @boundary @creative_agent_asset_type
   Scenario Outline: Creative agent asset type boundary - <boundary_point>

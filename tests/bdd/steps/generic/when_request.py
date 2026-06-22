@@ -750,20 +750,20 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 
 def _partition_agent_type(ctx: dict, partition: str) -> None:
-    """Creative agent type filter — removed in adcp 3.12, all dispatch unfiltered."""
+    """Creative agent type filter — REMOVED in adcp 3.12, all dispatch unfiltered.
+
+    ``ListCreativeFormatsRequest`` has no ``type`` field (the creative-agent-type
+    filter was excised in adcp 3.12), so EVERY type partition — including the
+    former 'unknown_value'/'native' rejection cases — carries no field to land on
+    and dispatches the same unfiltered request through the wire. Production no
+    longer rejects any value; it returns the full catalog. The previous code
+    constructed a test-side ``ValueError`` to fake a rejection production never
+    performs. Per the schema hierarchy (3.12 authoritative), these reconcile to
+    SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
+    real result. salesagent-33r0.
+    """
     ctx["filter_under_test"] = "creative_agent_format_type"
-    if partition in ("not_provided", "omitted"):
-        _call(ctx)
-    elif partition == "unknown_value":
-        # Unknown type values should be rejected
-        ctx["error"] = ValueError(f"Unknown creative agent format type: {partition}")
-    elif partition in ("native",):
-        # native is valid for media-buy but not creative agent — treat as invalid
-        ctx["error"] = ValueError(f"Invalid creative agent format type: {partition}")
-    else:
-        # Valid type values (audio, video, display, dooh) — type filter removed,
-        # so dispatch unfiltered request through production code
-        _call(ctx)
+    _call(ctx)
 
 
 def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
