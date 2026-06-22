@@ -917,20 +917,6 @@ def _adcp_error_class_for_http_status(status: int) -> type[AdCPError]:
     return AdCPAdapterError
 
 
-def status_to_recovery(status: int) -> tuple[str, RecoveryHint]:
-    """The ``(error_code, recovery)`` a GENERAL (buyer-facing) HTTP status maps to.
-
-    The pure mapping underneath ``adcp_error_for_http_status`` for a consumer that
-    needs the verdict without constructing an exception — an error type that
-    configures ``self.error_code``/``self.recovery`` in ``__init__`` cannot consume a
-    factory that hands back a *different* object. Reads the selected class's
-    ``_default_*`` so the table has one home. Ad-server boundaries use
-    ``ad_server_status_to_recovery`` instead (a 403 there is terminal).
-    """
-    cls = _adcp_error_class_for_http_status(status)
-    return (cls._default_error_code, cls._default_recovery)
-
-
 def adcp_error_for_http_status(
     status: int, message: str, *, field: str | None = None, suggestion: str | None = None
 ) -> AdCPError:
@@ -968,9 +954,11 @@ def _adcp_adapter_error_class_for_http_status(status: int) -> type[AdCPError]:
 def ad_server_status_to_recovery(status: int) -> tuple[str, RecoveryHint]:
     """The ``(error_code, recovery)`` an AD-SERVER HTTP status maps to.
 
-    The ad-server dual of ``status_to_recovery`` for a consumer that configures its
-    recovery in ``__init__`` (``BroadstreetAPIError``). A 403 is terminal (operator
-    credential denied); all other statuses share the general table.
+    The pure-mapping form for a consumer that configures its recovery in ``__init__``
+    (``BroadstreetAPIError``) and so cannot consume a factory that hands back a
+    *different* object. Reads the selected class's ``_default_*`` so the table has one
+    home, shared with ``adcp_adapter_error_for_http_status``. A 403 is terminal
+    (operator credential denied); all other statuses share the general table.
     """
     cls = _adcp_adapter_error_class_for_http_status(status)
     return (cls._default_error_code, cls._default_recovery)
