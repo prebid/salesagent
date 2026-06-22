@@ -1888,7 +1888,7 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition     | update_fields                    | outcome                                 |
-      | empty_update  | no updatable fields in request   | error "EMPTY_UPDATE" with suggestion    |
+      | empty_update  | no updatable fields in request   | error "VALIDATION_ERROR" with suggestion    |
 
   @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
@@ -1905,7 +1905,7 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                              | update_config                          | outcome                                 |
       | request with exactly one updatable field    | 1 package with budget update only      | success                                 |
       | request with all updatable fields           | packages with all updatable fields     | success                                 |
-      | request with zero updatable fields          | no updatable fields in request         | error "EMPTY_UPDATE" with suggestion    |
+      | request with zero updatable fields          | no updatable fields in request         | error "VALIDATION_ERROR" with suggestion    |
 
   @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>
@@ -1926,7 +1926,7 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition                       | approval_mode  | adapter_result   | outcome                          |
-      | auto_approve_adapter_failure    | auto-approval  | returns error    | error "ADAPTER_ERROR" — no records persisted |
+      | auto_approve_adapter_failure    | auto-approval  | returns error    | error "SERVICE_UNAVAILABLE" — no records persisted |
 
   @T-UC-003-boundary-persistence-timing @boundary @persistence_timing
   Scenario Outline: Persistence timing boundary validation - <boundary_point>
@@ -1943,7 +1943,7 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                              | approval_mode  | adapter_result   | outcome                                       |
       | adapter returns success (auto-approval)     | auto-approval  | returns success  | success with persisted records                |
-      | adapter returns error (auto-approval)       | auto-approval  | returns error    | error "ADAPTER_ERROR" — no records persisted  |
+      | adapter returns error (auto-approval)       | auto-approval  | returns error    | error "SERVICE_UNAVAILABLE" — no records persisted  |
       | manual approval detected (pending state)    | manual         | not yet called   | success with pending status                   |
 
   @T-UC-003-partition-principal-ownership @partition @principal_ownership
