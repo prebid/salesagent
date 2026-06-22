@@ -203,12 +203,8 @@ def iter_architecture_guard_trees(
 
 
 def src_python_files(repo: Path) -> Iterator[Path]:
-    """Every .py file under src/, excluding migrations and the legacy GAM file."""
-    excluded = {repo / "src" / "adapters" / "google_ad_manager_original.py"}
-    for p in (repo / "src").rglob("*.py"):
-        if p in excluded:
-            continue
-        yield p
+    """Every .py file under src/, excluding migrations."""
+    yield from (repo / "src").rglob("*.py")
 
 
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
@@ -239,7 +235,9 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
 
 # Patterns intentionally permissive: surfaces use varied formats. Each returns
 # a normalized version string ("3.12", "17", "0.11.7") via the first capture group.
-# ``anchor_kind`` labels the surface (e.g. ``target-version``) for ADR-008 exemptions.
+# ``anchor_kind`` labels the surface for ADR-008 exemptions; each kind mirrors its
+# config key verbatim (hyphen: ``requires-python``, ``target-version``; underscore:
+# ``python_version``).
 
 _DOCKERFILE_PYTHON_VERSION_PATTERN = r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)"
 
@@ -536,7 +534,11 @@ def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]]
 
 
 def assert_dockerfile_digest_args_present(text: str) -> None:
-    """Assert Dockerfile declares digest-pinned ``UV_IMAGE_DIGEST`` and ``PYTHON_BASE_DIGEST`` ARGs."""
+    """Assert Dockerfile declares digest ARGs with ``sha256:<64-hex>`` shape.
+
+    Verifies presence and format only — not that the digest matches the pinned
+    ``PYTHON_VERSION`` / ``UV_VERSION`` tags (see #1468 for version-aware follow-up).
+    """
     missing: list[str] = []
     if not _DOCKERFILE_UV_IMAGE_DIGEST_RE.search(text):
         missing.append("ARG UV_IMAGE_DIGEST=sha256:<64-hex>")

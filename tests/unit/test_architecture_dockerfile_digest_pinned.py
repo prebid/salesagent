@@ -25,7 +25,7 @@ _KNOWN_BAD_FROM = [
 
 @pytest.mark.arch_guard
 def test_dockerfile_digest_args_present() -> None:
-    """Dockerfile must declare digest-pinned UV_IMAGE_DIGEST and PYTHON_BASE_DIGEST ARGs."""
+    """Dockerfile must declare UV_IMAGE_DIGEST and PYTHON_BASE_DIGEST with sha256:<64-hex> shape."""
     assert_dockerfile_digest_args_present((repo_root() / "Dockerfile").read_text(encoding="utf-8"))
 
 

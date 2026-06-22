@@ -230,6 +230,20 @@ required (or stay blocked on stale `Test Suite / …` names).
 | `make quality` | Yes (`tests/unit/ -x`) | Local pre-commit habit |
 | `make quality-full` | Full suites via `run_all_tests.sh` | Pre-PR local gate |
 
+### Local vs CI Postgres isolation (D9)
+
+Local `tox -e integration` and `make test-int` reuse a **persistent** Postgres
+instance (agent-db or Docker stack on the host). CI integration/admin/BDD jobs
+start a **fresh** `postgres:17-alpine` service container per job run.
+
+Cross-test isolation bugs that depend on process-wide factory binding (see
+`tests/admin/conftest.py`) can reproduce locally but not in CI, or vice versa.
+
+**Diagnostic:** run `tox -p` or `./run_all_tests.sh quick` locally against a
+shared Postgres, then compare with the same slice in CI. If a failure is
+isolation-specific, inspect factory session binding and tenant scoping — not
+Postgres version drift (guarded by `test_architecture_postgres_image_anchor`).
+
 ## Layered pre-commit model (PR 4 of #1234)
 
 | Layer | Trigger | Enforcement |

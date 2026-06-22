@@ -153,7 +153,6 @@ repos:
         language: system
         args: [--config-file=mypy.ini, src/]
         files: '^src/'
-        exclude: '^src/adapters/google_ad_manager_original\.py$'
         pass_filenames: false
         require_serial: true
         stages: [pre-push]

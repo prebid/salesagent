@@ -1,5 +1,5 @@
-name: Install uv
-description: Install the uv version from .uv-version (single source; pin setup-uv here only).
+name: Install uv and Python
+description: Install the uv version from .uv-version and provision Python from .python-version (single-source anchors; pin setup-uv SHA here only).
 runs:
   using: composite
   steps:
