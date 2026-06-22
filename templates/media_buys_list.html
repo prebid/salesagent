@@ -97,7 +97,7 @@
                             </td>
                             <td>
                                 {% if mb.budget %}
-                                    ${{ "{:,.2f}".format(mb.budget) }}
+                                    {{ mb.currency or 'USD' }} {{ "{:,.2f}".format(mb.budget) }}
                                 {% else %}
                                     <span class="text-muted">-</span>
                                 {% endif %}

@@ -64,8 +64,37 @@ from adcp.server import (
     ToolContext,
     auth_context_factory,
 )
-from adcp.server.mcp_tools import DISCOVERY_TOOLS
+from adcp.server.mcp_tools import (
+    ADCP_TOOL_DEFINITIONS,
+    DISCOVERY_TOOLS,
+    _ensure_pydantic_schemas_applied,
+)
 from adcp.server.spec_compat import _spec_compat_hooks_impl
+
+from src.core.slim_schemas import CREATE_MEDIA_BUY_SLIM_SCHEMA
+
+# Optionally replace the create_media_buy inputSchema with a compact version.
+#
+# adcp's _generate_pydantic_schemas() inlines all $refs, turning the
+# CreateMediaBuyRequest schema into ~93 000 lines of JSON.  That volume
+# fills an LLM context window on tools/list, making the tool unusable.
+#
+# Set ADCP_COMPACT_TOOL_SCHEMAS=true to activate the slim schema.
+# When unset or false, the full adcp-generated schema is used (default).
+#
+# Strategy: call _ensure_pydantic_schemas_applied() eagerly so it sets
+# _schemas_applied=True.  Subsequent lazy calls on tools/list become
+# no-ops.  We then overwrite create_media_buy's inputSchema with our slim
+# version — it sticks for the lifetime of the process.
+#
+# Runtime validation is unchanged: the function still validates the
+# incoming request against the full Pydantic CreateMediaBuyRequest model.
+_ensure_pydantic_schemas_applied()
+if os.environ.get("ADCP_COMPACT_TOOL_SCHEMAS", "").lower() == "true":
+    for _tool in ADCP_TOOL_DEFINITIONS:
+        if _tool["name"] == "create_media_buy":
+            _tool["inputSchema"] = CREATE_MEDIA_BUY_SLIM_SCHEMA
+            break
 from sqlalchemy import select
 
 # Import for side-effect: registers the SQLAlchemy session listener that

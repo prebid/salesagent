@@ -68,7 +68,7 @@
         </div>
         <div class="detail-row">
             <span class="label">Budget:</span>
-            <span class="value">${{ "%.2f"|format(media_buy.budget or 0) }} {{ media_buy.currency or 'USD' }}</span>
+            <span class="value">{{ media_buy.currency or 'USD' }} {{ "%.2f"|format(media_buy.budget or 0) }}</span>
         </div>
         {% if media_buy.start_date and media_buy.end_date %}
         <div class="detail-row">
@@ -229,9 +229,9 @@
                     <span class="value">
                         {# Handle both Budget object (dict) and legacy float #}
                         {% if item.package.package_config.budget is mapping %}
-                            ${{ "%.2f"|format(item.package.package_config.budget.total) }}
+                            {{ media_buy.currency or 'USD' }} {{ "%.2f"|format(item.package.package_config.budget.total) }}
                         {% else %}
-                            ${{ "%.2f"|format(item.package.package_config.budget) }}
+                            {{ media_buy.currency or 'USD' }} {{ "%.2f"|format(item.package.package_config.budget) }}
                         {% endif %}
                     </span>
                 </div>
@@ -261,9 +261,9 @@
                         <span class="label">Rate:</span>
                         <span class="value">
                             {% if pricing.is_fixed %}
-                                ${{ "%.2f"|format(pricing.rate) }} {{ pricing.currency }} (Fixed)
+                                {{ pricing.currency }} {{ "%.2f"|format(pricing.rate) }} (Fixed)
                             {% else %}
-                                ${{ "%.2f"|format(pricing.bid_price or pricing.rate or 0) }} {{ pricing.currency }} (Bid Price)
+                                {{ pricing.currency }} {{ "%.2f"|format(pricing.bid_price or pricing.rate or 0) }} (Bid Price)
                             {% endif %}
                         </span>
                     </div>
@@ -289,7 +289,7 @@
                     <div class="detail-row">
                         <span class="label">Rate:</span>
                         <span class="value">
-                            ${{ "%.2f"|format(first_option.rate) }} {{ first_option.currency }}
+                            {{ first_option.currency }} {{ "%.2f"|format(first_option.rate) }}
                             {% if first_option.is_fixed %}(Fixed){% else %}(Floor){% endif %}
                         </span>
                     </div>
