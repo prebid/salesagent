@@ -221,7 +221,7 @@ def supports_property_list_targeting(adapter: object | None) -> bool:
 
 # ─── property_list targeting helpers ────────────────────────────────────
 #
-# Spec scope: these helpers only handle ``property_list``. The AdCP 3.0.0
+# Spec scope: these helpers only handle ``property_list``. The AdCP 3.1.0-beta.3
 # spec governs ``property_list`` via a per-product flag
 # (``Product.property_targeting_allowed``) and a per-capability declaration
 # (``MediaBuyFeatures.property_list_filtering``). ``collection_list`` and
@@ -243,7 +243,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
     machine-actionable ``suggestion`` so the buyer agent can drop the field
     and retry, or pick a capable seller.
 
-    AdCP spec basis (3.0.1): the spec's only property_list capability flag
+    AdCP spec basis (3.1.0-beta.3): the spec's only property_list capability flag
     (``features.property_list_filtering``) names the get_products filter; the
     targeting side has no standard flag, so this seller advertises it via
     ``ext.prebid.property_list_targeting`` in get_adcp_capabilities; honest
@@ -295,7 +295,7 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
 def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
-    AdCP 3.0.0 (core/product.json ``property_targeting_allowed``): "Sellers
+    AdCP 3.1.0-beta.3 (core/product.json ``property_targeting_allowed``): "Sellers
     SHOULD return a validation error if the product has
     property_targeting_allowed: false."
 
