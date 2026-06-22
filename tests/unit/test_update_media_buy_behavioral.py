@@ -88,7 +88,7 @@ def test_principal_not_found_returns_error():
         with pytest.raises(AdCPAuthenticationError, match="principal_test") as exc_info:
             env.call_impl(media_buy_id="mb_001")
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
         # _update_media_buy_impl wraps its body in the ``audit_workflow_step_failure_ctx`` context
         # manager, so the raise propagates through it rather than via a per-site
         # fail_step call; the exception type is asserted by ``pytest.raises`` above.
@@ -2014,7 +2014,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     def test_principal_not_found_in_database(self):
         """Principal ID exists but no DB record raises AdCPAuthenticationError.
@@ -2029,7 +2029,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     def test_state_unchanged_on_auth_failure(self):
         """No records modified when authentication fails.
@@ -2044,7 +2044,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes through UoW

@@ -43,8 +43,8 @@ class TestEnvelopeShape:
         """Internal error_code is translated through ERROR_CODE_MAPPING.
 
         NOT_FOUND is an INTERNAL_CODES entry mapped to INVALID_REQUEST (a
-        spec STANDARD code). AUTH_TOKEN_INVALID passes through unchanged — it is
-        not in ERROR_CODE_MAPPING.
+        spec STANDARD code). AUTH_REQUIRED passes through unchanged — it is a
+        translation target, not a key, in ERROR_CODE_MAPPING.
         """
         exc = AdCPError("resource gone")
         exc.error_code = "NOT_FOUND"

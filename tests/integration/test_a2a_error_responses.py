@@ -143,7 +143,7 @@ class TestA2AErrorPropagation:
         )
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
-        """Principal-not-found surfaces AUTH_TOKEN_INVALID as a two-layer envelope on the A2A wire."""
+        """Principal-not-found surfaces AUTH_REQUIRED as a two-layer envelope on the A2A wire."""
         # Mock identity with non-existent principal — simulates resolved but invalid principal
         identity = PrincipalFactory.make_identity(
             principal_id="nonexistent_principal",
@@ -188,11 +188,11 @@ class TestA2AErrorPropagation:
 
         # Principal-not-found raises AdCPAuthenticationError from _impl; the A2A
         # dispatcher catches the typed error and builds the two-layer envelope on
-        # a failed Task. AUTH_TOKEN_INVALID is a STANDARD_ERROR_CODES entry
+        # a failed Task. AUTH_REQUIRED is a STANDARD_ERROR_CODES entry
         # (passthrough — not rewritten by ERROR_CODE_MAPPING); recovery=terminal.
         assert_envelope_shape(
             artifact_data,
-            "AUTH_TOKEN_INVALID",
+            "AUTH_REQUIRED",
             recovery="terminal",
             message_substr="not found",
         )

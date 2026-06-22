@@ -44,7 +44,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTH_TOKEN_INVALID"
+        assert exc.error_code == "AUTH_REQUIRED"
 
     def test_authorization_error(self):
         """AdCPAuthorizationError must have status_code=403."""
@@ -504,10 +504,10 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
-        # AdCPAuthenticationError.error_code = "AUTH_TOKEN_INVALID" (spec STANDARD code,
-        # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_TOKEN_INVALID, not
+        # AdCPAuthenticationError.error_code = "AUTH_REQUIRED" (spec STANDARD code,
+        # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_REQUIRED, not
         # AUTH_REQUIRED (which is for AdCPAuthorizationError).
-        assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID", recovery="terminal")
+        assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="terminal")
 
     def test_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
@@ -675,8 +675,8 @@ class TestErrorCodeWireTranslation:
     def test_translate_mapped_code(self):
         from src.core.exceptions import translate_error_code
 
-        # AUTH_TOKEN_INVALID passes through (spec error code for auth)
-        assert translate_error_code("AUTH_TOKEN_INVALID") == "AUTH_TOKEN_INVALID"
+        # AUTH_REQUIRED passes through (spec error code for auth)
+        assert translate_error_code("AUTH_REQUIRED") == "AUTH_REQUIRED"
         # BUDGET_CEILING_EXCEEDED is mapped to BUDGET_EXCEEDED
         assert translate_error_code("BUDGET_CEILING_EXCEEDED") == "BUDGET_EXCEEDED"
         # RATE_LIMIT_EXCEEDED is mapped to RATE_LIMITED

@@ -367,7 +367,7 @@ class TestUC004EXTA02AuthenticationFailure:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _get_media_buy_delivery_impl(req, identity=None)
 
-            assert exc_info.value.message == "Identity is required"
+            assert exc_info.value.message == "Authentication required: no identity in request."
 
 
 # ---------------------------------------------------------------------------

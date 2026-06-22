@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Spec-required codes not yet in SDK STANDARD_ERROR_CODES.
 # These are mandated by AdCP BDD feature files but the SDK hasn't added them yet.
 _SPEC_CODES = {
-    "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
     "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
 }
 

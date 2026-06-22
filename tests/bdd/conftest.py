@@ -185,8 +185,8 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: T-UC-005-main — format 'audio-spot' has no assets or renders (all transports)
     "T-UC-005-main": "some formats (e.g. audio-spot) lack asset_requirements and render_capabilities — spec-production gap",
     # Partially graduated: dispatch fix landed (salesagent-40kk); error code mismatch remains
-    # FIXME(salesagent-40kk): production raises AUTH_TOKEN_INVALID, spec expects TENANT_REQUIRED
-    "T-UC-005-ext-a": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
+    # FIXME(salesagent-40kk): production raises AUTH_REQUIRED, spec expects TENANT_REQUIRED
+    "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",
     # Graduated: creative agent partition/boundary tests (salesagent-7fqx)
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(beads-dul): suggestion field not in production error model
@@ -589,18 +589,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # code doesn't implement the expected validation.
         _UC003_EXT_XFAILS: dict[str, str] = {
             # Error code mismatches (production uses different codes than spec)
-            # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
-            # The generated .feature asserts non-canonical lowercase "authentication_error",
-            # which is NOT in the AdCP standard vocabulary (error-code.json @04f59d2d5 defines
-            # AUTH_REQUIRED, whose description explicitly covers both credentials-missing and
-            # principal-presented-but-rejected). Owner decision (gh8p.6): reconcile the .feature
-            # to AUTH_REQUIRED upstream. Separately, these scenarios' request fixture is
-            # under-specified (media_buy_id only) so production rejects on the emptiness guard
-            # before reaching auth — that request shape is fixed upstream too. The
-            # production AUTH_TOKEN_INVALID->AUTH_REQUIRED reversal is deferred (72-test design
-            # change, its own ticket). Graduates after upstream regen.
-            "T-UC-003-ext-a": "generated .feature asserts non-canonical authentication_error + under-specified request; spec-canonical is AUTH_REQUIRED — stale spec, pending upstream regen (salesagent-lp0x)",
-            "T-UC-003-ext-a-unknown": "generated .feature asserts non-canonical authentication_error + under-specified request; spec-canonical is AUTH_REQUIRED — stale spec, pending upstream regen (salesagent-lp0x)",
+            # AUTH_REQUIRED code reversal is DONE (ztl6.5/ay3q): production + .feature both
+            # emit the canonical AUTH_REQUIRED and verify_feature_error_codes --uc UC-003 = 0.
+            # These two still xfail ONLY on the second obligation — a non-empty 'suggestion'
+            # field on the auth error: the REST no-identity middleware envelope drops
+            # details['suggestion'], and the unknown-principal path raises
+            # AdCPAuthorizationError (ownership) with no suggestion. That is the missing-
+            # suggestion production gap tracked under #1417 (gh8p.10); graduates when the
+            # auth error paths carry a buyer-facing suggestion.
+            "T-UC-003-ext-a": "AUTH_REQUIRED code correct; missing 'suggestion' on REST no-identity auth envelope — production suggestion gap (#1417)",
+            "T-UC-003-ext-a-unknown": "AUTH_REQUIRED code correct; unknown-principal -> AdCPAuthorizationError carries no 'suggestion' — production suggestion gap (#1417)",
             "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
@@ -2459,7 +2457,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Graduated: no-token/no-principal scenarios now pass after Gherkin
         # correction to AUTH_REQUIRED (commit 13b4ca8d). Production returns
         # AUTH_REQUIRED on rest/e2e_rest, matching the corrected Gherkin.
-        # Graduated: expired-token also passes — AUTH_TOKEN_INVALID matches.
+        # Graduated: expired-token also passes — AUTH_REQUIRED matches.
 
         # T-UC-011-ext-g-echo-error: impl passes (AdCPError carries context=req.context);
         # a2a/mcp/rest xfail+note via the context-echo Then step (pytest.xfail) because the

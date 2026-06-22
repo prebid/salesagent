@@ -459,9 +459,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "authentication_error"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "authentication"
     And the error should include "suggestion" field
     And the suggestion should contain "valid credentials"
@@ -476,9 +477,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "authentication_error"
+    And the error code should be "AUTH_REQUIRED"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains principal not found

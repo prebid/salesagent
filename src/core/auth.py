@@ -391,9 +391,9 @@ def require_identity(
 
     if identity is None:
         raise AdCPAuthRequiredError(
-            "Identity is required",
+            "Authentication required: no identity in request.",
             context=context,
-            details={"suggestion": "Provide a valid authentication token"},
+            details={"suggestion": "Provide valid credentials (x-adcp-auth token)."},
         )
     return identity
 

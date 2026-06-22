@@ -54,11 +54,10 @@ class TestErrorCodeStatusTableDerivation:
     def test_auth_required_resolves_to_403(self):
         """Pin: ``AUTH_REQUIRED`` resolves to 403 (Authorization class wins over Authentication).
 
-        ``AdCPAuthenticationError`` (401, AUTH_TOKEN_INVALID) and
-        ``AdCPAuthorizationError`` (403, AUTH_REQUIRED) both contribute. The
-        derivation rule keeps the **highest** status when multiple subclasses
-        share a wire code — 403 is the spec-aligned answer for AUTH_REQUIRED
-        (authenticated but not authorized).
+        ``AdCPAuthenticationError`` (401) and ``AdCPAuthorizationError`` (403)
+        both emit AUTH_REQUIRED. The derivation rule keeps the **highest**
+        status when multiple subclasses share a wire code — 403 is the
+        spec-aligned answer for AUTH_REQUIRED (authenticated but not authorized).
         """
         table = _build_error_code_to_status()
         status = table.get("AUTH_REQUIRED")
@@ -77,16 +76,23 @@ class TestErrorCodeStatusTableDerivation:
         status = table.get("INVALID_REQUEST")
         assert status == 400, f"INVALID_REQUEST must resolve to 400 (generic 4xx catchall), got {status}"
 
-    def test_auth_token_invalid_resolves_to_401(self):
-        """Pin: ``AUTH_TOKEN_INVALID`` resolves to 401 from ``AdCPAuthenticationError``.
+    def test_authentication_error_status_code_is_401(self):
+        """Pin: ``AdCPAuthenticationError`` instances carry HTTP 401.
 
-        AUTH_TOKEN_INVALID is the AUTH_TOKEN_INVALID class attribute on
-        ``AdCPAuthenticationError`` (status 401). This is a STANDARD spec code
-        — passthrough, not in ERROR_CODE_MAPPING.
+        Both ``AdCPAuthenticationError`` (401) and ``AdCPAuthorizationError``
+        (403) now emit the standard AUTH_REQUIRED wire code. The instance-level
+        status code distinguishes them: authentication failures are 401. The
+        plain-ToolError fallback table conflates them under AUTH_REQUIRED and,
+        by the "highest status wins" rule, resolves to 403 (the Authorization
+        class) — verified separately in ``test_auth_required_resolves_to_403``.
         """
+        from src.core.exceptions import AdCPAuthenticationError
+
+        assert AdCPAuthenticationError("no token").status_code == 401
+
+        # The fallback table conflates both AUTH_REQUIRED emitters → highest wins (403).
         table = _build_error_code_to_status()
-        status = table.get("AUTH_TOKEN_INVALID")
-        assert status == 401, f"AUTH_TOKEN_INVALID must resolve to 401 (AdCPAuthenticationError), got {status}"
+        assert table.get("AUTH_REQUIRED") == 403
 
     def test_service_unavailable_resolves_via_highest_status(self):
         """Pin: ``SERVICE_UNAVAILABLE`` takes the highest status when codes overlap.

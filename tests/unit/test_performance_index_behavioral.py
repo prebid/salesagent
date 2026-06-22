@@ -439,7 +439,7 @@ class TestErrorPaths:
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        with pytest.raises(AdCPAuthRequiredError, match="Identity is required"):
+        with pytest.raises(AdCPAuthRequiredError, match="Authentication required"):
             _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
@@ -500,7 +500,7 @@ class TestErrorPaths:
         """E4: a token resolving to a missing principal raises AdCPAuthenticationError.
 
         Parity with create/update/delivery, which all route this lookup through
-        resolve_principal_or_raise (AUTH_TOKEN_INVALID), not a 404.
+        resolve_principal_or_raise (AUTH_REQUIRED), not a 404.
         """
         from unittest.mock import Mock
 

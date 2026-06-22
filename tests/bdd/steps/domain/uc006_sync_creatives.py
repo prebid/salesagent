@@ -1889,21 +1889,15 @@ def given_buyer_empty_principal_id_in_auth(ctx: dict) -> None:
     """Buyer presents an identity whose principal_id is the empty string.
 
     Sets up the same state as 'the request has an empty principal_id'.
-    Production raises AUTH_TOKEN_INVALID; spec demands AUTH_REQUIRED.
-    The downstream generic Then step ``the error code should be "AUTH_REQUIRED"``
-    performs strict comparison that cannot accommodate this gap without
-    conftest-level xfail for tag T-UC-006-ext-a-empty.
+    Production emits the standard AUTH_REQUIRED for the missing-auth path,
+    matching the spec; the downstream generic Then step
+    ``the error code should be "AUTH_REQUIRED"`` asserts it.
     """
     env = ctx["env"]
     ctx["has_auth"] = False
     ctx["identity"] = PrincipalFactory.make_identity(
         principal_id="",
         tenant_id=env._tenant_id,
-    )
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: production raises AUTH_TOKEN_INVALID, spec requires AUTH_REQUIRED. "
-        "Generic Then step 'the error code should be \"AUTH_REQUIRED\"' does strict comparison. "
-        "Needs conftest xfail for T-UC-006-ext-a-empty (same gap as T-UC-006-ext-a-rest/mcp)."
     )
 
 
@@ -1934,18 +1928,12 @@ def given_principal_no_associated_tenant(ctx: dict) -> None:
 def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
     """Assert the sync was rejected with the spec-named auth error code.
 
-    Production raises AdCPAuthenticationError.error_code='AUTH_TOKEN_INVALID'
-    while the spec uses 'AUTH_REQUIRED'. When they differ, xfail with the
-    spec-production gap reason rather than weakening the assertion.
+    Production emits the standard AUTH_REQUIRED for authentication failures,
+    matching the spec.
     """
     error = ctx.get("error")
     assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
     actual_code, _ = _extract_error_code_and_suggestion(error)
-    if actual_code != expected_code:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: spec requires error_code '{expected_code}' but production "
-            f"raises '{actual_code}' (AdCPAuthenticationError.error_code='AUTH_TOKEN_INVALID')"
-        )
     assert actual_code == expected_code, (
         f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
     )

@@ -51,8 +51,6 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
-    # AUTH_TOKEN_INVALID is not mapped — it passes through directly as the
-    # spec error code for invalid/missing tokens (per AdCP BDD feature files).
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
     "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
@@ -404,35 +402,29 @@ class AdCPInvalidRequestError(AdCPValidationError):
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
-    Default error_code is ``AUTH_TOKEN_INVALID``. This code is project-specific:
-    it is in neither the AdCP 3.1 error-code enum nor adcp 5.7
-    ``STANDARD_ERROR_CODES`` (both define only ``AUTH_REQUIRED``). It reaches the
-    wire by passthrough — it is deliberately absent from ``ERROR_CODE_MAPPING``,
-    so ``wire_error_code`` returns it unchanged on the sync transports
-    (REST/MCP/A2A). The async webhook path additionally enforces
-    ``STANDARD_ERROR_CODES`` and would downgrade it to ``SERVICE_UNAVAILABLE``.
+    Emits the standard ``AUTH_REQUIRED`` wire code — the sole authentication
+    error code in the AdCP 3.1 error-code enum and adcp 5.7
+    ``STANDARD_ERROR_CODES``. Its enum description explicitly covers both
+    "credentials missing" and "credentials presented but rejected", so it is
+    the canonical code for every authentication failure.
 
-    Recovery defaults to ``terminal`` (inherited from ``AdCPError``; this is a
-    hardcoded ``_default_recovery`` ClassVar, not read from
-    ``STANDARD_ERROR_CODES``). We keep ``terminal`` deliberately: the AdCP 3.1
-    storyboards grade the wire *error code*, not the recovery class, so the
-    recovery hint is ours to set. This intentionally diverges from how adcp 5.7
-    classifies its nearest neighbour ``AUTH_REQUIRED`` (``correctable``).
+    Recovery defaults to ``terminal`` (inherited from ``AdCPError``), matching
+    ``AdCPAuthorizationError``, which also emits ``AUTH_REQUIRED``/``terminal``.
+    Keeping ``terminal`` here keeps the two ``AUTH_REQUIRED`` emitters
+    consistent; the AdCP 3.1 storyboards grade the wire error code, not the
+    recovery class.
     """
 
     _default_status_code: ClassVar[int] = 401
-    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
+    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
-    """No authentication context present (401, AUTH_TOKEN_INVALID).
+    """No authentication context present (401, AUTH_REQUIRED).
 
-    Raised when the request contains no auth token at all.
-    Uses same error_code as parent (AUTH_TOKEN_INVALID) — a project-specific
-    code; see parent docstring.
+    Raised when the request contains no auth token at all. Inherits the
+    standard ``AUTH_REQUIRED`` wire code from its parent.
     """
-
-    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):

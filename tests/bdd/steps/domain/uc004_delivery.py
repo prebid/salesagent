@@ -2606,7 +2606,7 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         # INTERNAL_ERROR / CONFIGURATION_ERROR to SERVICE_UNAVAILABLE, and the base
         # AdCPError default recovery is "terminal" — so a {SERVICE_UNAVAILABLE,
         # terminal} server fault would otherwise pass as a field rejection. (#1420 should-fix)
-        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "AUTH_REQUIRED", "AUTH_TOKEN_INVALID"}, (
+        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "AUTH_REQUIRED"}, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
         )
