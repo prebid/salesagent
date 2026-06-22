@@ -138,6 +138,31 @@ def _pytest_paths_from_hook_entry(entry: str) -> list[str]:
     return [part for part in entry.split() if part.startswith("tests/")]
 
 
+def _schema_contract_paths_from_location(location: str) -> list[str]:
+    """Extract explicit pytest paths after `` -> `` in a schema-contract location."""
+    if " -> " not in location:
+        return []
+    _, paths_part = location.rsplit(" -> ", 1)
+    return [part.strip() for part in paths_part.split(",") if part.strip()]
+
+
+def _schema_contract_expected_paths(
+    hook_id: str,
+    location: str,
+    hook_entries: dict[str, str],
+) -> list[str]:
+    """Paths the coverage map claims schema-contract must run for *hook_id*."""
+    explicit = _schema_contract_paths_from_location(location)
+    from_entry = _pytest_paths_from_hook_entry(hook_entries.get(hook_id, ""))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for path in (*explicit, *from_entry):
+        if path not in seen:
+            seen.add(path)
+            ordered.append(path)
+    return ordered
+
+
 def _validate_entry_schema(hook_id: str, entry: Any) -> list[str]:
     errors: list[str] = []
     if not isinstance(entry, dict):
@@ -191,10 +216,15 @@ def _validate_entry_references(
         if "schema-contract" not in location:
             errors.append(f"{hook_id}: {enforced_by} location must reference schema-contract job")
         else:
-            expected_paths = _pytest_paths_from_hook_entry(hook_entries.get(hook_id, ""))
+            explicit_paths = _schema_contract_paths_from_location(location)
+            expected_paths = _schema_contract_expected_paths(hook_id, location, hook_entries)
+            if enforced_by == "ci" and hook_id not in hook_ids and not explicit_paths:
+                errors.append(f"{hook_id}: ci-only entry must declare schema-contract test path via ' -> ' in location")
+            if not expected_paths:
+                errors.append(f"{hook_id}: no schema-contract pytest paths declared (location ' -> ' or hook entry)")
             for expected in expected_paths:
                 if expected not in schema_contract_paths:
-                    errors.append(f"{hook_id}: schema-contract job must run {expected} (from hook entry)")
+                    errors.append(f"{hook_id}: schema-contract job must run {expected}")
 
     return errors
 
@@ -355,11 +385,21 @@ _BROKEN_ENTRY_PROBES = (
         "ci-missing-test",
         {
             "enforced_by": "ci",
+            "location": ".github/workflows/ci.yml::schema-contract -> tests/integration/test_mcp_contract_validation.py",
+        },
+        "schema-contract job must run tests/integration/test_mcp_contract_validation.py",
+        hook_entries={},
+        schema_contract_paths=["tests/unit/test_adcp_contract.py"],
+    ),
+    _BrokenEntryProbe(
+        "ci-only-no-path",
+        {
+            "enforced_by": "ci",
             "location": ".github/workflows/ci.yml::schema-contract",
         },
-        "schema-contract job must run tests/unit/test_adcp_contract.py",
-        hook_entries={"ci-missing-test": "uv run pytest tests/unit/test_adcp_contract.py"},
-        schema_contract_paths=["tests/integration/test_mcp_contract_validation.py"],
+        "ci-only entry must declare schema-contract test path via ' -> ' in location",
+        hook_ids=set(),
+        hook_entries={},
     ),
 )
 

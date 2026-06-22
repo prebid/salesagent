@@ -37,7 +37,7 @@ adcp-contract-tests:
   location: stages_prepush + .github/workflows/ci.yml::schema-contract
 mcp-contract-validation:
   enforced_by: ci
-  location: .github/workflows/ci.yml::schema-contract
+  location: .github/workflows/ci.yml::schema-contract -> tests/integration/test_mcp_contract_validation.py
 check-docs-links:
   enforced_by: pre-push + ci-step
   location: stages_prepush + Makefile::quality-ci
