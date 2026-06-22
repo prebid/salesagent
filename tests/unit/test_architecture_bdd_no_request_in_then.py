@@ -78,9 +78,9 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # the parametrized transport on the wire (salesagent-osrl). Rate limiting and
     # payload size remain spec-production gaps (FIXME salesagent-9vgz.92).
     "bdd/steps/domain/uc002_nfr.py:126 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:187 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:234 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:410 then_budget_validated_against_min_order",
+    "bdd/steps/domain/uc002_nfr.py:190 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:237 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:413 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()
