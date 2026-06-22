@@ -309,10 +309,10 @@ class TestListCreativesErrorShapes:
     @pytest.mark.asyncio
     async def test_missing_auth_raises_authentication_error(self):
         """list_creatives _impl raises AdCPAuthenticationError when identity is None."""
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _list_creatives_impl(identity=None)
+            _list_creatives_impl(req=_build_list_creatives_request(), identity=None)
 
         assert "x-adcp-auth" in str(exc_info.value).lower() or "Missing" in str(exc_info.value)
 

@@ -54,6 +54,29 @@ def _make_identity(
     )
 
 
+def _call_impl(
+    media_buy_id,
+    performance_data,
+    context=None,
+    identity=None,
+):
+    """Build an UpdatePerformanceIndexRequest from flat params and invoke the impl.
+
+    The impl now takes a typed ``req``; the dict->ProductPerformance coercion and
+    schema validation happen in ``_build_update_performance_index_request``. Tests
+    that expect an AdCPValidationError on bad performance_data shape get it raised
+    from inside this helper (at build time), preserving the original assertion
+    semantics when the call is wrapped in ``pytest.raises``.
+    """
+    from src.core.tools.performance import (
+        _build_update_performance_index_request,
+        _update_performance_index_impl,
+    )
+
+    req = _build_update_performance_index_request(media_buy_id, performance_data, context)
+    return _update_performance_index_impl(req=req, identity=identity)
+
+
 def _patch_happy_path(
     adapter_return: bool = True,
     principal_id: str = "principal_1",
@@ -148,13 +171,11 @@ class TestHighRiskMCP:
 
         Covers: #1 T-UC-009-main-mcp
         """
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.2}],
                 context=ContextObject(session_id="s1"),
@@ -172,13 +193,11 @@ class TestHighRiskMCP:
 
         Covers: #2 T-UC-009-main-mcp-adapter
         """
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, mocks = _patch_happy_path()
 
         with stack:
-            _update_performance_index_impl(
+            _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "prod_abc", "performance_index": 0.9}],
                 identity=identity,
@@ -201,8 +220,6 @@ class TestHighRiskMCP:
 
         Covers: #6 T-UC-009-batch
         """
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, mocks = _patch_happy_path()
 
@@ -213,7 +230,7 @@ class TestHighRiskMCP:
         ]
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=perf_data,
                 identity=identity,
@@ -243,13 +260,11 @@ class TestHighRiskMCP:
 
         Covers: #15 T-UC-009-inv-043-1
         """
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 context=ContextObject(session_id="sess_1", trace_id="tr_1"),
@@ -267,8 +282,6 @@ class TestHighRiskMCP:
         Covers: #26 T-UC-009-ext-a-mcp
         """
         from unittest.mock import Mock
-
-        from src.core.tools.performance import _update_performance_index_impl
 
         identity = _make_identity()
 
@@ -292,7 +305,7 @@ class TestHighRiskMCP:
             ),
         ):
             with pytest.raises(ValueError, match="not found"):
-                _update_performance_index_impl(
+                _call_impl(
                     media_buy_id="mb_999",
                     performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                     identity=identity,
@@ -304,12 +317,10 @@ class TestHighRiskMCP:
 
         Covers: #28 T-UC-009-ext-b-mcp
         """
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
 
         with pytest.raises(AdCPValidationError) as exc_info:
-            _update_performance_index_impl(
+            _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1"}],  # missing performance_index
                 identity=identity,
@@ -324,13 +335,11 @@ class TestHighRiskMCP:
         Covers: #37 T-UC-009-ext-d-false
         Note: detail message is the same string regardless of success/failure.
         """
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path(adapter_return=False)
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 context=ContextObject(session_id="sess_fail"),
@@ -437,10 +446,8 @@ class TestErrorPaths:
         the boundary emits the canonical AUTH envelope with a recovery hint instead
         of a synthetic VALIDATION_ERROR.
         """
-        from src.core.tools.performance import _update_performance_index_impl
-
         with pytest.raises(AdCPAuthRequiredError, match="Authentication required"):
-            _update_performance_index_impl(
+            _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 identity=None,
@@ -449,8 +456,6 @@ class TestErrorPaths:
     # E2 ---------------------------------------------------------------
     def test_identity_no_tenant_raises_auth_error(self):
         """E2: identity with no tenant raises AdCPAuthenticationError."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = ResolvedIdentity(
             principal_id="principal_1",
             tenant_id="tenant_1",
@@ -459,7 +464,7 @@ class TestErrorPaths:
         )
 
         with pytest.raises(AdCPAuthenticationError, match="No tenant context"):
-            _update_performance_index_impl(
+            _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 identity=identity,
@@ -469,8 +474,6 @@ class TestErrorPaths:
     def test_identity_no_principal_id_raises_auth_error(self):
         """E3: identity with principal_id=None raises AdCPAuthenticationError after _verify_principal."""
         from unittest.mock import Mock
-
-        from src.core.tools.performance import _update_performance_index_impl
 
         identity = ResolvedIdentity(
             principal_id=None,
@@ -489,7 +492,7 @@ class TestErrorPaths:
             patch("src.core.tools.performance.MediaBuyUoW", return_value=mock_uow),
             pytest.raises(AdCPAuthenticationError),
         ):
-            _update_performance_index_impl(
+            _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 identity=identity,
@@ -504,8 +507,6 @@ class TestErrorPaths:
         """
         from unittest.mock import Mock
 
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
 
         mock_uow = MagicMock()
@@ -519,7 +520,7 @@ class TestErrorPaths:
             patch("src.core.auth.get_principal_object", return_value=None),
         ):
             with pytest.raises(AdCPAuthenticationError, match="not found"):
-                _update_performance_index_impl(
+                _call_impl(
                     media_buy_id="mb_1",
                     performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                     identity=identity,
@@ -528,12 +529,10 @@ class TestErrorPaths:
     # E5 ---------------------------------------------------------------
     def test_validation_error_missing_product_id(self):
         """E5: performance_data item missing product_id raises AdCPValidationError."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
 
         with pytest.raises(AdCPValidationError) as exc_info:
-            _update_performance_index_impl(
+            _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"performance_index": 1.0}],  # missing product_id
                 identity=identity,
@@ -544,12 +543,10 @@ class TestErrorPaths:
     # E6 ---------------------------------------------------------------
     def test_validation_error_non_numeric_performance_index(self):
         """E6: Non-numeric performance_index raises AdCPValidationError."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
 
         with pytest.raises(AdCPValidationError):
-            _update_performance_index_impl(
+            _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": "not_a_number"}],
                 identity=identity,
@@ -568,13 +565,11 @@ class TestResponseShape:
     # S1 ---------------------------------------------------------------
     def test_response_model_dump_json_shape(self):
         """S1: Response model_dump(mode='json') has correct top-level keys."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 context=ContextObject(session_id="s1"),
@@ -591,13 +586,11 @@ class TestResponseShape:
     # S2 ---------------------------------------------------------------
     def test_response_is_update_performance_index_response(self):
         """S2: Response is an instance of UpdatePerformanceIndexResponse."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 identity=identity,
@@ -608,13 +601,11 @@ class TestResponseShape:
     # S3 ---------------------------------------------------------------
     def test_response_str_returns_detail(self):
         """S3: Response __str__ returns the detail message (for MCP ToolResult content)."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 identity=identity,
@@ -625,13 +616,11 @@ class TestResponseShape:
     # S4 ---------------------------------------------------------------
     def test_response_context_none_when_not_provided(self):
         """S4: When context is not provided, response.context is None."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
                 identity=identity,
@@ -652,13 +641,11 @@ class TestConfidenceScoreAndEdgeCases:
     # C1 ---------------------------------------------------------------
     def test_confidence_score_passed_through(self):
         """C1: confidence_score is accepted in performance_data and doesn't affect status."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, _mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[
                     {"product_id": "p1", "performance_index": 0.95, "confidence_score": 0.87},
@@ -671,13 +658,11 @@ class TestConfidenceScoreAndEdgeCases:
     # C2 ---------------------------------------------------------------
     def test_empty_performance_data_succeeds(self):
         """C2: Empty performance_data list does not raise and returns success."""
-        from src.core.tools.performance import _update_performance_index_impl
-
         identity = _make_identity()
         stack, mocks = _patch_happy_path()
 
         with stack:
-            response = _update_performance_index_impl(
+            response = _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[],
                 identity=identity,

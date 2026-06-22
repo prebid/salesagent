@@ -27,6 +27,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
     Creative,
+    ListCreativesRequest,
     ListCreativesResponse,
 )
 from src.core.tool_context import ToolContext
@@ -47,61 +48,37 @@ def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: di
     return flat_params
 
 
-def _list_creatives_impl(
+def _build_list_creatives_request(
     media_buy_id: str | None = None,
     media_buy_ids: list[str] | None = None,
     status: str | None = None,
-    format: str | None = None,
     tags: list[str] | None = None,
     created_after: str | None = None,
     created_before: str | None = None,
     search: str | None = None,
-    filters: CreativeFilters | None = None,
+    filters: "CreativeFilters | None" = None,
     fields: list[str] | None = None,
-    include_performance: bool = False,
     include_assignments: bool = False,
-    include_sub_assets: bool = False,
-    page: int = 1,
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
-    context: ContextObject | None = None,  # Application level context per adcp spec
-    identity: ResolvedIdentity | None = None,
-) -> ListCreativesResponse:
-    """List and search creative library (AdCP v2.5 spec endpoint).
+    context: ContextObject | None = None,
+) -> "ListCreativesRequest":
+    """Build a ListCreativesRequest from individual wire params.
 
-    Advanced filtering and search endpoint for the centralized creative library.
-    Supports pagination, sorting, and multiple filter criteria.
+    Folds the flat filter/sort/pagination params (status, tags, search, dates,
+    media_buy_ids, sort_by/sort_order, limit) into the spec-compliant structured
+    request, merges any structured ``filters`` (flat take precedence), and
+    translates Pydantic/parse errors into AdCPValidationError. Shared by both
+    transport wrappers so this construction lives in one place.
 
-    Args:
-        media_buy_id: Filter by single media buy ID (optional, backward compat)
-        media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5, optional)
-        status: Filter by creative status (pending, approved, rejected) (optional)
-        format: Filter by creative format (optional)
-        tags: Filter by tags (optional)
-        created_after: Filter by creation date (ISO string) (optional)
-        created_before: Filter by creation date (ISO string) (optional)
-        search: Search in creative names and descriptions (optional)
-        filters: Advanced filtering options (CreativeFilters model, optional)
-        fields: Specific fields to return (optional)
-        include_performance: Include performance metrics (optional)
-        include_assignments: Include package assignments (optional)
-        include_sub_assets: Include sub-assets (optional)
-        page: Page number for pagination (default: 1)
-        limit: Number of results per page (default: 50, max: 1000)
-        sort_by: Sort field (created_date, name, status) (default: created_date)
-        sort_order: Sort order (asc, desc) (default: desc)
-        context: Application level context per adcp spec
-        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
-
-    Returns:
-        ListCreativesResponse with filtered creative assets and pagination info
+    Note: ``format``, ``page``, ``include_performance`` and ``include_sub_assets``
+    are NOT representable on ListCreativesRequest and stay as out-of-band _impl
+    kwargs.
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
     from adcp.types import PaginationRequest as LibraryPagination
     from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
-
-    from src.core.schemas import ListCreativesRequest
 
     # Parse datetime strings if provided
     created_after_dt = None
@@ -132,7 +109,7 @@ def _list_creatives_impl(
     filters_dict: dict[str, Any] = {}
     if status:
         filters_dict["statuses"] = [status]
-    # Note: flat 'format' param is handled by DB query directly (line ~213),
+    # Note: flat 'format' param is handled by DB query directly in _impl,
     # not via CreativeFilters. adcp 3.10 format_ids requires FormatId objects
     # which need agent_url — structured filters.format_ids handles this properly.
     if tags:
@@ -158,7 +135,6 @@ def _list_creatives_impl(
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
 
     # Build pagination
-    offset = (page - 1) * effective_limit
     # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
     structured_pagination = LibraryPagination(max_results=effective_limit)
 
@@ -175,7 +151,7 @@ def _list_creatives_impl(
     structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)
 
     try:
-        req = ListCreativesRequest(
+        return ListCreativesRequest(
             filters=structured_filters,
             pagination=structured_pagination,
             sort=structured_sort,
@@ -186,6 +162,53 @@ def _list_creatives_impl(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="list_creatives request")) from e
 
+
+def _list_creatives_impl(
+    req: "ListCreativesRequest",
+    format: str | None = None,
+    include_performance: bool = False,
+    include_sub_assets: bool = False,
+    page: int = 1,
+    identity: ResolvedIdentity | None = None,
+) -> ListCreativesResponse:
+    """List and search creative library (AdCP v2.5 spec endpoint).
+
+    Advanced filtering and search endpoint for the centralized creative library.
+    Supports pagination, sorting, and multiple filter criteria.
+
+    Args:
+        req: Typed list-creatives request (filters, sort, pagination, fields, context)
+        format: Filter by creative format — out-of-band (not a request field)
+        include_performance: Include performance metrics — out-of-band (not a request field)
+        include_sub_assets: Include sub-assets — out-of-band (not a request field)
+        page: Page number for pagination (default: 1) — out-of-band (pagination is cursor-based)
+        identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+
+    Returns:
+        ListCreativesResponse with filtered creative assets and pagination info
+    """
+    from typing import Literal
+
+    # Derive flat DB-query params from the structured request.
+    req_filters = req.filters
+    status = enum_value(req_filters.statuses[0]) if req_filters and req_filters.statuses else None
+    tags = req_filters.tags if req_filters else None
+    created_after_dt = req_filters.created_after if req_filters else None
+    created_before_dt = req_filters.created_before if req_filters else None
+    search = req_filters.name_contains if req_filters else None
+    effective_media_buy_ids = list(req_filters.media_buy_ids) if req_filters and req_filters.media_buy_ids else []
+
+    sort_by = enum_value(req.sort.field) if req.sort and req.sort.field else "created_date"
+    valid_sort_order: Literal["asc", "desc"] = cast(
+        Literal["asc", "desc"],
+        enum_value(req.sort.direction) if req.sort and req.sort.direction else "desc",
+    )
+
+    effective_limit = min(req.pagination.max_results, 1000) if req.pagination and req.pagination.max_results else 50
+    # Page is out-of-band (cursor-based pagination has no page index); preserve offset math.
+    limit = effective_limit
+    offset = (page - 1) * effective_limit
+
     start_time = time.time()
 
     # Authentication - REQUIRED (creatives contain sensitive data)
@@ -193,9 +216,9 @@ def _list_creatives_impl(
     # which are principal-specific and must be access-controlled
     # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
     # require_identity narrows the type for the tenant lookup below.
-    principal_id = require_principal_id(identity, context=context)
-    identity = require_identity(identity, context=context)
-    tenant = require_tenant(identity, context=context)
+    principal_id = require_principal_id(identity, context=req.context)
+    identity = require_identity(identity, context=req.context)
+    tenant = require_tenant(identity, context=req.context)
 
     creatives = []
     total_count = 0
@@ -450,25 +473,28 @@ async def list_creatives(
     if pagination is not None and pagination.max_results is not None:
         limit = pagination.max_results
 
-    response = _list_creatives_impl(
+    req = _build_list_creatives_request(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
         status=status,
-        format=format,
         tags=tags,
         created_after=created_after,
         created_before=created_before,
         search=search,
         filters=filters,
         fields=fields_list,
-        include_performance=include_performance,
         include_assignments=include_assignments,
-        include_sub_assets=include_sub_assets,
-        page=page,
         limit=limit,
         sort_by=sort_by,
         sort_order=sort_order,
         context=context,
+    )
+    response = _list_creatives_impl(
+        req=req,
+        format=format,
+        include_performance=include_performance,
+        include_sub_assets=include_sub_assets,
+        page=page,
         identity=identity,
     )
     return ToolResult(content=str(response), structured_content=response)
@@ -530,24 +556,27 @@ def list_creatives_raw(
 
         identity = resolve_identity_from_context(ctx)
 
-    return _list_creatives_impl(
+    req = _build_list_creatives_request(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
         status=status,
-        format=format,
         tags=tags,
         created_after=created_after,
         created_before=created_before,
         search=search,
         filters=filters,
         fields=fields,
-        include_performance=include_performance,
         include_assignments=include_assignments,
-        include_sub_assets=include_sub_assets,
-        page=page,
         limit=limit,
         sort_by=sort_by,
         sort_order=sort_order,
         context=to_context_object(context),
+    )
+    return _list_creatives_impl(
+        req=req,
+        format=format,
+        include_performance=include_performance,
+        include_sub_assets=include_sub_assets,
+        page=page,
         identity=identity,
     )
