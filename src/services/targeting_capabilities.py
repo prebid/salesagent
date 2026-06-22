@@ -295,8 +295,9 @@ def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: obje
 def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
-    AdCP 3.1.0-beta.3 (core/product.json ``property_targeting_allowed``): "Sellers
-    SHOULD return a validation error if the product has
+    AdCP 3.1.0-beta.3 — the ``property_targeting_allowed`` flag lives in
+    ``core/product.json``; the rule prose is in ``core/targeting.json``
+    ``property_list``: "Sellers SHOULD return a validation error if the product has
     property_targeting_allowed: false."
 
     Used at both create_media_buy and update_media_buy validation sites; pulled

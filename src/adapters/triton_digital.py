@@ -8,6 +8,7 @@ from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
+    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
 )
@@ -482,7 +483,10 @@ class TritonDigital(AdServerAdapter):
                         break
                     time.sleep(0.5)
                 else:
-                    raise Exception("Triton report did not complete in time.")
+                    # Report generation didn't finish within the poll window — transient
+                    # (it may complete later; the buyer should retry), not an untyped
+                    # INTERNAL_ERROR/terminal that tells the buyer to escalate.
+                    raise AdCPAdapterError("Triton report did not complete in time.")
 
                 report_response = requests.get(report_url)
                 report_response.raise_for_status()

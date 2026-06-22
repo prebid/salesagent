@@ -79,9 +79,13 @@ def advisory_tenant(integration_db):
         )
         # The Tenant model defaults human_review_required=True (and the
         # submitted-variant test sets it explicitly); the auto-approve tests
-        # need a committed False, independent of test order.
+        # need a committed False, independent of test order. auth_setup_mode=False
+        # satisfies the setup-checklist SSO item the production way — needed by the
+        # REST submitted leg that runs the real gate without the x-test-session-id
+        # bypass, and harmless for the bypass tests.
         tenant = session.get(TenantModel, TENANT_ID)
         tenant.human_review_required = False
+        tenant.auth_setup_mode = False
         session.commit()
     with IntegrationEnv() as _env:
         tenant = _env._session.scalars(select(TenantModel).filter_by(tenant_id=TENANT_ID)).first()
@@ -295,14 +299,11 @@ class TestCreateAdvisoryAttachment:
 
         from src.app import app
 
-        with get_db_session() as session:
-            tenant = session.get(TenantModel, TENANT_ID)
-            # This REST leg deliberately runs WITHOUT the x-test-session-id
-            # bypass (REST honors testing hooks since the resolve_identity
-            # parity default): the production setup-checklist gate runs for
-            # real here, so its SSO item is satisfied the production way.
-            tenant.auth_setup_mode = False
-            session.commit()
+        # This REST leg deliberately runs WITHOUT the x-test-session-id bypass (REST
+        # honors testing hooks since the resolve_identity parity default): the
+        # production setup-checklist gate runs for real here, and the advisory_tenant
+        # fixture's committed auth_setup_mode=False satisfies its SSO item the
+        # production way.
         with IntegrationEnv() as _env:
             tenant_row = _env._session.scalars(select(TenantModel).filter_by(tenant_id=TENANT_ID)).first()
             TenantAuthConfigFactory(tenant=tenant_row, oidc_enabled=True)
@@ -441,7 +442,8 @@ class TestCreateAdvisoryAttachment:
         assert isinstance(payload, dict), f"expected structured content dict, got {type(payload)}"
         payload = payload.get("result", payload)
         assert payload["media_buy_id"], "auto-approve path must complete the buy"
-        assert "errors" not in payload or payload["errors"] is None
+        # A completed-success envelope carries no errors[] (absent or explicit null).
+        assert payload.get("errors") is None
         advisory = payload["ext"]["prebid"]["property_list_advisories"][0]
         assert advisory["code"] == "PRODUCT_UNAVAILABLE"
         assert advisory["severity"] == "warning"
