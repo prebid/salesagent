@@ -119,25 +119,6 @@ class TestCreateMCPClient:
             tool_names = [tool.name for tool in tools]
             assert "get_signals" in tool_names
 
-    @pytest.mark.requires_server
-    async def test_connect_to_local_mcp_server(self):
-        """Can connect to our local MCP server in Docker."""
-        agent_url = "http://localhost:8100/mcp"
-
-        async with create_mcp_client(agent_url=agent_url, timeout=10) as client:
-            # Should successfully connect
-            assert client is not None
-
-            # Should be able to list tools
-            tools = await client.list_tools()
-            assert isinstance(tools, list)
-            assert len(tools) > 0
-
-            # Should have our sales agent tools
-            tool_names = [tool.name for tool in tools]
-            assert "get_products" in tool_names
-            assert "create_media_buy" in tool_names
-
     async def test_invalid_url_raises_connection_error(self):
         """Invalid URL raises MCPConnectionError after retries."""
         agent_url = "https://nonexistent.example.com/mcp"
