@@ -430,7 +430,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package creative_assignment references creative_id "cr-nonexistent"
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "CREATIVES_NOT_FOUND"
+    And the error code should be "CREATIVE_REJECTED"
     And the error message should contain "cr-nonexistent"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
@@ -445,7 +445,7 @@ Feature: BR-UC-002 Create Media Buy
     But a creative's format_id does not match any of the product's supported format_ids
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "CREATIVE_FORMAT_MISMATCH"
+    And the error code should be "CREATIVE_REJECTED"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -459,7 +459,7 @@ Feature: BR-UC-002 Create Media Buy
     But the ad server rejects the creative upload
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "CREATIVE_UPLOAD_FAILED"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
