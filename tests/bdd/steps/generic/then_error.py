@@ -14,6 +14,24 @@ from pytest_bdd import parsers, then
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
+def _wire_code(ctx: dict) -> str | None:
+    """Return the authoritative wire error code when a wire envelope was captured.
+
+    ``dispatch_request`` stores the normalized ``TransportResult`` on
+    ``ctx['result']`` and exposes the real two-layer envelope on
+    ``wire_error_envelope`` (REST/A2A/MCP). The wire code is the buyer-facing
+    contract; prefer it over the lossy reconstructed ``ctx['error']`` (which
+    collapses distinct wire codes onto one exception class — e.g. yields
+    ``RuntimeError`` for an unmapped code). Returns ``None`` on IMPL / no-wire
+    scenarios so callers fall back to the reconstructed exception (salesagent-ztl6.6).
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if not envelope:
+        return None
+    return (envelope.get("adcp_error") or {}).get("code")
+
+
 def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
@@ -209,10 +227,17 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
 
 @then(parsers.parse('the error code should be "{code}"'))
 def then_error_code(ctx: dict, code: str) -> None:
-    """Assert the error code matches."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    actual = _get_error_code(error)
+    """Assert the error code matches — wire-first, reconstructed fallback.
+
+    When the scenario dispatched through a wire transport, assert on the real
+    wire envelope's code (the buyer-facing contract); otherwise fall back to the
+    reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.6).
+    """
+    actual = _wire_code(ctx)
+    if actual is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        actual = _get_error_code(error)
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
