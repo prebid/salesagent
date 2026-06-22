@@ -1022,8 +1022,9 @@ def _build_device_type_breakdown(
     unknown) so truncation is False in practice (no limit applied by default).
 
     Uses adapter-supplied ``raw_device_type`` data when available; otherwise
-    synthesises a representative split across the three most common device
-    types from the package totals.
+    returns an empty list — the breakdown structure is present (satisfying
+    INV-1) but no per-device data is fabricated.  Real adapters populate
+    ``AdapterPackageDelivery.by_device_type`` to supply actual data.
 
     Returns:
         (breakdown, truncated) — both None when device_type dimension not
@@ -1037,20 +1038,10 @@ def _build_device_type_breakdown(
     if raw_device_type:
         entries: list[DeviceTypeBreakdown] = [DeviceTypeBreakdown(**d) for d in raw_device_type]
     else:
-        imp = float(package_impressions or 0.0)
-        spd = float(package_spend or 0.0)
-
-        # Synthesise a representative split across the three most common device
-        # types. Weights are distinct so descending sorts are verifiable.
-        weights = (("mobile", 0.5), ("desktop", 0.35), ("tablet", 0.15))
-        entries = [
-            DeviceTypeBreakdown(
-                device_type=device_type,
-                impressions=imp * w,
-                spend=spd * w,
-            )
-            for device_type, w in weights
-        ]
+        # No adapter data available — return an empty breakdown rather than
+        # fabricating a split.  The array presence satisfies BR-RULE-091 INV-1;
+        # truncated=False is correct (nothing was cut).
+        entries = []
 
     limited, truncated = _apply_breakdown_limit(entries, device_type_dim)
     return limited, truncated

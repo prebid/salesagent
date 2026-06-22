@@ -1276,11 +1276,23 @@ class MockAdServer(AdServerAdapter):
                         package_spend = spend / len(packages) if packages else spend
                         package_impressions = int(impressions / len(packages) if packages else impressions)
 
+                    # Simulate a device-type split from package totals.
+                    # Weights are distinct so descending sorts are verifiable in tests.
+                    # Real adapters replace this with actual platform data.
+                    imp = float(package_impressions)
+                    spd = float(package_spend)
+                    simulated_device_type = [
+                        {"device_type": "mobile", "impressions": imp * 0.50, "spend": spd * 0.50},
+                        {"device_type": "desktop", "impressions": imp * 0.35, "spend": spd * 0.35},
+                        {"device_type": "tablet", "impressions": imp * 0.15, "spend": spd * 0.15},
+                    ]
+
                     by_package.append(
                         AdapterPackageDelivery(
                             package_id=package_id,
                             impressions=package_impressions,
                             spend=package_spend,
+                            by_device_type=simulated_device_type,
                         )
                     )
 

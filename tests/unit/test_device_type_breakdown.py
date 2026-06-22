@@ -121,66 +121,37 @@ class TestBuildDeviceTypeBreakdownNoDimension:
 
 
 # ---------------------------------------------------------------------------
-# _build_device_type_breakdown — synthesised path (no adapter data)
+# _build_device_type_breakdown — no adapter data (empty list path)
 # ---------------------------------------------------------------------------
 
 
-class TestBuildDeviceTypeBreakdownSynthesised:
+class TestBuildDeviceTypeBreakdownNoAdapterData:
     def _req_with_dim(self, limit=None):
         dim = _make_dim(limit=limit)
         return _make_req(device_type=dim), dim
 
-    def test_returns_three_entries_by_default(self):
+    def test_returns_empty_list_when_no_adapter_data(self):
+        """No fabricated split — returns [] so no fake data is emitted."""
         req, _ = self._req_with_dim()
         entries, truncated = _build_device_type_breakdown(req, 1000.0, 10.0)
-        assert entries is not None
-        assert len(entries) == 3
+        assert entries == []
         assert truncated is False
 
-    def test_entries_are_device_type_breakdown_instances(self):
-        req, _ = self._req_with_dim()
-        entries, _ = _build_device_type_breakdown(req, 1000.0, 10.0)
-        assert all(isinstance(e, DeviceTypeBreakdown) for e in entries)
-
-    def test_device_types_are_mobile_desktop_tablet(self):
-        req, _ = self._req_with_dim()
-        entries, _ = _build_device_type_breakdown(req, 1000.0, 10.0)
-        device_types = [_device_type_value(e) for e in entries]
-        assert device_types == ["mobile", "desktop", "tablet"]
-
-    def test_impressions_sum_to_package_total(self):
-        req, _ = self._req_with_dim()
-        entries, _ = _build_device_type_breakdown(req, 1000.0, 10.0)
-        total_imp = sum(e.impressions for e in entries)
-        assert abs(total_imp - 1000.0) < 1e-9
-
-    def test_spend_sum_to_package_total(self):
-        req, _ = self._req_with_dim()
-        entries, _ = _build_device_type_breakdown(req, 1000.0, 10.0)
-        total_spend = sum(e.spend for e in entries)
-        assert abs(total_spend - 10.0) < 1e-9
-
-    def test_zero_package_metrics_produce_zero_entries(self):
+    def test_returns_empty_list_regardless_of_package_totals(self):
         req, _ = self._req_with_dim()
         entries, _ = _build_device_type_breakdown(req, 0, 0)
-        assert all(e.impressions == 0.0 for e in entries)
-        assert all(e.spend == 0.0 for e in entries)
+        assert entries == []
 
-    def test_none_package_metrics_treated_as_zero(self):
+    def test_none_package_metrics_still_returns_empty_list(self):
         req, _ = self._req_with_dim()
         entries, _ = _build_device_type_breakdown(req, None, None)
-        assert all(e.impressions == 0.0 for e in entries)
+        assert entries == []
 
-    def test_limit_truncates_entries_and_sets_truncated_true(self):
+    def test_limit_on_empty_list_returns_empty_and_false(self):
+        """Limit applied to empty list — nothing to truncate."""
         req, _ = self._req_with_dim(limit=2)
         entries, truncated = _build_device_type_breakdown(req, 1000.0, 10.0)
-        assert len(entries) == 2
-        assert truncated is True
-
-    def test_limit_larger_than_entries_returns_all_and_false(self):
-        req, _ = self._req_with_dim(limit=10)
-        entries, truncated = _build_device_type_breakdown(req, 1000.0, 10.0)
-        assert len(entries) == 3
+        assert entries == []
         assert truncated is False
 
 
@@ -224,11 +195,11 @@ class TestBuildDeviceTypeBreakdownAdapterSupplied:
         assert len(entries) == 1
         assert truncated is True
 
-    def test_empty_raw_list_falls_back_to_synthesised(self):
-        """Empty list is falsy — synthesised path is used."""
+    def test_empty_raw_list_falls_back_to_empty(self):
+        """Empty list is falsy — falls back to empty list (no fabrication)."""
         req = self._req_with_dim()
         entries, _ = _build_device_type_breakdown(req, 1000.0, 10.0, raw_device_type=[])
-        assert len(entries) == 3  # synthesised 3-way split
+        assert entries == []
 
 
 # ---------------------------------------------------------------------------
