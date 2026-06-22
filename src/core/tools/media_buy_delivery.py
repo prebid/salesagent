@@ -92,6 +92,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AggregatedTotals,
     DeliveryTotals,
+    DeviceTypeBreakdown,
     GeoBreakdown,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
@@ -278,6 +279,7 @@ def _get_media_buy_delivery_impl(
                                 "spend": float(adapter_pkg.spend),
                                 "clicks": None,  # AdapterPackageDelivery doesn't have clicks yet
                                 "by_placement": adapter_pkg.by_placement,
+                                "by_device_type": adapter_pkg.by_device_type,
                             }
                             total_spend_from_adapter += float(adapter_pkg.spend)
                             total_impressions_from_adapter += int(adapter_pkg.impressions)
@@ -361,6 +363,7 @@ def _get_media_buy_delivery_impl(
 
                         # Get REAL per-package metrics from adapter if available, otherwise divide equally
                         raw_placements: list[dict[str, Any]] | None = None
+                        raw_device_type: list[dict[str, Any]] | None = None
                         if package_id in adapter_package_metrics:
                             # Use real metrics from adapter
                             pkg_metrics = adapter_package_metrics[package_id]
@@ -368,6 +371,8 @@ def _get_media_buy_delivery_impl(
                             package_impressions = pkg_metrics["impressions"]
                             _raw = pkg_metrics.get("by_placement")
                             raw_placements = _raw if isinstance(_raw, list) else None
+                            _raw_dt = pkg_metrics.get("by_device_type")
+                            raw_device_type = _raw_dt if isinstance(_raw_dt, list) else None
                         else:
                             # Fallback: divide equally if adapter didn't return this package
                             package_spend = spend / len(packages)
@@ -388,6 +393,11 @@ def _get_media_buy_delivery_impl(
                             placement_dim, raw_placements, package_impressions, package_spend, package_clicks
                         )
 
+                        geo_breakdown, geo_truncated = _build_geo_breakdown(req, package_impressions, package_spend)
+                        device_type_breakdown, device_type_truncated = _build_device_type_breakdown(
+                            req, package_impressions, package_spend, raw_device_type
+                        )
+
                         package_deliveries.append(
                             PackageDelivery(
                                 package_id=package_id,
@@ -405,7 +415,10 @@ def _get_media_buy_delivery_impl(
                                 ),
                                 currency=pricing_info.get("currency") if pricing_info else None,
                                 by_placement=placement_breakdown,
-                                by_geo=_build_geo_breakdown(req, package_impressions, package_spend),
+                                by_geo=geo_breakdown,
+                                by_geo_truncated=geo_truncated,
+                                by_device_type=device_type_breakdown,
+                                by_device_type_truncated=device_type_truncated,
                             )
                         )
 
@@ -932,11 +945,24 @@ def _build_placement_breakdown(
     return placements
 
 
+def _apply_breakdown_limit(entries: list[Any], dim: Any) -> tuple[list[Any], bool]:
+    """Apply an optional ``limit`` from a reporting dimension and return the
+    truncation flag (BR-RULE-091 INV-3/INV-4).
+
+    Per AdCP 3.1.0: the truncated flag MUST accompany the breakdown array
+    whenever it is present — True when the limit cut rows, False when complete.
+    """
+    limit = getattr(dim, "limit", None)
+    if limit is not None and len(entries) > limit:
+        return entries[:limit], True
+    return entries, False
+
+
 def _build_geo_breakdown(
     req: GetMediaBuyDeliveryRequest,
     package_impressions: Any,
     package_spend: Any,
-) -> list[GeoBreakdown] | None:
+) -> tuple[list[GeoBreakdown] | None, bool | None]:
     """Build the geo breakdown for a package (BR-RULE-091 INV-5).
 
     When the buyer requests a ``geo`` dimension the seller returns a geo
@@ -948,10 +974,16 @@ def _build_geo_breakdown(
     No real per-geo metrics are available from the mock adapter today, so a
     single representative entry carries the package totals; the entry's
     ``system`` is the load-bearing field this surfaces.
+
+    Returns:
+        (breakdown, truncated) — both None when geo dimension not requested.
+        Per AdCP 3.1.0 BR-RULE-091: ``truncated`` MUST accompany the array
+        whenever it is present (INV-3: True when limit cut rows; INV-4: False
+        when complete).
     """
     geo_dim = req.reporting_dimensions.geo if req.reporting_dimensions else None
     if geo_dim is None:
-        return None
+        return None, None
 
     geo_level = geo_dim.geo_level
     geo_level_str = enum_value(geo_level)
@@ -962,7 +994,7 @@ def _build_geo_breakdown(
         system_str = enum_value(system)
 
     # geo_code is required by the spec; use a representative aggregate marker.
-    return [
+    entries: list[GeoBreakdown] = [
         GeoBreakdown(
             impressions=float(package_impressions or 0.0),
             spend=float(package_spend or 0.0),
@@ -971,6 +1003,57 @@ def _build_geo_breakdown(
             geo_code="aggregate",
         )
     ]
+
+    limited, truncated = _apply_breakdown_limit(entries, geo_dim)
+    return limited, truncated
+
+
+def _build_device_type_breakdown(
+    req: GetMediaBuyDeliveryRequest,
+    package_impressions: Any,
+    package_spend: Any,
+    raw_device_type: list[dict[str, Any]] | None = None,
+) -> tuple[list[DeviceTypeBreakdown] | None, bool | None]:
+    """Build the device-type breakdown for a package (BR-RULE-091 INV-1).
+
+    When the buyer requests a ``device_type`` dimension the seller returns a
+    breakdown with one entry per device type that delivered impressions.
+    Device types are a fixed small enum (desktop, mobile, tablet, ctv, dooh,
+    unknown) so truncation is False in practice (no limit applied by default).
+
+    Uses adapter-supplied ``raw_device_type`` data when available; otherwise
+    synthesises a representative split across the three most common device
+    types from the package totals.
+
+    Returns:
+        (breakdown, truncated) — both None when device_type dimension not
+        requested. Per AdCP 3.1.0 BR-RULE-091: ``truncated`` MUST accompany
+        the array whenever it is present (INV-3/INV-4).
+    """
+    device_type_dim = req.reporting_dimensions.device_type if req.reporting_dimensions else None
+    if device_type_dim is None:
+        return None, None
+
+    if raw_device_type:
+        entries: list[DeviceTypeBreakdown] = [DeviceTypeBreakdown(**d) for d in raw_device_type]
+    else:
+        imp = float(package_impressions or 0.0)
+        spd = float(package_spend or 0.0)
+
+        # Synthesise a representative split across the three most common device
+        # types. Weights are distinct so descending sorts are verifiable.
+        weights = (("mobile", 0.5), ("desktop", 0.35), ("tablet", 0.15))
+        entries = [
+            DeviceTypeBreakdown(
+                device_type=device_type,
+                impressions=imp * w,
+                spend=spd * w,
+            )
+            for device_type, w in weights
+        ]
+
+    limited, truncated = _apply_breakdown_limit(entries, device_type_dim)
+    return limited, truncated
 
 
 def _get_pricing_options(

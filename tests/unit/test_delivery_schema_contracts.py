@@ -107,6 +107,9 @@ class TestPackageDeliveryFields:
         "currency",
         "by_placement",
         "by_geo",
+        "by_geo_truncated",
+        "by_device_type",
+        "by_device_type_truncated",
     }
 
     def test_field_names(self):
@@ -317,11 +320,26 @@ class TestGetMediaBuyDeliveryResponseMethods:
 
 class TestAdapterPackageDelivery:
     def test_fields(self):
-        assert set(AdapterPackageDelivery.model_fields.keys()) == {"package_id", "impressions", "spend", "by_placement"}
+        assert set(AdapterPackageDelivery.model_fields.keys()) == {
+            "package_id",
+            "impressions",
+            "spend",
+            "by_placement",
+            "by_device_type",
+        }
 
     def test_construction(self):
         obj = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=5.0)
         assert obj.package_id == "pkg_1"
+
+    def test_by_device_type_defaults_to_none(self):
+        obj = AdapterPackageDelivery(package_id="pkg_1", impressions=0, spend=0.0)
+        assert obj.by_device_type is None
+
+    def test_by_device_type_accepts_raw_dicts(self):
+        raw = [{"device_type": "mobile", "impressions": 500.0, "spend": 2.5}]
+        obj = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=5.0, by_device_type=raw)
+        assert obj.by_device_type == raw
 
 
 class TestAdapterGetMediaBuyDeliveryResponse:
