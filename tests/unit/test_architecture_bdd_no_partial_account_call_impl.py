@@ -25,9 +25,10 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _NEEDLE = "call_impl(account_ref"
 
-# Files permitted to use the pattern (canonical resolve_account helper for the
-# account-resolution-only path on MediaBuyAccountEnv). Allowlist only shrinks.
-_ALLOWLIST = {"_account_resolution.py"}
+# Allowlist is empty: account-resolution scenarios now dispatch a full
+# create_media_buy through the wire (salesagent-zh85), so no step builds a
+# request via env.call_impl(account_ref=...) anymore. Allowlist only shrinks.
+_ALLOWLIST: set[str] = set()
 
 
 def _scan_hits() -> list[tuple[str, int]]:

@@ -158,5 +158,14 @@ class TransportResult:
         assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr)
         if require_suggestion:
             errors = envelope.get("errors") or [{}]
-            suggestion = errors[0].get("suggestion") or envelope.get("adcp_error", {}).get("suggestion")
+            adcp_error = envelope.get("adcp_error", {})
+            # AdCP carries the suggestion either directly on the error object or
+            # nested under ``details.suggestion`` (account-resolution errors use
+            # the latter). Accept both, in either layer.
+            suggestion = (
+                errors[0].get("suggestion")
+                or adcp_error.get("suggestion")
+                or (errors[0].get("details") or {}).get("suggestion")
+                or (adcp_error.get("details") or {}).get("suggestion")
+            )
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"

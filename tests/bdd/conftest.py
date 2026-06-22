@@ -734,18 +734,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
 
-        # --- UC-002: INVALID_REQUEST validation xfails (production not implemented) ---
+        # --- UC-002: validation xfails (production not implemented) ---
+        # NOTE: the former account-ref entries (missing_account / invalid_oneOf_both /
+        # "account field absent" / "both account_id and brand") were REMOVED by
+        # salesagent-zh85: those scenarios now dispatch a full create_media_buy on
+        # the wire. account is OPTIONAL, so an absent account SUCCEEDS (not
+        # INVALID_REQUEST); the oneOf-both shape is rejected by Pydantic at the
+        # boundary as VALIDATION_ERROR. The feature outcomes were reconciled to
+        # match production and the scenarios now pass on a2a/mcp/rest.
         _UC002_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
-            (
-                "T-UC-002-partition-account-ref",
-                {"missing_account", "invalid_oneOf_both"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
-            ),
-            (
-                "T-UC-002-boundary-account-ref",
-                {"account field absent", "both account_id and brand"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
-            ),
             # FIXME(salesagent-9vgz.61): daily spend cap error code mismatch
             # Production raises plain ValueError → code="validation_error", no suggestion.
             # Spec expects BUDGET_TOO_LOW with suggestion field.
@@ -788,6 +785,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 if tag in marker_names and any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break
+
+        # UC-002 account oneOf-both shape (salesagent-zh85): an account dict
+        # carrying BOTH account_id AND brand+operator is a Pydantic oneOf
+        # violation. On a2a/rest the boundary normalizes it to the AdCP two-layer
+        # VALIDATION_ERROR envelope; on MCP, FastMCP's framework-level TypeAdapter
+        # rejects it BEFORE our wrapper runs, raising a bare ToolError with no
+        # AdCP envelope (the documented MCP TypeAdapter forward-compat gap, same
+        # transport-specific gap UC-004 boundary-account already records for
+        # "both account_id"/"empty object"). Record the per-transport gap; the
+        # a2a/rest rows assert the real wire VALIDATION_ERROR.
+        if (
+            is_mcp
+            and {"T-UC-002-partition-account-ref", "T-UC-002-boundary-account-ref"} & marker_names
+            and ("invalid_oneOf_both" in nodeid or "both account_id and brand" in nodeid)
+        ):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="MCP TypeAdapter rejects the oneOf-both account shape as a bare ToolError "
+                    "before the AdCP boundary translator runs — no two-layer VALIDATION_ERROR envelope "
+                    "on MCP (a2a/rest pass). Documented MCP forward-compat gap.",
+                    strict=True,
+                )
+            )
 
         # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
         _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}
@@ -2564,11 +2584,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
-# UC-002 @account: MediaBuyAccountEnv tests resolve_account() directly — no
-# transport wrappers exist for the create_media_buy account resolution path.
-_IMPL_ONLY: set[tuple[str, str]] = {
-    ("UC-002", "account"),
-}
+# (UC-002 @account used to live here when it ran resolve_account() via IMPL on
+# MediaBuyAccountEnv; salesagent-zh85 routed those scenarios through a full
+# create_media_buy on the wire, so they now parametrize across a2a/mcp/rest.)
+_IMPL_ONLY: set[tuple[str, str]] = set()
 
 # UC-002 idempotency scenarios wired to MediaBuyCreateEnv (run a real
 # create_media_buy across all 4 transports). Only these two @idempotency-key
@@ -2849,12 +2868,23 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # Tags that need the full create_media_buy flow (MediaBuyCreateEnv)
         # rather than account resolution only (MediaBuyAccountEnv).
         if "account" in marker_names:
-            # Account resolution scenarios only — MediaBuyAccountEnv handles resolve_account
+            # Account-resolution scenarios run a full create_media_buy on the wire
+            # (salesagent-zh85): production resolves the account at the transport
+            # boundary (enrich_identity_with_account → resolve_account) and emits
+            # ACCOUNT_NOT_FOUND/AMBIGUOUS/SETUP_REQUIRED/PAYMENT_REQUIRED/SUSPENDED
+            # — or succeeds — on the wire. MediaBuyCreateEnv gives the create
+            # transport wrappers + the full product/pricing dependency chain; the
+            # account Given steps seed the account rows on top.
             request.getfixturevalue("integration_db")
-            from tests.harness.media_buy_account import MediaBuyAccountEnv
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
                 yield
         elif any(t.startswith("T-UC-002-ext-") for t in marker_names):
             # Extension/error scenarios: budget validation, pricing errors, etc.

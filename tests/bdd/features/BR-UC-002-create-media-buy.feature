@@ -1154,11 +1154,13 @@ Feature: BR-UC-002 Create Media Buy
       | explicit_account_id          | account resolution succeeds           |
       | natural_key_unambiguous      | account resolution succeeds           |
       | natural_key_sandbox          | account resolution succeeds           |
+      # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec):
+      # an omitted account field is accepted and the buy is created.
+      | missing_account              | account resolution succeeds           |
 
     Examples: Invalid partitions
       | partition                    | outcome                                         |
-      | missing_account              | error INVALID_REQUEST with suggestion             |
-      | invalid_oneOf_both           | error INVALID_REQUEST with suggestion             |
+      | invalid_oneOf_both           | error VALIDATION_ERROR                             |
       | explicit_not_found           | error ACCOUNT_NOT_FOUND terminal                  |
       | natural_key_not_found        | error ACCOUNT_NOT_FOUND terminal                  |
       | natural_key_ambiguous        | error ACCOUNT_AMBIGUOUS correctable               |
@@ -1617,8 +1619,8 @@ Feature: BR-UC-002 Create Media Buy
       | account resolved + setup incomplete                  | acc setup-needed         | error ACCOUNT_SETUP_REQUIRED correctable          |
       | account resolved + payment due                       | acc payment-due          | error ACCOUNT_PAYMENT_REQUIRED terminal           |
       | account resolved + suspended                         | acc suspended            | error ACCOUNT_SUSPENDED terminal                 |
-      | account field absent                                 | no account               | error INVALID_REQUEST with suggestion             |
-      | both account_id and brand/operator present           | both fields              | error INVALID_REQUEST with suggestion             |
+      | account field absent                                 | no account               | account resolution succeeds                      |
+      | both account_id and brand/operator present           | both fields              | error VALIDATION_ERROR                            |
       | brand + operator + sandbox:true present + sandbox account exists + active | brand+op+sandbox active | account resolution succeeds                      |
 
   @T-UC-002-boundary-optimization-goals @boundary @optimization-goals

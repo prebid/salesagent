@@ -3,12 +3,16 @@
 Focuses on account resolution error paths (ext-r, ext-s, ext-t, BR-RULE-080)
 and partition/boundary scenarios for account_ref.
 
-Steps delegate to MediaBuyAccountEnv which calls resolve_account() with real DB.
+Steps dispatch a full create_media_buy through the wire transport
+(MediaBuyCreateEnv); production resolves the account at the transport boundary
+and emits the outcome on the wire (salesagent-zh85).
 
-beads: salesagent-2rq
+beads: salesagent-2rq, salesagent-zh85
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
@@ -35,6 +39,28 @@ def _attach_account_to_full_request(ctx: dict) -> None:
     kwargs = _ensure_request_defaults(ctx)
     kwargs["account"] = ctx["account_ref"]
     ctx["dispatch_mode"] = "create"
+
+
+def _attach_raw_account_shape(ctx: dict, account_value: Any | None) -> None:
+    """Build a complete, valid create request carrying a MALFORMED account SHAPE.
+
+    Schema-shape cases (account field absent, or a oneOf-both dict carrying both
+    account_id AND brand+operator) cannot be expressed as a typed
+    ``CreateMediaBuyRequest`` — Pydantic rejects them at construction in test
+    code, so they could never reach the production transport boundary that way.
+    Instead we stash the raw flat kwargs (``request_kwargs`` minus a typed
+    account, plus the raw ``account_value`` verbatim) and dispatch them as a RAW
+    body (``dispatch_mode="create_raw"``). Production's route + Pydantic then
+    builds the request and either accepts it (account omitted is valid — account
+    is optional) or rejects the oneOf-both shape with VALIDATION_ERROR on the wire.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs.pop("account", None)
+    if account_value is not None:
+        kwargs["account"] = account_value
+    ctx["dispatch_mode"] = "create_raw"
 
 
 @given(parsers.parse('a valid create_media_buy request with account_id "{account_id}"'))
@@ -246,12 +272,19 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         )
 
     elif partition == "missing_account":
-        ctx["account_ref"] = None
-        ctx["account_absent"] = True
+        # Schema-shape case: dispatch the create with NO account field at all.
+        # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec),
+        # so production accepts it and creates the buy — outcome is success, not
+        # a rejection (see salesagent-zh85 empirical trace).
+        _attach_raw_account_shape(ctx, None)
+        return
 
     elif partition == "invalid_oneOf_both":
-        ctx["account_ref"] = None
-        ctx["account_invalid_both"] = True
+        # Schema-shape case: dispatch a raw account carrying BOTH account_id AND
+        # brand+operator. Pydantic's AccountReference oneOf rejects it at the
+        # transport boundary → VALIDATION_ERROR on the wire.
+        _attach_raw_account_shape(ctx, {"account_id": "acc_001", "brand": {"domain": "x.com"}, "operator": "x.com"})
+        return
 
     elif partition == "explicit_not_found":
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-not-found"))
@@ -328,6 +361,12 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 
     else:
         raise ValueError(f"Unknown account partition: {partition}")
+
+    # Valid-shape cases (resolution succeeds OR resolution fails with an account
+    # error): dispatch a full, valid create_media_buy carrying the typed account
+    # reference so production resolves it at the transport boundary and emits the
+    # outcome on the wire.
+    _attach_account_to_full_request(ctx)
 
 
 @given(parsers.parse("a create_media_buy request with account: {config}"))
@@ -425,12 +464,17 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
 
     elif "no account" in config:
-        ctx["account_ref"] = None
-        ctx["account_absent"] = True
+        # Schema-shape case: account field omitted entirely. account is OPTIONAL
+        # on CreateMediaBuyRequest, so production accepts and creates the buy →
+        # success, not a rejection (salesagent-zh85 empirical trace).
+        _attach_raw_account_shape(ctx, None)
+        return
 
     elif "both fields" in config:
-        ctx["account_ref"] = None
-        ctx["account_invalid_both"] = True
+        # Schema-shape case: raw account with BOTH account_id and brand+operator.
+        # Pydantic oneOf rejects at the boundary → VALIDATION_ERROR on the wire.
+        _attach_raw_account_shape(ctx, {"account_id": "acc_001", "brand": {"domain": "x.com"}, "operator": "x.com"})
+        return
 
     elif config.startswith("brand+op") and "sandbox" in config:
         # v3.1: sandbox natural-key resolution — an active sandbox account is
@@ -453,6 +497,10 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     else:
         raise ValueError(f"Unknown boundary config: {config}")
 
+    # Valid-shape cases: dispatch a full, valid create_media_buy carrying the
+    # typed account reference so production resolves it on the wire.
+    _attach_account_to_full_request(ctx)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # WHEN steps — send request
@@ -463,16 +511,19 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 def when_send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
-    Three scenario families share this step text:
+    Three dispatch modes share this step text — every one routes a full
+    ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
-    - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch a full
-      ``create_media_buy`` through the parametrized transport so the production
-      idempotency replay path runs end-to-end.
-    - "create" dispatch mode builds a CreateMediaBuyRequest from
-      ctx["request_kwargs"] and dispatches through the harness (for budget/pricing
-      validation scenarios).
-    - default: account-resolution scenarios resolve an ``account_ref`` at the
-      transport boundary via ``resolve_account_or_error``.
+    - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
+      ``request_kwargs`` so the production idempotency replay path runs end-to-end.
+    - ``dispatch_mode == "create"`` builds a typed ``CreateMediaBuyRequest`` from
+      ctx["request_kwargs"] (carrying a typed ``account`` for account-resolution
+      and budget/pricing scenarios) and dispatches it. Production resolves the
+      account at the transport boundary and emits the outcome on the wire.
+    - ``dispatch_mode == "create_raw"`` dispatches ctx["request_kwargs"] as a RAW
+      flat body (no typed construction) so a malformed account SHAPE (absent
+      field, or a oneOf-both dict) reaches the production Pydantic boundary, which
+      either accepts it (account is optional) or rejects it on the wire.
     """
     if ctx.get("idempotency_create"):
         from tests.bdd.steps.generic._dispatch import dispatch_request
@@ -480,16 +531,14 @@ def when_send_create_media_buy(ctx: dict) -> None:
         dispatch_request(ctx, **ctx["request_kwargs"])
         return
 
-    if ctx.get("dispatch_mode") == "create":
-        _dispatch_full_create(ctx)
+    if ctx.get("dispatch_mode") == "create_raw":
+        _dispatch_raw_create(ctx)
     else:
-        from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
-
-        resolve_account_or_error(ctx)
+        _dispatch_full_create(ctx)
 
 
 def _dispatch_full_create(ctx: dict) -> None:
-    """Build CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
+    """Build a typed CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
     from pydantic import ValidationError
 
     from src.core.schemas import CreateMediaBuyRequest
@@ -503,6 +552,19 @@ def _dispatch_full_create(ctx: dict) -> None:
         return
 
     dispatch_request(ctx, req=req)
+
+
+def _dispatch_raw_create(ctx: dict) -> None:
+    """Dispatch ctx['request_kwargs'] as a RAW flat body (no typed construction).
+
+    Schema-shape cases carry a malformed ``account`` shape that a typed
+    ``CreateMediaBuyRequest`` would reject in test code before reaching the wire.
+    Dispatching the flat kwargs sends them through the real route + production
+    Pydantic, so the boundary itself accepts or rejects the shape.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    dispatch_request(ctx, **ctx.get("request_kwargs", {}))
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -575,34 +637,25 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
 
 
 def _assert_account_resolution_succeeds(ctx: dict) -> None:
-    """Assert account resolution produced the correct account_id."""
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    resolved_id = ctx["resolved_account_id"]
-    assert isinstance(resolved_id, str), (
-        f"Expected resolved_account_id to be a string, got {type(resolved_id).__name__}: {resolved_id!r}"
-    )
-    # Compare against the expected account_id from the request's account_ref
-    account_ref = ctx.get("account_ref")
-    if account_ref is not None:
-        root = account_ref.root
-        if hasattr(root, "account_id"):
-            # Explicit account_id reference — resolved must match exactly
-            assert resolved_id == root.account_id, (
-                f"Expected resolved_account_id '{root.account_id}', got '{resolved_id}'"
-            )
-            return
-    # Natural key resolution — verify against request_account_id if available
-    if "request_account_id" in ctx:
-        assert resolved_id == ctx["request_account_id"], (
-            f"Expected resolved_account_id '{ctx['request_account_id']}', got '{resolved_id}'"
-        )
-    else:
-        # Natural key scenario: verify the ID is a non-trivial string (alphanumeric + hyphens)
-        import re
+    """Assert the create_media_buy succeeded — proving production resolved the account.
 
-        assert re.match(r"^[a-zA-Z0-9_-]+$", resolved_id), (
-            f"Expected resolved_account_id to be a valid ID string, got: {resolved_id!r}"
-        )
+    Account resolution now runs inside a full create_media_buy on the wire
+    (salesagent-zh85): a successful create proves the account reference resolved
+    at the transport boundary, because an unresolved/invalid account would have
+    raised before the buy was created. Assert the wire success response carries a
+    ``media_buy_id`` rather than inspecting a bare resolved-account string (which
+    no longer exists on this path).
+    """
+    assert "error" not in ctx, f"Expected account resolution to succeed but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a create_media_buy success response, but ctx['response'] is None"
+
+    from tests.bdd.steps._outcome_helpers import _get_response_field
+
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, (
+        f"Expected the create to succeed with a media_buy_id (account resolved), got response: {resp!r}"
+    )
 
 
 # -- Outcome family classifiers -----------------------------------------------
@@ -976,6 +1029,11 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     1. Structured code: "error CODE [recovery] [with suggestion]"
     2. Suggestion-only: "error with suggestion"
     3. Descriptive: "error <desc>" or "error: <desc>" -- message-contains check.
+
+    When the scenario dispatched through a wire transport (``ctx["result"]`` is a
+    TransportResult), the structured-code and suggestion-only paths assert on the
+    real wire envelope via ``result.assert_wire_error`` — the AdCP two-layer error
+    contract the buyer sees — instead of a reconstructed exception.
     """
     from src.core.exceptions import AdCPError
 
@@ -990,8 +1048,14 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert description.lower() in error_msg, f"Expected error message to contain '{description}', got: {error}"
         return
 
+    result = ctx.get("result")
+
     # Suggestion-only: "error with suggestion"
     if remainder.startswith("with suggestion"):
+        if result is not None and result.wire_error_envelope is not None:
+            code = result.wire_error_envelope.get("adcp_error", {}).get("code")
+            result.assert_wire_error(code, require_suggestion=True)
+            return
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
@@ -1006,13 +1070,21 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
 
     if is_structured:
         expected_code = first_word
+        recovery = parts[1] if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient") else None
+        require_suggestion = "with suggestion" in outcome.lower()
+
+        if result is not None and result.wire_error_envelope is not None:
+            # Wire-first: assert the AdCP two-layer envelope the buyer receives.
+            result.assert_wire_error(expected_code, recovery=recovery, require_suggestion=require_suggestion)
+            return
+
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError with code '{expected_code}', got {type(error).__name__}: {error}"
         )
         assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
-        if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
-            assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
-        if "with suggestion" in outcome.lower():
+        if recovery is not None:
+            assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
+        if require_suggestion:
             assert error.details is not None, "Expected error details with suggestion, got None"
             assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
     else:
