@@ -44,10 +44,7 @@ def test_commit_hook_counter_detects_over_ceiling() -> None:
 
 @pytest.mark.arch_guard
 def test_commit_hook_counter_counts_hooks_without_explicit_stages() -> None:
-    cfg = {
-        "default_stages": ["pre-commit", "commit"],
-        "repos": [{"hooks": [{"id": "ruff"}, {"id": "mypy"}]}],
-    }
+    cfg = {"repos": [{"hooks": [{"id": "ruff"}, {"id": "mypy"}]}]}
     assert _count_commit_stage_hooks(cfg) == 2
 
 
@@ -57,5 +54,7 @@ def test_commit_hook_counter_detects_under_ceiling() -> None:
         "default_stages": ["pre-commit", "commit"],
         "repos": [{"hooks": [{"stages": ["commit"]}] * (COMMIT_STAGE_MIN - 1)}],
     }
-    assert _count_commit_stage_hooks(under_cfg) == COMMIT_STAGE_MIN - 1
-    assert _count_commit_stage_hooks(under_cfg) < COMMIT_STAGE_MIN
+    count = _count_commit_stage_hooks(under_cfg)
+    assert count == COMMIT_STAGE_MIN - 1
+    with pytest.raises(AssertionError):
+        assert count >= COMMIT_STAGE_MIN

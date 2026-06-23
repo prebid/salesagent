@@ -12,7 +12,11 @@ from pathlib import Path
 
 
 def check_no_skip_tests(files: list[Path]) -> list[str]:
-    """Forbid @pytest.mark.skip without skip_ci justification."""
+    """Forbid bare @pytest.mark.skip in test files.
+
+    ``@pytest.mark.skipif`` and ``@pytest.mark.skip_ci`` are allowed (conditional /
+    CI-specific skips). Bare ``skip`` without justification is forbidden.
+    """
     pattern = re.compile(r"@pytest\.mark\.skip(?!if|_ci)")
     out: list[str] = []
     for filepath in files:

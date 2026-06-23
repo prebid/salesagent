@@ -181,6 +181,7 @@ class TestNoSkippedTests:
                 if line
                 and "pytest.skip(" not in line  # Allow runtime skips
                 and "skip_ci" not in line  # Allow CI-specific skips
+                and "skipif" not in line  # @pytest.mark.skipif is a conditional skip — allowed
                 and "skip_pattern" not in line  # Exclude this test file
                 and "test_no_skip" not in line  # Exclude this test
                 and "test_no_hardcoded_credentials" not in line  # Exclude disabled test
