@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 _SPEC_CODES = {
     "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
     "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
+    "IDEMPOTENCY_IN_FLIGHT",  # BR-UC-002/016/020/023/028: rule-9 reject-and-redirect (3.1.0-beta.0)
 }
 
 # All acceptable codes: SDK standard + justified internal + spec-required

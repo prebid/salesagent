@@ -64,7 +64,7 @@ from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TT
 from src.core.exceptions import (
     AdCPIdempotencyConflictError,
     AdCPIdempotencyExpiredError,
-    AdCPServiceUnavailableError,
+    AdCPIdempotencyInFlightError,
     AdCPValidationError,
 )
 from src.core.log_safety import loggable
@@ -279,9 +279,9 @@ def raise_degraded_replay_outcome(
       (rule 6 fail-closed),
     - canonical payload differs from the stored hash: ``IDEMPOTENCY_CONFLICT``
       (rule 5 — exactly as at the probe),
-    - otherwise: transient ``SERVICE_UNAVAILABLE`` with a short ``retry_after``
-      — the winner's cache write is in flight; the buyer's retry replays the
-      verbatim envelope once it lands.
+    - otherwise: transient ``IDEMPOTENCY_IN_FLIGHT`` with a short ``retry_after``
+      (rule 9 reject-and-redirect) — the winner's cache write is in flight; the
+      buyer retries the SAME key and replays the verbatim envelope once it lands.
     """
     with policy.make_uow(tenant_id) as uow:
         assert uow.idempotency_attempts is not None
@@ -336,10 +336,14 @@ def raise_degraded_replay_outcome(
         # Legacy rows without a stored hash carry no conflict signal.
         raise_on_payload_conflict(conflict_hash, request_hash)
 
-    raise AdCPServiceUnavailableError(
-        "the verbatim replay for this idempotency_key is not yet available — "
-        "the original response is still being committed; retry shortly",
+    raise AdCPIdempotencyInFlightError(
+        "a concurrent request with this idempotency_key is still in flight — "
+        "the original response is still being committed; retry with the same key shortly",
         retry_after=1,
+        suggestion=(
+            "wait retry_after seconds and retry with the SAME idempotency_key; do not mint "
+            "a fresh key — that turns a safe retry into a double-execution race"
+        ),
     )
 
 

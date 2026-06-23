@@ -764,6 +764,31 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
+class AdCPIdempotencyInFlightError(AdCPError):
+    """A concurrent same-key request is still in flight (503, IDEMPOTENCY_IN_FLIGHT).
+
+    Raised on the reject-and-redirect path: a request arrives while another request
+    carrying the same idempotency_key is mid-execution (the winner has not yet
+    committed its verbatim response). Per security.mdx#idempotency rule 9, the seller
+    returns ``IDEMPOTENCY_IN_FLIGHT`` with ``retry_after``; the buyer MUST retry with
+    the SAME idempotency_key once the hint elapses and MUST NOT mint a fresh key —
+    minting a new key turns a safe retry into the exact double-execution race the key
+    exists to prevent.
+
+    Recovery=transient — NOT correctable, unlike the sibling CONFLICT/EXPIRED. The buyer
+    recovers by retrying the UNCHANGED request after a delay, exactly as for the
+    ``SERVICE_UNAVAILABLE`` this replaces on the in-flight path: the request is correct,
+    the seller is merely not done committing. Rule 9 entered at AdCP 3.1.0-beta.0. The
+    code is not yet in the SDK's ``STANDARD_ERROR_CODES`` (the published-enum-vs-SDK
+    drift), so it is registered in the compliance guard's ``_SPEC_CODES`` passthrough
+    set and reaches the wire unchanged.
+    """
+
+    _default_status_code: ClassVar[int] = 503
+    _default_error_code: ClassVar[str] = "IDEMPOTENCY_IN_FLIGHT"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
+
+
 class AdCPCreativeRejectedError(AdCPError):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 

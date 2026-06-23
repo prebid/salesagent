@@ -4,7 +4,7 @@ Verifies that when two concurrent requests with the same idempotency_key
 both pass the initial lookup and attempt to commit, the loser catches
 IntegrityError and resolves to the winner — replaying the winner's verbatim
 cached success when visible, enforcing the payload-hash conflict rule even
-after the race, and FAILING CLOSED (transient SERVICE_UNAVAILABLE) when the
+after the race, and FAILING CLOSED (transient IDEMPOTENCY_IN_FLIGHT) when the
 cache row is missing or unusable: verbatim replay is byte-for-byte or
 nothing, never a fabricated body.
 """
@@ -91,7 +91,7 @@ class TestDegradedReplayFailsClosed:
     """
 
     def test_missing_cache_row_rejects_transient(self, integration_db):
-        """A same-key buy with no cache row rejects SERVICE_UNAVAILABLE + retry_after."""
+        """A same-key buy with no cache row rejects IDEMPOTENCY_IN_FLIGHT + retry_after."""
         from src.core.exceptions import AdCPError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
@@ -122,7 +122,7 @@ class TestDegradedReplayFailsClosed:
             )
 
         exc = exc_info.value
-        assert exc.error_code == "SERVICE_UNAVAILABLE"
+        assert exc.error_code == "IDEMPOTENCY_IN_FLIGHT"
         assert exc.recovery == "transient"
         assert exc.retry_after >= 1
 
@@ -192,7 +192,7 @@ class TestIdempotencyRaceRecovery:
                     idem_key,
                     principal_id,
                 )
-            assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+            assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
             assert exc_info.value.recovery == "transient"
 
         assert caught, "IntegrityError should have been raised by the duplicate idempotency_key"
@@ -237,7 +237,7 @@ class TestDegradedFallbackStatus:
                 principal_id,
             )
 
-        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
         assert exc_info.value.recovery == "transient"
 
 
@@ -328,7 +328,7 @@ class TestRaceLoserPayloadRules:
                 request_hash="same-hash",
             )
 
-        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
         assert exc_info.value.recovery == "transient"
 
 
@@ -391,7 +391,7 @@ class TestRaceSeamThroughEntrypoint:
         # The probe missed (row gone) → full re-execution → backstop fired →
         # the except-branch failed closed instead of fabricating a body.
         assert calls_after == calls_before + 1, "the retry must re-execute (probe miss), not replay"
-        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
         assert exc_info.value.recovery == "transient"
 
         # Exactly one booking exists for the key — the backstop held.

@@ -17,7 +17,7 @@ Business rules: BR-RULE-055..062 (sync_accounts); idempotency per AdCP 3.0.1.
 
 import pytest
 
-from src.core.exceptions import AdCPIdempotencyConflictError, AdCPServiceUnavailableError
+from src.core.exceptions import AdCPIdempotencyConflictError, AdCPIdempotencyInFlightError
 from src.core.schemas.account import SyncAccountsRequest
 from src.services import idempotency_replay
 from tests.harness import Transport
@@ -129,13 +129,13 @@ class TestSyncAccountsRace:
 
     def test_degraded_replay_fails_closed_when_cache_absent(self, integration_db):
         # When the cache row is not visible (a true in-flight race for a cache-only-backstop
-        # tool), the degraded path fails closed with a transient SERVICE_UNAVAILABLE rather
-        # than reconstructing a response — never a fabricated body.
+        # tool), the degraded path rejects with a transient IDEMPOTENCY_IN_FLIGHT (rule 9
+        # reject-and-redirect) rather than reconstructing a response — never a fabricated body.
         with AccountSyncEnv(tenant_id="sync_idem_race", principal_id="agent_idem") as env:
             env.setup_default_data()
             from src.core.tools.accounts import _SYNC_REPLAY_POLICY
 
-            with pytest.raises(AdCPServiceUnavailableError):
+            with pytest.raises(AdCPIdempotencyInFlightError) as exc_info:
                 idempotency_replay.replay_after_race(
                     _SYNC_REPLAY_POLICY,
                     "sync_idem_race",
@@ -144,6 +144,8 @@ class TestSyncAccountsRace:
                     account_id=None,
                     request_hash="some-canonical-hash",
                 )
+            assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
+            assert exc_info.value.recovery == "transient"
 
 
 class TestCrossToolIdempotencyIsolation:
