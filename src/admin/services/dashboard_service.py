@@ -196,12 +196,16 @@ class DashboardService:
 
             daily_revenue = 0.0
             for buy in daily_buys:
+                # Skip buys with no GAM delivery confirmation — budget alone is unreliable
+                # (order may not have been created, needs creative, line item missing, etc.)
+                if buy.delivered_amount is None:
+                    continue
                 start_date = type_cast(date | None, buy.start_date)
                 end_date = type_cast(date | None, buy.end_date)
                 if start_date and end_date:
                     days_in_flight = (end_date - start_date).days + 1
                     if days_in_flight > 0:
-                        daily_revenue += float(buy.budget or 0) / days_in_flight
+                        daily_revenue += float(buy.delivered_amount) / days_in_flight
 
             revenue_data.append({"date": day.isoformat(), "revenue": round(daily_revenue, 2)})
 
@@ -388,25 +392,22 @@ class DashboardService:
     def _net_revenue_in_window(self, session, start: datetime, end: datetime) -> float:
         """Net revenue for media buys approved in [start, end].
 
-        Prefers the delivery snapshot (`delivered_amount`) when present;
-        falls back to budget for buys that have never been polled.
+        Only counts buys with confirmed GAM delivery data (delivered_amount IS NOT NULL).
+        Buys that never ran in GAM (needs creative, line item not created, etc.) have no
+        delivery snapshot and are excluded — budget alone is not a reliable revenue signal.
         """
         from sqlalchemy import select
 
         stmt = (
-            select(MediaBuy.budget, MediaBuy.delivered_amount)
+            select(MediaBuy.delivered_amount)
             .where(MediaBuy.tenant_id == self.tenant_id)
             .where(MediaBuy.approved_at != None)  # noqa: E711
             .where(MediaBuy.approved_at >= start)
             .where(MediaBuy.approved_at < end)
+            .where(MediaBuy.status.in_(["active", "completed"]))
+            .where(MediaBuy.delivered_amount != None)  # noqa: E711
         )
-        total = 0.0
-        for budget, delivered in session.execute(stmt):
-            if delivered is not None:
-                total += float(delivered)
-            elif budget is not None:
-                total += float(budget)
-        return total
+        return sum(float(row) for (row,) in session.execute(stmt))
 
     def _incoming(self, repo: MediaBuyRepository) -> dict[str, Any]:
         """Offers waiting on a yes / no / counter from the publisher."""

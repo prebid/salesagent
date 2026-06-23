@@ -99,11 +99,13 @@ def get_tenant_access(tenant_id: str) -> bool:
 
     # Handle legacy user object style (if any)
     user = session.get("user", {})
-    if user.get("is_super_admin"):
-        return True
+    if isinstance(user, dict):
+        if user.get("is_super_admin"):
+            return True
+        user_tenants = user.get("tenants", [])
+        return tenant_id in user_tenants
 
-    user_tenants = user.get("tenants", [])
-    return tenant_id in user_tenants
+    return False
 
 
 @gam_reporting_api.route("/api/tenant/<tenant_id>/gam/reporting", methods=["GET"])

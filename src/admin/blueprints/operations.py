@@ -265,6 +265,15 @@ def media_buy_detail(tenant_id, media_buy_id):
                             "currency": delivery_response.currency,
                             "by_package": delivery_response.by_package,
                         }
+
+                        # Persist delivered_amount so the dashboard Running
+                        # column and pacing bars reflect real GAM data.
+                        from decimal import Decimal as _Decimal
+
+                        media_buy.delivered_amount = _Decimal(str(round(delivery_response.totals.spend, 2)))
+                        media_buy.delivered_impressions = int(delivery_response.totals.impressions or 0)
+                        media_buy.delivery_synced_at = datetime.now(UTC)
+                        db_session.commit()
                 except Exception as e:
                     logger.warning(f"Could not fetch delivery metrics for {media_buy_id}: {e}")
                     # Continue without metrics - don't fail the whole page
