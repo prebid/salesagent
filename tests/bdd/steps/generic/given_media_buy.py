@@ -2153,6 +2153,151 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# UC-002 ext-o/ext-p/ext-g/ext-q — single creative error scenarios
+# ═══════════════════════════════════════════════════════════════════════
+# These wire the four named creative-error scenarios so they dispatch a real
+# create_media_buy on the wire and assert the canonical creative error code:
+#   ext-o: creative_id referenced but absent from the library  → CREATIVE_REJECTED
+#   ext-p: creative format not in product's accepted formats    → CREATIVE_REJECTED
+#   ext-g: inline creative missing its required content URL      → message contains "URL"
+#   ext-q: ad server rejects the creative upload                 → SERVICE_UNAVAILABLE
+# They reuse the creative-seeding helpers above; each step text is defined once.
+
+
+@given(parsers.parse('But a package creative_assignment references creative_id "{creative_id}"'))
+@given(parsers.parse('a package creative_assignment references creative_id "{creative_id}"'))
+def given_package_references_missing_creative(ctx: dict, creative_id: str) -> None:
+    """ext-o: reference a creative_id with no matching library row.
+
+    No Creative is seeded for ``creative_id``, so the create path's
+    "Creative IDs not found" check (media_buy_create.py) raises
+    AdCPCreativeRejectedError → CREATIVE_REJECTED on the wire, with the missing
+    id and a sync_creatives suggestion.
+    """
+    _add_creative_ids_to_package(ctx, [creative_id])
+
+
+@given("But a creative's format_id does not match any of the product's supported format_ids")
+@given("a creative's format_id does not match any of the product's supported format_ids")
+def given_creative_format_mismatch(ctx: dict) -> None:
+    """ext-p: seed an approved creative whose format is absent from the product.
+
+    The default product accepts ``display_300x250``; this creative carries
+    ``video_640x480``. The pre-adapter creative validation in the create path
+    rejects the format mismatch with CREATIVE_REJECTED on the wire.
+    """
+    creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_640x480")
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+
+@given("a valid create_media_buy request with inline creatives")
+def given_request_with_inline_creatives(ctx: dict) -> None:
+    """ext-g/base: attach one valid inline creative to the request's package."""
+    _ensure_request_defaults(ctx)
+    _add_inline_creatives(ctx, count=1)
+
+
+@given("But a creative is missing the required URL in assets")
+@given("a creative is missing the required URL in assets")
+def given_inline_creative_missing_url(ctx: dict) -> None:
+    """ext-g: strip the content URL from the inline creative's primary asset.
+
+    Production's reference-creative validation requires a content URL; without
+    it the create path rejects the creative and the wire error message names the
+    missing URL.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    pkg = kwargs["packages"][0]
+    creatives = pkg.get("creatives")
+    assert creatives, "No inline creatives on package — wire the inline-creatives Given first"
+    for creative in creatives:
+        primary = creative.get("assets", {}).get("primary")
+        assert primary is not None, "Inline creative has no primary asset to clear the URL on"
+        # Empty (not absent) URL keeps the asset structurally valid so it syncs to
+        # the library, then production's reference-creative URL validation rejects
+        # it with a message naming the missing URL (ext-g intent).
+        primary["url"] = ""
+
+
+@given("And the creative format is not generative")
+@given("the creative format is not generative")
+def given_creative_format_not_generative(ctx: dict) -> None:
+    """ext-g: assert the inline creative uses a non-generative reference format.
+
+    Generative formats (those with output_format_ids) skip URL validation, so
+    the missing-URL rejection only fires for reference formats. The default
+    inline creative uses ``display_300x250`` (a reference format with no
+    output_format_ids), satisfying this precondition.
+    """
+    kwargs = ctx.get("request_kwargs", {})
+    for pkg in kwargs.get("packages", []):
+        for creative in pkg.get("creatives") or []:
+            fmt = creative.get("format_id", {})
+            fmt_id = fmt.get("id") if isinstance(fmt, dict) else fmt
+            assert fmt_id == "display_300x250", (
+                f"Inline creative format '{fmt_id}' is not the expected non-generative reference format"
+            )
+
+
+@given("Given a valid create_media_buy request with inline creatives that passes all validation")
+@given("a valid create_media_buy request with inline creatives that passes all validation")
+def given_request_inline_creatives_valid(ctx: dict) -> None:
+    """ext-q: attach a valid, approved creative whose format/URL pass all validation.
+
+    The creative is well-formed and approved (status='approved', no
+    platform_creative_id) so the synchronous create path reaches the ad-server
+    upload (adapter.add_creative_assets). Pending-review creatives are held back
+    from upload during create, so an *approved* creative is required to exercise
+    the upload path the scenario tests. The only failure injected (by the sibling
+    'ad server rejects the creative upload' step) is the adapter upload itself.
+    Tenant is set to auto-approval so the synchronous upload runs and the adapter
+    rejection surfaces on the create wire.
+    """
+    _ensure_request_defaults(ctx)
+    creative = _create_approved_creative(ctx, "cr-upload-ok")
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        env = ctx["env"]
+        tenant.human_review_required = False
+        env._commit_factory_data()
+        env._identity_cache.clear()
+        env._tenant_overrides["human_review_required"] = False
+        _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+
+
+@given("But the ad server rejects the creative upload")
+@given("the ad server rejects the creative upload")
+def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
+    """ext-q: make the adapter raise on the creative-upload call.
+
+    Configures ``add_creative_assets`` to raise so the create path's
+    synchronous upload surfaces the adapter failure as SERVICE_UNAVAILABLE
+    on the wire (instead of swallowing it — 'No Quiet Failures').
+    """
+    from src.core.exceptions import AdCPAdapterError
+
+    env = ctx["env"]
+    mock_adapter = env.mock["adapter"].return_value
+    upload_error = AdCPAdapterError(
+        "Ad server rejected the creative upload",
+        recovery="transient",
+        details={"suggestion": "Retry the upload or verify the creative meets the ad server's requirements"},
+    )
+    mock_adapter.add_creative_assets.side_effect = upload_error
+    # E2E path: write the failure to the adapter test-behavior config so a
+    # Docker-hosted adapter raises the same error on creative upload.
+    _sync_adapter_error_to_db(
+        ctx,
+        fail_on_create=False,
+        fail_on_update=False,
+        error_message="Ad server rejected the creative upload",
+        error_details={"suggestion": "Retry the upload or verify the creative meets the ad server's requirements"},
+        recovery="transient",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Optimization goals partition/boundary — BR-RULE-087
 # ═══════════════════════════════════════════════════════════════════════
 

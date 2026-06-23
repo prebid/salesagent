@@ -248,7 +248,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
     # ext-h: plain string format_id caught by Pydantic, not structured AdCPError
     # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
-    "T-UC-002-ext-g": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPError with suggestion",
     "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
     # FIXME(salesagent-9vgz.8): auth error lacks suggestion field
@@ -259,9 +258,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # Production wraps adapter exceptions as AdCPAdapterError and re-raises instead of
     # returning CreateMediaBuyResult(status="failed"). Also no suggestion field on error.
     "T-UC-002-ext-j": "adapter failure raises exception, no failed result envelope or suggestion — spec-production gap",
-    "T-UC-002-ext-o": "CREATIVES_NOT_FOUND error lacks suggestion field",
-    "T-UC-002-ext-p": "CREATIVE_FORMAT_MISMATCH error lacks suggestion field",
-    "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
     "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
     # Graduated (#1417/gh8p.10): the request-construction boundary now derives a
@@ -816,6 +812,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     reason="MCP TypeAdapter rejects the short webhook credential as a bare ToolError "
                     "before the AdCP boundary translator runs — no two-layer VALIDATION_ERROR envelope "
                     "on MCP (a2a/rest pass). Documented MCP forward-compat gap.",
+                    strict=True,
+                )
+            )
+
+        # UC-002 ext-g inline-creative missing URL (salesagent-gh8p.12): the inline
+        # creative carries a FormatId object on the wire. On a2a/rest the
+        # reference-creative URL validation rejects it with the AdCP CREATIVE_REJECTED
+        # envelope (message names the missing URL). On MCP the idempotency
+        # canonicalization (rfc8785) cannot serialize the FormatId object and raises a
+        # bare CanonicalizationError BEFORE the AdCP boundary translator runs — no
+        # two-layer envelope on MCP (same class of MCP serialization gap recorded for
+        # the oneOf-both account shape and the short webhook credential above). The
+        # a2a/rest rows assert the real wire CREATIVE_REJECTED with the URL message.
+        if is_mcp and "T-UC-002-ext-g" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="MCP rfc8785 canonicalization cannot serialize the inline creative's FormatId "
+                    "object (raises CanonicalizationError before the AdCP boundary translator) — no "
+                    "two-layer CREATIVE_REJECTED envelope on MCP (a2a/rest pass). Documented MCP "
+                    "serialization gap.",
                     strict=True,
                 )
             )

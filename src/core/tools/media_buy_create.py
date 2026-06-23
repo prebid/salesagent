@@ -3746,8 +3746,19 @@ async def _create_media_buy_impl(
                                             ctx_manager.update_workflow_step(
                                                 step.step_id, status="failed", error_message=format_error
                                             )
-                                            raise AdCPValidationError(
-                                                format_error or "Creative format mismatch",
+                                            # A creative whose format is not accepted by the product is a
+                                            # rejected creative (CREATIVE_REJECTED), not a generic request
+                                            # validation failure — matching the sibling pre-adapter
+                                            # validation raise. Carry a remediation suggestion (POST-F3).
+                                            raise AdCPCreativeRejectedError(
+                                                format_error
+                                                or "Creative format does not match the product's accepted formats",
+                                                suggestion=(
+                                                    "Assign a creative whose format matches one of the product's "
+                                                    "accepted formats, or re-sync the creative with a compatible "
+                                                    "format before referencing it in this media buy."
+                                                ),
+                                                details={"creative_id": creative_id, "product_id": package.product_id},
                                             )
 
                                         logger.info(
@@ -3845,6 +3856,13 @@ async def _create_media_buy_impl(
                                     logger.error(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
                                     raise AdCPAdapterError(
                                         f"Failed to upload creative {creative_id} to GAM: {str(upload_error)}",
+                                        details={
+                                            "suggestion": (
+                                                "The ad server rejected the creative upload. Retry the request, or "
+                                                "verify the creative meets the ad server's technical requirements "
+                                                "before re-submitting."
+                                            )
+                                        },
                                     ) from upload_error
 
                             # Create database assignment
