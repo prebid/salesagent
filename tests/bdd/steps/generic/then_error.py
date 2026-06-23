@@ -409,6 +409,7 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 
 
 @then('the error should include a "suggestion" field')
+@then('the error should include "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:
     """Assert error includes a non-empty suggestion — wire-first, reconstructed fallback.
 

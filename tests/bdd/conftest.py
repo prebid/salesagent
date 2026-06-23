@@ -300,6 +300,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # sandbox-production passes vacuously (sandbox absent from response by default).
     "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
     "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
+    # FIXME(salesagent-gh8p.13 / production-gap bead): natural-key sandbox resolution
+    # without prior provisioning is unimplemented. _resolve_by_natural_key
+    # (account_helpers.py:110) requires the sandbox account to already exist —
+    # raises ACCOUNT_NOT_FOUND rather than auto-provisioning — and
+    # CreateMediaBuyResult exposes no sandbox field to echo. Step dispatches the
+    # real natural-key create on the wire; flips to a pass when sandbox
+    # auto-provisioning + the sandbox echo land. BR-RULE-209 INV-8.
+    "T-UC-002-sandbox-natural-key": "natural-key sandbox auto-provisioning + sandbox echo not implemented "
+    "in create_media_buy (ACCOUNT_NOT_FOUND without prior provisioning) — spec-production gap (salesagent-gh8p.13)",
     # FIXME(salesagent-9vgz.1): inline creative upload not persisted in create_media_buy
     # process_and_upload_package_creatives → _sync_creatives_impl should persist
     # creatives to DB, but the Then step "upload creatives to creative library" fails
@@ -614,7 +623,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # vocabulary @04f59d2d5) and production emits them with a recovery suggestion.
             # The placement fixture gap (placement_configs -> placements) is fixed.
             # T-UC-003-ext-m / -ext-m-unsupported pass; xfails removed.
-            "T-UC-003-ext-n": "production doesn't check admin privileges on update",
+            # T-UC-003-ext-n moved to a dedicated STRICT xfail below (production gap).
             # Graduated: T-UC-003-ext-o (rczc: adapter failure returns correct shape on all 4 transports)
             "T-UC-003-ext-q-rejected": "production doesn't reject updates to terminal-status media buys",
             "T-UC-003-ext-q-canceled": "production doesn't reject updates to terminal-status media buys",
@@ -631,6 +640,47 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
                 break  # One xfail per scenario is sufficient
+
+        # FIXME(salesagent-gh8p.11 / production-gap bead): UC-003 ext-n insufficient
+        # privileges. Storyboard BR-UC-003-ext-n grounds an ADMIN-only adapter gate
+        # (e.g. GAM guaranteed-item activation) that emits the canonical
+        # PERMISSION_DENIED (pinned enum @04f59d2d5; reconciled from the prose's
+        # non-canonical "insufficient_privileges" in adcp-req BR-UC-003 impl-coverage).
+        # Production has NO privilege gate on update, and the AdCP buyer protocol has
+        # no principal-role concept (roles live on the admin-UI User model, not
+        # Principal). The fields-less ext-n request also short-circuits through the
+        # empty-update VALIDATION_ERROR path before any adapter call. The step now
+        # arms the real update adapter with a canonical PERMISSION_DENIED rejection,
+        # so this strict xfail flips to a wire-asserted pass the moment production
+        # gates admin-only update actions. Strict: fails loudly when that lands.
+        if "T-UC-003-ext-n" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="production gap: no admin-only privilege gate on update_media_buy; "
+                    "AdCP buyers have no principal-role concept and the fields-less request "
+                    "short-circuits via empty-update VALIDATION_ERROR before any adapter call "
+                    "(canonical target: PERMISSION_DENIED) — salesagent-gh8p.11",
+                    strict=True,
+                )
+            )
+
+        # FIXME(salesagent-gh8p.13 / production-gap bead): UC-003 ext-v cancellation
+        # refused. canceled IS a valid UpdateMediaBuyRequest field but production
+        # never reads it, has no state-based NOT_CANCELLABLE check, and
+        # has_updatable_fields() omits canceled — so a media_buy_id+canceled
+        # request trips the empty-update VALIDATION_ERROR path instead of
+        # NOT_CANCELLABLE. The step arms the update adapter with the canonical
+        # NOT_CANCELLABLE refusal and dispatches the real cancel on the wire, so
+        # this strict xfail flips to a pass when production wires the cancel path.
+        if "T-UC-003-ext-v" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="production gap: update_media_buy never reads canceled and has no state-based "
+                    "cancellation gate; has_updatable_fields() omits canceled so the request short-circuits "
+                    "via empty-update VALIDATION_ERROR (canonical target: NOT_CANCELLABLE) — salesagent-gh8p.13",
+                    strict=True,
+                )
+            )
 
         # workflow_step_id is an internal field (exclude=True in schema).
         # impl/a2a return raw Python objects where the attribute is accessible

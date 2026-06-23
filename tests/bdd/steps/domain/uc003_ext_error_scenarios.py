@@ -17,23 +17,43 @@ from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_default
 
 
 def _inject_privilege_error(ctx: dict) -> None:
-    """Inject INSUFFICIENT_PRIVILEGES error into the mock adapter.
+    """Arm the adapter to refuse an admin-only update with PERMISSION_DENIED.
 
-    Called when both 'Buyer does not have admin privileges' and
-    'the update operation requires admin privileges' are active, regardless
-    of step ordering.
+    Storyboard BR-UC-003-ext-n grounds the privilege check at the ADAPTER
+    (step 9b: "Adapter checks admin privilege requirement — operation requires
+    admin, principal is not admin"), not at a Principal/buyer role in our DB
+    (the AdCP buyer protocol has no principal-role concept — roles belong to the
+    admin-UI ``User`` model). The pinned error-code enum @04f59d2d5 has no
+    ``INSUFFICIENT_PRIVILEGES``; the canonical reconciliation is
+    ``PERMISSION_DENIED`` (adcp-req BR-UC-003 impl-coverage), recovery
+    correctable, with a buyer-facing "privileges" suggestion.
+
+    So we arm the method production actually calls during update
+    (``adapter.update_media_buy``) with the canonical rejection. This makes the
+    test wire-ready: the instant production gates admin-only actions and lets
+    the adapter rejection surface on the wire, the strict xfail in conftest
+    (T-UC-003-ext-n) flips to a real PERMISSION_DENIED pass. Today production
+    short-circuits the fields-less ext-n request through the empty-update path
+    and never reaches the adapter — hence the documented production gap.
     """
     from src.core.exceptions import AdCPError
 
     env = ctx["env"]
-    mock_adapter = env.mock["adapter"].return_value
-    error = AdCPError(
-        error_code="INSUFFICIENT_PRIVILEGES",
-        message="This operation requires admin privileges",
-        recovery="contact_admin",
-        details={"suggestion": "Request admin privileges or contact an administrator"},
+    # MediaBuyDualEnv keys the UPDATE adapter under "update_adapter" (the create
+    # adapter is "adapter" and is never used by the update path). Inject into the
+    # update adapter's update_media_buy — the method production invokes during
+    # the adapter execution step (media_buy_update.py:628/692/760) — NOT
+    # validate_media_buy_request, which the update path never calls.
+    mock_adapter = env.mock["update_adapter"].return_value
+    # PERMISSION_DENIED is canonical (pinned enum @04f59d2d5, recovery
+    # correctable) but no typed subclass models it, so synthesize the code.
+    error = AdCPError.synthesize(
+        "This operation requires admin privileges",
+        error_code="PERMISSION_DENIED",
+        recovery="correctable",
+        details={"suggestion": "Request admin privileges or contact an administrator to perform this action"},
     )
-    mock_adapter.validate_media_buy_request.side_effect = error
+    mock_adapter.update_media_buy.side_effect = error
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -534,20 +554,20 @@ def given_product_no_placement_targeting(ctx: dict) -> None:
 
 @given("the Buyer does not have admin privileges")
 def given_buyer_no_admin(ctx: dict) -> None:
-    """Mark the buyer as non-admin and set role on the principal object."""
-    ctx["buyer_is_admin"] = False
-    principal = ctx.get("principal")
-    # Principal may not exist yet if this step runs before env setup —
-    # that's OK because the scenario's When step creates the identity.
-    # But if a principal IS present, it must have the role attribute set.
-    if principal is not None:
-        assert hasattr(principal, "role"), (
-            f"Principal {type(principal).__name__} has no 'role' attribute — cannot mark buyer as non-admin"
-        )
-        principal.role = "buyer"
-        assert principal.role == "buyer", f"Failed to set principal.role to 'buyer', got {principal.role!r}"
+    """Mark the buyer as non-admin.
 
-    # If update already requires admin, inject the privilege error now
+    The AdCP buyer protocol has NO principal-role concept: the ``Principal``
+    ORM model (src/core/database/models.py:536) carries no ``role`` column —
+    roles (admin/manager/viewer) belong to the admin-UI ``User`` model. The
+    storyboard BR-UC-003-ext-n places the admin gate at the ADAPTER (e.g.
+    activating guaranteed items in GAM requires an admin account), not on the
+    buyer principal. So "non-admin buyer" is recorded as scenario intent in ctx
+    and enforced via the adapter rejection (``_inject_privilege_error``), not by
+    mutating a non-existent ``principal.role`` attribute.
+    """
+    ctx["buyer_is_admin"] = False
+
+    # If update already requires admin, arm the adapter privilege error now
     if ctx.get("update_requires_admin"):
         _inject_privilege_error(ctx)
 
@@ -570,12 +590,101 @@ def given_update_requires_admin(ctx: dict) -> None:
     # This catches the case where step ordering left the env unconfigured.
     if ctx.get("update_requires_admin") and not ctx.get("buyer_is_admin", True):
         env = ctx["env"]
-        mock_adapter = env.mock["adapter"].return_value
-        assert mock_adapter.validate_media_buy_request.side_effect is not None, (
+        mock_adapter = env.mock["update_adapter"].return_value
+        assert mock_adapter.update_media_buy.side_effect is not None, (
             "Both 'update_requires_admin' and 'buyer_is_admin=False' are set, "
-            "but validate_media_buy_request.side_effect was not injected — "
+            "but update_adapter.update_media_buy.side_effect was not injected — "
             "the privilege error will not fire during the When step"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — mid-flight package addition (ext-u) + cancellation (ext-v)
+#   salesagent-gh8p.13. Both are production gaps: update_media_buy never reads
+#   new_packages or canceled, and has_updatable_fields() (schemas/_base.py)
+#   omits both — so a request carrying only media_buy_id + one of them trips the
+#   empty-update VALIDATION_ERROR path instead of UNSUPPORTED_FEATURE /
+#   NOT_CANCELLABLE. These steps build the real request and dispatch it on the
+#   wire; the strict xfail markers in conftest flip to passes when production
+#   implements the mid-flight capability gate and state-based cancellation.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('the media buy "{mb_label}" is in "{status}" status'))
+def given_named_media_buy_status(ctx: dict, mb_label: str, status: str) -> None:
+    """Set the existing media buy (referenced by Gherkin label) to a status.
+
+    Alias of the unquoted-label status step for scenarios that name the media
+    buy explicitly (e.g. ext-v 'the media buy "mb_existing" is in "active"
+    status'). The conftest Background already created the existing media buy;
+    we mutate its status precondition.
+    """
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, (
+        f"No existing_media_buy in ctx — step names '{mb_label}' in '{status}' status "
+        "but no media buy exists to set status on"
+    )
+    mb.status = status
+    ctx["env"]._commit_factory_data()
+
+
+@given("the request includes new_packages with one complete package-request")
+def given_request_new_packages_one(ctx: dict) -> None:
+    """Add one complete package-request to the update's new_packages list.
+
+    new_packages IS a valid UpdateMediaBuyRequest field, but production never
+    reads it and has_updatable_fields() omits it (production gap, ext-u).
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    product = ctx.get("default_product")
+    product_id = product.product_id if product else "guaranteed_display"
+    kwargs["new_packages"] = [
+        {
+            "product_id": product_id,
+            "budget": 5000.0,
+            "pricing_option_id": "cpm_usd_fixed",
+        }
+    ]
+
+
+@given(parsers.parse('the media buy\'s valid_actions does NOT advertise "{action}"'))
+def given_valid_actions_excludes(ctx: dict, action: str) -> None:
+    """Record that the media buy's valid_actions does NOT advertise an action.
+
+    BR-RULE-217 INV-1: new_packages on a seller not advertising add_packages
+    must be rejected with UNSUPPORTED_FEATURE. Production has no such capability
+    gate (it never reads new_packages), so this precondition is recorded for the
+    wire-ready strict xfail. We assert the precondition is meaningful: the action
+    must be a real valid-action name the gate would consult.
+    """
+    assert action, "valid_actions exclusion step requires a non-empty action name"
+    ctx.setdefault("excluded_valid_actions", set()).add(action)
+
+
+@given("the media buy has committed delivery that the seller cannot cancel mid-flight")
+def given_media_buy_uncancellable(ctx: dict) -> None:
+    """Mark the active media buy as carrying committed delivery + request cancel.
+
+    BR-RULE-216 INV-4: a buy not cancellable in its current state must reject a
+    cancel with NOT_CANCELLABLE. Production never reads canceled and has no
+    state-based cancellation check (gap, ext-v). We arm the update adapter to
+    refuse the cancel (the seller-side gate) and set canceled=true so the real
+    cancellation path is exercised on the wire.
+    """
+    from src.core.exceptions import AdCPError
+
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["canceled"] = True
+    ctx["uncancellable"] = True
+    # Arm the seller-side refusal at the update adapter with the canonical code.
+    env = ctx["env"]
+    mock_adapter = env.mock["update_adapter"].return_value
+    mock_adapter.update_media_buy.side_effect = AdCPError.synthesize(
+        "Media buy cannot be canceled in its current state with committed delivery",
+        error_code="NOT_CANCELLABLE",
+        recovery="correctable",
+        details={"suggestion": "Pause the buy instead (paused: true) or contact the seller to arrange cancellation"},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

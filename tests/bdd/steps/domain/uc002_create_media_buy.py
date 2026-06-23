@@ -503,6 +503,130 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — malformed-package error scenarios (salesagent-gh8p.13)
+#
+# Each step mutates the first package of the shared create request to introduce
+# the malformed condition the scenario describes, then routes the request
+# through the RAW wire dispatch (dispatch_mode="create_raw") so the malformed
+# body reaches production's real Pydantic + business-logic boundary. The
+# scenarios are all CURRENT production gaps (the fields are accepted by
+# PackageRequest's extra="allow" but never validated, or the dead-code
+# validator is never called) and carry strict xfail markers in conftest; these
+# steps make them wire-ready so each flips to a real pass the moment production
+# implements the validation. See the gh8p.13 production-gap beads.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _first_package(ctx: dict) -> dict:
+    """Return the first package dict of the shared create request (raw-dispatched)."""
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    packages = kwargs.get("packages")
+    assert packages, "request has no packages to mutate"
+    ctx["dispatch_mode"] = "create_raw"
+    return packages[0]
+
+
+@given(parsers.parse('a package has optimization_goal with kind "metric" and metric "{metric}" not in supported set'))
+def given_package_optimization_unsupported_metric(ctx: dict, metric: str) -> None:
+    """Attach an optimization_goal whose metric is outside the seller's supported set.
+
+    Production gap: create_media_buy never reads optimization_goals; the metric
+    is silently accepted (BR-UC-002 ext-u wants UNSUPPORTED_FEATURE).
+    """
+    pkg = _first_package(ctx)
+    pkg["optimization_goals"] = [{"metric": metric, "weight": 1.0}]
+
+
+@given(parsers.parse('a package has optimization_goal with kind "event" and unregistered event_source_id'))
+def given_package_optimization_unregistered_event(ctx: dict) -> None:
+    """Attach an optimization_goal referencing an unregistered event_source_id.
+
+    Production gap: no event_source validation exists (ext-u-event wants a
+    'not registered' error + sync_event_sources suggestion).
+    """
+    pkg = _first_package(ctx)
+    pkg["optimization_goals"] = [{"event_source_id": "evt-unregistered", "weight": 1.0}]
+
+
+@given(parsers.parse('a package format_id is a plain string "{format_id}" instead of a FormatId object'))
+def given_package_format_id_plain_string(ctx: dict, format_id: str) -> None:
+    """Set a package format_id to a bare string instead of a FormatId object.
+
+    Production behaviour: Pydantic rejects the plain string with a generic
+    VALIDATION_ERROR ('Input should be a valid dictionary or instance of
+    FormatReferenceStructuredObject'). ext-h wants the message to name
+    'FormatId' with a suggestion (the structured validator is dead code).
+    """
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [format_id]
+
+
+@given(parsers.parse("a package format_id references an unregistered agent_url"))
+def given_package_format_id_unregistered_agent(ctx: dict) -> None:
+    """Set a well-formed FormatId whose agent_url is not a registered creative agent.
+
+    Production gap: _validate_and_convert_format_ids (the unregistered-agent
+    check) is dead code — never called — so the unregistered agent_url is not
+    detected (ext-h-agent wants a 'not registered' error).
+    """
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
+
+
+@given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))
+def given_package_duplicate_catalog_types(ctx: dict, catalog_type: str) -> None:
+    """Attach two catalogs of the same type to one package.
+
+    Production gap: create_media_buy never reads request catalogs; the duplicate
+    type is silently accepted (ext-v wants INVALID_REQUEST 'duplicate catalog type').
+    """
+    pkg = _first_package(ctx)
+    pkg["catalogs"] = [
+        {"type": catalog_type, "ids": ["cat-a"]},
+        {"type": catalog_type, "ids": ["cat-b"]},
+    ]
+
+
+@given(parsers.parse('a package references catalog_id "{catalog_id}" not found in synced catalogs'))
+def given_package_catalog_not_found(ctx: dict, catalog_id: str) -> None:
+    """Reference a catalog_id that was never synced for the tenant.
+
+    Production gap: no catalog_id existence validation (ext-v-notfound wants
+    INVALID_REQUEST 'not found' + sync_catalogs suggestion).
+    """
+    pkg = _first_package(ctx)
+    pkg["catalogs"] = [{"type": "product", "ids": [catalog_id]}]
+
+
+@given(parsers.parse("the request uses a natural-key account reference with brand and operator and sandbox true"))
+def given_request_natural_key_sandbox(ctx: dict) -> None:
+    """Attach a natural-key (brand+operator+sandbox:true) account reference.
+
+    BR-RULE-209 INV-8 wants this to resolve to a sandbox account WITHOUT prior
+    sync_accounts provisioning and echo sandbox=true on the response.
+
+    Production gap: _resolve_by_natural_key (account_helpers.py:110) requires the
+    account to already exist (raises ACCOUNT_NOT_FOUND otherwise — there is no
+    sandbox auto-provisioning), and CreateMediaBuyResult exposes no ``sandbox``
+    field. So with no prior provisioning the create fails ACCOUNT_NOT_FOUND and
+    the sandbox echo cannot be asserted. Wire-ready: dispatch a full create
+    carrying the natural-key reference so production resolves it at the boundary.
+    """
+    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
+
+    ctx["account_ref"] = AccountReference(
+        root=AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="sandbox-brand.com"),
+            operator="sandbox-brand.com",
+            sandbox=True,
+        )
+    )
+    _attach_account_to_full_request(ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # WHEN steps — send request
 # ═══════════════════════════════════════════════════════════════════════
 
