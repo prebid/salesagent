@@ -42,7 +42,6 @@ Feature: get_products buying_mode three-mode contract (brief / wholesale / refin
     Then the response status should be "completed"
     And the response should contain "products" array
     And no product should include a brief_relevance value
-    And the response should NOT contain "proposals" array
 
   @buying_mode @bm-refine
   Scenario: Refine mode returns refinement_applied for each ask
@@ -69,4 +68,12 @@ Feature: get_products buying_mode three-mode contract (brief / wholesale / refin
       | field        | value       |
       | adcp_version | 3.0.6       |
       | brief        | display ads |
+    Then the get_products request is rejected with error code "INVALID_REQUEST"
+
+  @buying_mode @bm-reject-finalize
+  Scenario: Refine mode with action=finalize is rejected (proposal commit unsupported)
+    When the Buyer Agent sends a get_products request with:
+      | field       | value                                                              |
+      | buying_mode | refine                                                             |
+      | refine      | [{"scope": "proposal", "proposal_id": "p1", "action": "finalize"}] |
     Then the get_products request is rejected with error code "INVALID_REQUEST"

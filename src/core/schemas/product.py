@@ -231,10 +231,20 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
+    """One request model spanning all three get_products buying modes.
 
-    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so callers aren't forced into a single mode.
+    Runtime shape: this is a single class subclassing ``AdcpVersionEnvelope`` (via
+    ``AdCPBaseModel``), not a union. It extends the library's
+    ``GetProductsWholesaleRequest`` (imported as ``LibraryGetProductsRequest``); the
+    sibling names ``GetProductsWholesaleRequest`` and ``GetProductsRefineRequest`` are
+    ``TypeAlias`` bindings to this same class, not distinct types. The library declares
+    ``buying_mode`` as a required ``BuyingMode`` enum; we widen it to ``str | None`` so a
+    single model serves every mode (and forward/pre-v3 construction without a mode).
+
+    The three modes the validator enforces cross-mode rules for:
+    - ``brief``: the publisher curates products from a required ``brief``; ``refine`` forbidden.
+    - ``wholesale``: the buyer requests raw inventory; ``brief`` forbidden.
+    - ``refine``: iterate on a prior response via a required ``refine`` array; ``brief`` forbidden.
 
     Library provides: account, brand, brief, buyer_campaign_ref, catalog,
     context, ext, fields, filters, pagination, property_list, refine.
@@ -307,8 +317,34 @@ class GetProductsRequest(LibraryGetProductsRequest):
                 raise ValueError("brief must not be provided when buying_mode is 'refine'")
             if not refine_present:
                 raise ValueError("refine array is required when buying_mode is 'refine'")
+            self._reject_unsupported_finalize()
 
         return self
+
+    def _reject_unsupported_finalize(self) -> None:
+        """Reject refine arrays carrying ``action: "finalize"`` until proposal commit lands.
+
+        AdCP 3.1.0-beta.3 refinement.mdx ("Finalize is exclusive within ``refine[]``"):
+        ``action: "finalize"`` is a commit, not a refinement — it transitions a draft
+        proposal to committed with an expires_at hold window, and if any entry finalizes
+        then ALL entries MUST be proposal-scoped ``action: "finalize"``. refine is a stub
+        here (``refinement_applied`` reports ``status: "unable"``); proposal-state
+        persistence and the commit transition are not implemented. The honest declaration
+        is to reject any finalize outright with INVALID_REQUEST rather than silently
+        accept a commit we cannot perform. (``ValueError`` here is translated to
+        ``AdCPInvalidRequestError`` by ``create_get_products_request``.)
+        """
+        from src.core.helpers import enum_value
+
+        for entry in self.refine or []:
+            inner = getattr(entry, "root", entry)
+            action = getattr(inner, "action", None)
+            if action is not None and enum_value(action) == "finalize":
+                raise ValueError(
+                    "refine action='finalize' (proposal commit) is not yet supported; "
+                    "sequence a refine call then a separate finalize call once proposal "
+                    "commit is implemented"
+                )
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):

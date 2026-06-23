@@ -96,7 +96,16 @@ def then_includes_catalog_products(ctx: dict) -> None:
 
 @then("no product should include a brief_relevance value")
 def then_no_brief_relevance(ctx: dict) -> None:
-    """Wholesale mode bypasses the ranker — brief_relevance is None on every product."""
+    """Assert the harness-default: every product's brief_relevance is None.
+
+    This does NOT prove the wholesale-bypasses-ranker contract. The BDD harness runs
+    with the AI ranker disabled (see the feature preamble), so brief_relevance is None
+    in every mode here, not specifically because wholesale skipped ranking. The
+    "wholesale bypasses the ranker" gate is pinned by the ranker unit tests and
+    test_get_products_mode_branching.py. This step is the transport-observable floor:
+    it reddens if any product ever carries a brief_relevance value under the disabled
+    harness — catching a leak of ranker state into the wholesale path.
+    """
     resp = _require_response(ctx)
     offenders = {p.product_id: p.brief_relevance for p in resp.products if p.brief_relevance is not None}
     assert not offenders, f"Wholesale products must not carry brief_relevance, got {offenders}"
@@ -104,6 +113,15 @@ def then_no_brief_relevance(ctx: dict) -> None:
 
 @then('the response should NOT contain "proposals" array')
 def then_no_proposals(ctx: dict) -> None:
+    """Forward-guard: wholesale responses carry no proposals (a refine-mode concept).
+
+    Per refinement.mdx ("Proposals in refine mode"), sellers MAY surface proposals
+    in refine mode; wholesale/brief responses must not. No production path currently
+    populates ``proposals`` on a get_products response, so this assertion does not
+    discriminate today's behavior — it reddens only if a future change leaks a
+    populated proposals array into a wholesale response. Retained because
+    BR-UC-001-discover-available-inventory also relies on it for the wholesale shape.
+    """
     resp = _require_response(ctx)
     proposals = getattr(resp, "proposals", None)
     assert proposals in (None, []), f"Expected no proposals array, got {proposals!r}"
