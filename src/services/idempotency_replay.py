@@ -1,4 +1,4 @@
-"""Tool-agnostic verbatim idempotency replay/cache orchestration (AdCP 3.0.1).
+"""Tool-agnostic verbatim idempotency replay/cache orchestration (AdCP 3.1.0-beta.3).
 
 A retry of a mutating tool call with the same ``idempotency_key`` must return the
 ORIGINAL success response byte-for-byte (marked ``replayed: true``); a same key

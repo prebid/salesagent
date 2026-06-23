@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field, ValidationError
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
+from src.core.database.repositories.idempotency_attempt import split_response_envelope
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -469,7 +470,8 @@ def _sync_replay_from_envelope(envelope: dict[str, Any]) -> SyncAccountsResponse
     replay TTL window) so callers treat it as a miss and re-execute.
     """
     try:
-        response = SyncAccountsResponse.model_validate(envelope["response"])
+        _, raw = split_response_envelope(envelope)
+        response = SyncAccountsResponse.model_validate(raw)
     except (KeyError, TypeError, ValidationError):
         logger.warning("Cached sync_accounts envelope failed validation — treating as a miss", exc_info=True)
         return None

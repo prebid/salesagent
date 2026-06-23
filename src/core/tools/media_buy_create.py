@@ -1478,6 +1478,7 @@ async def _validate_and_convert_format_ids(
     return validated_format_ids
 
 
+from src.core.database.repositories.idempotency_attempt import split_response_envelope
 from src.services import idempotency_replay
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
@@ -1723,8 +1724,7 @@ def _replay_create_from_envelope(envelope: dict[str, Any]) -> CreateMediaBuyResu
     callers treat that as a cache miss so the retry re-executes instead of erroring.
     """
     try:
-        protocol_status = envelope["status"]
-        raw = envelope["response"]
+        protocol_status, raw = split_response_envelope(envelope)
         response: CreateMediaBuySuccess | CreateMediaBuySubmitted
         if isinstance(raw, dict) and raw.get("task_id") and not raw.get("media_buy_id"):
             response = CreateMediaBuySubmitted.model_validate(raw)

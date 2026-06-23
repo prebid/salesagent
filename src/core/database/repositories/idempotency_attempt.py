@@ -31,6 +31,18 @@ from src.core.database.models import IdempotencyAttempt
 DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
 
 
+def split_response_envelope(env: dict) -> tuple[str, dict]:
+    """Decode a stored verbatim envelope into ``(protocol_status, response_dump)``.
+
+    Counterpart of the ``{"status": ..., "response": ...}`` shape written by
+    ``IdempotencyAttemptRepository.record_success``; the two ``replay_from_envelope``
+    decoders (create_media_buy, sync_accounts) call this so the envelope's key names
+    live in one place instead of being re-hardcoded per consumer. Raises ``KeyError``
+    on a malformed envelope, which the decoders already catch as a cache miss.
+    """
+    return env["status"], env["response"]
+
+
 class IdempotencyAttemptRepository:
     """Tenant-scoped CRUD for the verbatim success cache.
 

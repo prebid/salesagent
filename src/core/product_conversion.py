@@ -23,6 +23,7 @@ from adcp import (
     FlatRatePricingOption,
     VcpmPricingOption,
 )
+from adcp.types import ReportingCapabilities
 from adcp.types._generated import MediaChannel
 from packaging.version import InvalidVersion, Version
 
@@ -410,15 +411,17 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     if product_model.reporting_capabilities:
         product_data["reporting_capabilities"] = product_model.reporting_capabilities
     else:
-        # adcp 4.3 makes reporting_capabilities required — provide minimal default
-        product_data["reporting_capabilities"] = {
-            "available_reporting_frequencies": ["daily"],
-            "expected_delay_minutes": 1440,
-            "timezone": "UTC",
-            "supports_webhooks": False,
-            "available_metrics": ["impressions"],
-            "date_range_support": "date_range",
-        }
+        # adcp 4.3 makes reporting_capabilities required — provide a minimal typed
+        # default. A plain dict here trips PydanticSerializationUnexpectedValue when
+        # the parent serializes (the field expects a ReportingCapabilities, not a dict).
+        product_data["reporting_capabilities"] = ReportingCapabilities(
+            available_reporting_frequencies=["daily"],
+            expected_delay_minutes=1440,
+            timezone="UTC",
+            supports_webhooks=False,
+            available_metrics=["impressions"],
+            date_range_support="date_range",
+        )
 
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False

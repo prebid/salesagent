@@ -82,8 +82,8 @@ class SyncAccountsRequest(LibrarySyncAccountsRequest):
 
     # adcp 4.3 makes idempotency_key required; sync deliberately keeps it OPTIONAL
     # (omit => non-idempotent execution) as a pre-existing repo-wide deviation — NOT
-    # boundary-generated (no code mints one). This diverges from spec 3.0.1's "reject
-    # a missing key" rule and is tracked for a coordinated fix across the sync tools.
+    # boundary-generated (no code mints one). This diverges from spec 3.1.0-beta.3's
+    # "reject a missing key" rule and is tracked for a coordinated fix across the sync tools.
     idempotency_key: str | None = None  # type: ignore[assignment]
 
 
