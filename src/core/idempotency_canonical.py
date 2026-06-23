@@ -44,6 +44,7 @@ __all__ = [
     "_EXCLUDED_FIELDS",
     "canonical_payload_hash",
     "canonical_request_hash",
+    "request_hash_for",
     "strip_excluded_fields",
 ]
 
@@ -72,3 +73,16 @@ def canonical_request_hash(request: BaseModel) -> str:
     call ``.model_dump()`` directly (the no-model-dump-in-impl architecture guard).
     """
     return canonical_payload_hash(request.model_dump(mode="json"))
+
+
+def request_hash_for(request: BaseModel, raw_wire_payload: dict[str, Any] | None) -> str:
+    """Select the idempotency hash input — the single rule every mutating tool shares.
+
+    Transport wrappers thread ``raw_wire_payload`` (the spec's equivalence input,
+    hashed AS SENT); impl-direct callers pass ``None`` and fall back to the
+    model-dump hash. Centralizing the choice keeps ``create_media_buy`` and
+    ``sync_accounts`` from drifting on which input the hash is computed over.
+    """
+    if raw_wire_payload is not None:
+        return canonical_payload_hash(raw_wire_payload)
+    return canonical_request_hash(request)

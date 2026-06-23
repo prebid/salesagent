@@ -41,6 +41,7 @@ from tests.harness.transport import Transport
 from tests.helpers.adcp_factories import (
     create_test_identifiers,
     create_test_property_list_create_params,
+    create_test_property_list_create_wire_params,
 )
 from tests.utils.a2a_helpers import drive_a2a_skill, extract_data_from_artifact
 from tests.utils.database_helpers import manual_approval, seed_property_list_capability_tenant
@@ -261,7 +262,7 @@ class TestCreateAdvisoryAttachment:
         with manual_approval(TENANT_ID), _patched_resolver():
             result = await drive_a2a_skill(
                 "create_media_buy",
-                create_test_property_list_create_params(PRODUCT_ID),
+                create_test_property_list_create_wire_params(PRODUCT_ID),
                 headers,
                 auth_token=ACCESS_TOKEN,
             )
@@ -311,7 +312,7 @@ class TestCreateAdvisoryAttachment:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.post(
                 "/api/v1/media-buys",
-                json=create_test_property_list_create_params(PRODUCT_ID),
+                json=create_test_property_list_create_wire_params(PRODUCT_ID),
                 headers={
                     "x-adcp-auth": ACCESS_TOKEN,
                     "x-adcp-tenant": TENANT_ID,
@@ -345,7 +346,7 @@ class TestCreateAdvisoryAttachment:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.post(
                 "/api/v1/media-buys",
-                json=create_test_property_list_create_params(PRODUCT_ID),
+                json=create_test_property_list_create_wire_params(PRODUCT_ID),
                 headers={
                     "x-adcp-auth": ACCESS_TOKEN,
                     "x-adcp-tenant": TENANT_ID,
@@ -383,7 +384,7 @@ class TestCreateAdvisoryAttachment:
             "x-adcp-tenant": TENANT_ID,
             "x-test-session-id": "prop-list-advisory-mcp-submitted",
         }
-        arguments = create_test_property_list_create_params(PRODUCT_ID)
+        arguments = create_test_property_list_create_wire_params(PRODUCT_ID)
 
         # Each module binds get_http_headers via ``from ... import`` so each
         # needs its own patch; testing_hooks turns x-test-session-id into the
@@ -426,7 +427,7 @@ class TestCreateAdvisoryAttachment:
             "x-adcp-tenant": TENANT_ID,
             "x-test-session-id": "prop-list-advisory-mcp-completed",
         }
-        arguments = create_test_property_list_create_params(PRODUCT_ID)
+        arguments = create_test_property_list_create_wire_params(PRODUCT_ID)
 
         with (
             patch("src.core.auth.get_http_headers", return_value=headers),
@@ -458,7 +459,7 @@ class TestCreateAdvisoryAttachment:
         the real ``on_message_send`` → token→DB→identity → ``_impl`` → mock
         adapter → ``_serialize_for_a2a`` chain and reads the DataPart.
         """
-        skill_params = create_test_property_list_create_params(PRODUCT_ID)
+        skill_params = create_test_property_list_create_wire_params(PRODUCT_ID)
         headers = {
             "x-adcp-auth": ACCESS_TOKEN,
             "x-adcp-tenant": TENANT_ID,

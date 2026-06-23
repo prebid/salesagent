@@ -36,13 +36,12 @@ Business logic is mocked via _get_products_impl.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.server.context import Context
-from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPInvalidRequestError
 from src.core.schemas import GetProductsResponse
 from tests.factories import PrincipalFactory
 
@@ -78,62 +77,40 @@ class TestMcpGetProductsWrapper:
         assert "products" in result.structured_content
         assert result.content is not None  # Human-readable text
 
-    def test_mcp_wrapper_validation_error_raises_adcp_validation(self):
-        """MCP wrapper translates ValidationError to AdCPValidationError."""
+    def test_mcp_wrapper_invalid_request_raises_adcp_invalid_request(self):
+        """The shared helper owns the schema-validation translation, so a cross-mode
+        violation surfaces at the wrapper as AdCPInvalidRequestError (INVALID_REQUEST)
+        with no wrapper-level try/except. brief mode without a brief rejects before _impl."""
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=None)
 
-        with patch(
-            "src.core.tools.products.create_get_products_request",
-            side_effect=ValidationError.from_exception_data(
-                title="GetProductsRequest",
-                line_errors=[
-                    {
-                        "type": "missing",
-                        "loc": ("brief",),
-                        "msg": "Field required",
-                        "input": {},
-                    }
-                ],
-            ),
-        ):
-            from src.core.tools.products import get_products
+        from src.core.tools.products import get_products
 
-            with pytest.raises(AdCPValidationError):
-                asyncio.run(get_products(brief="", ctx=mock_ctx))
+        with pytest.raises(AdCPInvalidRequestError):
+            asyncio.run(get_products(brief="", buying_mode="brief", ctx=mock_ctx))
 
-    def test_mcp_wrapper_value_error_raises_adcp_validation(self):
-        """MCP wrapper translates ValueError to AdCPValidationError."""
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=None)
-
-        with patch(
-            "src.core.tools.products.create_get_products_request",
-            side_effect=ValueError("Invalid brand format"),
-        ):
-            from src.core.tools.products import get_products
-
-            with pytest.raises(AdCPValidationError, match="Invalid get_products request"):
-                asyncio.run(get_products(brief="ads", ctx=mock_ctx))
-
-    def test_mcp_wrapper_no_version_compat(self):
-        """MCP wrapper does NOT apply version compat — that's the handler's job (parity with A2A)."""
+    def test_mcp_wrapper_applies_version_compat_for_pre_v3(self):
+        """The MCP wrapper applies outbound v2-compat for pre-v3 buyers. Patched at its
+        USE site (products.apply_version_compat) — the imported reference the wrapper
+        calls — not the definition module, which the wrapper never re-imports."""
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=PrincipalFactory.make_identity(protocol="mcp"))
+        response = _mock_response()
 
         with (
             patch(
                 "src.core.tools.products._get_products_impl",
                 new_callable=AsyncMock,
-                return_value=_mock_response(),
+                return_value=response,
             ),
-            patch("src.core.version_compat.apply_version_compat") as mock_compat,
+            patch("src.core.tools.products.apply_version_compat", return_value={"products": []}) as mock_compat,
         ):
             from src.core.tools.products import get_products
 
-            asyncio.run(get_products(brief="ads", ctx=mock_ctx))
+            result = asyncio.run(get_products(brief="ads", adcp_version="1.0.0", ctx=mock_ctx))
 
-        mock_compat.assert_not_called()
+        mock_compat.assert_called_once_with("get_products", response, "1.0.0")
+        assert result.structured_content == {"products": []}
 
     def test_mcp_wrapper_reads_identity_from_ctx_state(self):
         """MCP wrapper reads identity from ctx.get_state('identity')."""
@@ -151,9 +128,7 @@ class TestMcpGetProductsWrapper:
             asyncio.run(get_products(brief="video", ctx=mock_ctx))
 
         mock_ctx.get_state.assert_awaited_once_with("identity")
-        mock_impl.assert_awaited_once()
-        _, call_identity = mock_impl.call_args.args
-        assert call_identity is identity
+        mock_impl.assert_awaited_once_with(ANY, identity, pre_v3_defaulted=ANY)
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +168,7 @@ class TestA2AGetProductsRawWrapper:
 
             asyncio.run(get_products_raw(brief="video", identity=identity))
 
-        mock_impl.assert_awaited_once()
-        _, call_identity = mock_impl.call_args.args
-        assert call_identity is identity
+        mock_impl.assert_awaited_once_with(ANY, identity, pre_v3_defaulted=ANY)
 
     def test_a2a_wrapper_constructs_request_from_params(self):
         """A2A wrapper constructs GetProductsRequest from its parameters."""

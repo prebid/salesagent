@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPAuthorizationError, AdCPError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
@@ -190,8 +190,8 @@ class TestRankingThresholdBehavior:
         assert len(response.products) == 0
 
     @pytest.mark.asyncio
-    async def test_brief_relevance_not_set_on_products(self, integration_db):
-        """brief_relevance is NOT_IMPLEMENTED -- field should be absent/None after ranking."""
+    async def test_brief_relevance_set_from_ranker_in_brief_mode(self, integration_db):
+        """brief mode populates brief_relevance from the ranker explanation (PART 1 buying_mode)."""
         from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
 
         with ProductEnv(tenant_id="rank-rel", principal_id="p1") as env:
@@ -228,9 +228,10 @@ class TestRankingThresholdBehavior:
 
                 response = await env.call_impl(brief="campaign")
 
+        assert response.products, "brief mode must rank and return the catalog"
         for p in response.products:
-            assert getattr(p, "brief_relevance", None) is None, (
-                "brief_relevance should NOT be set by _get_products_impl (NOT_IMPLEMENTED)"
+            assert getattr(p, "brief_relevance", None) is not None, (
+                "brief mode populates brief_relevance from the ranker explanation (PART 1 buying_mode)"
             )
 
 
@@ -859,18 +860,24 @@ class TestProductConversionNegativeCardinality:
 
 
 class TestSearchCriteriaValidation:
-    """_get_products_impl requires at least one search criterion (brief, brand, or filters).
+    """_get_products_impl accepts any search-criteria combination — criteria are no
+    longer mode-agnostically required.
 
-    Enforced uniformly across all transports (MCP, A2A, REST).
+    PART 1 (buying_mode) replaced the old "at least one of brief/brand/filters" gate:
+    a wholesale request legitimately browses all inventory with no brief, so criteria
+    became mode-scoped (the model's cross-mode validator — brief mode requires a brief)
+    and buying_mode required-ness is version-keyed at the wrapper
+    (``create_get_products_request``). The transport-agnostic ``_impl`` itself no longer
+    rejects a criteria-less request; it returns the (possibly empty) catalog.
 
     Note: These tests call _get_products_impl directly because ProductEnv.call_impl
-    always provides a default brand={"domain": "test.com"}, which would satisfy the
-    search criteria requirement. Direct calls are needed to test with brand=None.
+    always provides a default brand={"domain": "test.com"}; direct calls reach the impl
+    with brand=None.
     """
 
     @pytest.mark.asyncio
-    async def test_no_search_criteria_raises_validation_error(self, integration_db):
-        """When brief, brand, and filters are all empty/None, _impl raises AdCPValidationError."""
+    async def test_no_search_criteria_returns_catalog(self, integration_db):
+        """With brief, brand, and filters all None, _impl browses (no mode-agnostic gate)."""
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
         from src.core.tools.products import _get_products_impl
 
@@ -879,12 +886,13 @@ class TestSearchCriteriaValidation:
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
             req = GetProductsRequestGenerated(brief=None, brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
-                await _get_products_impl(req, env.identity)
+            response = await _get_products_impl(req, env.identity)
+
+        assert response.products is not None, "criteria-less discovery returns the catalog, not an error"
 
     @pytest.mark.asyncio
-    async def test_empty_string_brief_counts_as_no_criteria(self, integration_db):
-        """An empty string brief is equivalent to None for search criteria validation."""
+    async def test_empty_string_brief_is_accepted(self, integration_db):
+        """An empty-string brief no longer triggers a mode-agnostic rejection at _impl."""
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
         from src.core.tools.products import _get_products_impl
 
@@ -893,8 +901,9 @@ class TestSearchCriteriaValidation:
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
             req = GetProductsRequestGenerated(brief="", brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
-                await _get_products_impl(req, env.identity)
+            response = await _get_products_impl(req, env.identity)
+
+        assert response.products is not None
 
     @pytest.mark.asyncio
     async def test_brief_alone_satisfies_search_criteria(self, integration_db):
@@ -938,19 +947,3 @@ class TestSearchCriteriaValidation:
             response = await env.call_impl(brief=None, filters={})
 
         assert response.products is not None
-
-    @pytest.mark.asyncio
-    async def test_validation_error_has_correct_error_code(self, integration_db):
-        """AdCPValidationError has error_code='VALIDATION_ERROR'."""
-        from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-        from src.core.tools.products import _get_products_impl
-
-        with ProductEnv(tenant_id="err-code", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="err-code", subdomain="err-code")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-
-            req = GetProductsRequestGenerated(brief=None, brand=None, filters=None)
-            with pytest.raises(AdCPValidationError) as exc_info:
-                await _get_products_impl(req, env.identity)
-
-        assert exc_info.value.error_code == "VALIDATION_ERROR"

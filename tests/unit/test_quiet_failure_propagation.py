@@ -34,7 +34,7 @@ def _make_identity(tenant_id="test-tenant"):
 def _make_request(brief="test brief"):
     from src.core.schema_helpers import create_get_products_request
 
-    return create_get_products_request(brief=brief)
+    return create_get_products_request(brief=brief).request
 
 
 def _mock_uow_with_products(products):
