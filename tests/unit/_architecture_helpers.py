@@ -219,11 +219,6 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
     yield from sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")])
 
 
-def iter_compose_files(repo: Path) -> Iterator[Path]:
-    """docker-compose*.yml and compose.yaml at repo root."""
-    yield from sorted([*repo.glob("docker-compose*.yml"), *repo.glob("compose.yaml")])
-
-
 def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
     """Yield git-tracked files that exist on disk (hermetic; ignores untracked local files)."""
     try:

@@ -1,4 +1,5 @@
 # Map of pre-commit hooks deleted/moved in PR 4 → replacement enforcement.
+# location may append " -> tests/path.py" for ci-only hooks (explicit schema-contract test path).
 no-tenant-config:
   enforced_by: guard
   location: tests/unit/test_architecture_no_tenant_config.py
