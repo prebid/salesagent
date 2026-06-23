@@ -21,6 +21,9 @@ import re
 import subprocess
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 # ---------------------------------------------------------------------------
 # Repo-root anchor
@@ -608,6 +611,38 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
         return []
     runtime_stage = line_list[from_indices[-1] :]
     return [line.strip() for line in runtime_stage if line.strip().upper().startswith("USER ")]
+
+
+# ---------------------------------------------------------------------------
+# Pre-commit config helpers
+# ---------------------------------------------------------------------------
+
+PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
+
+
+def load_pre_commit_config(path: Path | None = None, repo: Path | None = None) -> dict[str, Any]:
+    """Load ``.pre-commit-config.yaml`` anchored to *repo* (default: repo root)."""
+    root = repo or repo_root()
+    cfg_path = path or (root / PRE_COMMIT_CONFIG_PATH)
+    return yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+
+
+def iter_pre_commit_hooks(
+    cfg: dict[str, Any] | None = None,
+    *,
+    path: Path | None = None,
+    repo: Path | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield hook records with ``id``, ``entry``, and ``stages`` from pre-commit config."""
+    config = cfg if cfg is not None else load_pre_commit_config(path=path, repo=repo)
+    default_stages = config.get("default_stages", ["pre-commit", "commit"])
+    for repo_entry in config["repos"]:
+        for hook in repo_entry["hooks"]:
+            yield {
+                "id": hook["id"],
+                "entry": hook.get("entry", ""),
+                "stages": hook.get("stages", default_stages),
+            }
 
 
 # ---------------------------------------------------------------------------

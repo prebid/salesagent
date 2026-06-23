@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-import yaml
+
+from tests.unit._architecture_helpers import load_pre_commit_config
 
 COMMIT_STAGE_MIN = 10
 COMMIT_STAGE_MAX = 12
@@ -23,7 +22,7 @@ def _count_commit_stage_hooks(cfg: dict) -> int:
 
 @pytest.mark.arch_guard
 def test_pre_commit_hook_count_within_ceiling() -> None:
-    cfg = yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    cfg = load_pre_commit_config()
     count = _count_commit_stage_hooks(cfg)
     assert count >= COMMIT_STAGE_MIN, (
         f"commit-stage hook count {count} < {COMMIT_STAGE_MIN} — likely over-deletion; see .pre-commit-coverage-map.yml"
