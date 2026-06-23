@@ -341,3 +341,11 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_parti
 tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-dooh-valid]
 # +++ test_uc011_manage_accounts (1) +++
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
+# +++ test_uc002_create_media_buy creative scenarios (3) — gh8p.12 graduated for a2a/mcp/rest +++
+# In-process CreativeFactory seeding + adapter-response injection are invisible to the
+# separate e2e_rest server, so the creative-validation check can't fire (the create
+# succeeds with creative_assignments=None). a2a/mcp/rest assert the real wire CREATIVE_REJECTED/
+# SERVICE_UNAVAILABLE; e2e_rest retires off this ledger when the transport-aware seeding lands.
+tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]
+tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]
+tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]
