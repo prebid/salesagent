@@ -94,14 +94,12 @@ class CreativeFormatsEnv(IntegrationEnv):
         """Call list_creative_formats via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
-    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to ListCreativeFormatsBody shape for REST POST.
-
-        Returns empty dict intentionally: ListCreativeFormatsBody
-        (src/routes/api_v1.py) only defines ``adcp_version: str = "1.0.0"``
-        with no user-facing parameters. All kwargs are dropped.
-        """
-        return {}
+    # build_rest_body is inherited from IntegrationEnv: it serializes the Pydantic
+    # ``req`` via model_dump(mode="json", exclude_none=True). ListCreativeFormatsBody
+    # (src/routes/api_v1.py) declares format_ids + every other filter and the route
+    # maps them into ListCreativeFormatsRequest, so REST filters for real — there is
+    # no need to drop kwargs. (A prior override returned {} behind a stale docstring
+    # claiming the body had no parameters; that suppressed REST filter coverage.)
 
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativeFormatsResponse:
         """Parse REST JSON into ListCreativeFormatsResponse."""

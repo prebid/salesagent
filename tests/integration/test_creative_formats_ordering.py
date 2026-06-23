@@ -20,9 +20,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 
-# IMPL and A2A accept req= kwarg for filtering; MCP takes individual params.
-# REST build_rest_body discards filter kwargs, so REST only works for unfiltered tests.
-REQ_TRANSPORTS = [Transport.IMPL, Transport.A2A]
+# IMPL, A2A, and REST accept the req= kwarg for filtering (REST serializes it via the
+# inherited build_rest_body and the route rebuilds the request); MCP takes individual
+# params. (Sorting tests below dispatch unfiltered, so they use ALL_TRANSPORTS.)
+REQ_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST]
 
 
 def _fmt(

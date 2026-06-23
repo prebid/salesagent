@@ -22,9 +22,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 
-# REST drops all filter kwargs (build_rest_body returns {}), so filter-specific
-# tests use only IMPL/A2A/MCP. See CreativeFormatsEnv.build_rest_body.
-FILTER_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP]
+# REST now transmits filter kwargs too: CreativeFormatsEnv inherits the base
+# build_rest_body, which serializes the request, and the /creative-formats route
+# maps format_ids + filters into ListCreativeFormatsRequest. So filter-specific
+# tests run on all four transports.
+FILTER_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 
 
 def _fmt(
