@@ -59,6 +59,26 @@ def _wire_suggestion(ctx: dict) -> str | None:
     )
 
 
+def _wire_error_object(ctx: dict) -> dict | None:
+    """Return the buyer-facing error object from the captured wire envelope.
+
+    Mirrors ``_wire_code`` / ``_wire_suggestion``: when the scenario dispatched
+    through a wire transport (REST/A2A/MCP), field-presence checks must read the
+    real envelope's error object, not the lossy reconstructed ``ctx['error']``.
+    Prefers the ``errors[0]`` layer (per-error fields like ``field``) and falls
+    back to the envelope-level ``adcp_error``. Returns ``None`` on IMPL / no-wire
+    scenarios so callers fall back to the reconstructed exception (salesagent-ztl6.8).
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if not envelope:
+        return None
+    errors = envelope.get("errors") or []
+    if errors and errors[0]:
+        return errors[0]
+    return envelope.get("adcp_error") or {}
+
+
 def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
@@ -436,26 +456,29 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     the suggestion contains actionable language (use/try/check/provide/etc.)
     that tells the caller how to correct the problem.
     """
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
+    # Wire-first: on a wire transport the suggestion is the buyer-facing contract.
+    # Read it from the real envelope; fall back to the reconstructed ctx['error']
+    # for IMPL/no-wire scenarios (ztl6.8).
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
 
-    # Pydantic ValidationErrors carry the fix guidance inline in each field
-    # error's ``msg`` (e.g. "Input should be 'operator', 'agent' or 'advertiser'")
-    # rather than a separate ``suggestion`` field. That inline message IS the
-    # actionable guidance, so accept it without the verb check below.
-    from pydantic import ValidationError
+        # Pydantic ValidationErrors carry the fix guidance inline in each field
+        # error's ``msg`` (e.g. "Input should be 'operator', 'agent' or 'advertiser'")
+        # rather than a separate ``suggestion`` field. That inline message IS the
+        # actionable guidance, so accept it without the verb check below.
+        from pydantic import ValidationError
 
-    if isinstance(error, ValidationError):
-        details = error.errors()
-        assert details, "ValidationError has no field-level details to guide a fix"
-        for detail in details:
-            msg = detail.get("msg", "")
-            assert isinstance(msg, str) and msg.strip(), f"ValidationError detail lacks fix guidance: {detail}"
-        return
+        if isinstance(error, ValidationError):
+            details = error.errors()
+            assert details, "ValidationError has no field-level details to guide a fix"
+            for detail in details:
+                msg = detail.get("msg", "")
+                assert isinstance(msg, str) and msg.strip(), f"ValidationError detail lacks fix guidance: {detail}"
+            return
 
-    d = _get_error_dict(error)
-    assert "suggestion" in d, f"Expected 'suggestion' in error: {d}"
-    suggestion = d["suggestion"]
+        suggestion = _get_error_dict(error).get("suggestion")
     assert suggestion, "Expected non-empty suggestion"
     # A fix suggestion must contain actionable guidance — a verb telling the
     # caller what to DO, not just describing the problem.
@@ -487,17 +510,23 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
 @then("the suggestion should advise providing authentication credentials")
 def then_suggestion_auth(ctx: dict) -> None:
-    """Assert suggestion mentions authentication credentials."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
-    assert "credential" in suggestion or "auth" in suggestion, f"Expected auth suggestion: {d.get('suggestion')}"
+    """Assert suggestion mentions authentication credentials — wire-first, reconstructed fallback (ztl6.8)."""
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion_lower = suggestion.lower()
+    assert "credential" in suggestion_lower or "auth" in suggestion_lower, f"Expected auth suggestion: {suggestion}"
 
 
 @then("the suggestion should provide valid parameter values")
 def then_suggestion_valid_values(ctx: dict) -> None:
-    """Assert suggestion provides valid parameter values — must reference both validity AND values."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = d.get("suggestion", "")
+    """Assert suggestion provides valid parameter values — wire-first, reconstructed fallback (ztl6.8).
+
+    Must reference both validity AND values.
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
     # Must mention validity concept
@@ -512,15 +541,17 @@ def then_suggestion_valid_values(ctx: dict) -> None:
 
 @then("the suggestion should advise using valid DisclosurePosition enum values")
 def then_suggestion_disclosure_enum(ctx: dict) -> None:
-    """Assert suggestion mentions both DisclosurePosition AND valid values."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    """Assert suggestion mentions both DisclosurePosition AND valid values — wire-first (ztl6.8)."""
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     # Gherkin requires both concepts: "DisclosurePosition" AND "valid enum values"
     assert (
         "disclosureposition" in suggestion or "disclosure_position" in suggestion or "disclosure position" in suggestion
-    ), f"Expected 'DisclosurePosition' in suggestion: {d.get('suggestion')}"
+    ), f"Expected 'DisclosurePosition' in suggestion: {raw}"
     assert "valid" in suggestion or "allowed" in suggestion or "enum" in suggestion, (
-        f"Expected valid/allowed/enum values language in suggestion: {d.get('suggestion')}"
+        f"Expected valid/allowed/enum values language in suggestion: {raw}"
     )
 
 
@@ -530,27 +561,35 @@ def then_suggestion_positions_or_omit(ctx: dict) -> None:
 
     Gherkin describes two alternatives — the suggestion should mention at least
     one alternative completely (position + provide/add, or omit/remove).
+    Wire-first, reconstructed fallback (ztl6.8).
     """
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     has_provide_position = "position" in suggestion and any(
         w in suggestion for w in ("provide", "add", "include", "at least")
     )
     has_omit = "omit" in suggestion or "remove" in suggestion
     assert has_provide_position or has_omit, (
-        f"Expected suggestion to advise providing positions or omitting filter: {d.get('suggestion')}"
+        f"Expected suggestion to advise providing positions or omitting filter: {raw}"
     )
 
 
 @then("the suggestion should advise removing duplicate positions")
 def then_suggestion_remove_dupes(ctx: dict) -> None:
-    """Assert suggestion advises removing duplicates — both concepts required."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    """Assert suggestion advises removing duplicates — wire-first, reconstructed fallback (ztl6.8).
+
+    Both concepts required.
+    """
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     # Gherkin says "removing duplicate" — both concepts must appear
-    assert "duplicate" in suggestion, f"Expected 'duplicate' in suggestion: {d.get('suggestion')}"
+    assert "duplicate" in suggestion, f"Expected 'duplicate' in suggestion: {raw}"
     assert any(w in suggestion for w in ("remove", "deduplicate", "dedup", "eliminate")), (
-        f"Expected removal action in suggestion: {d.get('suggestion')}"
+        f"Expected removal action in suggestion: {raw}"
     )
 
 
@@ -559,25 +598,27 @@ def then_suggestion_format_id_or_omit(ctx: dict) -> None:
     """Assert suggestion advises providing FormatId OR omitting the filter.
 
     Same pattern as positions_or_omit — one complete alternative required.
+    Wire-first, reconstructed fallback (ztl6.8).
     """
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     has_provide_format = ("formatid" in suggestion or "format_id" in suggestion or "format id" in suggestion) and any(
         w in suggestion for w in ("provide", "add", "include", "at least")
     )
     has_omit = "omit" in suggestion or "remove" in suggestion
-    assert has_provide_format or has_omit, (
-        f"Expected suggestion to advise providing FormatId or omitting filter: {d.get('suggestion')}"
-    )
+    assert has_provide_format or has_omit, f"Expected suggestion to advise providing FormatId or omitting filter: {raw}"
 
 
 @then("the suggestion should advise including agent_url (URI) and id fields")
 def then_suggestion_agent_url_id(ctx: dict) -> None:
-    """Assert suggestion advises including both agent_url AND id fields."""
+    """Assert suggestion advises including both agent_url AND id fields — wire-first (ztl6.8)."""
     import re
 
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = d.get("suggestion", "")
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
     assert "agent_url" in suggestion_lower or "uri" in suggestion_lower, (
@@ -615,10 +656,18 @@ def then_no_error_for_value(ctx: dict, value: str) -> None:
 
 @then("the response should indicate a validation error")
 def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error."""
-    error = ctx.get("error")
-    assert error is not None, "Expected a validation error"
-    assert _get_error_code(error) == "VALIDATION_ERROR", f"Expected VALIDATION_ERROR, got {_get_error_code(error)}"
+    """Assert response indicates a validation error — wire-first, reconstructed fallback.
+
+    When the scenario dispatched through a wire transport, assert on the real
+    wire envelope's code (the buyer-facing contract); otherwise fall back to the
+    reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.8).
+    """
+    actual = _wire_code(ctx)
+    if actual is None:
+        error = ctx.get("error")
+        assert error is not None, "Expected a validation error"
+        actual = _get_error_code(error)
+    assert actual == "VALIDATION_ERROR", f"Expected VALIDATION_ERROR, got {actual}"
 
 
 @then("the error should be a real validation error, not simulated")
@@ -644,11 +693,23 @@ def then_real_validation_error(ctx: dict) -> None:
 
 @then(parsers.parse('the error should include "{field}" field'))
 def then_error_includes_field(ctx: dict, field: str) -> None:
-    """Assert the error includes a named field with a non-empty value.
+    """Assert the error includes a named field with a non-empty value — wire-first.
 
-    Works with AdCPError (checks .details, direct attributes, and the
-    top-level to_dict() representation) and adcp.types.Error models.
+    When the scenario dispatched through a wire transport, read the field from
+    the real wire envelope's error object (the buyer-facing contract); otherwise
+    fall back to the reconstructed ``ctx['error']`` for IMPL/no-wire scenarios.
+    Works with AdCPError (checks .details, direct attributes, and the top-level
+    to_dict() representation) and adcp.types.Error models (ztl6.8).
     """
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        wire_details = wire.get("details") or {}
+        has_field = (field in wire and wire[field]) or (field in wire_details and wire_details[field])
+        assert has_field, (
+            f"Expected wire error to include non-empty '{field}' field. "
+            f"Wire error keys: {list(wire.keys())}, details keys: {list(wire_details.keys())}"
+        )
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)

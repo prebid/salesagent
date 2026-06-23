@@ -903,13 +903,21 @@ def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
 def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
-    """Assert error suggestion contains either text1 or text2 (case-insensitive)."""
-    from tests.bdd.steps.generic.then_error import _get_error_dict
+    """Assert error suggestion contains either text1 or text2 (case-insensitive).
 
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    d = _get_error_dict(error)
-    suggestion = (d.get("suggestion") or "").lower()
+    Wire-first (ztl6.6/ztl6.8): read the buyer-facing suggestion from the real
+    wire envelope when the scenario dispatched through a transport, falling back
+    to the reconstructed ``ctx['error']`` only for IMPL/no-wire — matching its
+    wire-first sibling ``then_suggestion_contains``.
+    """
+    from tests.bdd.steps.generic.then_error import _get_error_dict, _wire_suggestion
+
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        suggestion = _get_error_dict(error).get("suggestion") or ""
+    suggestion = suggestion.lower()
     assert text1.lower() in suggestion or text2.lower() in suggestion, (
-        f"Expected suggestion to contain '{text1}' or '{text2}', got: {d.get('suggestion')}"
+        f"Expected suggestion to contain '{text1}' or '{text2}', got: {suggestion}"
     )
