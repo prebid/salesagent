@@ -27,7 +27,7 @@ beads: salesagent-ihwl
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 _HARNESS_DIR = Path(__file__).resolve().parents[1] / "harness"
 
@@ -48,9 +48,7 @@ def _enclosing_funcs_with_direct_tool_call(source: str) -> set[str]:
     for func in ast.walk(tree):
         if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        for call in ast.walk(func):
-            if not isinstance(call, ast.Call):
-                continue
+        for call in iter_call_expressions(func):
             callee = call.func
             if (
                 isinstance(callee, ast.Name)

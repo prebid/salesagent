@@ -42,6 +42,7 @@ _SCAN_DIRS = [
 
 
 from tests.unit._architecture_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
+from tests.unit._architecture_helpers import iter_call_expressions  # noqa: E402
 
 
 def _collect_error_code_literals() -> list[tuple[str, int, str]]:
@@ -64,10 +65,7 @@ def _collect_error_code_literals() -> list[tuple[str, int, str]]:
 
             error_aliases = _collect_error_aliases(tree)
 
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                # Match calls to Error(...) / <alias>(...) / adcp.types.Error(...)
+            for node in iter_call_expressions(tree):  # Match calls to Error(...) / <alias>(...) / adcp.types.Error(...)
                 func = node.func
                 matched = False
                 if isinstance(func, ast.Name) and func.id in error_aliases:

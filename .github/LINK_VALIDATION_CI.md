@@ -20,7 +20,7 @@ integration-other:
   runs-on: ubuntu-latest
   services:
     postgres:
-      image: postgres:15
+      image: postgres:17-alpine
   steps:
     - uses: ./.github/actions/_setup-env
     - uses: ./.github/actions/_postgres

@@ -26,6 +26,8 @@ beads: salesagent-j4bo
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _CONFTEST = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
 _TARGET_FUNC = "_harness_env"
 
@@ -40,9 +42,7 @@ def _get_harness_env(source: str) -> ast.FunctionDef:
 
 def _test_calls_ext_startswith(test: ast.expr) -> bool:
     """True if the if-test contains a `<x>.startswith("...-ext-...")` call."""
-    for sub in ast.walk(test):
-        if not isinstance(sub, ast.Call):
-            continue
+    for sub in iter_call_expressions(test):
         func = sub.func
         if isinstance(func, ast.Attribute) and func.attr == "startswith" and sub.args:
             arg = sub.args[0]
@@ -54,13 +54,12 @@ def _test_calls_ext_startswith(test: ast.expr) -> bool:
 def _orelse_calls_xfail(orelse: list[ast.stmt]) -> bool:
     """True if the else-body contains a `pytest.xfail(...)` call."""
     for stmt in orelse:
-        for sub in ast.walk(stmt):
-            if isinstance(sub, ast.Call):
-                func = sub.func
-                if isinstance(func, ast.Attribute) and func.attr == "xfail":
-                    return True
-                if isinstance(func, ast.Name) and func.id == "xfail":
-                    return True
+        for sub in iter_call_expressions(stmt):
+            func = sub.func
+            if isinstance(func, ast.Attribute) and func.attr == "xfail":
+                return True
+            if isinstance(func, ast.Name) and func.id == "xfail":
+                return True
     return False
 
 

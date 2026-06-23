@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 
@@ -56,9 +56,7 @@ def _find_model_dump_in_impl() -> list[tuple[str, int, str, str]]:
             if not node.name.endswith("_impl"):
                 continue
 
-            for child in ast.walk(node):
-                if not isinstance(child, ast.Call):
-                    continue
+            for child in iter_call_expressions(node):
                 func = child.func
                 if isinstance(func, ast.Attribute) and func.attr in BANNED_METHODS:
                     rel_path = str(py_file.relative_to(TOOLS_DIR))

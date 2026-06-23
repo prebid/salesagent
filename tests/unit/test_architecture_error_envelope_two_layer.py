@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 # Anchor scan paths on this file's location so guards work regardless of pytest's
 # working directory (CI runs from repo root; agents/IDEs may launch from a subdir).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -70,9 +72,7 @@ def _body_contains_builder_call(
     defeating the guard without weakening its actual intent — every boundary's
     wire response must reach the builder somewhere in its call chain.
     """
-    for child in ast.walk(body_node):
-        if not isinstance(child, ast.Call):
-            continue
+    for child in iter_call_expressions(body_node):
         f = child.func
         if isinstance(f, ast.Name) and f.id == ENVELOPE_BUILDER:
             return True

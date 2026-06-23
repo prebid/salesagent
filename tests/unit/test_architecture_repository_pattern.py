@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -523,17 +523,16 @@ def _find_impl_functions_with_db_session(file_path: str) -> list[tuple[str, str,
             continue
 
         # Check all calls inside this function for get_db_session
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                func = child.func
-                # Match: get_db_session()
-                if isinstance(func, ast.Name) and func.id == "get_db_session":
-                    violations.append((file_path, node.name, child.lineno))
-                    break  # One violation per function is enough
-                # Match: database_session.get_db_session()
-                if isinstance(func, ast.Attribute) and func.attr == "get_db_session":
-                    violations.append((file_path, node.name, child.lineno))
-                    break
+        for child in iter_call_expressions(node):
+            func = child.func
+            # Match: get_db_session()
+            if isinstance(func, ast.Name) and func.id == "get_db_session":
+                violations.append((file_path, node.name, child.lineno))
+                break  # One violation per function is enough
+            # Match: database_session.get_db_session()
+            if isinstance(func, ast.Attribute) and func.attr == "get_db_session":
+                violations.append((file_path, node.name, child.lineno))
+                break
 
     return violations
 
@@ -554,20 +553,19 @@ def _find_session_add_in_tests(file_path: str) -> list[tuple[str, str, int]]:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
 
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                func = child.func
-                # Match: session.add(...) or *.add(...)
-                if isinstance(func, ast.Attribute) and func.attr == "add":
-                    # Check it's likely a session (common var names)
-                    if isinstance(func.value, ast.Name) and func.value.id in (
-                        "session",
-                        "db_session",
-                        "mock_session",
-                        "s",
-                    ):
-                        violations.append((file_path, node.name, child.lineno))
-                        break  # One violation per function is enough
+        for child in iter_call_expressions(node):
+            func = child.func
+            # Match: session.add(...) or *.add(...)
+            if isinstance(func, ast.Attribute) and func.attr == "add":
+                # Check it's likely a session (common var names)
+                if isinstance(func.value, ast.Name) and func.value.id in (
+                    "session",
+                    "db_session",
+                    "mock_session",
+                    "s",
+                ):
+                    violations.append((file_path, node.name, child.lineno))
+                    break  # One violation per function is enough
 
     return violations
 

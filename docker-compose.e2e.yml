@@ -195,7 +195,7 @@ services:
   # normal e2e `up` never pulls it.
   creative-pg:
     profiles: ["runner"]
-    image: postgres:16
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: adcp_registry
       POSTGRES_USER: adcp

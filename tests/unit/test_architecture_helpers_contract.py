@@ -2,11 +2,66 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_anchor_consistency, assert_violations_match_allowlist
+from tests.unit._architecture_helpers import (
+    assert_anchor_consistency,
+    assert_violations_match_allowlist,
+    iter_call_expressions,
+    postgres_image_ref,
+    postgres_tag_pattern_map,
+    uv_version_pattern_map,
+)
+
+_ITER_CALL_SOURCE = """
+f()
+g.h()
+other.i()
+
+def inner():
+    inner_call()
+"""
+
+
+@pytest.mark.arch_guard
+def test_iter_call_expressions_yields_all_calls_unfiltered() -> None:
+    tree = ast.parse(_ITER_CALL_SOURCE)
+    calls = list(iter_call_expressions(tree))
+    assert len(calls) == 4
+
+
+@pytest.mark.arch_guard
+def test_iter_call_expressions_filters_by_name() -> None:
+    tree = ast.parse(_ITER_CALL_SOURCE)
+    f_calls = list(iter_call_expressions(tree, name="f"))
+    assert len(f_calls) == 1
+    assert isinstance(f_calls[0].func, ast.Name)
+    assert f_calls[0].func.id == "f"
+
+    h_calls = list(iter_call_expressions(tree, name="h"))
+    assert len(h_calls) == 1
+    assert isinstance(h_calls[0].func, ast.Attribute)
+    assert h_calls[0].func.attr == "h"
+
+
+@pytest.mark.arch_guard
+def test_iter_call_expressions_name_matches_bare_and_attribute() -> None:
+    tree = ast.parse("h()\nx.h()")
+    h_calls = list(iter_call_expressions(tree, name="h"))
+    assert len(h_calls) == 2
+
+
+@pytest.mark.arch_guard
+def test_iter_call_expressions_subtree_scope() -> None:
+    tree = ast.parse(_ITER_CALL_SOURCE)
+    inner_func = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
+    calls = list(iter_call_expressions(inner_func))
+    assert len(calls) == 1
+    assert isinstance(calls[0].func, ast.Name)
+    assert calls[0].func.id == "inner_call"
 
 
 @pytest.mark.arch_guard
@@ -51,12 +106,21 @@ def test_assert_anchor_consistency_passes_when_values_match() -> None:
 @pytest.mark.arch_guard
 def test_assert_anchor_consistency_flags_drift() -> None:
     sources = [
-        (Path("ci.yml"), "UV_VERSION: '0.11.15'\n"),
+        (Path(".uv-version"), "0.11.15\n"),
         (Path("Dockerfile"), "ARG UV_VERSION=0.11.14\n"),
     ]
-    pattern_map = {
-        "ci.yml": r"UV_VERSION:\s*['\"]([\d.]+)['\"]",
-        "Dockerfile": r"ARG UV_VERSION=([\d.]+)",
-    }
-    with pytest.raises(AssertionError, match="uv drift"):
-        assert_anchor_consistency(sources, pattern_map, label="uv")
+    with pytest.raises(AssertionError, match="uv version drift"):
+        assert_anchor_consistency(sources, uv_version_pattern_map(), label="uv version")
+
+
+@pytest.mark.arch_guard
+def test_assert_anchor_consistency_flags_intra_file_drift() -> None:
+    sources = [
+        (
+            Path("ci.yml"),
+            f"services:\n  db1:\n    image: {postgres_image_ref('17-alpine')}\n  db2:\n    image: {postgres_image_ref('15-alpine')}\n",
+        ),
+    ]
+
+    with pytest.raises(AssertionError, match="postgres image drift"):
+        assert_anchor_consistency(sources, postgres_tag_pattern_map(), label="postgres image")

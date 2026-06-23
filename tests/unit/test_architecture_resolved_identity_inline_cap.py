@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 # Per-file caps for inline ``ResolvedIdentity(...)`` constructions in
 # ``tests/`` (excluding ``test_a2a*.py`` files — those are zero-tolerance
 # under ``test_architecture_a2a_test_uses_factory``). Caps frozen at the
@@ -121,13 +123,12 @@ def _count_inline_resolved_identity(filepath: Path) -> list[int]:
     except (OSError, SyntaxError):
         return []
     lines: list[int] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-                lines.append(node.lineno)
-            elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-                lines.append(node.lineno)
+    for node in iter_call_expressions(tree):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
+            lines.append(node.lineno)
+        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
+            lines.append(node.lineno)
     return lines
 
 

@@ -125,8 +125,8 @@ def main() -> int:
         Exit code: 0 if no issues, 1 if issues found
     """
     if len(sys.argv) < 2:
-        print("Usage: check_response_attribute_access.py [files...]")
-        return 0
+        print("check_response_attribute_access: no files provided", file=sys.stderr)
+        return 1
 
     files_to_check = [Path(f) for f in sys.argv[1:]]
     all_errors = []
