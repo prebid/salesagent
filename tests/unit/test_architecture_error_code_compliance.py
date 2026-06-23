@@ -17,20 +17,14 @@ from pathlib import Path
 import pytest
 from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import INTERNAL_CODES
+from src.core.exceptions import INTERNAL_CODES, SPEC_CODES
 
 logger = logging.getLogger(__name__)
 
-# Spec-required codes not yet in SDK STANDARD_ERROR_CODES.
-# These are mandated by AdCP BDD feature files but the SDK hasn't added them yet.
-_SPEC_CODES = {
-    "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
-    "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
-    "IDEMPOTENCY_IN_FLIGHT",  # BR-UC-002/016/020/023/028: rule-9 reject-and-redirect (3.1.0-beta.0)
-}
-
-# All acceptable codes: SDK standard + justified internal + spec-required
-_ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | _SPEC_CODES
+# All acceptable codes: SDK standard + justified internal + spec-required.
+# SPEC_CODES is the single source in src.core.exceptions (spec codes the vendored SDK
+# helper lacks but that reach the wire unchanged).
+_ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | SPEC_CODES
 
 # Anchor scan paths on the test file's location so they resolve correctly
 # regardless of pytest's working directory (CI runs from the repo root;

@@ -129,6 +129,18 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(STANDARD_ERROR_CODES)
 assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
 
+# Spec-required codes the SDK's STANDARD_ERROR_CODES table does not yet carry (the
+# published-error-enum-vs-SDK drift). Unlike INTERNAL_CODES, these REACH the wire
+# unchanged — valid AdCP codes, merely absent from the vendored SDK helper. Single
+# source for the guards that enumerate acceptable wire codes.
+SPEC_CODES: frozenset[str] = frozenset(
+    {
+        "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
+        "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
+        "IDEMPOTENCY_IN_FLIGHT",  # BR-UC-002/016/020/023/028: rule-9 reject-and-redirect (3.1.0-beta.0)
+    }
+)
+
 
 def translate_error_code(code: str) -> str:
     """Translate a server-side error code to its wire-compliant equivalent.
