@@ -493,7 +493,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
         try:
             # Initialize GAM client
-            from gam_orders_service import GAMOrdersService
+            from src.services.gam_orders_service import GAMOrdersService
 
             from src.adapters.google_ad_manager import GoogleAdManager
             from src.core.schemas import Principal
@@ -559,7 +559,7 @@ def get_tenant_orders(tenant_id: str) -> tuple[Response, int]:
     try:
         db_session.remove()  # Start fresh
 
-        from gam_orders_service import GAMOrdersService
+        from src.services.gam_orders_service import GAMOrdersService
 
         # Validate tenant_id
         if not tenant_id or len(tenant_id) > 50:
@@ -622,7 +622,7 @@ def get_order_details(tenant_id: str, order_id: str) -> tuple[Response, int]:
         if not order_id or len(order_id) > 50:
             return jsonify({"error": "Invalid order_id"}), 400
 
-        from gam_orders_service import GAMOrdersService
+        from src.services.gam_orders_service import GAMOrdersService
 
         service = GAMOrdersService(db_session)
         order_details = service.get_order_details(tenant_id, order_id)
@@ -646,7 +646,7 @@ def get_tenant_line_items(tenant_id: str) -> tuple[Response, int]:
     try:
         db_session.remove()  # Start fresh
 
-        from gam_orders_service import GAMOrdersService
+        from src.services.gam_orders_service import GAMOrdersService
 
         # Parse filters from query params
         filters = {}

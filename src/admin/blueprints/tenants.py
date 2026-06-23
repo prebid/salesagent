@@ -796,6 +796,28 @@ def rotate_out_webhook_signing_key(tenant_id, key_id):
     return redirect_resp
 
 
+@tenants_bp.route("/<tenant_id>/sync-gam-orders", methods=["POST"])
+@require_tenant_access(role=("admin",))
+def sync_gam_orders(tenant_id, **kwargs):
+    from flask import flash, redirect, url_for
+
+    from src.services.gam_advertisers_sync import _build_gam_client_for_tenant
+    from src.services.gam_orders_service import GAMOrdersService
+
+    try:
+        with get_db_session() as db_session:
+            summary = GAMOrdersService(db_session).sync_tenant_orders(
+                tenant_id, _build_gam_client_for_tenant(tenant_id)
+            )
+        orders = summary.get("orders", {}).get("total", 0)
+        line_items = summary.get("line_items", {}).get("total", 0)
+        flash(f"GAM orders synced: {orders} orders, {line_items} line items.", "success")
+    except Exception as e:
+        logger.error("GAM orders sync failed for tenant %s: %s", tenant_id, e, exc_info=True)
+        flash(f"GAM orders sync failed: {e}", "error")
+    return redirect(url_for("tenants.media_buys_list", tenant_id=tenant_id))
+
+
 @tenants_bp.route("/<tenant_id>/media-buys", methods=["GET"])
 @require_tenant_access()
 def media_buys_list(tenant_id):

@@ -602,6 +602,15 @@ def _run_sync_thread(
         # Invalidate inventory tree cache after successful sync.
         _invalidate_inventory_tree_cache(tenant_id, sync_id)
 
+        # Sync GAM orders alongside inventory — same GAM client config.
+        try:
+            from src.services.gam_advertisers_sync import _build_gam_client_for_tenant
+            from src.services.gam_orders_service import GAMOrdersService
+            with _sync_session() as db:
+                GAMOrdersService(db).sync_tenant_orders(tenant_id, _build_gam_client_for_tenant(tenant_id))
+        except Exception as _oe:
+            logger.warning("[%s] GAM orders sync after inventory failed: %s", sync_id, _oe)
+
     except Exception as e:
         logger.error(f"[{sync_id}] Sync failed: {e}", exc_info=True)
         _mark_sync_failed(sync_id, str(e))
