@@ -1287,11 +1287,28 @@ class MockAdServer(AdServerAdapter):
                         {"device_type": "tablet", "impressions": imp * 0.15, "spend": spd * 0.15},
                     ]
 
+                    # Simulate a geo split across 10 countries so that a small limit
+                    # (e.g. 5) triggers truncation (BR-RULE-091 INV-3).
+                    # Weights are distinct and descending for verifiable sort order.
+                    # Real adapters replace this with actual platform geo data.
+                    _geo_codes = ["US", "GB", "DE", "FR", "CA", "AU", "JP", "BR", "IN", "MX"]
+                    _geo_weights = [0.30, 0.15, 0.12, 0.10, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03]
+                    simulated_geo = [
+                        {
+                            "geo_code": geo_code,
+                            "geo_level": "country",
+                            "impressions": imp * weight,
+                            "spend": spd * weight,
+                        }
+                        for geo_code, weight in zip(_geo_codes, _geo_weights, strict=False)
+                    ]
+
                     by_package.append(
                         AdapterPackageDelivery(
                             package_id=package_id,
                             impressions=package_impressions,
                             spend=package_spend,
+                            by_geo=simulated_geo,
                             by_device_type=simulated_device_type,
                         )
                     )

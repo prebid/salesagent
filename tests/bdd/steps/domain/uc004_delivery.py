@@ -622,8 +622,16 @@ def given_seller_no_dimension(ctx: dict, dimension: str) -> None:
 
 @given(parsers.parse('the seller supports reporting dimensions "{dim1}" and "{dim2}"'))
 def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
-    """Seller supports multiple reporting dimensions."""
+    """Seller supports multiple reporting dimensions.
+
+    Also configures the adapter with simulated breakdown data so that
+    multi-dimension requests (BR-RULE-091 INV-1) return non-empty arrays.
+    """
     ctx.setdefault("supported_dimensions", []).extend([dim1, dim2])
+    env = ctx.get("env")
+    if env is not None and hasattr(env, "set_adapter_response"):
+        for mb_id in ctx.get("media_buys", {}):
+            env.set_adapter_response(media_buy_id=mb_id)
 
 
 @given(parsers.parse('the seller does NOT support "{capability}"'))
@@ -658,14 +666,30 @@ def given_seller_reports_metric(ctx: dict, metric: str) -> None:
 
 @given("there are more geo breakdown entries than the requested limit")
 def given_geo_exceeds_limit(ctx: dict) -> None:
-    """More geo entries than limit — truncation expected."""
+    """More geo entries than limit — truncation expected.
+
+    Configures the adapter with 10 geo entries so that a limit=5 request
+    triggers truncation (BR-RULE-091 INV-3).
+    """
     ctx["geo_exceeds_limit"] = True
+    env = ctx.get("env")
+    if env is not None and hasattr(env, "set_adapter_response"):
+        for mb_id in ctx.get("media_buys", {}):
+            env.set_adapter_response(media_buy_id=mb_id)
 
 
 @given("the device_type breakdown has fewer entries than any limit")
 def given_device_type_under_limit(ctx: dict) -> None:
-    """Fewer device_type entries than limit — no truncation."""
+    """Fewer device_type entries than limit — no truncation.
+
+    Configures the adapter with 3 device_type entries so that the breakdown
+    is present but not truncated (BR-RULE-091 INV-4).
+    """
     ctx["device_type_under_limit"] = True
+    env = ctx.get("env")
+    if env is not None and hasattr(env, "set_adapter_response"):
+        for mb_id in ctx.get("media_buys", {}):
+            env.set_adapter_response(media_buy_id=mb_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2059,20 +2083,44 @@ def then_packages_limited(ctx: dict, field: str, n: int) -> None:
 
 @then(parsers.parse('"{field}" should be true'))
 def then_field_true(ctx: dict, field: str) -> None:
-    """Assert the named top-level response field is True."""
+    """Assert the named field is True on every package in the response.
+
+    Truncation flags (by_geo_truncated, by_device_type_truncated) live on
+    PackageDelivery, not on the top-level response object.  This step checks
+    all packages so it works for both package-level and response-level fields.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    value = getattr(resp, field, None)
-    assert value is True, f"Expected response.{field} to be True, got {value!r}"
+    packages = _collect_all_packages(resp)
+    if packages:
+        for pkg in packages:
+            value = getattr(pkg, field, None)
+            assert value is True, f"Expected response package.{field} to be True, got {value!r}"
+    else:
+        # Fall back to top-level response field
+        value = getattr(resp, field, None)
+        assert value is True, f"Expected response.{field} to be True, got {value!r}"
 
 
 @then(parsers.parse('"{field}" should be false'))
 def then_field_false(ctx: dict, field: str) -> None:
-    """Assert the named top-level response field is False."""
+    """Assert the named field is False on every package in the response.
+
+    Truncation flags (by_geo_truncated, by_device_type_truncated) live on
+    PackageDelivery, not on the top-level response object.  This step checks
+    all packages so it works for both package-level and response-level fields.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    value = getattr(resp, field, None)
-    assert value is False, f"Expected response.{field} to be False, got {value!r}"
+    packages = _collect_all_packages(resp)
+    if packages:
+        for pkg in packages:
+            value = getattr(pkg, field, None)
+            assert value is False, f"Expected response package.{field} to be False, got {value!r}"
+    else:
+        # Fall back to top-level response field
+        value = getattr(resp, field, None)
+        assert value is False, f"Expected response.{field} to be False, got {value!r}"
 
 
 @then(parsers.parse('the response packages should include "{field}"'))

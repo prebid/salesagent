@@ -279,6 +279,7 @@ def _get_media_buy_delivery_impl(
                                 "spend": float(adapter_pkg.spend),
                                 "clicks": None,  # AdapterPackageDelivery doesn't have clicks yet
                                 "by_placement": adapter_pkg.by_placement,
+                                "by_geo": adapter_pkg.by_geo,
                                 "by_device_type": adapter_pkg.by_device_type,
                             }
                             total_spend_from_adapter += float(adapter_pkg.spend)
@@ -363,6 +364,7 @@ def _get_media_buy_delivery_impl(
 
                         # Get REAL per-package metrics from adapter if available, otherwise divide equally
                         raw_placements: list[dict[str, Any]] | None = None
+                        raw_geo: list[dict[str, Any]] | None = None
                         raw_device_type: list[dict[str, Any]] | None = None
                         if package_id in adapter_package_metrics:
                             # Use real metrics from adapter
@@ -371,6 +373,8 @@ def _get_media_buy_delivery_impl(
                             package_impressions = pkg_metrics["impressions"]
                             _raw = pkg_metrics.get("by_placement")
                             raw_placements = _raw if isinstance(_raw, list) else None
+                            _raw_geo = pkg_metrics.get("by_geo")
+                            raw_geo = _raw_geo if isinstance(_raw_geo, list) else None
                             _raw_dt = pkg_metrics.get("by_device_type")
                             raw_device_type = _raw_dt if isinstance(_raw_dt, list) else None
                         else:
@@ -393,7 +397,9 @@ def _get_media_buy_delivery_impl(
                             placement_dim, raw_placements, package_impressions, package_spend, package_clicks
                         )
 
-                        geo_breakdown, geo_truncated = _build_geo_breakdown(req, package_impressions, package_spend)
+                        geo_breakdown, geo_truncated = _build_geo_breakdown(
+                            req, package_impressions, package_spend, raw_geo
+                        )
                         device_type_breakdown, device_type_truncated = _build_device_type_breakdown(
                             req, package_impressions, package_spend, raw_device_type
                         )
@@ -962,6 +968,7 @@ def _build_geo_breakdown(
     req: GetMediaBuyDeliveryRequest,
     package_impressions: Any,
     package_spend: Any,
+    raw_geo: list[dict[str, Any]] | None = None,
 ) -> tuple[list[GeoBreakdown] | None, bool | None]:
     """Build the geo breakdown for a package (BR-RULE-091 INV-5).
 
@@ -971,9 +978,10 @@ def _build_geo_breakdown(
     and the seller echoes the system it applied). For ``country``/``region``
     levels no classification system applies.
 
-    No real per-geo metrics are available from the mock adapter today, so a
-    single representative entry carries the package totals; the entry's
-    ``system`` is the load-bearing field this surfaces.
+    Uses adapter-supplied ``raw_geo`` data when available; otherwise returns
+    a single aggregate entry. Real adapters (and the mock adapter) populate
+    ``AdapterPackageDelivery.by_geo`` to supply actual per-geo data including
+    enough entries to trigger truncation when a limit is requested.
 
     Returns:
         (breakdown, truncated) — both None when geo dimension not requested.
@@ -993,16 +1001,20 @@ def _build_geo_breakdown(
     if system is not None:
         system_str = enum_value(system)
 
-    # geo_code is required by the spec; use a representative aggregate marker.
-    entries: list[GeoBreakdown] = [
-        GeoBreakdown(
-            impressions=float(package_impressions or 0.0),
-            spend=float(package_spend or 0.0),
-            geo_level=geo_level_str,
-            system=system_str,
-            geo_code="aggregate",
-        )
-    ]
+    if raw_geo:
+        entries: list[GeoBreakdown] = [GeoBreakdown(**d) for d in raw_geo]
+    else:
+        # No adapter data — return a single aggregate entry.
+        # Real adapters supply per-geo rows via AdapterPackageDelivery.by_geo.
+        entries = [
+            GeoBreakdown(
+                impressions=float(package_impressions or 0.0),
+                spend=float(package_spend or 0.0),
+                geo_level=geo_level_str,
+                system=system_str,
+                geo_code="aggregate",
+            )
+        ]
 
     limited, truncated = _apply_breakdown_limit(entries, geo_dim)
     return limited, truncated

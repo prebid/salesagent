@@ -383,6 +383,7 @@ class AdapterPackageDelivery(SalesAgentBaseModel):
     impressions: int
     spend: float
     by_placement: list[dict[str, Any]] | None = None
+    by_geo: list[dict[str, Any]] | None = None
     by_device_type: list[dict[str, Any]] | None = None
 
 
