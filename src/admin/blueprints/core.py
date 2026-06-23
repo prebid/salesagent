@@ -378,13 +378,30 @@ def debug_headers():
 
 @core_bp.route("/health")
 def health():
-    """Health check endpoint."""
+    """Liveness probe — confirms the process is up and can serve a request.
+
+    Intentionally does NOT touch the database. ELB liveness must not depend on
+    a contended resource (the shared SQLAlchemy pool / RDS round-trip): during
+    the 6-hourly GAM inventory sync those resources are saturated, a DB-backed
+    /health blocks past the load balancer's timeout, and consecutive failures
+    kill an otherwise-healthy task. Use /health/ready for DB connectivity.
+    """
+    return "OK", 200
+
+
+@core_bp.route("/health/ready")
+def health_ready():
+    """Readiness probe — verifies database connectivity.
+
+    For deeper monitoring/alerting, NOT for the ELB target-group health check
+    (see /health for why liveness stays DB-free).
+    """
     try:
         with get_db_session() as db_session:
             db_session.execute(text("SELECT 1"))
             return "OK", 200
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
+        logger.error(f"Readiness check failed: {e}")
         return f"Database connection failed: {str(e)}", 500
 
 
