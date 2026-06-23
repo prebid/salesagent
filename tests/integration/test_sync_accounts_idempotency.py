@@ -17,7 +17,11 @@ Business rules: BR-RULE-055..062 (sync_accounts); idempotency per AdCP 3.0.1.
 
 import pytest
 
-from src.core.exceptions import AdCPIdempotencyConflictError, AdCPIdempotencyInFlightError
+from src.core.exceptions import (
+    AdCPIdempotencyConflictError,
+    AdCPIdempotencyExpiredError,
+    AdCPIdempotencyInFlightError,
+)
 from src.core.schemas.account import SyncAccountsRequest
 from src.services import idempotency_replay
 from tests.harness import Transport
@@ -146,6 +150,55 @@ class TestSyncAccountsRace:
                 )
             assert exc_info.value.error_code == "IDEMPOTENCY_IN_FLIGHT"
             assert exc_info.value.recovery == "transient"
+
+    def test_degraded_path_rejects_expired_sync_cache_row(self, integration_db):
+        """An expired sync cache row rejects IDEMPOTENCY_EXPIRED (rule 6), never a stale replay.
+
+        The sync policy is anchor-less (find_backstop_anchor=None), so the expiry decision
+        rests on the cache row's STORED expires_at. This pins the EXPIRED branch for the
+        SECOND engine consumer specifically — the create-side tests prove the policy-agnostic
+        engine logic; this proves sync (the pattern #1470 inherits) does not special-case away.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
+        from src.core.database.repositories.uow import AccountUoW
+        from src.core.schemas.account import SyncAccountsResponse
+        from src.core.tools.accounts import _SYNC_REPLAY_POLICY
+
+        tenant_id, principal_id, key = "sync_idem_expired", "agent_idem", "k-expired"
+        req_hash = "sync-canonical-hash-expired"
+
+        with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+            env.setup_default_data()
+            # Seed a cache row already past its replay window (record at a past `now` so
+            # expires_at = past + TTL is still in the past).
+            with AccountUoW(tenant_id) as uow:
+                assert uow.idempotency_attempts is not None
+                uow.idempotency_attempts.record_success(
+                    principal_id=principal_id,
+                    tool_name="sync_accounts",
+                    idempotency_key=key,
+                    response_model=SyncAccountsResponse(accounts=[]),
+                    protocol_status="completed",
+                    payload_hash=req_hash,
+                    account_id=None,
+                    now=datetime.now(UTC) - (DEFAULT_REPLAY_TTL + timedelta(seconds=60)),
+                )
+
+            # Same key + MATCHING hash: the rule-5 conflict check passes, so the rule-6
+            # window-expired check is what fires → IDEMPOTENCY_EXPIRED (correctable), not a replay.
+            with pytest.raises(AdCPIdempotencyExpiredError) as exc_info:
+                idempotency_replay.replay_after_race(
+                    _SYNC_REPLAY_POLICY,
+                    tenant_id,
+                    idempotency_key=key,
+                    principal_id=principal_id,
+                    account_id=None,
+                    request_hash=req_hash,
+                )
+            assert exc_info.value.error_code == "IDEMPOTENCY_EXPIRED"
+            assert exc_info.value.recovery == "correctable"
 
 
 class TestCrossToolIdempotencyIsolation:
