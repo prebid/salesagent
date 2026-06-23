@@ -628,10 +628,9 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
     multi-dimension requests (BR-RULE-091 INV-1) return non-empty arrays.
     """
     ctx.setdefault("supported_dimensions", []).extend([dim1, dim2])
-    env = ctx.get("env")
-    if env is not None and hasattr(env, "set_adapter_response"):
-        for mb_id in ctx.get("media_buys", {}):
-            env.set_adapter_response(media_buy_id=mb_id)
+    env = ctx["env"]
+    for mb_id in ctx.get("media_buys", {}):
+        env.set_adapter_response(media_buy_id=mb_id)
 
 
 @given(parsers.parse('the seller does NOT support "{capability}"'))
@@ -672,10 +671,9 @@ def given_geo_exceeds_limit(ctx: dict) -> None:
     triggers truncation (BR-RULE-091 INV-3).
     """
     ctx["geo_exceeds_limit"] = True
-    env = ctx.get("env")
-    if env is not None and hasattr(env, "set_adapter_response"):
-        for mb_id in ctx.get("media_buys", {}):
-            env.set_adapter_response(media_buy_id=mb_id)
+    env = ctx["env"]
+    for mb_id in ctx.get("media_buys", {}):
+        env.set_adapter_response(media_buy_id=mb_id)
 
 
 @given("the device_type breakdown has fewer entries than any limit")
@@ -686,10 +684,9 @@ def given_device_type_under_limit(ctx: dict) -> None:
     is present but not truncated (BR-RULE-091 INV-4).
     """
     ctx["device_type_under_limit"] = True
-    env = ctx.get("env")
-    if env is not None and hasattr(env, "set_adapter_response"):
-        for mb_id in ctx.get("media_buys", {}):
-            env.set_adapter_response(media_buy_id=mb_id)
+    env = ctx["env"]
+    for mb_id in ctx.get("media_buys", {}):
+        env.set_adapter_response(media_buy_id=mb_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -325,6 +325,7 @@ class TestAdapterPackageDelivery:
             "impressions",
             "spend",
             "by_placement",
+            "by_geo",
             "by_device_type",
         }
 
