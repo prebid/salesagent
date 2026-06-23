@@ -6,7 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.ext_namespace import PREBID_EXT_NAMESPACE, prebid_ext, prebid_vendor
+from src.core.ext_namespace import (
+    PREBID_EXT_NAMESPACE,
+    PROPERTY_LIST_ADVISORIES_KEY,
+    prebid_ext,
+    prebid_vendor,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -37,3 +42,19 @@ class TestPrebidVendor:
 
     def test_roundtrip_write_then_read(self):
         assert prebid_vendor(prebid_ext(property_list_targeting=False)) == {"property_list_targeting": False}
+
+
+class TestPropertyListAdvisoriesKey:
+    """The advisory sub-key is single-sourced, so the create-success producer and the
+    response reader land on the same ``ext.prebid.property_list_advisories`` slot."""
+
+    def test_lands_under_the_prebid_namespace(self):
+        ext = prebid_ext(**{PROPERTY_LIST_ADVISORIES_KEY: [{"code": "PRODUCT_UNAVAILABLE"}]})
+        assert ext == {PREBID_EXT_NAMESPACE: {"property_list_advisories": [{"code": "PRODUCT_UNAVAILABLE"}]}}
+
+    def test_producer_consumer_share_the_key(self):
+        # Writing under the constant and reading by the same constant must roundtrip —
+        # the structural guarantee that the producer/consumer literals cannot drift.
+        advisories = [{"code": "PRODUCT_UNAVAILABLE", "message": "no overlap"}]
+        vendor = prebid_vendor(prebid_ext(**{PROPERTY_LIST_ADVISORIES_KEY: advisories}))
+        assert vendor.get(PROPERTY_LIST_ADVISORIES_KEY) == advisories

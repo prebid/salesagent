@@ -14,6 +14,7 @@ from src.adapters.kevel_site_resolver import (
 )
 from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
+    AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
     AdCPPackageNotFoundError,
@@ -242,11 +243,18 @@ class Kevel(AdServerAdapter):
         404s and the live flight keeps serving the stale configuration.
         """
         flight = next(
-            (f for f in self._fetch_campaign_flights(campaign_id) if f["Name"] == package_id),
+            (f for f in self._fetch_campaign_flights(campaign_id) if f.get("Name") == package_id),
             None,
         )
         if not flight:
             raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+        if flight.get("Id") is None:
+            # Symmetric with the site path's malformed-record guard: a flight without
+            # a numeric Id can't be addressed at /flight/{Id}; surface a typed transient
+            # rather than letting the caller's ``flight['Id']`` escape as INTERNAL_ERROR/terminal.
+            raise AdCPAdapterError(
+                f"Malformed Kevel flight record for '{package_id}' (campaign {campaign_id}): missing 'Id'"
+            )
         return flight
 
     def update_package_targeting(

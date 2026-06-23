@@ -2,7 +2,7 @@
 
 Matching semantics come from the SDK primitives ``adcp.adagents.domain_matches``
 and ``adcp.adagents.identifiers_match`` — the AdCP reference implementation of
-the ``Identifier.value`` grammar (spec 3.0.1, ``core/identifier.json``):
+the ``Identifier.value`` grammar (spec 3.1.0-beta.3, ``core/identifier.json``):
 
 - ``example.com`` matches the base domain plus the ``www.``/``m.`` subdomains
 - ``edition.example.com`` matches exactly that subdomain

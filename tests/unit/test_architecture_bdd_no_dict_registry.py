@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Files that contain Given steps populating registry_formats
@@ -45,17 +47,18 @@ def _body_appends_dict_to_registry(func: ast.FunctionDef | ast.AsyncFunctionDef)
         ctx.setdefault("registry_formats", []).append({"name": ...})
         ctx.setdefault("registry_formats", []).extend([{"name": ...}])
     """
-    for node in ast.walk(func):
+    for walk_node in ast.walk(func):
         # Assignment: ctx["registry_formats"] = [{...}, ...]
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if _is_registry_formats_access(target) and _value_contains_dict(node.value):
+        if isinstance(walk_node, ast.Assign):
+            for target in walk_node.targets:
+                if _is_registry_formats_access(target) and _value_contains_dict(walk_node.value):
                     return True
 
+    for call_node in iter_call_expressions(func):
         # .append({...}) or .extend([{...}])
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr in ("append", "extend") and node.args:
-                if _value_contains_dict(node.args[0]):
+        if isinstance(call_node.func, ast.Attribute):
+            if call_node.func.attr in ("append", "extend") and call_node.args:
+                if _value_contains_dict(call_node.args[0]):
                     return True
 
     return False

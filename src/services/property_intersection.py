@@ -236,7 +236,7 @@ def property_list_drop_advisory(
         # transient (retry), the wrong instruction for this condition.
         recovery="correctable",
         # severity is prose-defined for warnings-in-errors[] but absent from
-        # the Error schema at 3.0.1 — legal via additionalProperties, and it
+        # the Error schema at 3.1.0-beta.3 — legal via additionalProperties, and it
         # lets schema-aware buyers separate advisories from failures.
         severity="warning",
     )

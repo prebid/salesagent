@@ -20,6 +20,8 @@ from typing import Literal
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Allowlist for empty Given/When steps. Must only shrink — never add entries.
@@ -85,11 +87,8 @@ def _body_has_assert_or_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
 
 def _contains_placeholder_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if the function delegates to a known placeholder helper like _pending()."""
-    for node in ast.walk(func):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Name) and node.func.id == "_pending":
-            return True
+    for _node in iter_call_expressions(func, name="_pending"):
+        return True
     return False
 
 

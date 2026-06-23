@@ -11,7 +11,7 @@ from typing import Any
 import requests
 from requests.exceptions import RequestException
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, ad_server_error_attrs
 
 logger = logging.getLogger(__name__)
 
@@ -24,39 +24,34 @@ class BroadstreetAPIError(AdCPAdapterError):
     ``INTERNAL_ERROR``/``terminal`` — which would tell a buyer agent to escalate
     to a human on a transient ad-server outage, the exact recovery-taxonomy
     contradiction the sibling adapters (Kevel/Triton/Xandr) were just fixed to
-    avoid. Recovery is refined from the HTTP status:
+    avoid. ``error_code``/``recovery``/``status_code`` ALL come from the shared
+    ad-server table (``ad_server_error_attrs``), so this configures-self-in-``__init__``
+    error type produces the SAME buyer-facing envelope AND REST status as the
+    ``wrap_request_errors`` factory path for the same status — one ad-server event,
+    one buyer-facing result, regardless of which adapter the tenant runs:
 
-    - transport outage (no status) / 5xx -> ``SERVICE_UNAVAILABLE``, transient
-    - 429 (rate limited) -> ``RATE_LIMITED``, transient (retry with backoff)
-    - 403 (operator ``access_token`` denied) -> ``CONFIGURATION_ERROR``, terminal
-    - other 4xx -> ``VALIDATION_ERROR``, correctable (fix the request/reference)
+    - transport outage (no status) / 5xx -> ``SERVICE_UNAVAILABLE``, transient, HTTP 502
+    - 429 (rate limited) -> ``RATE_LIMITED``, transient (retry with backoff), HTTP 429
+    - 403 (operator ``access_token`` denied) -> ``CONFIGURATION_ERROR``, terminal, HTTP 500
+    - other 4xx -> ``VALIDATION_ERROR``, correctable (fix the request/reference), HTTP 400
 
-    Callers that ``except BroadstreetAPIError`` or read ``status_code`` are
-    unaffected; the upstream HTTP status, when present, stays on ``status_code``
-    (a transport outage keeps the ``AdCPAdapterError`` 502 default).
+    The buyer-facing ``status_code`` is the mapped AdCP class default, NOT the upstream
+    ad-server status (which would leak the upstream's 403/404 to the buyer REST status
+    line and diverge by adapter); the upstream status stays in the message text
+    (``"... (HTTP 403)"``) and ``response_body``.
     """
 
     def __init__(self, message: str, status_code: int | None = None, response_body: Any = None):
         super().__init__(message)
         self.response_body = response_body
-        # Refine the inherited transient default per upstream HTTP status. When
-        # status_code is None (a transport outage) the AdCPAdapterError defaults
-        # stand: status_code=502, SERVICE_UNAVAILABLE / transient. error_code and
-        # recovery are set as instance attributes (not error_code=/recovery=
-        # kwargs, which the src/adapters error-construction guard forbids).
+        # Derive the FULL (error_code, recovery, status_code) verdict from the shared
+        # ad-server table so Broadstreet matches the wrap_request_errors factory path
+        # exactly. When status_code is None (a transport outage) the AdCPAdapterError
+        # defaults stand: status_code=502, SERVICE_UNAVAILABLE / transient. The attrs
+        # are set as instance attributes (not error_code=/recovery= kwargs, which the
+        # src/adapters error-construction guard forbids).
         if status_code is not None:
-            self.status_code = status_code  # upstream HTTP status (callers/tests read it)
-            if status_code == 403:
-                self.error_code = "CONFIGURATION_ERROR"
-                self.recovery = "terminal"
-            elif status_code == 429:
-                # Match the shared status->recovery table (AdCPRateLimitError): a 429 is a
-                # transient rate limit (retry with backoff), not a correctable client error.
-                self.error_code = "RATE_LIMITED"
-                self.recovery = "transient"
-            elif 400 <= status_code < 500:
-                self.error_code = "VALIDATION_ERROR"
-                self.recovery = "correctable"
+            self.error_code, self.recovery, self.status_code = ad_server_error_attrs(status_code)
 
 
 class BroadstreetClient:
@@ -152,8 +147,10 @@ class BroadstreetClient:
             )
 
         if response.status_code >= 400:
+            # Do NOT echo the response body into the buyer-facing message (unbounded
+            # reflected ad-server output); keep it server-side on response_body only.
             raise BroadstreetAPIError(
-                f"Broadstreet API error (HTTP {response.status_code}): {body}",
+                f"Broadstreet API error (HTTP {response.status_code})",
                 status_code=response.status_code,
                 response_body=body,
             )
@@ -192,7 +189,12 @@ class BroadstreetClient:
             )
             return self._handle_response(response)
         except RequestException as e:
-            raise BroadstreetAPIError(f"Request failed: {e}") from e
+            # Do NOT interpolate str(e): a requests error stringifies the request URL,
+            # which carries the operator's access_token query param (client.py builds
+            # the URL with ?access_token=...). That message reaches the buyer wire via
+            # the typed-error boundary. Keep the credentialed detail server-side only
+            # (the chained `from e` preserves it for the operator's traceback/logs).
+            raise BroadstreetAPIError(f"Broadstreet request failed (network {self.network_id})") from e
 
     def get(self, path: str, query_params: dict[str, Any] | None = None) -> Any:
         """Make a GET request."""

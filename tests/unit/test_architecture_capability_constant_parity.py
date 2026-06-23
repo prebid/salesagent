@@ -17,6 +17,8 @@ The non-AST-detectable slice (one invariant computed two ways) stays a review co
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 # Capability keywords whose value must be derived from an enforced constant, not a literal.
 _DERIVED_CAPABILITY_KEYWORDS = {"replay_ttl_seconds"}
 
@@ -25,9 +27,7 @@ def _literal_capability_sites_in(source: str) -> list[str]:
     """Return ``keyword@line`` for capability keywords assigned a bare numeric literal."""
     tree = ast.parse(source)
     out: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node in iter_call_expressions(tree):
         for kw in node.keywords:
             if (
                 kw.arg in _DERIVED_CAPABILITY_KEYWORDS

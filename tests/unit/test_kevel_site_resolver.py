@@ -22,7 +22,7 @@ import pytest
 from adcp.types import Identifier, PropertyListReference
 
 from src.adapters.kevel_site_resolver import KevelSiteResolver, ResolvedSiteIds
-from src.core.exceptions import AdCPAdapterError, AdCPValidationError
+from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPValidationError
 from src.core.property_list_resolver import clear_cache as clear_property_list_cache
 from tests.helpers.adcp_factories import create_test_identifier as _identifier
 
@@ -481,26 +481,37 @@ class TestPaginationAndFetch:
                 resolver._fetch_all_sites()
         assert exc_info.value.recovery == "transient"
 
-    def test_http_4xx_error_is_correctable_not_transient(self):
-        # The A4 status->recovery sweep gap this closes: before adcp_error_for_httpx_exc, a
-        # /v1/site 4xx surfaced as AdCPAdapterError (transient → buyer retries a request that
-        # can never succeed). It must surface as a correctable AdCPValidationError instead.
+    def _fetch_with_status(self, status: int):
         resolver = _resolver()
         mock_client = MagicMock()
         mock_client.__enter__ = MagicMock(return_value=mock_client)
         mock_client.__exit__ = MagicMock(return_value=None)
-        mock_response = MagicMock(status_code=403)
+        mock_response = MagicMock(status_code=status)
         mock_response.raise_for_status = MagicMock(
-            side_effect=httpx.HTTPStatusError("forbidden", request=MagicMock(), response=mock_response)
+            side_effect=httpx.HTTPStatusError(f"HTTP {status}", request=MagicMock(), response=mock_response)
         )
         mock_client.get = MagicMock(return_value=mock_response)
-
         with patch("src.adapters.kevel_site_resolver.httpx.Client", return_value=mock_client):
-            with pytest.raises(AdCPValidationError, match="Failed to fetch Kevel site list") as exc_info:
-                resolver._fetch_all_sites()
+            resolver._fetch_all_sites()
+
+    def test_http_403_is_terminal_configuration_error(self):
+        # /v1/site is fetched with the tenant operator's X-Adzerk-ApiKey, so a 403 is the
+        # operator's credential being denied — a request the buyer can never make succeed.
+        # That is terminal (requires human action), NOT correctable (fix-and-resend) and NOT
+        # transient (the pre-fix AdCPAdapterError that sent buyers into a retry loop).
+        with pytest.raises(AdCPConfigurationError, match="Failed to fetch Kevel site list") as exc_info:
+            self._fetch_with_status(403)
+        assert exc_info.value.error_code == "CONFIGURATION_ERROR"
+        assert exc_info.value.recovery == "terminal"
+        assert not isinstance(exc_info.value, AdCPAdapterError)  # not the transient class
+
+    def test_http_other_4xx_is_correctable_not_transient(self):
+        # A non-credential 4xx (e.g. 404) is the request, not the operator credential → it
+        # stays correctable (fix and resend), never transient (retry a request that can't succeed).
+        with pytest.raises(AdCPValidationError, match="Failed to fetch Kevel site list") as exc_info:
+            self._fetch_with_status(404)
         assert exc_info.value.recovery == "correctable"
         assert exc_info.value.error_code == "VALIDATION_ERROR"
-        # The pre-fix code raised AdCPAdapterError (transient); the correctable class is not one.
         assert not isinstance(exc_info.value, AdCPAdapterError)
 
     def test_malformed_page_missing_key_raises(self):

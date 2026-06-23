@@ -149,7 +149,7 @@ class TestMCPToolRoundtripMinimal:
 
         After the error-emission architecture migration, _impl raises AdCPValidationError; the MCP boundary
         translator emits a ToolError whose message is the JSON envelope
-        ``{adcp_error: {...}, errors: [...]}`` per the AdCP 3.0.6 spec.
+        ``{adcp_error: {...}, errors: [...]}`` per the AdCP 3.1.0-beta.3 spec.
         """
         import json
 

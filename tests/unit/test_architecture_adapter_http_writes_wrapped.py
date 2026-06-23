@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, rel, safe_parse
+from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions, rel, safe_parse
 
 # Adapter HTTP-write sites that emit a raw (non-AdCPError) transport failure.
 # MUST stay empty — wrap the write instead of allowlisting it.
@@ -291,12 +291,11 @@ def _handler_catches_httpx_status_error(handler: ast.ExceptHandler) -> bool:
 
 def _handler_calls_status_mapper(handler: ast.ExceptHandler) -> bool:
     """True if the handler routes through a shared status->recovery mapper (status-preserving)."""
-    for node in ast.walk(handler):
-        if isinstance(node, ast.Call):
-            fn = node.func
-            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
-            if name in _STATUS_MAPPERS:
-                return True
+    for node in iter_call_expressions(handler):
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        if name in _STATUS_MAPPERS:
+            return True
     return False
 
 

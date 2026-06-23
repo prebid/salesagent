@@ -93,9 +93,9 @@ def _dropped_product_advisories(dropped: "tuple[DroppedProduct, ...]") -> list[E
     side's UNSUPPORTED_FEATURE reject: the request succeeds, and the envelope
     says what the filter did instead of silently shrinking the list.
     """
-    # PRODUCT_UNAVAILABLE is the closest standard code at spec 3.0.1 (the
+    # PRODUCT_UNAVAILABLE is the closest standard code at spec 3.1.0-beta.3 (the
     # storyboard's INSUFFICIENT_INVENTORY/INVALID_TARGETING aren't in the
-    # 3.0.1 enum); "unavailable under your filter" is a documented stretch
+    # 3.1.0-beta.3 enum); "unavailable under your filter" is a documented stretch
     # of its sold-out wording, chosen over a non-standard code so buyers
     # keep standard-table recovery resolution. The code and details
     # vocabulary live in property_list_drop_advisory.

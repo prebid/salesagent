@@ -112,7 +112,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-from src.core.ext_namespace import prebid_ext
+from src.core.ext_namespace import PROPERTY_LIST_ADVISORIES_KEY, prebid_ext
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -1659,9 +1659,14 @@ def _advisory_ext(advisories: list[Error]) -> dict | None:
     if not advisories:
         return None
     # Vendor-namespaced per the spec's ExtensionObject description ("must be
-    # namespaced under a vendor/platform key"); the namespace lives in prebid_ext.
+    # namespaced under a vendor/platform key"); the namespace lives in prebid_ext and
+    # the sub-key in PROPERTY_LIST_ADVISORIES_KEY, so producer and reader share both.
     return prebid_ext(
-        property_list_advisories=[advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories]
+        **{
+            PROPERTY_LIST_ADVISORIES_KEY: [
+                advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories
+            ]
+        }
     )
 
 
@@ -4397,8 +4402,11 @@ async def create_media_buy(
 
     identity = enrich_identity_with_account(identity, req.account)
 
-    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
-    pnc_dict = push_notification_config.model_dump() if push_notification_config else None
+    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None).
+    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
+    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
+    # String columns cannot coerce, causing StatementError at flush time.
+    pnc_dict = push_notification_config.model_dump(mode="json") if push_notification_config else None
     result = await _create_media_buy_impl(
         req=req,
         push_notification_config=pnc_dict,
@@ -4479,9 +4487,12 @@ async def create_media_buy_raw(
     # pass identity directly without ctx, so this is best-effort)
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
 
-    # Serialize SDK model to dict for _impl (which uses dict-based config access)
+    # Serialize SDK model to dict for _impl (which uses dict-based config access).
+    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
+    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
+    # String columns cannot coerce, causing StatementError at flush time.
     pnc_dict = (
-        push_notification_config.model_dump()
+        push_notification_config.model_dump(mode="json")
         if isinstance(push_notification_config, PushNotificationConfig)
         else push_notification_config
     )

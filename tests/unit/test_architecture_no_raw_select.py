@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -408,10 +408,7 @@ def _find_raw_selects() -> list[tuple[str, str, str, int]]:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
 
-            for child in ast.walk(node):
-                if not isinstance(child, ast.Call):
-                    continue
-
+            for child in iter_call_expressions(node):
                 func = child.func
                 if not (isinstance(func, ast.Name) and func.id == "select"):
                     continue

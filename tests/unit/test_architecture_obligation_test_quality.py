@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
 _COVERS_RE = re.compile(r"Covers:\s+([\w-]+)")
@@ -161,10 +161,7 @@ def _function_body_calls_names(func_node: ast.FunctionDef, names: set[str]) -> b
     This catches the gaming pattern: ``import _get_products_impl  # noqa: F401``
     passes the old "references" check but fails this "calls" check.
     """
-    for node in ast.walk(func_node):
-        if not isinstance(node, ast.Call):
-            continue
-
+    for node in iter_call_expressions(func_node):
         func = node.func
 
         # Direct call: name(...)

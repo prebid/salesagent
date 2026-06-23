@@ -215,7 +215,7 @@ class TestPropertyListResolution:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with patch("src.core.property_list_resolver._validate_agent_url"):
+            with patch("src.core.property_list_resolver._validated_agent_ip", return_value="93.184.216.34"):
                 result = await resolve_property_list_typed(ref)
 
         # Resolver should return typed identifiers from the response
@@ -257,7 +257,7 @@ class TestPropertyListResolution:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with patch("src.core.property_list_resolver._validate_agent_url"):
+            with patch("src.core.property_list_resolver._validated_agent_ip", return_value="93.184.216.34"):
                 result = await resolve_property_list_typed(ref)
 
         assert result == [], "Exhausted cursor should yield empty identifier list"
@@ -301,7 +301,7 @@ class TestPropertyListResolution:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with patch("src.core.property_list_resolver._validate_agent_url"):
+            with patch("src.core.property_list_resolver._validated_agent_ip", return_value="93.184.216.34"):
                 result = await resolve_property_list_typed(ref)
 
         # The resolver returns exactly the identifiers from the current page

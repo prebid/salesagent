@@ -10,7 +10,15 @@ Covers:
 import os
 from unittest.mock import MagicMock, patch
 
-from src.core.security.url_validator import BLOCKED_HOSTNAMES, check_url_ssrf
+import pytest
+
+from src.core.security.url_validator import (
+    BLOCKED_HOSTNAMES,
+    check_url_ssrf,
+    resolve_validated_ip,
+    ssrf_pinned_async_transport,
+    ssrf_pinned_transport,
+)
 
 
 class TestCheckUrlSsrf:
@@ -292,3 +300,102 @@ class TestSignalsAgentEndpointSSRFWiring:
         assert "edit" in response.headers.get("Location", "")
         # Confirm the agent URL was NOT committed as the unsafe value
         mock_session.commit.assert_not_called()
+
+
+class TestResolveValidatedIp:
+    """resolve_validated_ip validates EVERY resolved address and returns a safe IP to pin."""
+
+    @staticmethod
+    def _addrinfo(*ips):
+        # Mimic socket.getaddrinfo: (family, type, proto, canonname, sockaddr=(ip, port)).
+        return [(2, 1, 6, "", (ip, 0)) for ip in ips]
+
+    def test_all_public_returns_first_ip(self):
+        with patch(
+            "src.core.security.url_validator.socket.getaddrinfo",
+            return_value=self._addrinfo("93.184.216.34", "93.184.216.35"),
+        ):
+            ip, error = resolve_validated_ip("https://example.com/", require_https=True)
+        assert ip == "93.184.216.34"
+        assert error == ""
+
+    def test_any_private_record_rejects_the_multi_a_record_bypass(self):
+        # First A-record public, a second private. check_url_ssrf (one gethostbyname result)
+        # would PASS this; validating ALL getaddrinfo results rejects it.
+        with patch(
+            "src.core.security.url_validator.socket.getaddrinfo",
+            return_value=self._addrinfo("93.184.216.34", "10.0.0.5"),
+        ):
+            ip, error = resolve_validated_ip("https://example.com/", require_https=True)
+        assert ip is None
+        assert "10.0.0.0/8" in error
+
+    def test_loopback_rejected(self):
+        with patch("src.core.security.url_validator.socket.getaddrinfo", return_value=self._addrinfo("127.0.0.1")):
+            ip, error = resolve_validated_ip("https://example.com/", require_https=True)
+        assert ip is None
+        assert "private/internal" in error
+
+    def test_https_required(self):
+        ip, error = resolve_validated_ip("http://example.com/", require_https=True)
+        assert ip is None
+        assert "HTTPS" in error
+
+    def test_blocked_hostname_rejected(self):
+        ip, error = resolve_validated_ip("https://metadata.google.internal/", require_https=True)
+        assert ip is None
+        assert "blocked" in error
+
+    def test_unresolvable_hostname(self):
+        import socket as _socket
+
+        with patch("src.core.security.url_validator.socket.getaddrinfo", side_effect=_socket.gaierror):
+            ip, error = resolve_validated_ip("https://nope.invalid/", require_https=True)
+        assert ip is None
+        assert "Cannot resolve" in error
+
+
+class TestSsrfPinnedTransport:
+    """The connection is pinned to the validated IP, closing the DNS-rebinding TOCTOU.
+
+    These are the failing oracle for the pin: they drive a real httpx request through the
+    pinned transport and assert the TCP connect targets the validated IP (not the request
+    hostname). If the httpcore-internal seam (``_pool._network_backend`` /
+    ``SyncBackend.connect_tcp``) the pin overrides ever changes, these redden — rather than
+    the pin silently no-op'ing and reopening the SSRF hole.
+    """
+
+    def test_sync_httpx_connects_to_the_pinned_ip_not_the_hostname(self):
+        import httpx
+        from httpcore._backends.sync import SyncBackend
+
+        captured: list[str] = []
+
+        def spy(self, host, port, *a, **k):
+            captured.append(host)
+            raise RuntimeError("stop-after-capture")  # don't actually open a socket
+
+        with patch.object(SyncBackend, "connect_tcp", spy):
+            with httpx.Client(transport=ssrf_pinned_transport("203.0.113.7")) as client:
+                with pytest.raises(Exception):  # noqa: B017 — the spy aborts the connect
+                    client.get("https://rebind.example.test/")
+
+        assert captured == ["203.0.113.7"], f"connect must target the pinned IP, got {captured}"
+
+    @pytest.mark.asyncio
+    async def test_async_httpx_connects_to_the_pinned_ip_not_the_hostname(self):
+        import httpx
+        from httpcore._backends.anyio import AnyIOBackend
+
+        captured: list[str] = []
+
+        async def spy(self, host, port, *a, **k):
+            captured.append(host)
+            raise RuntimeError("stop-after-capture")
+
+        with patch.object(AnyIOBackend, "connect_tcp", spy):
+            async with httpx.AsyncClient(transport=ssrf_pinned_async_transport("203.0.113.8")) as client:
+                with pytest.raises(Exception):  # noqa: B017
+                    await client.get("https://rebind.example.test/")
+
+        assert captured == ["203.0.113.8"], f"connect must target the pinned IP, got {captured}"

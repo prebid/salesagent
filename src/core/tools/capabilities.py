@@ -171,7 +171,7 @@ def _get_adcp_capabilities_impl(
         # adapter-independent, and emits property_list_applied=true. The
         # CREATE-side capability (compiling targeting_overlay.property_list
         # into native ad-server targeting) is a different feature with no
-        # standard flag at 3.0.1; it is signaled via
+        # standard flag at 3.1.0-beta.3; it is signaled via
         # ext.prebid.property_list_targeting on this response and enforced
         # at the boundary by raise_if_property_list_unsupported.
         property_list_filtering=True,
@@ -277,7 +277,7 @@ def _get_adcp_capabilities_impl(
         # Create-side property_list capability: whether the bound adapter
         # compiles targeting_overlay.property_list into native targeting
         # (Kevel → siteIds; mock → simulation). No standard flag exists at
-        # 3.0.1 for the targeting side, so it rides the response's ext,
+        # 3.1.0-beta.3 for the targeting side, so it rides the response's ext,
         # vendor-namespaced per the spec's ExtensionObject guidance.
         ext=prebid_ext(property_list_targeting=supports_property_list_targeting(adapter)),
         last_updated=datetime.now(UTC),

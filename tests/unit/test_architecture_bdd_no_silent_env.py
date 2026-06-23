@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
@@ -50,11 +50,9 @@ def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _has_ctx_get_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function calls ctx.get("env")."""
-    for node in ast.walk(func):
+    for node in iter_call_expressions(func, name="get"):
         if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
+            isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "ctx"
             and node.args
@@ -67,15 +65,8 @@ def _has_ctx_get_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _has_hasattr_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function calls hasattr(env, ...)."""
-    for node in ast.walk(func):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "hasattr"
-            and len(node.args) >= 1
-            and isinstance(node.args[0], ast.Name)
-            and node.args[0].id == "env"
-        ):
+    for node in iter_call_expressions(func, name="hasattr"):
+        if len(node.args) >= 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == "env":
             return True
     return False
 
