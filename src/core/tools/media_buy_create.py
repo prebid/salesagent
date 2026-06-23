@@ -153,7 +153,7 @@ from src.core.tools.financial_validation import (
 )
 
 # Import get_product_catalog from main (after refactor)
-from src.core.validation_helpers import format_validation_error, package_field_path
+from src.core.validation_helpers import format_validation_error, package_field_path, suggest_validation_fix
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -2123,7 +2123,10 @@ async def _create_media_buy_impl(
             duplicate_products = [pid for pid, count in product_id_counts.items() if count > 1]
             if duplicate_products:
                 error_msg = f"Duplicate product_id(s) found in packages: {', '.join(duplicate_products)}. Each product can only be used once per media buy."
-                raise AdCPValidationError(error_msg)
+                raise AdCPValidationError(
+                    error_msg,
+                    suggestion="Each package must reference a distinct product_id; remove the duplicate package or change its product_id.",
+                )
 
         # 4. Currency-specific budget validation
         # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
@@ -4225,7 +4228,10 @@ def _build_create_media_buy_request(
             **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
     except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="request")) from e
+        raise AdCPValidationError(
+            format_validation_error(e, context="request"),
+            suggestion=suggest_validation_fix(e),
+        ) from e
 
 
 async def create_media_buy(

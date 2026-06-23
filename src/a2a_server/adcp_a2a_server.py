@@ -106,7 +106,7 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from src.core.validation_helpers import first_validation_error_field
+from src.core.validation_helpers import first_validation_error_field, suggest_validation_fix
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -1575,7 +1575,11 @@ class AdCPRequestHandler(RequestHandler):
         try:
             req = CreateMediaBuyRequest.model_validate(params)
         except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
+            raise AdCPValidationError(
+                f"Invalid parameters: {e}",
+                field=first_validation_error_field(e),
+                suggestion=suggest_validation_fix(e),
+            ) from e
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each

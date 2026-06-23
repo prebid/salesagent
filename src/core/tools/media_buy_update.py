@@ -279,7 +279,15 @@ def _verify_principal(
             resource_id=media_buy_id,
             reason=f"Principal does not own media buy (owner: {media_buy.principal_id})",
         )
-        raise AdCPAuthorizationError(f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.")
+        raise AdCPAuthorizationError(
+            f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.",
+            details={
+                "suggestion": (
+                    "Verify your x-adcp-auth token identifies the principal that owns this media buy; "
+                    "contact the seller if the token should be authorized."
+                )
+            },
+        )
 
 
 def _update_media_buy_impl(
@@ -912,7 +920,13 @@ def _update_media_buy_impl(
                                 for r in failed_creatives
                             ]
                             raise AdCPAdapterError(
-                                f"Failed to sync creatives: {'; '.join(error_msgs)}", context=req.context
+                                f"Failed to sync creatives: {'; '.join(error_msgs)}",
+                                context=req.context,
+                                suggestion=(
+                                    "The creative upload/sync did not complete; this is typically transient. "
+                                    "Retry the update_media_buy request; if it persists, re-sync the creative(s) "
+                                    "via sync_creatives before assigning them."
+                                ),
                             )
 
                         # Track in affected_packages

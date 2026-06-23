@@ -32,6 +32,33 @@ def _wire_code(ctx: dict) -> str | None:
     return (envelope.get("adcp_error") or {}).get("code")
 
 
+def _wire_suggestion(ctx: dict) -> str | None:
+    """Return the buyer-facing ``suggestion`` from the captured wire envelope.
+
+    Mirrors ``_wire_code``: when the scenario dispatched through a wire transport
+    (REST/A2A/MCP), the ``suggestion`` is the buyer-facing contract and must be
+    read from the real envelope, not the lossy reconstructed ``ctx['error']``.
+    AdCP carries the suggestion either directly on the error object or nested
+    under ``details.suggestion`` (account/auth errors use the latter), in either
+    the ``errors[0]`` or the envelope-level ``adcp_error`` layer — the same
+    canonical lookup as ``TransportResult.assert_wire_error``. Returns ``None``
+    on IMPL / no-wire scenarios so callers fall back to the reconstructed
+    exception (salesagent-ztl6.6).
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if not envelope:
+        return None
+    errors = envelope.get("errors") or [{}]
+    adcp_error = envelope.get("adcp_error") or {}
+    return (
+        errors[0].get("suggestion")
+        or adcp_error.get("suggestion")
+        or (errors[0].get("details") or {}).get("suggestion")
+        or (adcp_error.get("details") or {}).get("suggestion")
+    )
+
+
 def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
@@ -255,12 +282,19 @@ def then_error_message_contains(ctx: dict, text: str) -> None:
 
 @then(parsers.parse('the suggestion should contain "{text}"'))
 def then_suggestion_contains(ctx: dict, text: str) -> None:
-    """Assert error suggestion contains the given text (case-insensitive)."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    d = _get_error_dict(error)
-    suggestion = (d.get("suggestion") or "").lower()
-    assert text.lower() in suggestion, f"Expected '{text}' in suggestion: {d.get('suggestion')}"
+    """Assert error suggestion contains the given text — wire-first, reconstructed fallback.
+
+    When the scenario dispatched through a wire transport, assert on the real
+    wire envelope's suggestion (the buyer-facing contract); otherwise fall back
+    to the reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.6).
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        suggestion = _get_error_dict(error).get("suggestion")
+    suggestion_lower = (suggestion or "").lower()
+    assert text.lower() in suggestion_lower, f"Expected '{text}' in suggestion: {suggestion}"
 
 
 # ── Error message content (specific) ───────────────────────────────────
@@ -376,7 +410,16 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 
 @then('the error should include a "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion field."""
+    """Assert error includes a non-empty suggestion — wire-first, reconstructed fallback.
+
+    On a wire transport the suggestion is read from the real envelope (the
+    buyer-facing contract); IMPL/no-wire scenarios fall back to the reconstructed
+    ``ctx['error']`` (ztl6.6).
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is not None:
+        assert suggestion, "Expected non-empty suggestion in wire envelope"
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)

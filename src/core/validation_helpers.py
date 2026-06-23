@@ -189,3 +189,34 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
     )
 
     return error_msg
+
+
+def suggest_validation_fix(validation_error: ValidationError) -> str:
+    """Derive a single buyer-facing correction hint from a Pydantic ValidationError.
+
+    Produces the actionable ``suggestion`` companion to
+    ``format_validation_error``'s diagnostic message, so request-validation
+    rejections carry a non-empty wire ``suggestion`` (AdCP POST-F3: the buyer
+    must learn how to fix the request). The hint names the offending field(s)
+    and the corrective action, keyed off the Pydantic error ``type``:
+
+    * ``missing``        → provide the required field
+    * ``string_pattern_mismatch`` / ``string_too_short`` / ``string_too_long`` → fix the value to satisfy the constraint
+    * ``extra_forbidden`` → remove the unrecognized field
+    * anything else      → correct the field per the AdCP spec
+    """
+    errors = validation_error.errors()
+    if not errors:
+        return "Correct the request to match the AdCP specification and resend."
+
+    first = errors[0]
+    field_path = ".".join(str(loc) for loc in first.get("loc", ())) or "request"
+    error_type = first.get("type", "")
+
+    if "missing" in error_type:
+        return f"Provide the required '{field_path}' field and resend the request."
+    if "extra_forbidden" in error_type:
+        return f"Remove the unrecognized '{field_path}' field; it is not part of the AdCP request schema."
+    if error_type.startswith("string_pattern_mismatch") or "too_short" in error_type or "too_long" in error_type:
+        return f"Provide a valid '{field_path}' value that satisfies the AdCP field constraints and resend."
+    return f"Correct the '{field_path}' field to match the AdCP specification and resend."

@@ -366,7 +366,16 @@ def given_creative_format_incompatible(ctx: dict, creative_id: str) -> None:
 
 @given("the request includes 1 package update with inline creatives")
 def given_package_update_inline_creatives_bare(ctx: dict) -> None:
-    """Add a package update with inline creative content (ext-k scenario)."""
+    """Add a package update with a VALID inline creative (ext-k scenario).
+
+    Uses the canonical AssetSpec factory (``build_assets`` / ``image_spec``) so the
+    asset carries its ``asset_type`` discriminator and the request parses cleanly —
+    the scenario must reach the adapter creative-sync step (where the upload is
+    configured to fail), NOT be rejected at request-validation time for a malformed
+    asset map.
+    """
+    from tests.factories.creative_asset import build_assets, image_spec
+
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
@@ -378,13 +387,7 @@ def given_package_update_inline_creatives_bare(ctx: dict) -> None:
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": {
-                "primary": {
-                    "url": "https://example.com/banner.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            },
+            "assets": build_assets(image_spec("primary")),
         }
     ]
 

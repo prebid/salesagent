@@ -38,6 +38,11 @@ _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODU
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
+# Single buyer-facing correction hint for every AUTH_REQUIRED rejection (missing
+# identity in an _impl, or a missing/invalid token at the REST auth boundary), so
+# all AUTH_REQUIRED envelopes carry the same actionable suggestion (AdCP POST-F3).
+AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:
     """
@@ -393,7 +398,7 @@ def require_identity(
         raise AdCPAuthRequiredError(
             "Authentication required: no identity in request.",
             context=context,
-            details={"suggestion": "Provide valid credentials (x-adcp-auth token)."},
+            details={"suggestion": AUTH_REQUIRED_SUGGESTION},
         )
     return identity
 

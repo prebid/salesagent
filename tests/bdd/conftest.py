@@ -216,10 +216,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # SELECTED option's currency — so the create SUCCEEDS instead of failing. Graduates
     # once selected-option currency validation lands (salesagent-scxw).
     "T-UC-002-ext-d": "selected pricing-option currency not validated against CurrencyLimit; create succeeds instead of UNSUPPORTED_FEATURE — spec-production gap (salesagent-scxw)",
-    # FIXME(salesagent-9vgz.4): duplicate product_id error lacks suggestion field
-    # Production correctly detects duplicate product_ids and raises ValueError with
-    # good message, but the error is not a structured AdCPError — no suggestion field.
-    "T-UC-002-ext-e": "duplicate product_id error lacks suggestion field — spec-production gap",
+    # Graduated (#1417/gh8p.10): duplicate product_id now raises AdCPValidationError
+    # with a buyer-facing suggestion ("Each package must reference a distinct
+    # product_id ..."), surfaced on the wire. T-UC-002-ext-e passes.
     # FIXME(salesagent-lp0x): stale .feature expectation, NOT a production gap.
     # Production correctly emits BUDGET_EXCEEDED for "daily budget exceeds cap"
     # (AdCPBudgetExceededError; verified at wire on mcp/rest/a2a). v3.1 renamed the
@@ -265,14 +264,10 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
     "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
-    # Missing-required-field (idempotency_key) validation error lacks a structured
-    # suggestion on every transport: format_validation_error (validation_helpers.py)
-    # returns a message string only, so the AdCPValidationError carries details=None.
-    # VALIDATION_ERROR code + the missing-field reference are correct (those Then
-    # steps pass); only `the error should include "suggestion" field` fails. The
-    # replay sibling (T-UC-002-v31-idempotency-replay) is fully wired and passing —
-    # this entry covers solely the suggestion spec-production gap.
-    "T-UC-002-v31-idempotency-missing": "missing idempotency_key VALIDATION_ERROR lacks suggestion field — spec-production gap",
+    # Graduated (#1417/gh8p.10): the request-construction boundary now derives a
+    # field-aware suggestion (suggest_validation_fix) and attaches it to the
+    # AdCPValidationError, so a missing idempotency_key rejects with a non-empty
+    # wire suggestion. T-UC-002-v31-idempotency-missing passes.
     # FIXME(salesagent-9vgz.17): optimization_goals not in adcp v3.6.0 or production schemas
     # PackageRequest(extra='forbid') rejects the field with generic validation error,
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
@@ -589,16 +584,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # code doesn't implement the expected validation.
         _UC003_EXT_XFAILS: dict[str, str] = {
             # Error code mismatches (production uses different codes than spec)
-            # AUTH_REQUIRED code reversal is DONE (ztl6.5/ay3q): production + .feature both
-            # emit the canonical AUTH_REQUIRED and verify_feature_error_codes --uc UC-003 = 0.
-            # These two still xfail ONLY on the second obligation — a non-empty 'suggestion'
-            # field on the auth error: the REST no-identity middleware envelope drops
-            # details['suggestion'], and the unknown-principal path raises
-            # AdCPAuthorizationError (ownership) with no suggestion. That is the missing-
-            # suggestion production gap tracked under #1417 (gh8p.10); graduates when the
-            # auth error paths carry a buyer-facing suggestion.
-            "T-UC-003-ext-a": "AUTH_REQUIRED code correct; missing 'suggestion' on REST no-identity auth envelope — production suggestion gap (#1417)",
-            "T-UC-003-ext-a-unknown": "AUTH_REQUIRED code correct; unknown-principal -> AdCPAuthorizationError carries no 'suggestion' — production suggestion gap (#1417)",
+            # Graduated (#1417/gh8p.10): both auth error paths now carry a buyer-facing
+            # suggestion. The REST auth boundary (_require_auth_dep) raises
+            # AdCPAuthRequiredError with AUTH_REQUIRED_SUGGESTION (REST no-identity envelope
+            # no longer drops it), and the unknown-principal ownership check
+            # (AdCPAuthorizationError) carries a "verify your x-adcp-auth token" suggestion.
+            # T-UC-003-ext-a / -ext-a-unknown pass on a2a/mcp/rest.
             "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
@@ -617,7 +608,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # verified at wire on mcp/rest/a2a). The generated .feature asserts the
             # pre-v3.1 BUDGET_TOO_LOW (see UC-002 ext-k). Graduates after upstream regen.
             "T-UC-003-ext-g": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production validates and correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen (salesagent-lp0x)",
-            "T-UC-003-ext-k": "inline creative sync: FK violation in production (missing creative commit)",
+            # Graduated (#1417/gh8p.10): a failed creative sync no longer crashes with an
+            # FK violation. _process_assignments skips assignment for un-synced creatives,
+            # and update_media_buy raises a clean retryable AdCPAdapterError carrying a
+            # buyer-facing retry suggestion. T-UC-003-ext-k passes on a2a/mcp/rest.
             # Graduated (salesagent-lp0x): the .feature now asserts standard codes
             # (VALIDATION_ERROR for an invalid placement id, UNSUPPORTED_FEATURE when the
             # product defines no placements; invalid_placement_ids is not in the AdCP

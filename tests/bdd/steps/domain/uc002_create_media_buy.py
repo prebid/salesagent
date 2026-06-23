@@ -1253,10 +1253,10 @@ def given_request_idempotency_key_omitted(ctx: dict) -> None:
     Uses the harness OMIT sentinel: the request assembler keeps it, and
     MediaBuyCreateEnv._ensure_idempotency_key pops it so the constructed
     CreateMediaBuyRequest is missing the REQUIRED field — production rejects it
-    with a VALIDATION_ERROR naming idempotency_key. (Production's
-    format_validation_error returns a message string only, so the error carries
-    no structured ``suggestion`` field — the scenario is strict-xfailed on that
-    one Then step; see T-UC-002-v31-idempotency-missing in conftest _XFAIL_TAGS.)
+    with a VALIDATION_ERROR naming idempotency_key and a buyer-facing
+    ``suggestion`` derived by ``suggest_validation_fix`` ("Provide the required
+    'idempotency_key' field ..."), surfaced on the wire across all transports
+    (#1417/gh8p.10).
     """
     from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 

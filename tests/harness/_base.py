@@ -811,12 +811,24 @@ class BaseTestEnv:
         5. Return raw httpx.Response
 
         Identity handling (mirrors production auth middleware):
-        - identity is None → dep raises AdCPAuthenticationError (no token)
+        - identity is None → dep raises AUTH_REQUIRED (no token) with suggestion
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
         """
-        from src.app import app
-        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+        client, identity = self._prepare_rest_request(kwargs)
+        body = self.build_rest_body(**kwargs)
+        return client.post(endpoint, json=body)
+
+    def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:
+        """Resolve identity, commit factory data, get the client, and install auth.
+
+        Single source of truth for the REST request preamble every dispatcher
+        shares: pops ``identity`` from *kwargs* (defaulting to the REST identity),
+        commits pending factory rows, creates/returns the TestClient, and installs
+        the per-request auth-dep override (which must run AFTER ``get_rest_client``).
+        Returns ``(client, resolved_identity)``; the caller builds the body from the
+        now-identity-free *kwargs* and issues the HTTP verb.
+        """
         from tests.harness.transport import Transport
 
         _NO_OVERRIDE = object()
@@ -825,26 +837,35 @@ class BaseTestEnv:
             identity = self.identity_for(Transport.REST)
 
         self._commit_factory_data()
-
-        # Get client first (may set default dep overrides on first call),
-        # then override per-request auth AFTER.
         client = self.get_rest_client()
+        self._configure_rest_auth_override(identity)
+        return client, identity
 
-        # Configure per-request auth (must be after get_rest_client)
+    @staticmethod
+    def _configure_rest_auth_override(identity: Any) -> None:
+        """Install per-request FastAPI auth-dep overrides for the test app.
+
+        Single source of truth for the REST auth contract every dispatcher needs
+        (must run AFTER ``get_rest_client``). With ``identity=None`` the require
+        dep raises the production ``AUTH_REQUIRED`` error — carrying the shared
+        buyer-facing suggestion — so the no-auth wire envelope matches what the
+        real REST auth boundary emits; otherwise both deps return the identity.
+        """
+        from src.app import app
+        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+
         if identity is None:
-            from src.core.exceptions import AdCPAuthenticationError
+            from src.core.auth import AUTH_REQUIRED_SUGGESTION
+            from src.core.exceptions import AdCPAuthRequiredError
 
             def _no_auth() -> None:
-                raise AdCPAuthenticationError("Authentication required")
+                raise AdCPAuthRequiredError("Authentication required", details={"suggestion": AUTH_REQUIRED_SUGGESTION})
 
             app.dependency_overrides[_require_auth_dep] = _no_auth
             app.dependency_overrides[_resolve_auth_dep] = lambda: None
         else:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
-
-        body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.
