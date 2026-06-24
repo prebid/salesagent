@@ -3111,3 +3111,21 @@ class Proposal(Base):
         ),
         Index("ix_proposals_tenant_id", "tenant_id"),
     )
+
+
+# Register the embedded-tenant write-guard's SQLAlchemy event listeners.
+#
+# This import lives at the BOTTOM of models.py (not in the package __init__) on
+# purpose: the guard attaches ``@event.listens_for`` listeners to the model
+# classes defined above (Tenant, AdapterConfig, TenantSigning*). Anchoring the
+# registration here means the guard is always attached whenever the ORM is in
+# use — you cannot mutate a guarded model without importing this module — while
+# leaving the lightweight session/config layer importable without dragging in
+# the ORM + the ~1 GB ``adcp`` dependency (see src/core/database/__init__.py).
+#
+# It MUST stay at the end (after every guarded class is defined) and be a plain
+# module import (``import ... as _``), never ``from ... import <name>``: when the
+# guard is imported first, it imports this module, which re-imports the guard
+# mid-load — a bare module binding resolves safely against the partially-loaded
+# module, whereas a name import would raise.
+from src.core.database import embedded_tenant_guard as _embedded_tenant_guard  # noqa: E402,F401
