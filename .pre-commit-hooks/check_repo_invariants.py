@@ -10,6 +10,17 @@ import re
 import sys
 from pathlib import Path
 
+_SKIP_RE = re.compile(r"@pytest\.mark\.skip(?!if|_ci)")
+
+
+def is_forbidden_skip_line(line: str) -> bool:
+    """True when *line* contains a bare ``@pytest.mark.skip`` decorator.
+
+    ``@pytest.mark.skipif`` and ``@pytest.mark.skip_ci`` are allowed.
+    Shared by the pre-commit hook and the Smoke Tests gate.
+    """
+    return bool(_SKIP_RE.search(line))
+
 
 def check_no_skip_tests(files: list[Path]) -> list[str]:
     """Forbid bare @pytest.mark.skip in test files.
@@ -17,13 +28,12 @@ def check_no_skip_tests(files: list[Path]) -> list[str]:
     ``@pytest.mark.skipif`` and ``@pytest.mark.skip_ci`` are allowed (conditional /
     CI-specific skips). Bare ``skip`` without justification is forbidden.
     """
-    pattern = re.compile(r"@pytest\.mark\.skip(?!if|_ci)")
     out: list[str] = []
     for filepath in files:
         if "tests/" not in str(filepath) or not filepath.name.startswith("test_"):
             continue
         for lineno, line in enumerate(filepath.read_text().splitlines(), 1):
-            if pattern.search(line):
+            if is_forbidden_skip_line(line):
                 out.append(f"{filepath}:{lineno}: @pytest.mark.skip forbidden (use skip_ci with justification)")
     return out
 

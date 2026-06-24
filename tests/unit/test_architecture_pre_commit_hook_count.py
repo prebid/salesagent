@@ -56,5 +56,3 @@ def test_commit_hook_counter_detects_under_ceiling() -> None:
     }
     count = _count_commit_stage_hooks(under_cfg)
     assert count == COMMIT_STAGE_MIN - 1
-    with pytest.raises(AssertionError):
-        assert count >= COMMIT_STAGE_MIN
