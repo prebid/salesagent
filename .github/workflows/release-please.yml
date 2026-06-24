@@ -8,11 +8,13 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  packages: write
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -33,13 +35,13 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     outputs:
-      ghcr_image: ${{ steps.meta.outputs.tags }}
-      ghcr_digest: ${{ steps.build.outputs.digest }}
+      image_tags: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
@@ -54,8 +56,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$RELEASE_SHA" ]] || { echo "ERROR: release-please.outputs.sha is empty (D47 gate broken)"; exit 1; }
-          MAX_ATTEMPTS=6
-          SLEEP_SEC=30
+          MAX_ATTEMPTS=45
+          SLEEP_SEC=60
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
             STATUS=$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA" \
               --jq '.workflow_runs[0].conclusion // "pending"')
@@ -79,7 +81,7 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -106,8 +108,30 @@ jobs:
       - name: Compute SOURCE_DATE_EPOCH from git
         id: sde
         run: echo "value=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
+      - name: Build amd64 image for pre-push Trivy gate
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: salesagent:release-gate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            SOURCE_DATE_EPOCH=${{ steps.sde.outputs.value }}
+      - name: Trivy gate (pre-push OS/CVE scan)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: salesagent:release-gate
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: 1
+          format: table
       - id: build
-        name: Build and push Docker image
+        name: Build and push multi-arch image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
@@ -134,39 +158,68 @@ jobs:
       id-token: write
       attestations: write
       packages: write
+      security-events: write
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USER }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
       - name: Sign image with cosign keyless
         env:
-          DIGEST: ${{ needs.build-and-push.outputs.ghcr_digest }}
-          TAGS: ${{ needs.build-and-push.outputs.ghcr_image }}
-          BUNDLE_PREFIX: /tmp/cosign-bundle-${{ github.run_id }}
+          DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
+          TAGS: ${{ needs.build-and-push.outputs.image_tags }}
+          BUNDLE_DIR: /tmp/cosign-bundles-${{ github.run_id }}
         run: |
           set -euo pipefail
+          mkdir -p "$BUNDLE_DIR"
           for tag in $TAGS; do
+            signed=false
+            safe_tag="${tag//\//-}"
             for attempt in 1 2 3; do
-              cosign sign --yes --bundle "${BUNDLE_PREFIX}-${attempt}.json" "${tag}@${DIGEST}" && break
+              bundle_path="${BUNDLE_DIR}/${safe_tag}-${attempt}.json"
+              if cosign sign --yes --bundle "$bundle_path" "${tag}@${DIGEST}"; then
+                signed=true
+                break
+              fi
               echo "cosign attempt $attempt failed for ${tag} — retrying..."
               sleep 30
             done
+            if [ "$signed" != true ]; then
+              echo "ERROR: cosign sign failed for ${tag} after 3 attempts"
+              exit 1
+            fi
           done
+      - name: Upload cosign bundles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cosign-bundles-${{ github.run_id }}
+          path: /tmp/cosign-bundles-${{ github.run_id }}/*.json
+          if-no-files-found: error
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ needs.build-and-push.outputs.ghcr_digest }}
+          subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
           push-to-registry: true
-      - name: Scan image for OS-layer CVEs
+      - name: Scan image for OS-layer CVEs (SARIF report)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}@${{ needs.build-and-push.outputs.ghcr_digest }}
+          image-ref: ghcr.io/${{ github.repository }}@${{ needs.build-and-push.outputs.image_digest }}
           severity: CRITICAL,HIGH
           vuln-type: os,library
           ignore-unfixed: true
-          exit-code: 1
+          exit-code: 0
           format: sarif
           output: trivy-results.sarif
       - name: Upload Trivy SARIF to GitHub Security tab

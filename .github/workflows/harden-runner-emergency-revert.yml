@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       reason:
-        description: Brief reason for revert (logged in PR body)
+        description: Brief reason for revert (logged in issue body)
         required: true
 
 permissions: {}
@@ -14,35 +14,53 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      issues: write
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Write PR body
+      - name: Detect block-mode harden-runner steps
+        id: detect
+        run: |
+          set -euo pipefail
+          if grep -R --include='*.yml' 'egress-policy: block' .github/workflows/; then
+            echo "block_mode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "block_mode=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open manual revert issue
+        if: steps.detect.outputs.block_mode == 'true'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REVERT_REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
           {
-            echo "Emergency revert triggered via workflow_dispatch."
-            echo "Reason: ${REVERT_REASON}"
-            echo "Post-revert: identify blocked egress, update allowlist, then flip back to block-mode."
-          } > /tmp/pr-body.md
-      - name: Revert harden-runner to audit mode
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          for f in .github/workflows/*.yml; do
-            sed -i 's/egress-policy: block/egress-policy: audit/g' "$f"
-          done
-          git checkout -b "harden-runner-emergency-revert-${{ github.run_id }}"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git add .github/workflows/
-          git commit -m "ops: emergency revert harden-runner to audit mode"
-          gh pr create \
-            --title "ops: emergency revert harden-runner to audit" \
-            --body-file /tmp/pr-body.md
+            echo "Emergency harden-runner revert requested via workflow_dispatch."
+            echo
+            echo "**Reason:** ${REVERT_REASON}"
+            echo
+            echo "Automated PR creation is not possible with \`GITHUB_TOKEN\` (no \`workflows\` write permission)."
+            echo "Apply manually:"
+            echo
+            echo '```bash'
+            echo "grep -Rl 'egress-policy: block' .github/workflows/ | xargs sed -i '' 's/egress-policy: block/egress-policy: audit/g'"
+            echo 'git checkout -b ops/harden-runner-emergency-revert'
+            echo 'git commit -am "ops: emergency revert harden-runner to audit mode"'
+            echo 'gh pr create --title "ops: emergency revert harden-runner to audit" --body "Manual revert from issue #ISSUE"'
+            echo '```'
+            echo
+            echo "Post-revert: identify blocked egress, update allowlist, then re-enable block mode deliberately."
+          } > /tmp/issue-body.md
+          gh issue create \
+            --title "ops: manual harden-runner emergency revert" \
+            --body-file /tmp/issue-body.md
+      - name: No block-mode steps (no-op)
+        if: steps.detect.outputs.block_mode == 'false'
+        run: >-
+          echo "No egress-policy block mode found — all workflows already audit-only; nothing to revert."
