@@ -5,9 +5,11 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  pull-requests: write
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
   release-please:
@@ -37,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
+      actions: read
       contents: read
       packages: write
     outputs:
@@ -52,6 +55,7 @@ jobs:
       - name: Require CI green on release commit (D47 gate)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
         run: |
           set -euo pipefail
@@ -59,7 +63,7 @@ jobs:
           MAX_ATTEMPTS=45
           SLEEP_SEC=60
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-            STATUS=$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA" \
+            STATUS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA" \
               --jq '.workflow_runs[0].conclusion // "pending"')
             echo "Attempt $attempt/$MAX_ATTEMPTS: status=$STATUS"
             case "$STATUS" in
@@ -116,15 +120,37 @@ jobs:
           push: false
           load: true
           platforms: linux/amd64
-          tags: salesagent:release-gate
+          tags: salesagent:release-gate-amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
             SOURCE_DATE_EPOCH=${{ steps.sde.outputs.value }}
-      - name: Trivy gate (pre-push OS/CVE scan)
+      - name: Trivy gate (pre-push OS/CVE scan, amd64)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: salesagent:release-gate
+          image-ref: salesagent:release-gate-amd64
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: 1
+          format: table
+      - name: Build arm64 image for pre-push Trivy gate
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          platforms: linux/arm64
+          tags: salesagent:release-gate-arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            SOURCE_DATE_EPOCH=${{ steps.sde.outputs.value }}
+      - name: Trivy gate (pre-push OS/CVE scan, arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: salesagent:release-gate-arm64
           severity: CRITICAL,HIGH
           vuln-type: os,library
           ignore-unfixed: true
@@ -164,18 +190,17 @@ jobs:
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USER }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+      - name: Registry auth (daemon-free)
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DH_USER: ${{ secrets.DOCKERHUB_USER }}
+          DH_PASS: ${{ secrets.DOCKERHUB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cosign login ghcr.io -u "$GHCR_USER" -p "$GH_TOKEN"
+          cosign login docker.io -u "$DH_USER" -p "$DH_PASS"
       - name: Sign image with cosign keyless
         env:
           DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
@@ -183,6 +208,7 @@ jobs:
           BUNDLE_DIR: /tmp/cosign-bundles-${{ github.run_id }}
         run: |
           set -euo pipefail
+          [[ -n "$DIGEST" ]] || { echo "ERROR: build-and-push image_digest is empty"; exit 1; }
           mkdir -p "$BUNDLE_DIR"
           for tag in $TAGS; do
             signed=false
@@ -210,6 +236,11 @@ jobs:
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ secrets.DOCKERHUB_USER }}/salesagent
           subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
           push-to-registry: true
       - name: Scan image for OS-layer CVEs (SARIF report)

@@ -35,7 +35,7 @@ jobs:
       - name: Scan published creative-agent image (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}/adcp-creative-agent:ca70dd1e2a6c
+          image-ref: ${{ steps.publish.outputs.ref }}
           severity: CRITICAL,HIGH
           vuln-type: os,library
           ignore-unfixed: true

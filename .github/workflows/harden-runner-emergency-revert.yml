@@ -28,7 +28,8 @@ jobs:
         id: detect
         run: |
           set -euo pipefail
-          if grep -R --include='*.yml' 'egress-policy: block' .github/workflows/; then
+          if grep -R --include='*.yml' --exclude='harden-runner-emergency-revert.yml' \
+              'egress-policy: block' .github/workflows/; then
             echo "block_mode=true" >> "$GITHUB_OUTPUT"
           else
             echo "block_mode=false" >> "$GITHUB_OUTPUT"
@@ -49,7 +50,7 @@ jobs:
             echo "Apply manually:"
             echo
             echo '```bash'
-            echo "grep -Rl 'egress-policy: block' .github/workflows/ | xargs sed -i '' 's/egress-policy: block/egress-policy: audit/g'"
+            echo "grep -Rl 'egress-policy: block' .github/workflows/ --exclude='harden-runner-emergency-revert.yml' | xargs sed -i '' 's/egress-policy: block/egress-policy: audit/g'"
             echo 'git checkout -b ops/harden-runner-emergency-revert'
             echo 'git commit -am "ops: emergency revert harden-runner to audit mode"'
             echo 'gh pr create --title "ops: emergency revert harden-runner to audit" --body "Manual revert from issue #ISSUE"'

@@ -40,9 +40,9 @@ rules:
   # CLA-assistant action to commit signatures and post status checks.
   # Minimum required permissions; no narrowing possible without breaking the action.
   #
-  # release-please.yml: contents/pull-requests/packages: write are required at
-  # workflow level for release-please-action (tag/release creation) and
-  # docker/build-push-action (GHCR push). Narrowing to job-level tracked for #1234-pr3.
+  # release-please.yml: job-level permissions only (workflow default is contents +
+  # pull-requests). No workflow-level packages: write — excessive-permissions no
+  # longer fires for this file (verified via zizmor --persona=auditor).
   #
   # pr-title-check.yml: no explicit permissions block — uses workflow default.
   # The amannn/action-semantic-pull-request action requires pull-requests: write
@@ -51,7 +51,6 @@ rules:
   excessive-permissions:
     ignore:
       - ipr-agreement.yml
-      - release-please.yml
       - pr-title-check.yml
 
   # ─────────────────────────────────────────────────────────────────────────────

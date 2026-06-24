@@ -45,16 +45,19 @@ Preferred — `gh attestation verify` (insulates from cosign v3/v4 churn):
 gh attestation verify oci://ghcr.io/prebid/salesagent@sha256:<digest> --owner prebid
 ```
 
-If using raw `cosign verify` directly, cosign v3+ requires the `--bundle`
-flag (mandatory; was optional in v2.x):
+If using raw `cosign verify` directly (cosign-installer@v4.1.1 ships **binary v3.0.5**;
+signatures are attached to the registry by `cosign sign`, so `--bundle` is not used
+for image verification):
 
 ```bash
 cosign verify \
   --certificate-identity-regexp 'https://github.com/prebid/salesagent/\.github/workflows/release-please\.yml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  --bundle <bundle.json> \
   ghcr.io/prebid/salesagent@sha256:<digest>
 ```
+
+Cosign bundle files uploaded as workflow artifacts support offline `cosign verify-blob`
+for detached signatures; registry-attached signatures use the command above.
 
 ## Consequences
 

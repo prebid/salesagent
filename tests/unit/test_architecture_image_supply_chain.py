@@ -45,6 +45,7 @@ def _job_uses_docker(job: dict[str, Any]) -> bool:
             "docker build" in run_script
             or "docker run" in run_script
             or "docker push" in run_script
+            or "docker compose" in run_script
             or "./scripts/creative-agent-stack.sh" in run_script
         ):
             return True
@@ -76,16 +77,27 @@ def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
     for perm in ("id-token", "attestations", "packages", "security-events"):
         assert perms.get(perm) == "write", f"sign-and-attest missing permissions.{perm}: write"
 
-    step_uses = [_step_uses(step) for step in _job_steps(job)]
-    assert any(u.startswith("docker/login-action@") for u in step_uses), "sign-and-attest missing docker/login-action"
-    assert sum(u.startswith("docker/login-action@") for u in step_uses) >= 2, (
-        "sign-and-attest needs ghcr + Docker Hub login"
+    steps = _job_steps(job)
+    step_uses = [_step_uses(step) for step in steps]
+    assert any(u.startswith("sigstore/cosign-installer@") for u in step_uses), (
+        "sign-and-attest missing cosign-installer"
     )
-    assert any("cosign sign" in (step.get("run") or "") for step in _job_steps(job)), (
-        "sign-and-attest missing cosign sign"
+    login_runs = [step.get("run") or "" for step in steps]
+    assert any("cosign login ghcr.io" in run for run in login_runs), (
+        "sign-and-attest must daemon-free cosign login for ghcr.io"
     )
-    assert any(u.startswith("actions/attest-build-provenance@") for u in step_uses), (
-        "sign-and-attest missing provenance"
+    assert any("cosign login docker.io" in run for run in login_runs), (
+        "sign-and-attest must daemon-free cosign login for docker.io"
+    )
+    assert not any(u.startswith("docker/login-action@") for u in step_uses), (
+        "sign-and-attest must not use docker/login-action (Docker uninstalled by harden-runner)"
+    )
+    assert any("cosign sign" in run for run in login_runs), "sign-and-attest missing cosign sign"
+    assert any('[[ -n "$DIGEST" ]]' in run for run in login_runs), (
+        "sign-and-attest must guard empty image_digest before cosign sign"
+    )
+    assert sum(u.startswith("actions/attest-build-provenance@") for u in step_uses) >= 2, (
+        "sign-and-attest must attest ghcr.io and Docker Hub images"
     )
     assert any(u.startswith("actions/upload-artifact@") for u in step_uses), (
         "sign-and-attest must upload cosign bundles"
@@ -96,11 +108,32 @@ def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
 
 
 def _assert_build_and_push_job(job: dict[str, Any]) -> None:
-    names = [step.get("name", "") for step in _job_steps(job)]
-    assert any("pre-push" in name.lower() for name in names), "build-and-push missing pre-push Trivy gate"
-    push_steps = [step for step in _job_steps(job) if _step_uses(step).startswith("docker/build-push-action@")]
-    assert len(push_steps) >= 2, "build-and-push must build scan artifact then push multi-arch image"
+    perms = job.get("permissions", {})
+    assert isinstance(perms, dict)
+    assert perms.get("actions") == "read", "build-and-push D47 gate needs permissions.actions: read"
+
+    steps = _job_steps(job)
+    names = [step.get("name", "") for step in steps]
+    assert sum("pre-push" in name.lower() for name in names) >= 2, (
+        "build-and-push must Trivy-gate amd64 and arm64 before push"
+    )
+    gate_steps = [
+        step
+        for step in steps
+        if _step_uses(step).startswith("aquasecurity/trivy-action@") and "pre-push" in (step.get("name") or "").lower()
+    ]
+    assert len(gate_steps) >= 2, "build-and-push missing per-arch pre-push Trivy steps"
+    for step in gate_steps:
+        assert step.get("with", {}).get("exit-code") == 1, f"pre-push Trivy step {step.get('name')} must exit-code: 1"
+    push_steps = [step for step in steps if _step_uses(step).startswith("docker/build-push-action@")]
+    assert len(push_steps) >= 3, "build-and-push must gate amd64, gate arm64, then push multi-arch"
     assert push_steps[-1].get("with", {}).get("push") is True, "final build step must push to registry"
+
+    d47_runs = [step.get("run") or "" for step in steps if "D47 gate" in (step.get("name") or "")]
+    assert d47_runs, "build-and-push missing D47 gate step"
+    assert all("${{ github.repository }}" not in run for run in d47_runs), (
+        "D47 gate must not interpolate github.repository in run: (use env:)"
+    )
 
 
 @pytest.mark.arch_guard
@@ -135,6 +168,7 @@ def test_release_workflow_supply_chain_wiring() -> None:
     assert "image_tags:" in text
     assert "image_digest:" in text
     assert "ghcr_image:" not in text
+    assert "concurrency:" in text
     assert "provenance: mode=max" in text
     assert "sbom: true" in text
 
@@ -172,7 +206,7 @@ def test_harden_runner_guard_detects_docker_job_with_disable_sudo() -> None:
 
 @pytest.mark.arch_guard
 def test_sign_and_attest_guard_detects_missing_registry_login() -> None:
-    """Negative probe: sign-and-attest without docker login must fail."""
+    """Negative probe: sign-and-attest without daemon-free cosign login must fail."""
     job = {
         "permissions": {
             "id-token": "write",
@@ -184,11 +218,12 @@ def test_sign_and_attest_guard_detects_missing_registry_login() -> None:
             {"uses": "sigstore/cosign-installer@abc"},
             {"run": "cosign sign --yes --bundle /tmp/b.json image@sha256:abc"},
             {"uses": "actions/attest-build-provenance@abc"},
+            {"uses": "actions/attest-build-provenance@abc"},
             {"uses": "actions/upload-artifact@abc"},
             {"uses": "github/codeql-action/upload-sarif@abc"},
         ],
     }
-    with pytest.raises(AssertionError, match="docker/login-action"):
+    with pytest.raises(AssertionError, match="cosign login"):
         _assert_sign_and_attest_job(job)
 
 
@@ -206,9 +241,37 @@ def test_dependency_review_configured() -> None:
 
 @pytest.mark.arch_guard
 def test_codeql_is_gating() -> None:
-    """CodeQL analyze must block merges (no continue-on-error)."""
-    text = (repo_root() / ".github/workflows/codeql.yml").read_text(encoding="utf-8")
-    assert "continue-on-error: true" not in text
+    """CodeQL analyze job must block merges (no continue-on-error)."""
+    jobs = _load_workflow(repo_root() / ".github/workflows/codeql.yml").get("jobs", {})
+    assert isinstance(jobs, dict)
+    analyze_jobs = [job for name, job in jobs.items() if "analyze" in name.lower()]
+    assert analyze_jobs, "codeql.yml must define an analyze job"
+    for job in analyze_jobs:
+        assert job.get("continue-on-error") is not True, "CodeQL analyze must not continue-on-error"
+
+
+@pytest.mark.arch_guard
+def test_emergency_revert_detect_excludes_self() -> None:
+    """Emergency revert must not match its own grep instruction lines."""
+    text = (repo_root() / ".github/workflows/harden-runner-emergency-revert.yml").read_text(encoding="utf-8")
+    assert "--exclude='harden-runner-emergency-revert.yml'" in text
+
+
+@pytest.mark.arch_guard
+def test_creative_agent_scan_uses_publish_output_ref() -> None:
+    """publish-creative-agent Trivy must scan the ref emitted by publish, not a hardcoded pin."""
+    wf_path = repo_root() / ".github/workflows/publish-creative-agent.yml"
+    jobs = _load_workflow(wf_path).get("jobs", {})
+    publish_job = jobs.get("publish", {})
+    trivy_steps = [
+        step for step in _job_steps(publish_job) if _step_uses(step).startswith("aquasecurity/trivy-action@")
+    ]
+    assert trivy_steps, "publish-creative-agent missing Trivy scan"
+    image_ref = trivy_steps[0].get("with", {}).get("image-ref", "")
+    assert image_ref == "${{ steps.publish.outputs.ref }}", "Trivy must reference steps.publish.outputs.ref"
+    assert "ca70dd1e2a6c" not in wf_path.read_text(encoding="utf-8"), (
+        "publish-creative-agent must not hardcode ADCP pin in workflow"
+    )
 
 
 @pytest.mark.arch_guard
