@@ -14,12 +14,12 @@ from adcp import (
     CpmPricingOption,
     CppPricingOption,
     CpvPricingOption,
+    EventType,
     FlatRatePricingOption,
     TimeBasedPricingOption,
     TimeUnit,
     VcpmPricingOption,
 )
-from adcp.types.generated_poc.enums.event_type import EventType
 
 from src.core.product_conversion import convert_pricing_option_to_adcp
 
@@ -292,18 +292,6 @@ class TestFlatRateConversion:
 class TestCpaConversion:
     """CPA (Cost Per Acquisition) pricing model conversion (AdCP 3.1)."""
 
-    def test_cpa_fixed_with_default_event_type(self):
-        """CPA with no event_type in parameters defaults to 'purchase'."""
-        po = _make_pricing_option("cpa", is_fixed=True, rate=15.00)
-        result = convert_pricing_option_to_adcp(po)
-
-        assert isinstance(result, CpaPricingOption)
-        assert result.pricing_model == "cpa"
-        assert result.fixed_price == 15.00
-        assert result.currency == "USD"
-        assert result.event_type == EventType.purchase
-        assert result.pricing_option_id == "cpa_usd_fixed"
-
     def test_cpa_with_explicit_event_type(self):
         """CPA with event_type in parameters uses that event type."""
         params = {"event_type": "lead"}
@@ -311,8 +299,11 @@ class TestCpaConversion:
         result = convert_pricing_option_to_adcp(po)
 
         assert isinstance(result, CpaPricingOption)
-        assert result.event_type == EventType.lead
+        assert result.pricing_model == "cpa"
         assert result.fixed_price == 25.00
+        assert result.currency == "USD"
+        assert result.event_type == EventType.lead
+        assert result.pricing_option_id == "cpa_usd_fixed"
 
     def test_cpa_with_purchase_event_type(self):
         """CPA with explicit 'purchase' event_type."""
@@ -332,14 +323,48 @@ class TestCpaConversion:
         assert isinstance(result, CpaPricingOption)
         assert result.event_type == EventType.app_install
 
-    def test_cpa_unknown_event_type_falls_back_to_purchase(self):
-        """CPA with unknown event_type logs a warning and defaults to 'purchase'."""
+    def test_cpa_missing_event_type_raises(self):
+        """CPA with no event_type in parameters raises ValueError (required per spec)."""
+        po = _make_pricing_option("cpa", is_fixed=True, rate=15.00)
+        with pytest.raises(ValueError, match="requires parameters.event_type"):
+            convert_pricing_option_to_adcp(po)
+
+    def test_cpa_unknown_event_type_raises(self):
+        """CPA with unknown event_type raises ValueError (silent mispricing is not acceptable)."""
         params = {"event_type": "not_a_real_event"}
         po = _make_pricing_option("cpa", is_fixed=True, rate=10.00, parameters=params)
+        with pytest.raises(ValueError, match="unknown event_type"):
+            convert_pricing_option_to_adcp(po)
+
+    def test_cpa_custom_event_type_with_name(self):
+        """CPA with event_type='custom' and custom_event_name succeeds."""
+        params = {"event_type": "custom", "custom_event_name": "newsletter_signup"}
+        po = _make_pricing_option("cpa", is_fixed=True, rate=8.00, parameters=params)
         result = convert_pricing_option_to_adcp(po)
 
         assert isinstance(result, CpaPricingOption)
-        assert result.event_type == EventType.purchase
+        assert result.event_type == EventType.custom
+        assert result.custom_event_name == "newsletter_signup"
+
+    def test_cpa_custom_event_type_without_name_raises(self):
+        """CPA with event_type='custom' but no custom_event_name raises ValueError."""
+        params = {"event_type": "custom"}
+        po = _make_pricing_option("cpa", is_fixed=True, rate=8.00, parameters=params)
+        with pytest.raises(ValueError, match="requires parameters.custom_event_name"):
+            convert_pricing_option_to_adcp(po)
+
+    def test_cpa_custom_event_type_with_event_source_id(self):
+        """CPA with event_type='custom' passes event_source_id through."""
+        params = {
+            "event_type": "custom",
+            "custom_event_name": "checkout_complete",
+            "event_source_id": "src_abc123",
+        }
+        po = _make_pricing_option("cpa", is_fixed=True, rate=20.00, parameters=params)
+        result = convert_pricing_option_to_adcp(po)
+
+        assert isinstance(result, CpaPricingOption)
+        assert result.event_source_id == "src_abc123"
 
     def test_cpa_missing_rate_raises(self):
         """CPA without a rate raises ValueError."""
@@ -349,7 +374,8 @@ class TestCpaConversion:
 
     def test_cpa_non_usd_currency(self):
         """CPA pricing option with EUR currency."""
-        po = _make_pricing_option("cpa", is_fixed=True, rate=12.00, currency="EUR")
+        params = {"event_type": "purchase"}
+        po = _make_pricing_option("cpa", is_fixed=True, rate=12.00, currency="EUR", parameters=params)
         result = convert_pricing_option_to_adcp(po)
 
         assert isinstance(result, CpaPricingOption)
@@ -358,7 +384,8 @@ class TestCpaConversion:
 
     def test_cpa_with_min_spend(self):
         """CPA pricing option with min_spend_per_package."""
-        po = _make_pricing_option("cpa", is_fixed=True, rate=10.00, min_spend_per_package=200.0)
+        params = {"event_type": "purchase"}
+        po = _make_pricing_option("cpa", is_fixed=True, rate=10.00, min_spend_per_package=200.0, parameters=params)
         result = convert_pricing_option_to_adcp(po)
 
         assert isinstance(result, CpaPricingOption)
@@ -371,48 +398,36 @@ class TestCpaConversion:
 class TestTimeBasedConversion:
     """Time-based pricing model conversion (AdCP 3.1)."""
 
-    def test_time_fixed_daily_rate(self):
-        """Fixed time-based pricing with day time_unit."""
-        params = {"time_unit": "day"}
-        po = _make_pricing_option("time", is_fixed=True, rate=500.00, parameters=params)
+    @pytest.mark.parametrize(
+        "time_unit_str,rate,expected_unit",
+        [
+            ("hour", 50.00, TimeUnit.hour),
+            ("day", 500.00, TimeUnit.day),
+            ("week", 2500.00, TimeUnit.week),
+            ("month", 8000.00, TimeUnit.month),
+        ],
+    )
+    def test_time_fixed_all_time_units(self, time_unit_str, rate, expected_unit):
+        """Fixed time-based pricing accepts all four spec-defined time_unit values."""
+        params = {"time_unit": time_unit_str}
+        po = _make_pricing_option("time", is_fixed=True, rate=rate, parameters=params)
         result = convert_pricing_option_to_adcp(po)
 
         assert isinstance(result, TimeBasedPricingOption)
         assert result.pricing_model == "time"
-        assert result.fixed_price == 500.00
+        assert result.fixed_price == rate
         assert result.currency == "USD"
-        assert result.parameters.time_unit == TimeUnit.day
+        assert result.parameters.time_unit == expected_unit
         assert result.pricing_option_id == "time_usd_fixed"
 
-    def test_time_fixed_weekly_rate(self):
-        """Fixed time-based pricing with week time_unit."""
-        params = {"time_unit": "week"}
-        po = _make_pricing_option("time", is_fixed=True, rate=2500.00, parameters=params)
+    def test_time_fixed_zero_rate_accepted(self):
+        """Fixed time-based pricing with rate=0 is valid (time-option.json minimum: 0)."""
+        params = {"time_unit": "day"}
+        po = _make_pricing_option("time", is_fixed=True, rate=0.0, parameters=params)
         result = convert_pricing_option_to_adcp(po)
 
         assert isinstance(result, TimeBasedPricingOption)
-        assert result.parameters.time_unit == TimeUnit.week
-        assert result.fixed_price == 2500.00
-
-    def test_time_fixed_monthly_rate(self):
-        """Fixed time-based pricing with month time_unit."""
-        params = {"time_unit": "month"}
-        po = _make_pricing_option("time", is_fixed=True, rate=8000.00, parameters=params)
-        result = convert_pricing_option_to_adcp(po)
-
-        assert isinstance(result, TimeBasedPricingOption)
-        assert result.parameters.time_unit == TimeUnit.month
-        assert result.fixed_price == 8000.00
-
-    def test_time_fixed_hourly_rate(self):
-        """Fixed time-based pricing with hour time_unit."""
-        params = {"time_unit": "hour"}
-        po = _make_pricing_option("time", is_fixed=True, rate=50.00, parameters=params)
-        result = convert_pricing_option_to_adcp(po)
-
-        assert isinstance(result, TimeBasedPricingOption)
-        assert result.parameters.time_unit == TimeUnit.hour
-        assert result.fixed_price == 50.00
+        assert result.fixed_price == 0.0
 
     def test_time_with_min_max_duration(self):
         """Time-based pricing with min_duration and max_duration constraints."""

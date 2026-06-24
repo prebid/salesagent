@@ -20,13 +20,13 @@ from adcp import (
     CpmPricingOption,
     CppPricingOption,
     CpvPricingOption,
+    EventType,
     FlatRatePricingOption,
     TimeBasedPricingOption,
     TimeUnit,
     VcpmPricingOption,
 )
 from adcp.types._generated import MediaChannel
-from adcp.types.generated_poc.enums.event_type import EventType
 from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
 from packaging.version import InvalidVersion, Version
 
@@ -257,25 +257,30 @@ def convert_pricing_option_to_adcp(
 
     elif pricing_model == "cpa":
         # CPA (Cost Per Acquisition) - AdCP v3.1 pricing model for affiliate/conversion pricing.
-        # Requires event_type; defaults to "purchase" for affiliate/SSS use cases.
+        # event_type is required per cpa-option.json; no default — an unknown value is a mispricing.
         if not rate:
             raise ValueError(f"CPA pricing option {pricing_option_id} requires rate")
-        # Resolve event_type from parameters if provided, otherwise default to "purchase"
-        event_type_val = EventType.purchase
-        if parameters and isinstance(parameters, dict):
-            raw_event = parameters.get("event_type")
-            if raw_event:
-                try:
-                    event_type_val = EventType(raw_event)
-                except ValueError:
-                    logger.warning(
-                        "Unknown event_type '%s' for CPA pricing option %s, defaulting to 'purchase'",
-                        raw_event,
-                        pricing_option_id,
-                    )
+        raw_event = parameters.get("event_type") if isinstance(parameters, dict) else None
+        if not raw_event:
+            raise ValueError(f"CPA pricing option {pricing_option_id} requires parameters.event_type")
+        try:
+            event_type_val = EventType(raw_event)
+        except ValueError:
+            raise ValueError(
+                f"CPA pricing option {pricing_option_id} has unknown event_type '{raw_event}'. "
+                f"Supported values: {[e.value for e in EventType]}"
+            )
+        custom_event_name = parameters.get("custom_event_name") if isinstance(parameters, dict) else None
+        if event_type_val == EventType.custom and not custom_event_name:
+            raise ValueError(
+                f"CPA pricing option {pricing_option_id} with event_type 'custom' requires parameters.custom_event_name"
+            )
+        event_source_id = parameters.get("event_source_id") if isinstance(parameters, dict) else None
         return CpaPricingOption(
             **common_fields,
             event_type=event_type_val,
+            custom_event_name=custom_event_name,
+            event_source_id=event_source_id,
             fixed_price=float(rate),
         )
 
@@ -303,7 +308,7 @@ def convert_pricing_option_to_adcp(
         )
         time_fields: dict = {**common_fields, "parameters": time_params}
         if is_fixed:
-            if not rate:
+            if rate is None:
                 raise ValueError(f"Fixed time-based pricing option {pricing_option_id} requires rate")
             time_fields["fixed_price"] = float(rate)
         else:
