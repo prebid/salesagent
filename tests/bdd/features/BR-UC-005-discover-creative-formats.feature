@@ -115,7 +115,7 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with format_ids filter ["fmt-001"]
     Then only "leaderboard" should be returned
     # BR-RULE-049 INV-2: format_ids matches on the (agent_url, id) federation pair
-    # (core/format-id.json required [agent_url, id]; list_formats_integrity match_keys [agent_url, id])
+    # (core/format-id.json requires [agent_url, id]; list_formats step match_keys [agent_url, id])
 
   @T-UC-005-inv-049-2-violated @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 violated - Non-matching format IDs silently excluded

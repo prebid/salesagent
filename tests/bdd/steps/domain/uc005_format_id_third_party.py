@@ -3,7 +3,7 @@
 Scenario ``T-UC-005-storyboard-format-id-third-party-agent-out-of-scope``
 (@third-party-agent): when a product advertises a ``format_id`` whose ``agent_url``
 points at a creative agent OTHER than this seller, the seller cannot verify it
-locally. Per the ``list_formats_integrity`` storyboard such a reference is OUT OF
+locally. Per the ``list_formats`` storyboard step such a reference is OUT OF
 SCOPE — ``scope.equals=$agent_url`` with ``on_out_of_scope: warn`` — so the seller
 MUST NOT fabricate a local format entry to cover it, and an empty result is an
 observation, never a graded failure.
@@ -11,16 +11,16 @@ observation, never a graded failure.
 Wired to real production across a2a/mcp/rest (auto-parametrized; UC-005 →
 CreativeFormatsEnv). Falsifiability comes from the COLLISION setup: the seller's own
 catalog holds a format whose ``id`` matches the third-party reference but under the
-SELLER's ``agent_url``. A filter comparing ``id`` alone (the pre-#1411 behavior)
-would return that local format as if it satisfied the third-party reference; the
-v3.1 ``(agent_url, id)`` federation filter (``format_id_identity``) returns nothing,
-which is the correct observation. Both the production filter fix and the REST
-harness fix (``build_rest_body`` now transmits ``format_ids``) are required for this
-to hold on all three transports.
+SELLER's ``agent_url``. A filter comparing ``id`` alone would return that local
+format as if it satisfied the third-party reference; the v3.1 ``(agent_url, id)``
+federation filter (``format_id_identity``) returns nothing, which is the correct
+observation. Both the production filter fix and the REST harness fix
+(``build_rest_body`` now transmits ``format_ids``) are required for this to hold on
+all three transports.
 
-@source repo=adcp ref=v3.1-04f59d2d5
+@source repo=adcp ref=v3.1.0-beta.3
   path=static/compliance/source/protocols/media-buy/index.yaml
-  (phase list_formats_integrity, refs_resolve: match_keys [agent_url, id], on_out_of_scope: warn)
+  (step list_formats, refs_resolve: match_keys [agent_url, id], scope.equals $agent_url, on_out_of_scope: warn)
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def then_no_fabricated_local_entry(ctx: dict) -> None:
     )
 
     # Falsifiable core: the seller's own same-id format must NOT be substituted for
-    # the foreign reference. id-only matching (pre-#1411) would surface it here.
+    # the foreign reference. id-only matching would surface it here.
     seller_local = (SELLER_AGENT_URL, ctx["third_party_format_id"].id)
     assert seller_local not in returned, (
         f"seller substituted its own format {seller_local} for the third-party reference "

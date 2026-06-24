@@ -269,7 +269,7 @@ def _list_creative_formats_impl(
     if req.format_ids:
         # v3.1 federation contract: a format_id is identified by the (agent_url, id)
         # PAIR, not id alone (core/format-id.json requires [agent_url, id]; the
-        # list_formats_integrity storyboard matches references with
+        # list_formats storyboard step matches references with
         # match_keys: [agent_url, id]). Matching on id alone would mis-resolve a
         # third-party reference (foreign agent_url) to a local format that merely
         # shares an id — fabricating a local entry for a format this seller does
@@ -371,14 +371,24 @@ def _list_creative_formats_impl(
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
 
-    # Filter by output_format_ids / input_format_ids (OR semantics each)
+    # Filter by output_format_ids / input_format_ids (OR semantics each).
+    # These $ref the same core/format-id.json schema as format_ids, so they carry
+    # the same (agent_url, id) federation identity — match on the pair via
+    # format_id_identity, never id alone, for the same reason as the format_ids
+    # filter above (id-only would mis-resolve a foreign reference to a local format
+    # sharing an id). The storyboard grades refs_resolve on the top-level format_id
+    # only, but the contract is symmetric across every FormatId reference.
     for req_ids, attr in (
         (req.output_format_ids, "output_format_ids"),
         (req.input_format_ids, "input_format_ids"),
     ):
         if req_ids:
-            requested = {fmt.id for fmt in req_ids}
-            formats = [f for f in formats if getattr(f, attr) and {fid.id for fid in getattr(f, attr)} & requested]
+            requested = {format_id_identity(fid) for fid in req_ids}
+            formats = [
+                f
+                for f in formats
+                if getattr(f, attr) and {format_id_identity(fid) for fid in getattr(f, attr)} & requested
+            ]
 
     # Sort formats by name for consistent ordering
     # (type field removed in adcp 3.12)
