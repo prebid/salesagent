@@ -394,7 +394,7 @@ def health_ready():
     """Readiness probe — verifies database connectivity.
 
     For deeper monitoring/alerting, NOT for the ELB target-group health check
-    (see /health for why liveness stays DB-free).
+    (see /health for why liveness stays DopB-free).
     """
     try:
         with get_db_session() as db_session:

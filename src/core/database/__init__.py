@@ -15,6 +15,13 @@ Key components:
 - embedded_tenant_guard.py: model-layer write guard for platform-managed surfaces
 """
 
-# Importing the guard registers SQLAlchemy event listeners as a side effect.
-# Keep this import at module load time so listeners are always attached.
-from src.core.database import embedded_tenant_guard as _embedded_tenant_guard  # noqa: F401
+# NOTE: the embedded_tenant_guard registration was intentionally moved OUT of
+# this package __init__ and into models.py (see the import at the bottom of
+# models.py). Importing the guard here forced every ``src.core.database.*``
+# import — even lightweight ones like ``database_session`` / ``db_config`` — to
+# transitively load the ORM models and the ~1 GB ``adcp`` dependency, because
+# the guard imports model classes to attach its listeners. Lightweight tools
+# (e.g. the sync cron) only need a DB session, not the ORM/adcp. Registering
+# the guard from models.py instead keeps it attached whenever the ORM is in use
+# (you cannot mutate a guarded model without importing models.py) while letting
+# the session/config layer be imported adcp-free.
