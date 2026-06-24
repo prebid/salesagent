@@ -393,7 +393,7 @@ def _get_media_buy_delivery_impl(
 
                         # Build placement breakdown if reporting_dimensions includes "placement"
                         placement_dim = req.reporting_dimensions.placement if req.reporting_dimensions else None
-                        placement_breakdown = _build_placement_breakdown(
+                        placement_breakdown, placement_truncated = _build_placement_breakdown(
                             placement_dim, raw_placements, package_impressions, package_spend, package_clicks
                         )
 
@@ -421,6 +421,7 @@ def _get_media_buy_delivery_impl(
                                 ),
                                 currency=pricing_info.get("currency") if pricing_info else None,
                                 by_placement=placement_breakdown,
+                                by_placement_truncated=placement_truncated,
                                 by_geo=geo_breakdown,
                                 by_geo_truncated=geo_truncated,
                                 by_device_type=device_type_breakdown,
@@ -921,11 +922,15 @@ def _build_placement_breakdown(
     package_impressions: Any,
     package_spend: Any,
     package_clicks: Any,
-) -> list[PlacementBreakdown] | None:
+) -> tuple[list[PlacementBreakdown] | None, bool | None]:
     """Build and sort the placement breakdown for a package.
 
-    Returns ``None`` when the buyer did not request the ``placement``
-    dimension. Otherwise:
+    Returns ``(None, None)`` when the buyer did not request the ``placement``
+    dimension. Otherwise returns ``(entries, truncated)`` where ``truncated``
+    MUST accompany the array whenever it is present — True when the limit cut
+    rows, False when complete.
+    (``get-media-buy-delivery-response.json`` §by_placement_truncated;
+    ``get_media_buy_delivery.mdx`` §Truncation.)
 
     - Uses the adapter's per-placement metrics when present, else synthesizes
       a representative multi-placement split of the package totals so the
@@ -937,7 +942,7 @@ def _build_placement_breakdown(
       (``get_media_buy_delivery.mdx`` §Truncation / INV-6.)
     """
     if placement_dim is None:
-        return None
+        return None, None
 
     if raw_placements:
         placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
@@ -961,8 +966,7 @@ def _build_placement_breakdown(
             for w, pid in weights
         ]
 
-    limited, _truncated = _apply_breakdown_limit(placements, placement_dim)
-    return limited
+    return _apply_breakdown_limit(placements, placement_dim)
 
 
 def _build_geo_breakdown(

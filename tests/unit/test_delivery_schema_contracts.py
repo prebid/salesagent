@@ -106,6 +106,7 @@ class TestPackageDeliveryFields:
         "rate",
         "currency",
         "by_placement",
+        "by_placement_truncated",
         "by_geo",
         "by_geo_truncated",
         "by_device_type",

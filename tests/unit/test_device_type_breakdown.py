@@ -19,6 +19,7 @@ from src.core.tools.media_buy_delivery import (
     _apply_breakdown_limit,
     _build_device_type_breakdown,
     _build_geo_breakdown,
+    _build_placement_breakdown,
 )
 
 
@@ -396,3 +397,73 @@ class TestPackageDeliveryNewFields:
         dumped = pkg.model_dump()
         assert dumped["by_device_type_truncated"] is False
         assert dumped["by_geo_truncated"] is True
+
+    def test_by_placement_truncated_defaults_to_none(self):
+        pkg = self._make_pkg()
+        assert pkg.by_placement_truncated is None
+
+    def test_by_placement_truncated_true_when_placement_was_cut(self):
+        pkg = self._make_pkg(by_placement_truncated=True)
+        assert pkg.by_placement_truncated is True
+
+    def test_by_placement_truncated_false_when_complete(self):
+        pkg = self._make_pkg(by_placement_truncated=False)
+        assert pkg.by_placement_truncated is False
+
+
+# ---------------------------------------------------------------------------
+# _build_placement_breakdown — truncation flag surfaced
+# ---------------------------------------------------------------------------
+
+
+def _make_placement_dim(*, limit=None, sort_by=None):
+    """Build a placement dimension mock with an optional limit and sort_by."""
+    dim = MagicMock()
+    dim.limit = limit
+    dim.sort_by = sort_by
+    return dim
+
+
+class TestBuildPlacementBreakdownTruncation:
+    """Guard that _build_placement_breakdown returns (list|None, bool|None) and
+    surfaces by_placement_truncated correctly (spec MUST field)."""
+
+    def test_returns_none_none_when_no_placement_dim(self):
+        """No placement dimension requested → (None, None)."""
+        result, truncated = _build_placement_breakdown(None, None, 1000.0, 5.0, None)
+        assert result is None
+        assert truncated is None
+
+    def test_returns_false_when_under_limit(self):
+        """Fewer placements than limit → truncated=False."""
+        dim = _make_placement_dim(limit=10)
+        raw = [
+            {"placement_id": "plc_a", "impressions": 500.0, "spend": 2.5},
+            {"placement_id": "plc_b", "impressions": 300.0, "spend": 1.5},
+        ]
+        result, truncated = _build_placement_breakdown(dim, raw, 800.0, 4.0, None)
+        assert result is not None
+        assert len(result) == 2
+        assert truncated is False
+
+    def test_returns_true_when_over_limit_keeps_top_by_spend(self):
+        """More placements than limit → truncated=True; survivors are top-N by spend."""
+        dim = _make_placement_dim(limit=1)
+        raw = [
+            {"placement_id": "plc_low", "impressions": 200.0, "spend": 1.0},
+            {"placement_id": "plc_high", "impressions": 800.0, "spend": 8.0},
+        ]
+        result, truncated = _build_placement_breakdown(dim, raw, 1000.0, 9.0, None)
+        assert result is not None
+        assert len(result) == 1
+        assert truncated is True
+        # plc_high has higher spend — must be the survivor
+        assert result[0].placement_id == "plc_high"
+
+    def test_synthesised_split_returns_false_when_no_limit(self):
+        """No adapter data, no limit → synthesised 3-way split, truncated=False."""
+        dim = _make_placement_dim(limit=None)
+        result, truncated = _build_placement_breakdown(dim, None, 1000.0, 5.0, None)
+        assert result is not None
+        assert len(result) == 3
+        assert truncated is False

@@ -185,6 +185,12 @@ class PackageDelivery(SalesAgentBaseModel):
         None,
         description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
     )
+    by_placement_truncated: bool | None = Field(
+        None,
+        description="True when by_placement was truncated by the requested limit; false when complete. "
+        "MUST be present whenever by_placement is present "
+        "(get-media-buy-delivery-response.json §by_placement_truncated; get_media_buy_delivery.mdx §Truncation).",
+    )
     by_geo: list[GeoBreakdown] | None = Field(
         None,
         description="Geographic delivery breakdown (populated when reporting_dimensions includes 'geo'). "
