@@ -1947,7 +1947,15 @@ class AdCPRequestHandler(RequestHandler):
         if "media_buy_ids" not in params and "media_buy_id" in params:
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
-        req = GetMediaBuyDeliveryRequest.model_validate(params)
+        from pydantic import ValidationError
+
+        try:
+            req = GetMediaBuyDeliveryRequest.model_validate(params)
+        except ValidationError as e:
+            raise AdCPValidationError(
+                f"Invalid parameters: {e}",
+                field=first_validation_error_field(e),
+            ) from e
 
         # Call core function with validated fields (all optional per AdCP spec).
         # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
