@@ -130,8 +130,9 @@ class GeoBreakdown(LibraryByGeoItem):
 
     Library provides geo_level, system, geo_code, geo_name plus the full
     DeliveryMetrics surface. For metro/postal_area levels the ``system``
-    field carries the classification system the seller used (BR-RULE-091
-    INV-5, e.g. 'nielsen_dma', 'us_zip').
+    field carries the classification system the seller used
+    (e.g. 'nielsen_dma', 'us_zip').  See ``get_media_buy_delivery.mdx``
+    §Geo Breakdown.
     """
 
     pass  # All fields inherited from library ByGeoItem
@@ -144,9 +145,9 @@ class DeviceTypeBreakdown(LibraryByDeviceTypeItem):
     unknown) plus the full DeliveryMetrics surface (impressions, spend, clicks,
     ctr, views, completed_views, ...).
 
-    Per AdCP spec 3.1.0 BR-RULE-091: returned when reporting_dimensions
-    includes 'device_type'. The sibling flag ``by_device_type_truncated``
-    MUST accompany this array whenever it is present.
+    Returned when reporting_dimensions includes 'device_type'.  The sibling
+    flag ``by_device_type_truncated`` MUST accompany this array whenever it
+    is present (``get-media-buy-delivery-response.json``).
     """
 
     pass  # All fields inherited from library ByDeviceTypeItem
@@ -192,7 +193,8 @@ class PackageDelivery(SalesAgentBaseModel):
     by_geo_truncated: bool | None = Field(
         None,
         description="True when by_geo was truncated by the requested limit; false when complete. "
-        "MUST be present whenever by_geo is present (AdCP 3.1.0 BR-RULE-091 INV-3/INV-4).",
+        "MUST be present whenever by_geo is present "
+        "(get-media-buy-delivery-response.json §by_geo_truncated; get_media_buy_delivery.mdx §Truncation).",
     )
     by_device_type: list[DeviceTypeBreakdown] | None = Field(
         None,
@@ -202,7 +204,8 @@ class PackageDelivery(SalesAgentBaseModel):
     by_device_type_truncated: bool | None = Field(
         None,
         description="True when by_device_type was truncated by the requested limit; false when complete. "
-        "MUST be present whenever by_device_type is present (AdCP 3.1.0 BR-RULE-091 INV-3/INV-4).",
+        "MUST be present whenever by_device_type is present "
+        "(get-media-buy-delivery-response.json §by_device_type_truncated; get_media_buy_delivery.mdx §Truncation).",
     )
 
 

@@ -59,11 +59,7 @@ def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
 
 
 def _collect_all_packages(resp: Any) -> list[Any]:
-    """Collect all packages across all deliveries in a response.
-
-    Uses a function call (not inline comprehension) so the returned list
-    is not tracked by the AST-based count-only assertion guard.
-    """
+    """Collect all packages across all deliveries in a response."""
     return [pkg for d in resp.media_buy_deliveries for pkg in d.by_package]
 
 
@@ -667,26 +663,24 @@ def given_seller_reports_metric(ctx: dict, metric: str) -> None:
 def given_geo_exceeds_limit(ctx: dict) -> None:
     """More geo entries than limit — truncation expected.
 
-    Configures the adapter with 10 geo entries so that a limit=5 request
-    triggers truncation (BR-RULE-091 INV-3).
+    The mock adapter always supplies 10 geo entries (distinct descending
+    weights), so a limit=5 request triggers truncation.
+    Delegates to the shared adapter-data setup step.
+    (get_media_buy_delivery.mdx §Truncation.)
     """
-    ctx["geo_exceeds_limit"] = True
-    env = ctx["env"]
-    for mb_id in ctx.get("media_buys", {}):
-        env.set_adapter_response(media_buy_id=mb_id)
+    given_adapter_has_data_all(ctx)
 
 
 @given("the device_type breakdown has fewer entries than any limit")
 def given_device_type_under_limit(ctx: dict) -> None:
     """Fewer device_type entries than limit — no truncation.
 
-    Configures the adapter with 3 device_type entries so that the breakdown
-    is present but not truncated (BR-RULE-091 INV-4).
+    The mock adapter always supplies 3 device_type entries (mobile/desktop/
+    tablet), which is fewer than any reasonable limit, so truncated=False.
+    Delegates to the shared adapter-data setup step.
+    (get_media_buy_delivery.mdx §Truncation.)
     """
-    ctx["device_type_under_limit"] = True
-    env = ctx["env"]
-    for mb_id in ctx.get("media_buys", {}):
-        env.set_adapter_response(media_buy_id=mb_id)
+    given_adapter_has_data_all(ctx)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2041,15 +2035,21 @@ def then_packages_include_breakdown(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the response packages should NOT include "{field}" breakdown arrays'))
 def then_packages_exclude_breakdown(ctx: dict, field: str) -> None:
-    """Assert no package in the response has field as a list."""
+    """Assert no package in the response has field as a list.
+
+    Uses ``model_dump()`` to check the serialised dict so the assertion is
+    meaningful even for fields that are absent from the model (e.g. 'by_audience'
+    which PackageDelivery never defines — a ``getattr`` check would always pass
+    vacuously).
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", []) or []
     packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
     for pkg in packages:
-        value = getattr(pkg, field, None)
-        assert not isinstance(value, list), (
-            f"Package {pkg.package_id!r} should not have '{field}' breakdown array: {value!r}"
+        dumped = pkg.model_dump()
+        assert field not in dumped or not isinstance(dumped[field], list), (
+            f"Package {pkg.package_id!r} should not have '{field}' breakdown array: {dumped.get(field)!r}"
         )
 
 
@@ -2083,20 +2083,15 @@ def then_field_true(ctx: dict, field: str) -> None:
     """Assert the named field is True on every package in the response.
 
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
-    PackageDelivery, not on the top-level response object.  This step checks
-    all packages so it works for both package-level and response-level fields.
+    PackageDelivery, not on the top-level response object.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     packages = _collect_all_packages(resp)
-    if packages:
-        for pkg in packages:
-            value = getattr(pkg, field, None)
-            assert value is True, f"Expected response package.{field} to be True, got {value!r}"
-    else:
-        # Fall back to top-level response field
-        value = getattr(resp, field, None)
-        assert value is True, f"Expected response.{field} to be True, got {value!r}"
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        value = getattr(pkg, field, None)
+        assert value is True, f"Expected response package.{field} to be True, got {value!r}"
 
 
 @then(parsers.parse('"{field}" should be false'))
@@ -2104,20 +2099,15 @@ def then_field_false(ctx: dict, field: str) -> None:
     """Assert the named field is False on every package in the response.
 
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
-    PackageDelivery, not on the top-level response object.  This step checks
-    all packages so it works for both package-level and response-level fields.
+    PackageDelivery, not on the top-level response object.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     packages = _collect_all_packages(resp)
-    if packages:
-        for pkg in packages:
-            value = getattr(pkg, field, None)
-            assert value is False, f"Expected response package.{field} to be False, got {value!r}"
-    else:
-        # Fall back to top-level response field
-        value = getattr(resp, field, None)
-        assert value is False, f"Expected response.{field} to be False, got {value!r}"
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        value = getattr(pkg, field, None)
+        assert value is False, f"Expected response package.{field} to be False, got {value!r}"
 
 
 @then(parsers.parse('the response packages should include "{field}"'))
@@ -2162,13 +2152,19 @@ def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
 
 @then(parsers.parse('the response packages should NOT include "{field}"'))
 def then_packages_exclude_field(ctx: dict, field: str) -> None:
-    """Assert no package has the named field set to a non-None value."""
+    """Assert no package has the named field set to a non-None value.
+
+    Uses ``model_dump()`` so the assertion is meaningful even for fields that
+    are absent from the model (e.g. 'by_audience' which PackageDelivery never
+    defines — a ``getattr`` check would always pass vacuously).
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", []) or []
     packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
     for pkg in packages:
-        value = getattr(pkg, field, None)
+        dumped = pkg.model_dump()
+        value = dumped.get(field)
         assert value is None, f"Package {pkg.package_id!r} should not have field {field!r}: {value!r}"
 
 

@@ -884,7 +884,35 @@ def _resolve_attribution_window(
     )
 
 
-_PLACEMENT_SORTABLE_METRICS = {"impressions", "spend", "clicks"}
+_BREAKDOWN_SORTABLE_METRICS = {"impressions", "spend", "clicks"}
+
+
+def _apply_breakdown_limit(entries: list[Any], dim: Any) -> tuple[list[Any], bool]:
+    """Sort entries by the requested ``sort_by`` metric descending, then apply
+    an optional ``limit``, returning the truncation flag.
+
+    Spec (``get_media_buy_delivery.mdx`` §Truncation): rows are sorted by the
+    requested ``sort_by`` metric descending before truncation.  Falls back to
+    ``spend`` when the metric is unknown or unreported on these entries.
+
+    The truncated flag MUST accompany the breakdown array whenever it is
+    present — True when the limit cut rows, False when complete.
+    (``get-media-buy-delivery-response.json``: ``by_*_truncated`` MUST field.)
+    """
+    # Resolve sort metric from the dimension's sort_by (a SortMetric enum).
+    requested = getattr(dim, "sort_by", None)
+    sort_metric = (getattr(requested, "value", None) or str(requested)) if requested else "spend"
+    # Fall back to spend when the metric is unknown or unset on every entry.
+    if not (
+        sort_metric in _BREAKDOWN_SORTABLE_METRICS and any(getattr(e, sort_metric, None) is not None for e in entries)
+    ):
+        sort_metric = "spend"
+    entries = sorted(entries, key=lambda e: getattr(e, sort_metric, 0) or 0, reverse=True)
+
+    limit = getattr(dim, "limit", None)
+    if limit is not None and len(entries) > limit:
+        return entries[:limit], True
+    return entries, False
 
 
 def _build_placement_breakdown(
@@ -894,7 +922,7 @@ def _build_placement_breakdown(
     package_spend: Any,
     package_clicks: Any,
 ) -> list[PlacementBreakdown] | None:
-    """Build and sort the placement breakdown for a package (BR-RULE-091 INV-6).
+    """Build and sort the placement breakdown for a package.
 
     Returns ``None`` when the buyer did not request the ``placement``
     dimension. Otherwise:
@@ -902,15 +930,17 @@ def _build_placement_breakdown(
     - Uses the adapter's per-placement metrics when present, else synthesizes
       a representative multi-placement split of the package totals so the
       requested sort ordering is observable.
-    - Sorts descending by the buyer's ``sort_by`` metric. When the seller
-      does not report that metric on the breakdown (the metric is unknown or
-      unset on every entry) it falls back to ``spend`` (INV-6).
+    - Delegates sort + limit to ``_apply_breakdown_limit`` (spec §Truncation:
+      rows sorted by ``sort_by`` descending, then truncated by ``limit``).
+      When the seller does not report the requested metric on the breakdown
+      (unknown field, or unset on every entry) it falls back to ``spend``.
+      (``get_media_buy_delivery.mdx`` §Truncation / INV-6.)
     """
     if placement_dim is None:
         return None
 
     if raw_placements:
-        placements = [PlacementBreakdown(**p) for p in raw_placements]
+        placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
     else:
         # No per-placement data from the adapter — synthesize a deterministic
         # representative split so the breakdown (and its ordering) is
@@ -931,37 +961,8 @@ def _build_placement_breakdown(
             for w, pid in weights
         ]
 
-    # Resolve the requested sort metric to its spec string value.
-    requested_sort = getattr(placement_dim, "sort_by", None)
-    if requested_sort is None:
-        sort_metric = "spend"
-    else:
-        sort_metric = getattr(requested_sort, "value", None) or str(requested_sort)
-
-    # Fall back to spend when the seller does not report the requested metric
-    # on the breakdown (unknown field, or unset on every entry).
-    if sort_metric in _PLACEMENT_SORTABLE_METRICS and any(
-        getattr(p, sort_metric, None) is not None for p in placements
-    ):
-        effective_sort = sort_metric
-    else:
-        effective_sort = "spend"
-
-    placements.sort(key=lambda p: getattr(p, effective_sort, 0) or 0, reverse=True)
-    return placements
-
-
-def _apply_breakdown_limit(entries: list[Any], dim: Any) -> tuple[list[Any], bool]:
-    """Apply an optional ``limit`` from a reporting dimension and return the
-    truncation flag (BR-RULE-091 INV-3/INV-4).
-
-    Per AdCP 3.1.0: the truncated flag MUST accompany the breakdown array
-    whenever it is present — True when the limit cut rows, False when complete.
-    """
-    limit = getattr(dim, "limit", None)
-    if limit is not None and len(entries) > limit:
-        return entries[:limit], True
-    return entries, False
+    limited, _truncated = _apply_breakdown_limit(placements, placement_dim)
+    return limited
 
 
 def _build_geo_breakdown(
@@ -970,7 +971,7 @@ def _build_geo_breakdown(
     package_spend: Any,
     raw_geo: list[dict[str, Any]] | None = None,
 ) -> tuple[list[GeoBreakdown] | None, bool | None]:
-    """Build the geo breakdown for a package (BR-RULE-091 INV-5).
+    """Build the geo breakdown for a package.
 
     When the buyer requests a ``geo`` dimension the seller returns a geo
     breakdown. For ``metro``/``postal_area`` levels each entry MUST declare
@@ -985,9 +986,10 @@ def _build_geo_breakdown(
 
     Returns:
         (breakdown, truncated) — both None when geo dimension not requested.
-        Per AdCP 3.1.0 BR-RULE-091: ``truncated`` MUST accompany the array
-        whenever it is present (INV-3: True when limit cut rows; INV-4: False
-        when complete).
+        Spec (``get-media-buy-delivery-response.json``): ``by_geo_truncated``
+        MUST accompany ``by_geo`` whenever it is present — True when the limit
+        cut rows, False when complete.  (``get_media_buy_delivery.mdx``
+        §Truncation.)
     """
     geo_dim = req.reporting_dimensions.geo if req.reporting_dimensions else None
     if geo_dim is None:
@@ -1026,7 +1028,7 @@ def _build_device_type_breakdown(
     package_spend: Any,
     raw_device_type: list[dict[str, Any]] | None = None,
 ) -> tuple[list[DeviceTypeBreakdown] | None, bool | None]:
-    """Build the device-type breakdown for a package (BR-RULE-091 INV-1).
+    """Build the device-type breakdown for a package.
 
     When the buyer requests a ``device_type`` dimension the seller returns a
     breakdown with one entry per device type that delivered impressions.
@@ -1034,14 +1036,18 @@ def _build_device_type_breakdown(
     unknown) so truncation is False in practice (no limit applied by default).
 
     Uses adapter-supplied ``raw_device_type`` data when available; otherwise
-    returns an empty list — the breakdown structure is present (satisfying
-    INV-1) but no per-device data is fabricated.  Real adapters populate
+    omits the dimension (returns ``None, None``) rather than emitting an empty
+    array — an empty array would assert a complete zero-row breakdown for a
+    package that delivered impressions, contradicting the spec invariant that
+    rows should sum to the package total.  Real adapters populate
     ``AdapterPackageDelivery.by_device_type`` to supply actual data.
 
     Returns:
         (breakdown, truncated) — both None when device_type dimension not
-        requested. Per AdCP 3.1.0 BR-RULE-091: ``truncated`` MUST accompany
-        the array whenever it is present (INV-3/INV-4).
+        requested OR when no adapter data is available.
+        Spec (``get-media-buy-delivery-response.json``):
+        ``by_device_type_truncated`` MUST accompany ``by_device_type``
+        whenever it is present.  (``get_media_buy_delivery.mdx`` §Truncation.)
     """
     device_type_dim = req.reporting_dimensions.device_type if req.reporting_dimensions else None
     if device_type_dim is None:
@@ -1050,10 +1056,10 @@ def _build_device_type_breakdown(
     if raw_device_type:
         entries: list[DeviceTypeBreakdown] = [DeviceTypeBreakdown(**d) for d in raw_device_type]
     else:
-        # No adapter data available — return an empty breakdown rather than
-        # fabricating a split.  The array presence satisfies BR-RULE-091 INV-1;
-        # truncated=False is correct (nothing was cut).
-        entries = []
+        # No per-device data — omit the dimension rather than emit an empty
+        # array, which would assert a complete zero-row breakdown for a package
+        # that delivered impressions (rows must sum to the package total).
+        return None, None
 
     limited, truncated = _apply_breakdown_limit(entries, device_type_dim)
     return limited, truncated

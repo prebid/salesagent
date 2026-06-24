@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.adapters.mock_ad_server import simulate_breakdowns
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -115,24 +116,7 @@ class DeliveryPollMixin:
             total_spend = float(sum(p.get("spend", 0.0) for p in packages))
             totals = DeliveryTotals(impressions=total_impressions, spend=total_spend)
         else:
-            imp = float(impressions)
-            spd = float(spend)
-            simulated_device_type = [
-                {"device_type": "mobile", "impressions": imp * 0.50, "spend": spd * 0.50},
-                {"device_type": "desktop", "impressions": imp * 0.35, "spend": spd * 0.35},
-                {"device_type": "tablet", "impressions": imp * 0.15, "spend": spd * 0.15},
-            ]
-            _geo_codes = ["US", "GB", "DE", "FR", "CA", "AU", "JP", "BR", "IN", "MX"]
-            _geo_weights = [0.30, 0.15, 0.12, 0.10, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03]
-            simulated_geo = [
-                {
-                    "geo_code": geo_code,
-                    "geo_level": "country",
-                    "impressions": imp * weight,
-                    "spend": spd * weight,
-                }
-                for geo_code, weight in zip(_geo_codes, _geo_weights, strict=False)
-            ]
+            simulated_geo, simulated_device_type = simulate_breakdowns(float(impressions), float(spend))
             by_package = [
                 AdapterPackageDelivery(
                     package_id=package_id,
