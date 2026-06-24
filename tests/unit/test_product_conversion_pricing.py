@@ -336,6 +336,16 @@ class TestCpaConversion:
         with pytest.raises(ValueError, match="unknown event_type"):
             convert_pricing_option_to_adcp(po)
 
+    def test_cpa_non_custom_event_type_omits_custom_event_name(self):
+        """CPA with non-custom event_type does not emit custom_event_name (spec: ignored otherwise)."""
+        params = {"event_type": "purchase"}
+        po = _make_pricing_option("cpa", is_fixed=True, rate=10.00, parameters=params)
+        result = convert_pricing_option_to_adcp(po)
+
+        assert isinstance(result, CpaPricingOption)
+        assert result.event_type == EventType.purchase
+        assert result.custom_event_name is None
+
     def test_cpa_custom_event_type_with_name(self):
         """CPA with event_type='custom' and custom_event_name succeeds."""
         params = {"event_type": "custom", "custom_event_name": "newsletter_signup"}
@@ -487,6 +497,13 @@ class TestTimeBasedConversion:
         params = {"time_unit": "day"}
         po = _make_pricing_option("time", is_fixed=True, parameters=params)
         with pytest.raises(ValueError, match="requires rate"):
+            convert_pricing_option_to_adcp(po)
+
+    def test_time_max_duration_less_than_min_duration_raises(self):
+        """Time-based pricing with max_duration < min_duration raises ValueError (spec MUST)."""
+        params = {"time_unit": "day", "min_duration": 30, "max_duration": 3}
+        po = _make_pricing_option("time", is_fixed=True, rate=500.00, parameters=params)
+        with pytest.raises(ValueError, match="max_duration.*<.*min_duration"):
             convert_pricing_option_to_adcp(po)
 
     def test_time_non_usd_currency(self):
