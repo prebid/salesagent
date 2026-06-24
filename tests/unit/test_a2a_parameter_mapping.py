@@ -11,9 +11,9 @@ before they reach production.
 """
 
 from unittest.mock import ANY, patch
-from adcp.types import AccountReference as LibraryAccountReference
 
 import pytest
+from adcp.types import AccountReference as LibraryAccountReference
 
 from tests.factories.principal import PrincipalFactory
 
@@ -229,10 +229,7 @@ class TestA2AParameterMapping:
 
         handler = AdCPRequestHandler()
 
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
-            patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery,
-        ):
+        with patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery:
             mock_delivery.return_value = {"media_buys": []}
 
             parameters = {"account": {"account_id": "acct-1"}}
@@ -255,7 +252,43 @@ class TestA2AParameterMapping:
                 context=ANY,
                 identity=ANY,
             )
-            
+
+    def test_get_media_buy_delivery_forwards_natural_key_account_reference(self):
+        """A2A get_media_buy_delivery forwards the validated {brand, operator} account form.
+
+        Complements the {account_id} case above by pinning the natural-key
+        AccountReference variant — the form the delivery conformance storyboard
+        sends — whose nested brand exercises its own coercion path.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+
+        with patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery:
+            mock_delivery.return_value = {"media_buys": []}
+
+            account = {"brand": {"domain": "acmeoutdoor.example"}, "operator": "pinnacle-agency.example"}
+            parameters = {"account": account}
+
+            import asyncio
+
+            asyncio.run(handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY))
+
+            expected = LibraryAccountReference.model_validate(account)
+
+            mock_delivery.assert_called_once_with(
+                media_buy_ids=ANY,
+                status_filter=ANY,
+                start_date=ANY,
+                end_date=ANY,
+                reporting_dimensions=ANY,
+                attribution_window=ANY,
+                include_package_daily_breakdown=ANY,
+                account=expected,
+                context=ANY,
+                identity=ANY,
+            )
+
     def test_get_media_buy_delivery_rejects_malformed_account(self):
         """Malformed account should fail validation and not call the core tool."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
@@ -263,10 +296,7 @@ class TestA2AParameterMapping:
 
         handler = AdCPRequestHandler()
 
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY),
-            patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery,
-        ):
+        with patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery:
             parameters = {"account": {}}
 
             import asyncio
