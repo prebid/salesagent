@@ -1011,13 +1011,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
             # T-UC-004-dim-sortby-valid: resolved — sort_by now works in _impl
             # Graduated: T-UC-004-dim-sortby-fallback (impl, mcp, rest pass — only a2a still fails)
-            # FIXME(#1376): _impl only supports by_placement, not by_device_type/by_geo/truncation
-            "T-UC-004-dim-supported": ("by_device_type breakdown not implemented in _impl (only by_placement)", True),
-            "T-UC-004-dim-truncated": ("truncation flags (by_*_truncated) not implemented in _impl", True),
-            "T-UC-004-dim-complete": ("by_device_type_truncated flag not implemented in _impl", True),
+            # T-UC-004-dim-supported: resolved — by_device_type now populated by _impl (#1376)
+            # T-UC-004-dim-truncated: resolved — truncation flags (by_*_truncated) now implemented (#1376)
+            # T-UC-004-dim-complete: resolved — by_device_type_truncated flag now implemented (#1376)
             # T-UC-004-dim-geo-system: resolved — by_geo now populated by _impl
             # T-UC-004-dim-geo-postal: resolved — by_geo now populated by _impl
-            "T-UC-004-dim-multi": ("by_device_type breakdown not implemented on PackageDelivery (by_geo works)", True),
+            # T-UC-004-dim-multi: resolved — by_device_type now on PackageDelivery (#1376)
             # Partial-success Error model lacks suggestion field and rich messages
             "T-UC-004-ext-a": ("partial-success Error needs suggestion field + authentication in message", True),
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
