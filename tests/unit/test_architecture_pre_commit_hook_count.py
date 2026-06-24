@@ -39,3 +39,19 @@ def test_commit_hook_counter_detects_over_ceiling() -> None:
         "repos": [{"hooks": [{"stages": ["commit"]}] * (COMMIT_STAGE_MAX + 1)}],
     }
     assert _count_commit_stage_hooks(over_cfg) == COMMIT_STAGE_MAX + 1
+
+
+@pytest.mark.arch_guard
+def test_commit_hook_counter_counts_hooks_without_explicit_stages() -> None:
+    cfg = {"repos": [{"hooks": [{"id": "ruff"}, {"id": "mypy"}]}]}
+    assert _count_commit_stage_hooks(cfg) == 2
+
+
+@pytest.mark.arch_guard
+def test_commit_hook_counter_detects_under_ceiling() -> None:
+    under_cfg = {
+        "default_stages": ["pre-commit", "commit"],
+        "repos": [{"hooks": [{"stages": ["commit"]}] * (COMMIT_STAGE_MIN - 1)}],
+    }
+    count = _count_commit_stage_hooks(under_cfg)
+    assert count == COMMIT_STAGE_MIN - 1
