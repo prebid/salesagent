@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPPackageNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPPackageNotFoundError
 from src.core.schemas import SyncCreativeResult
 
 logger = logging.getLogger(__name__)
@@ -166,7 +166,18 @@ def _process_assignments(
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
                                 if validation_mode == "strict":
-                                    raise AdCPValidationError(error_msg)
+                                    # Converge with the update path (media_buy_update.py:233):
+                                    # creative-format-incompatible-with-product is CREATIVE_REJECTED,
+                                    # the canonical code for a rejected creative (salesagent-8j5r).
+                                    raise AdCPCreativeRejectedError(
+                                        error_msg,
+                                        suggestion=(
+                                            "Assign a creative whose format matches one of the product's "
+                                            f"supported formats ({supported_formats_display}), or call "
+                                            "list_creative_formats to discover supported formats."
+                                        ),
+                                        details={"supported_formats": supported_formats_display},
+                                    )
                                 else:
                                     logger.warning(f"Creative format mismatch during assignment, skipping: {error_msg}")
                                     continue

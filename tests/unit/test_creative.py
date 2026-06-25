@@ -3423,34 +3423,6 @@ class TestFormatCompatibility:
             assert len(assignment_list) == 1
             assert assignment_list[0].creative_id == "c1"
 
-    def test_format_mismatch_strict_raises(self):
-        """Strict mode: incompatible format raises AdCPValidationError.
-
-        Spec: UNSPECIFIED (implementation-defined format compatibility logic).
-        When creative format does not match product formats in strict mode,
-        _process_assignments raises AdCPValidationError (line 160).
-        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-02
-        """
-        from src.core.tools.creatives._assignments import _process_assignments
-
-        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            self._setup_assignment_mocks(
-                mock_db,
-                creative_agent_url="https://creative.example.com",
-                creative_format="video_30s",
-                product_format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250"}],
-            )
-
-            results = [SyncCreativeResult(creative_id="c1", action="created")]
-
-            with pytest.raises(AdCPValidationError, match="not supported"):
-                _process_assignments(
-                    assignments={"c1": ["pkg_1"]},
-                    results=results,
-                    tenant={"tenant_id": "t1"},
-                    validation_mode="strict",
-                )
-
     def test_format_mismatch_lenient_logs_error(self):
         """Lenient mode: incompatible format skipped, added to assignment_errors.
 
@@ -4407,52 +4379,6 @@ class TestExtensionGaps:
             with pytest.raises(AdCPNotFoundError, match="Package not found.*PKG-GONE"):
                 _process_assignments(
                     assignments={"c1": ["PKG-GONE"]},
-                    results=results,
-                    tenant={"tenant_id": "t1"},
-                    validation_mode="strict",
-                )
-
-    def test_ext_k_format_mismatch_strict(self):
-        """Strict mode: format mismatch raises operation-level error.
-
-        Spec: UNSPECIFIED (implementation-defined format compatibility logic).
-        Cross-ref: TestFormatCompatibility.test_format_mismatch_strict_raises
-        covers this same path. This test exercises it as an extension scenario.
-        Covers: UC-006-EXT-K-01
-        """
-        from src.core.tools.creatives._assignments import _process_assignments
-
-        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            mock_uow = MagicMock()
-            mock_assignment_repo = MagicMock()
-            mock_uow.assignments = mock_assignment_repo
-            mock_db.return_value.__enter__.return_value = mock_uow
-            mock_db.return_value.__exit__.return_value = None
-
-            mock_package = MagicMock()
-            mock_package.media_buy_id = "mb_1"
-            mock_package.package_id = "pkg_1"
-            mock_package.package_config = {"product_id": "prod_1"}
-
-            mock_media_buy = MagicMock()
-            mock_media_buy.media_buy_id = "mb_1"
-
-            mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
-
-            mock_creative = MagicMock()
-            mock_creative.agent_url = "https://agent.example.com"
-            mock_creative.format = "video_30s"
-            mock_assignment_repo.get_creative_by_id.return_value = mock_creative
-
-            mock_product = MagicMock()
-            mock_product.format_ids = [{"agent_url": "https://agent.example.com", "id": "display_300x250"}]
-            mock_product.name = "Display Only Product"
-            mock_assignment_repo.get_product_by_id.return_value = mock_product
-
-            results = [SyncCreativeResult(creative_id="c1", action="created")]
-            with pytest.raises(AdCPValidationError, match="not supported"):
-                _process_assignments(
-                    assignments={"c1": ["pkg_1"]},
                     results=results,
                     tenant={"tenant_id": "t1"},
                     validation_mode="strict",

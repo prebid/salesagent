@@ -1011,17 +1011,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             # Invariant scenarios: production behaviour diverges from spec
             "T-UC-006-rule-039-inv2": (
-                "SPEC-PRODUCTION GAP: AdCPValidationError has no details dict — "
-                "cannot contain 'suggestion' field (spec requires suggestion for "
-                "format mismatch per BR-RULE-039 INV-2)"
+                "OVER-SPECIFIED OBLIGATION (#1417): scenario asserts the non-canonical "
+                "FORMAT_MISMATCH. Production now emits CREATIVE_REJECTED WITH a suggestion + "
+                "details (#1417), so the suggestion gap is closed; the code "
+                "assertion awaits upstream reconciliation (FORMAT_MISMATCH -> CREATIVE_REJECTED)."
             ),
-            # FIXME(#TBD): ext-k: format mismatch raises VALIDATION_ERROR, spec expects FORMAT_MISMATCH
-            # _assignments.py:146 raises AdCPValidationError(error_msg) which has
-            # error_code='VALIDATION_ERROR'. Spec expects 'FORMAT_MISMATCH' with suggestion.
+            # FIXME(#1417): ext-k asserts FORMAT_MISMATCH, which is NOT in the pinned
+            # error-code enum (non-canonical). Production now emits CREATIVE_REJECTED
+            # (_assignments.py), converged with the update path for the identical
+            # condition. Reconcile upstream (adcp-req: FORMAT_MISMATCH -> CREATIVE_REJECTED),
+            # then remove this xfail.
             "T-UC-006-ext-k": (
-                "SPEC-PRODUCTION GAP: format mismatch raises AdCPValidationError "
-                "(VALIDATION_ERROR) — spec expects FORMAT_MISMATCH with suggestion "
-                "and list_creative_formats hint (BR-RULE-039)"
+                "OVER-SPECIFIED OBLIGATION (#1417): scenario asserts the non-canonical "
+                "FORMAT_MISMATCH (absent from the pinned error-code enum). Production emits "
+                "the canonical CREATIVE_REJECTED, converged with the update path. Awaiting "
+                "upstream reconciliation of the generated feature."
             ),
             # FIXME(#TBD): inv5-lenient: lenient mode format mismatch doesn't populate assigned_to
             # In lenient mode, the compatible package assignment should be created
