@@ -43,6 +43,7 @@ from src.core.exceptions import (
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPGoneError,
+    AdCPInvalidRequestError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -441,7 +442,14 @@ def _update_media_buy_impl(
                     overlay_violations.extend(validate_overlay_targeting(pkg_update.targeting_overlay))
                     overlay_violations.extend(validate_geo_overlap(pkg_update.targeting_overlay))
                 if overlay_violations:
-                    raise AdCPValidationError(f"Targeting validation failed: {'; '.join(overlay_violations)}")
+                    # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
+                    # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
+                    # converges with the create path (salesagent-da07).
+                    raise AdCPInvalidRequestError(
+                        f"Targeting validation failed: {'; '.join(overlay_violations)}",
+                        suggestion="Check targeting constraints.",
+                        field="targeting_overlay",
+                    )
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:

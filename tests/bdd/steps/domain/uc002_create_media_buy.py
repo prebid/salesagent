@@ -742,7 +742,12 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     - Error outcomes: AdCPError with matching code and recovery
     - Unknown: raises ValueError so unmapped rows are caught immediately
     """
-    if outcome.startswith("account resolution succeeds"):
+    if outcome == "success":
+        # Bare success outcome (e.g. UC-003 targeting-overlay "Valid partitions"):
+        # the operation proceeded without error and produced a response.
+        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+        assert ctx.get("response") is not None, "Expected a response for success outcome but ctx['response'] is None"
+    elif outcome.startswith("account resolution succeeds"):
         _assert_account_resolution_succeeds(ctx)
     elif outcome.startswith("error"):
         _assert_error_outcome(ctx, outcome)
@@ -1187,9 +1192,11 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
         return
 
-    # Check if first word is a structured error code (UPPER_CASE with _)
+    # Check if first word is a structured error code (UPPER_CASE with _).
+    # Strip surrounding quotes: the partition/boundary outlines write the code
+    # quoted (e.g. error "INVALID_REQUEST" with suggestion).
     parts = remainder.split()
-    first_word = parts[0] if parts else ""
+    first_word = parts[0].strip('"') if parts else ""
     is_structured = bool(first_word) and first_word == first_word.upper() and "_" in first_word
 
     if is_structured:

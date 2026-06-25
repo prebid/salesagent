@@ -333,6 +333,47 @@ _XFAIL_TAGS: dict[str, str] = {
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
+    # salesagent-da07 wiring surfaced pre-existing UC-003 targeting-overlay gaps
+    # (tracked separately). The geo include/exclude overlap partitions DO reach the
+    # converged update.py:444 raise and PASS (proving da07); these other partitions
+    # hit unrelated gaps: pydantic extra='forbid' on unknown/managed/device_platform
+    # fields raising a raw ValidationError before dispatch, GeoProximity requiring
+    # lat/lng (geometry/radius/travel_time-only modes + method-conflict unmodeled),
+    # frequency_cap field-combo validation, keyword-duplicate detection, and
+    # device_type include/exclude overlap validation.
+    (
+        "T-UC-003-partition-targeting-overlay",
+        {
+            "unknown_field",
+            "managed_only_dimension",
+            "multiple_dimensions",
+            "device_type_overlap",
+            "proximity_method_conflict",
+            "proximity_geometry",
+            "proximity_radius",
+            "proximity_travel_time",
+            "frequency_cap_missing_fields",
+            "keyword_duplicate",
+        },
+        "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
+        "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
+    ),
+    (
+        "T-UC-003-boundary-targeting-overlay",
+        {
+            "unknown field name",
+            "managed-only dimension",
+            "device_type include/exclude overlap",
+            "with travel_time only",
+            "with radius only",
+            "with geometry only",
+            "with travel_time AND radius",
+            "frequency_cap max_impressions without per",
+            "keyword_targets with duplicate",
+        },
+        "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
+        "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
+    ),
     (
         "T-UC-005-partition-disclosure",
         {"duplicate_positions"},
@@ -3019,7 +3060,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-003":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if any(t.startswith("T-UC-003-ext-") for t in marker_names):
+        # The targeting-overlay partition/boundary outlines (salesagent-da07) need the
+        # same full update flow as ext- scenarios to reach the overlay-validation raise
+        # at media_buy_update.py:444; wire them through MediaBuyDualEnv too.
+        _UC003_TARGETING_OVERLAY = {
+            "T-UC-003-partition-targeting-overlay",
+            "T-UC-003-boundary-targeting-overlay",
+        }
+        if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
             # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module
