@@ -96,9 +96,14 @@ def _assert_sign_and_attest_job(job: dict[str, Any]) -> None:
     assert any('[[ -n "$DIGEST" ]]' in run for run in login_runs), (
         "sign-and-attest must guard empty image_digest before cosign sign"
     )
-    assert sum(u.startswith("actions/attest-build-provenance@") for u in step_uses) >= 2, (
-        "sign-and-attest must attest ghcr.io and Docker Hub images"
-    )
+    attest_steps = [step for step in steps if _step_uses(step).startswith("actions/attest-build-provenance@")]
+    assert len(attest_steps) >= 2, "sign-and-attest must attest ghcr.io and Docker Hub images"
+    ghcr_attest = [s for s in attest_steps if "ghcr.io/" in str(s.get("with", {}).get("subject-name", ""))]
+    dockerhub_attest = [
+        s for s in attest_steps if str(s.get("with", {}).get("subject-name", "")).startswith("docker.io/")
+    ]
+    assert ghcr_attest, "sign-and-attest must attest ghcr.io image with registry host"
+    assert dockerhub_attest, "sign-and-attest Docker Hub attest must use docker.io/ registry host in subject-name"
     assert any(u.startswith("actions/upload-artifact@") for u in step_uses), (
         "sign-and-attest must upload cosign bundles"
     )
@@ -125,6 +130,11 @@ def _assert_build_and_push_job(job: dict[str, Any]) -> None:
     assert len(gate_steps) >= 2, "build-and-push missing per-arch pre-push Trivy steps"
     for step in gate_steps:
         assert step.get("with", {}).get("exit-code") == 1, f"pre-push Trivy step {step.get('name')} must exit-code: 1"
+    arm64_gate = [step for step in gate_steps if "arm64" in (step.get("name") or "").lower()]
+    assert arm64_gate, "build-and-push missing arm64 pre-push Trivy gate"
+    assert arm64_gate[0].get("env", {}).get("TRIVY_PLATFORM") == "linux/arm64", (
+        "arm64 pre-push Trivy must set TRIVY_PLATFORM=linux/arm64"
+    )
     push_steps = [step for step in steps if _step_uses(step).startswith("docker/build-push-action@")]
     assert len(push_steps) >= 3, "build-and-push must gate amd64, gate arm64, then push multi-arch"
     assert push_steps[-1].get("with", {}).get("push") is True, "final build step must push to registry"
@@ -205,6 +215,33 @@ def test_harden_runner_guard_detects_docker_job_with_disable_sudo() -> None:
 
 
 @pytest.mark.arch_guard
+def test_sign_and_attest_guard_detects_bare_dockerhub_subject_name() -> None:
+    """Negative probe: Docker Hub attest without docker.io/ host must fail."""
+    job = {
+        "permissions": {
+            "id-token": "write",
+            "attestations": "write",
+            "packages": "write",
+            "security-events": "write",
+        },
+        "steps": [
+            {"uses": "sigstore/cosign-installer@abc"},
+            {"run": "cosign login ghcr.io\ncosign login docker.io"},
+            {"run": '[[ -n "$DIGEST" ]]\ncosign sign --yes image@sha256:abc'},
+            {"uses": "actions/attest-build-provenance@abc", "with": {"subject-name": "ghcr.io/org/repo"}},
+            {
+                "uses": "actions/attest-build-provenance@abc",
+                "with": {"subject-name": "${{ secrets.DOCKERHUB_USER }}/salesagent"},
+            },
+            {"uses": "actions/upload-artifact@abc"},
+            {"uses": "github/codeql-action/upload-sarif@abc"},
+        ],
+    }
+    with pytest.raises(AssertionError, match="docker.io/"):
+        _assert_sign_and_attest_job(job)
+
+
+@pytest.mark.arch_guard
 def test_sign_and_attest_guard_detects_missing_registry_login() -> None:
     """Negative probe: sign-and-attest without daemon-free cosign login must fail."""
     job = {
@@ -241,13 +278,30 @@ def test_dependency_review_configured() -> None:
 
 @pytest.mark.arch_guard
 def test_codeql_is_gating() -> None:
-    """CodeQL analyze job must block merges (no continue-on-error)."""
+    """CodeQL analyze job and steps must block merges (no continue-on-error)."""
     jobs = _load_workflow(repo_root() / ".github/workflows/codeql.yml").get("jobs", {})
     assert isinstance(jobs, dict)
     analyze_jobs = [job for name, job in jobs.items() if "analyze" in name.lower()]
     assert analyze_jobs, "codeql.yml must define an analyze job"
     for job in analyze_jobs:
-        assert job.get("continue-on-error") is not True, "CodeQL analyze must not continue-on-error"
+        assert job.get("continue-on-error") is not True, "CodeQL analyze job must not continue-on-error"
+        for step in _job_steps(job):
+            assert step.get("continue-on-error") is not True, (
+                f"CodeQL analyze step {_step_uses(step) or step.get('name')} must not continue-on-error"
+            )
+
+
+@pytest.mark.arch_guard
+def test_codeql_guard_detects_step_level_continue_on_error() -> None:
+    """Negative probe: step-level continue-on-error on analyze must fail the guard."""
+    job = {
+        "steps": [
+            {"uses": "github/codeql-action/analyze@abc", "continue-on-error": True},
+        ],
+    }
+    with pytest.raises(AssertionError, match="continue-on-error"):
+        for step in _job_steps(job):
+            assert step.get("continue-on-error") is not True
 
 
 @pytest.mark.arch_guard

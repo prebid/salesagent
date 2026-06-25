@@ -149,6 +149,8 @@ jobs:
             SOURCE_DATE_EPOCH=${{ steps.sde.outputs.value }}
       - name: Trivy gate (pre-push OS/CVE scan, arm64)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
         with:
           image-ref: salesagent:release-gate-arm64
           severity: CRITICAL,HIGH
@@ -240,7 +242,7 @@ jobs:
           push-to-registry: true
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-name: ${{ secrets.DOCKERHUB_USER }}/salesagent
+          subject-name: docker.io/${{ secrets.DOCKERHUB_USER }}/salesagent
           subject-digest: ${{ needs.build-and-push.outputs.image_digest }}
           push-to-registry: true
       - name: Scan image for OS-layer CVEs (SARIF report)
