@@ -10,12 +10,13 @@ CRITICAL: These tests catch protocol mismatches like 'updates' vs 'packages'
 before they reach production.
 """
 
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
 
 from tests.factories.principal import PrincipalFactory
+from tests.utils.a2a_helpers import assert_delivery_forwarded_account
 
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="principal_123",
@@ -240,18 +241,7 @@ class TestA2AParameterMapping:
 
             expected = LibraryAccountReference.model_validate({"account_id": "acct-1"})
 
-            mock_delivery.assert_called_once_with(
-                media_buy_ids=ANY,
-                status_filter=ANY,
-                start_date=ANY,
-                end_date=ANY,
-                reporting_dimensions=ANY,
-                attribution_window=ANY,
-                include_package_daily_breakdown=ANY,
-                account=expected,
-                context=ANY,
-                identity=ANY,
-            )
+            assert_delivery_forwarded_account(mock_delivery, expected)
 
     def test_get_media_buy_delivery_forwards_natural_key_account_reference(self):
         """A2A get_media_buy_delivery forwards the validated {brand, operator} account form.
@@ -276,18 +266,7 @@ class TestA2AParameterMapping:
 
             expected = LibraryAccountReference.model_validate(account)
 
-            mock_delivery.assert_called_once_with(
-                media_buy_ids=ANY,
-                status_filter=ANY,
-                start_date=ANY,
-                end_date=ANY,
-                reporting_dimensions=ANY,
-                attribution_window=ANY,
-                include_package_daily_breakdown=ANY,
-                account=expected,
-                context=ANY,
-                identity=ANY,
-            )
+            assert_delivery_forwarded_account(mock_delivery, expected)
 
     def test_get_media_buy_delivery_rejects_malformed_account(self):
         """Malformed account should fail validation and not call the core tool."""
