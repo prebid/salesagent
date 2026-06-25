@@ -41,7 +41,7 @@ Full field lists were extracted from `~/projects/adcp` via
 | BR-UC-002 create | Drop `\| buyer_ref \| … \|` request rows + "response includes buyer_ref" assertion; edit "track via media_buy_id and buyer_ref" → "via media_buy_id". |
 | BR-UC-003 update | Keep "response should NOT contain buyer_ref"; "without package_id or buyer_ref" → "without package_id"; drop `buyer_ref_only`/`both_provided` resolution partitions (keep `media_buy_id`). |
 | BR-UC-004 delivery | "media buy with buyer_ref" → identify by `media_buy_id`; drop `buyer_refs only`/`both provided` partitions; "without media_buy_ids or buyer_refs" → "without media_buy_ids". |
-| BR-UC-009 perf-index | Drop the `buyer_ref` resolution scenario + `buyer_ref_legacy` partitions (already `@abstract-rejection`); retire **BR-RULE-021** in `docs/requirements/business-rules/BR-RULE-021.md`. |
+| BR-UC-009 perf-index | Drop the `buyer_ref` resolution scenario + `buyer_ref_legacy` partitions (already `@abstract-rejection`); retire **BR-RULE-021** in `docs/test-obligations/business-rules.md`. |
 | BR-UC-019 query | "include buyer_ref and buyer_campaign_ref" → drop `buyer_ref`, keep `buyer_campaign_ref`. |
 | BR-UC-022 creative-delivery | `buyer_ref` / `media_buy_buyer_refs` → `media_buy_id` / `media_buy_ids`, or drop. |
 | BR-UC-026 package | Keep deprecation comment; drop `\| buyer_ref \| pkg-* \|` columns + "package should contain buyer_ref"; "neither package_id nor buyer_ref" → "without package_id" + suggestion `package_id`; required-fields suggestion `buyer_ref, product_id, budget, pricing_option_id` → `product_id, budget, pricing_option_id`. |
