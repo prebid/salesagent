@@ -57,6 +57,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc005_format_id_shape",
+    "tests.bdd.steps.domain.uc005_format_id_third_party",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
@@ -370,31 +371,13 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     ),
 ]
 
-# REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).
-# Only xfail scenarios that genuinely fail — many invariant "holds" scenarios
-# pass coincidentally because unfiltered results include the expected format.
-_REST_XFAIL_TAGS: set[str] = {
-    # Invariant filter scenarios where REST unfiltered results break assertions
-    # NOTE: inv-049-1-holds/violated moved to _XFAIL_TAGS (adcp 3.12 type filter removal affects all transports)
-    "T-UC-005-inv-049-2-holds",  # format_ids filter
-    "T-UC-005-inv-049-3-violated",  # asset_types filter
-    "T-UC-005-inv-049-4-violated",  # dimension filter
-    "T-UC-005-inv-049-4-edge",  # dimension filter (formats without dimensions)
-    "T-UC-005-inv-049-4-nodim",  # dimension filter (no dimensions)
-    "T-UC-005-inv-049-5-holds",  # responsive=true filter
-    "T-UC-005-inv-049-6-holds",  # responsive=false filter
-    "T-UC-005-inv-049-7-holds",  # name_search filter
-    "T-UC-005-inv-049-7-violated",
-    # Un-graduated: inv-049-9 and inv-049-10 (REST drops output_format_ids/input_format_ids again)
-    "T-UC-005-inv-049-9-holds",  # output_format_ids filter
-    "T-UC-005-inv-049-9-violated",
-    "T-UC-005-inv-049-9-nofield",
-    "T-UC-005-inv-049-10-holds",  # input_format_ids filter
-    "T-UC-005-inv-049-10-violated",
-    "T-UC-005-inv-049-10-nofield",
-    "T-UC-005-inv-031-1-holds",  # multi-filter AND combination
-    "T-UC-005-inv-031-1-violated",
-}
+# NOTE: the former _REST_XFAIL_TAGS set was retired once the stale
+# CreativeFormatsEnv.build_rest_body override (which returned {}) was removed.
+# In-process REST now serializes the request body and filters for real, so these
+# UC-005 filter scenarios pass on [rest] like every other transport. The only
+# UC-005 filter tags that still cannot hold are not REST-specific: inv-031-1-holds
+# / inv-031-1-violated stay xfailed via _XFAIL_TAGS because adcp 3.12 removed the
+# `type` filter for ALL transports (not a REST body issue).
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -410,26 +393,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
-        # uc005 list_creative_formats filters are NOT transmitted over e2e_rest:
-        # build_rest_body() returns {} (stale — ListCreativeFormatsBody declares
-        # the fields, but the harness drops them; tracked separately). So the live
-        # server never observes these filters/validations and the in-process
-        # strict markers cannot hold over e2e_rest. Mark strict=False (tolerate
-        # either outcome) until build_rest_body transmits the route-body fields.
-        # NOT retirements — type is still in the pin (04f59d2d5); disclosure
-        # uniqueItems is a separate production gap. (salesagent-7fye / -95kz)
+        # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
+        # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
+        # now serializes the request and the live server observes the filters). The
+        # remaining gaps are transport-independent production gaps that the in-process
+        # transports xfail strict=True: the `type` filter was removed from the SDK 5.7
+        # request model (adcp 3.12 — the pin 3.1.0-beta.3 still lists it, but the
+        # generated request cannot carry it), and disclosure_positions lacks the pin's
+        # uniqueItems validation. Against the live Docker server these scenarios pass
+        # vacuously (valid rows dispatch unfiltered) rather than failing deterministically,
+        # so strict=True would XPASS — weaken to strict=False to tolerate either outcome.
         uc005_filter_e2e_untestable = {
-            # type filter — also removed from the 5.7 SDK (pin retains it)
+            # type filter — removed from the SDK 5.7 request model (pin still lists it)
             "T-UC-005-inv-031-1-violated",
             "T-UC-005-partition-type-filter",
             "T-UC-005-boundary-type-filter",
-            # disclosure_positions duplicate — prod also lacks the pin's uniqueItems
+            # disclosure_positions duplicate — prod lacks the pin's uniqueItems validation
             "T-UC-005-partition-disclosure",
             "T-UC-005-boundary-disclosure",
         }
         uc005_filter_e2e_reason = (
-            "e2e_rest: uc005 filter not transmitted (build_rest_body returns {}); filter/validation "
-            "untestable over e2e_rest until the harness sends route-body fields"
+            "e2e_rest: type filter removed from SDK 5.7 request model / disclosure_positions "
+            "uniqueItems not validated in production — transport-independent gaps that pass "
+            "vacuously over the live server, so the strict in-process xfail cannot hold here"
         )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
@@ -480,12 +466,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # RESOLVED: MCP transport suggestion field now correctly unpacked by
         # _unwrap_mcp_tool_error (was double-nesting the extra JSON blob).
 
-        # Transport-specific xfails: REST drops all filter params
-        if is_rest:
-            for tag in _REST_XFAIL_TAGS:
-                if tag in marker_names:
-                    item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
-                    break
+        # RESOLVED: in-process REST no longer drops UC-005 filter params. The
+        # CreativeFormatsEnv.build_rest_body override that returned {} was removed,
+        # so [rest] serializes the request body and filters for real — the former
+        # _REST_XFAIL_TAGS block is gone (see note above the function).
 
         # E2E_REST: Docker always has the creative agent — can't test empty catalog
         if is_e2e_rest and "T-UC-005-empty-catalog" in marker_names:
@@ -659,13 +643,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
             # Skip selective xfails for these — the strict=False above covers them
         else:
-            # Graduated disclosure examples on impl — still fail on a2a/mcp/rest
-            if not is_impl and not is_e2e_rest:
+            # disclosure_positions is unimplemented in production (no filter narrows
+            # on it), but a2a/rest still return a well-formed, unnarrowed catalog that
+            # the "valid" partition/boundary check tolerates — so those pass. Only the
+            # MCP wrapper genuinely fails these: it does not accept the
+            # disclosure_positions keyword, so the request never produces a response.
+            if is_mcp:
                 if "T-UC-005-partition-disclosure" in marker_names:
                     if any(s in item.nodeid for s in ("all_positions", "no_matching_formats")):
                         item.add_marker(
                             pytest.mark.xfail(
-                                reason="disclosure_positions filter not implemented on non-impl transports",
+                                reason="MCP wrapper does not accept the disclosure_positions keyword",
                                 strict=True,
                             )
                         )
@@ -673,7 +661,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     if any(s in item.nodeid for s in ("all 8 positions", "format has no")):
                         item.add_marker(
                             pytest.mark.xfail(
-                                reason="disclosure_positions filter not implemented on non-impl transports",
+                                reason="MCP wrapper does not accept the disclosure_positions keyword",
                                 strict=True,
                             )
                         )
