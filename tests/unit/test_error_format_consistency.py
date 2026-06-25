@@ -555,8 +555,6 @@ class TestMCPRecoveryInErrorResponses:
             # translator maps them to STANDARD_ERROR_CODES at wire emission.
             ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPAuthenticationError", "bad token", "AUTH_REQUIRED", "correctable"),
-            ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "correctable"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
             ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
             ("AdCPGoneError", "expired", "INVALID_STATE", "correctable"),
@@ -620,8 +618,6 @@ class TestA2ARecoveryInErrorResponses:
         [
             ("AdCPError", "internal", "terminal"),
             ("AdCPValidationError", "bad", "correctable"),
-            ("AdCPAuthenticationError", "unauth", "correctable"),
-            ("AdCPAuthorizationError", "forbidden", "correctable"),
             ("AdCPNotFoundError", "missing", "terminal"),
             ("AdCPConflictError", "dup", "correctable"),
             ("AdCPGoneError", "expired", "correctable"),

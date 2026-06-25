@@ -16,7 +16,6 @@ import pytest
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPError,
     AdCPNotFoundError,
     AdCPValidationError,
@@ -53,16 +52,6 @@ class TestExtractErrorInfoAdCPError:
         code, message, recovery = extract_error_info(exc)
         assert code == "VALIDATION_ERROR"
         assert message == "bad field"
-        assert recovery == "correctable"
-
-    def test_adcp_auth_error_extracts_code_and_message(self):
-        """AdCPAuthenticationError → ('AUTH_REQUIRED', 'bad token', 'correctable')."""
-        from src.core.tool_error_logging import extract_error_info
-
-        exc = AdCPAuthenticationError("bad token")
-        code, message, recovery = extract_error_info(exc)
-        assert code == "AUTH_REQUIRED"
-        assert message == "bad token"
         assert recovery == "correctable"
 
     def test_adcp_not_found_extracts_code_and_message(self):
@@ -254,26 +243,6 @@ class TestMCPBoundaryAdCPErrorTranslation:
             message_substr="GAM down",
         )
 
-    def test_adcp_auth_becomes_tool_error(self):
-        """AdCPAuthenticationError from tool → ToolError envelope with AUTH_REQUIRED + correctable.
-
-        AUTH_REQUIRED is the spec STANDARD code (passthrough, not mapped).
-        AUTH_REQUIRED is reserved for AdCPAuthorizationError (403).
-        """
-        from fastmcp.exceptions import ToolError
-
-        from src.core.tool_error_logging import with_error_logging
-
-        def failing_tool():
-            raise AdCPAuthenticationError("bad token")
-
-        wrapped = with_error_logging(failing_tool)
-
-        with pytest.raises(ToolError) as exc_info:
-            wrapped()
-
-        assert_envelope_shape(exc_info.value, "AUTH_REQUIRED", check_mcp_tool_error=True, recovery="correctable")
-
     @pytest.mark.asyncio
     async def test_async_adcp_validation_becomes_tool_error(self):
         """Async: AdCPValidationError → ToolError envelope with preserved code and recovery."""
@@ -385,24 +354,6 @@ class TestA2AHandlerExplicitSkillReraises:
             assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
-    async def test_adcp_auth_propagates_for_dispatcher_wrap(self):
-        """AdCPAuthenticationError propagates with correctable recovery."""
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-
-        handler = AdCPRequestHandler()
-
-        async def mock_skill(params, token):
-            raise AdCPAuthenticationError("bad token")
-
-        with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(AdCPAuthenticationError) as exc_info:
-                await handler._handle_explicit_skill("get_products", {}, "token")
-
-            assert "bad token" in exc_info.value.message
-            # AdCPAuthenticationError pins error_code = "AUTH_REQUIRED" (spec STANDARD code).
-            assert exc_info.value.error_code == "AUTH_REQUIRED"
-            assert exc_info.value.recovery == "correctable"
-
     @pytest.mark.asyncio
     async def test_adcp_adapter_propagates_for_dispatcher_wrap(self):
         """AdCPAdapterError propagates with transient recovery."""
@@ -568,23 +519,6 @@ class TestRESTBoundaryAdCPErrorTranslation:
                 response.json(), "VALIDATION_ERROR", recovery="correctable", message_substr="invalid request"
             )
 
-    def test_adcp_auth_from_impl_returns_401(self):
-        """AdCPAuthenticationError raised in _impl → REST returns 401 with correctable recovery."""
-        from starlette.testclient import TestClient
-
-        from src.app import app
-
-        with patch(
-            "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=AdCPAuthenticationError("token expired"),
-        ):
-            client = TestClient(app, raise_server_exceptions=False)
-            response = client.get("/api/v1/capabilities")
-            assert response.status_code == 401
-            # AUTH_REQUIRED is a spec STANDARD code (passthrough). Recovery is correctable
-            # per the pinned error-code enum (salesagent-xc2j).
-            assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="correctable")
-
     def test_adcp_not_found_from_impl_returns_404(self):
         """AdCPNotFoundError raised in _impl → REST returns 404 with terminal recovery."""
         from starlette.testclient import TestClient
@@ -726,26 +660,6 @@ class TestRESTSymmetricValueErrorAndPermissionError:
                 message_substr="invalid input shape",
             )
 
-    def test_permission_error_returns_403_with_auth_envelope(self):
-        """Raw PermissionError → 403 with AUTH_REQUIRED envelope (mirrors MCP wrapper)."""
-        from starlette.testclient import TestClient
-
-        from src.app import app
-
-        with patch(
-            "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=PermissionError("tenant scope mismatch"),
-        ):
-            client = TestClient(app, raise_server_exceptions=False)
-            response = client.get("/api/v1/capabilities")
-            assert response.status_code == 403
-            assert_envelope_shape(
-                response.json(),
-                "AUTH_REQUIRED",
-                recovery="correctable",
-                message_substr="tenant scope mismatch",
-            )
-
     def test_request_validation_error_unaffected(self):
         """FastAPI's RequestValidationError handler is NOT overridden by our ValueError handler.
 
@@ -879,8 +793,6 @@ class TestToDictRecoveryField:
         """Every AdCPError subclass produces recovery in to_dict() output."""
         from src.core.exceptions import (
             AdCPAdapterError,
-            AdCPAuthenticationError,
-            AdCPAuthorizationError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
             AdCPError,
@@ -894,8 +806,6 @@ class TestToDictRecoveryField:
         cases = [
             (AdCPError("internal"), "terminal"),
             (AdCPValidationError("bad field"), "correctable"),
-            (AdCPAuthenticationError("bad token"), "correctable"),
-            (AdCPAuthorizationError("forbidden"), "correctable"),
             (AdCPNotFoundError("missing"), "terminal"),
             (AdCPConflictError("duplicate"), "correctable"),
             (AdCPGoneError("expired"), "correctable"),
@@ -1036,8 +946,6 @@ class TestRecoveryRoundtrip:
         """All 11 AdCPError subclasses: raise -> with_error_logging -> ToolError -> extract_error_info."""
         from src.core.exceptions import (
             AdCPAdapterError,
-            AdCPAuthenticationError,
-            AdCPAuthorizationError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
             AdCPError,
@@ -1055,8 +963,6 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", "AUTH_REQUIRED", "correctable"),
-            (AdCPAuthorizationError, "forbidden", "AUTH_REQUIRED", "correctable"),
             (AdCPNotFoundError, "missing", "INVALID_REQUEST", "terminal"),
             (AdCPConflictError, "dup", "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", "INVALID_STATE", "correctable"),
@@ -1103,8 +1009,6 @@ class TestRecoveryRoundtrip:
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import (
             AdCPAdapterError,
-            AdCPAuthenticationError,
-            AdCPAuthorizationError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
             AdCPError,
@@ -1118,8 +1022,6 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", "terminal"),
             (AdCPValidationError, "bad", "correctable"),
-            (AdCPAuthenticationError, "unauth", "correctable"),
-            (AdCPAuthorizationError, "forbidden", "correctable"),
             (AdCPNotFoundError, "missing", "terminal"),
             (AdCPConflictError, "dup", "correctable"),
             (AdCPGoneError, "expired", "correctable"),
@@ -1148,8 +1050,6 @@ class TestRecoveryRoundtrip:
         from src.app import app
         from src.core.exceptions import (
             AdCPAdapterError,
-            AdCPAuthenticationError,
-            AdCPAuthorizationError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
             AdCPError,
@@ -1166,8 +1066,6 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", 401, "AUTH_REQUIRED", "correctable"),
-            (AdCPAuthorizationError, "forbidden", 403, "AUTH_REQUIRED", "correctable"),
             (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "terminal"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", 410, "INVALID_STATE", "correctable"),

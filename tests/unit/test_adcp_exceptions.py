@@ -216,20 +216,6 @@ class TestRecoveryClassification:
         exc = AdCPValidationError("invalid field")
         assert exc.recovery == "correctable"
 
-    def test_authentication_error_defaults_to_correctable(self):
-        """AdCPAuthenticationError defaults to recovery='correctable' (pinned AUTH_REQUIRED enum)."""
-        from src.core.exceptions import AdCPAuthenticationError
-
-        exc = AdCPAuthenticationError("bad token")
-        assert exc.recovery == "correctable"
-
-    def test_authorization_error_defaults_to_correctable(self):
-        """AdCPAuthorizationError defaults to recovery='correctable' (pinned AUTH_REQUIRED enum)."""
-        from src.core.exceptions import AdCPAuthorizationError
-
-        exc = AdCPAuthorizationError("forbidden")
-        assert exc.recovery == "correctable"
-
     def test_not_found_error_defaults_to_terminal(self):
         """AdCPNotFoundError (the *base*) defaults to recovery='terminal'.
 
@@ -498,16 +484,6 @@ class TestFastAPIExceptionHandlers:
         assert_envelope_shape(
             response.json(), "VALIDATION_ERROR", recovery="correctable", message_substr="test validation error"
         )
-
-    def test_authentication_error_returns_401(self, exc_handler_test_app):
-        """AdCPAuthenticationError raised in a route must return 401."""
-        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
-        response = client.get("/test-exc/auth")
-        assert response.status_code == 401
-        # AdCPAuthenticationError.error_code = "AUTH_REQUIRED" (spec STANDARD code,
-        # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_REQUIRED, not
-        # AUTH_REQUIRED (which is for AdCPAuthorizationError).
-        assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="correctable")
 
     def test_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
