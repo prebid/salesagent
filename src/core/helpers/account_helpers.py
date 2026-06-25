@@ -118,23 +118,29 @@ def _resolve_by_natural_key(
     if ref.brand.brand_id is not None:
         brand_id = str(ref.brand.brand_id.root)
 
-    # Single query: fetch up to 2 matches for ambiguity detection
+    # Single query: fetch up to 2 matches for ambiguity detection, scoped to the
+    # agent's accessible accounts (salesagent-ym1c) so detection — and the count
+    # disclosed below — never observe accounts outside this agent's access.
+    principal_id = identity.principal_id
     matches = repo.list_by_natural_key(
         operator=ref.operator,
         brand_domain=brand_domain,
         brand_id=brand_id,
         sandbox=ref.sandbox,
         limit=2,
+        principal_id=principal_id,
     )
     if len(matches) > 1:
         # Ambiguity is already established by the limit=2 fast path. Only now —
         # on the rare error path — pay for an exact COUNT so the buyer learns how
-        # many accounts collide (the happy path never runs this query).
+        # many accounts collide (the happy path never runs this query). Scoped to
+        # the same accessible set as detection.
         total = repo.count_by_natural_key(
             operator=ref.operator,
             brand_domain=brand_domain,
             brand_id=brand_id,
             sandbox=ref.sandbox,
+            principal_id=principal_id,
         )
         raise AdCPAccountAmbiguousError(
             f"Natural key matches {total} accounts for brand '{brand_domain}', operator '{ref.operator}'.",

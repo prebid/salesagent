@@ -188,6 +188,40 @@ def given_multiple_matches(ctx: dict, count: int) -> None:
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
+@given(parsers.parse("the natural key matches {total:d} accounts but the agent can access {accessible:d}"))
+def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> None:
+    """Create ``total`` active accounts matching the request natural key, granting the
+    requesting agent access to only ``accessible`` of them (the rest are accessible to a
+    different agent). Exercises access-scoped natural-key ambiguity (salesagent-ym1c):
+    the inaccessible matches must not drive ambiguity nor leak into the disclosed count.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    if "tenant" not in ctx:
+        tenant, principal = env.setup_default_data()
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+    else:
+        tenant = ctx["tenant"]
+        principal = ctx["principal"]
+
+    brand = ctx.get("request_brand", "multi-brand.com")
+    operator = ctx.get("request_operator", "agency.com")
+    other_principal = PrincipalFactory(tenant=tenant)
+
+    for i in range(total):
+        account = AccountFactory(
+            tenant=tenant,
+            account_id=f"acc-scope-{i}",
+            status="active",
+            brand={"domain": brand},
+            operator=operator,
+        )
+        owner = principal if i < accessible else other_principal
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=owner, account=account)
+
+
 @given(parsers.parse('the account "{account_id}" exists and is active'))
 def given_account_exists_active(ctx: dict, account_id: str) -> None:
     """Create an active account with agent access."""
