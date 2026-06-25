@@ -473,3 +473,77 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
         f"Expected minimum spend rejection (wire message containing 'minimum spend' "
         f"or code 'BUDGET_EXCEEDED'), got: code={error_code!r}, message={first_error.get('message')!r}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# nfr-highvalue: >$10k high-value Seller alert (salesagent-wvry)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the Seller observes high-value audit alerts")
+def given_observe_high_value_alerts(ctx: dict) -> None:
+    """Make the >$10k high-value audit alert observable at the Seller boundary.
+
+    The high-value alert fires inside the REAL AuditLogger (notify_audit_log),
+    which the create harness no-ops by default. This swaps in the real audit
+    logger so the budget gate actually runs, and spies its external Slack
+    boundary (the same Slack-boundary idiom as 'a Slack notification should be
+    sent to the Seller', which asserts notify_media_buy_event). The spy is
+    registered on the env's patcher list so it is torn down on env __exit__.
+
+    In-process only: e2e_rest dispatches create in the Docker process, out of
+    this spy's reach — the Then step branches on is_e2e.
+    """
+    from tests.bdd.steps._outcome_helpers import is_e2e
+
+    if is_e2e(ctx):
+        return
+
+    from unittest import mock
+
+    from src.core.audit_logger import get_audit_logger
+
+    env = ctx["env"]
+    # Real audit logger -> the high-value notification gate executes for real.
+    env.mock["audit"].side_effect = get_audit_logger
+    # Spy the audit logger's external Slack boundary; tie teardown to env lifecycle.
+    patcher = mock.patch("src.services.slack_notifier.get_slack_notifier")
+    notifier_factory = patcher.start()
+    env._patchers.append(patcher)
+    notifier = mock.MagicMock()
+    notifier_factory.return_value = notifier
+    env.mock["audit_slack"] = notifier_factory
+    ctx["high_value_alert_notifier"] = notifier
+
+
+@then("a high-value alert should be sent to the Seller")
+def then_high_value_alert_sent(ctx: dict) -> None:
+    """Assert the >$10k pending-approval high-value alert fired to the Seller.
+
+    Filtering by the create_media_buy_pending_approval operation isolates the
+    high-value budget gate from audit_logger's sensitive_ops allowlist (the
+    auto-approve op create_media_buy would notify regardless) and confirms the
+    create took the pending path.
+    """
+    from tests.bdd.steps._outcome_helpers import assert_audit_logged, is_e2e
+
+    if is_e2e(ctx):
+        # Out-of-process: the Slack send cannot be spied. Assert the pending
+        # high-value buy's audit entry persisted (the path ran end-to-end).
+        assert_audit_logged(ctx, operation_substring="create_media_buy_pending_approval")
+        return
+
+    notifier = ctx.get("high_value_alert_notifier")
+    assert notifier is not None, (
+        "high-value alert observation not armed — the "
+        "'the Seller observes high-value audit alerts' Given must run before this Then"
+    )
+    high_value_calls = [
+        call
+        for call in notifier.notify_audit_log.call_args_list
+        if call.kwargs.get("operation") == "create_media_buy_pending_approval"
+    ]
+    assert len(high_value_calls) == 1, (
+        "the >$10k pending-approval high-value Seller alert did not fire "
+        f"(notify_audit_log calls: {notifier.notify_audit_log.call_args_list})"
+    )

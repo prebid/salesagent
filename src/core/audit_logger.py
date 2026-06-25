@@ -12,6 +12,7 @@ Implements security-compliant logging with:
 import json
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,38 @@ if not os.environ.get("FLY_APP_NAME") and not os.environ.get("PRODUCTION"):
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
     audit_logger.addHandler(console_handler)
+
+
+# Budget at or above this value triggers a high-value Slack alert to the Seller.
+_HIGH_VALUE_BUDGET_THRESHOLD = 10000
+
+
+def _is_high_value_budget(details: dict[str, Any]) -> bool:
+    """True if ``details`` carries a budget above the high-value alert threshold.
+
+    Accepts int | float | Decimal. ``get_total_budget()`` returns ``Decimal``
+    (money — float is wrong for money), which the old ``isinstance(.,(int,float))``
+    gate silently rejected, disabling the >$10k alert on the create path
+    (salesagent-wvry). One helper covers both the ``budget`` and ``total_budget``
+    detail keys.
+    """
+    for key in ("budget", "total_budget"):
+        value = details.get(key)
+        if isinstance(value, (int, float, Decimal)) and value > _HIGH_VALUE_BUDGET_THRESHOLD:
+            return True
+    return False
+
+
+def _audit_json_default(value: Any) -> Any:
+    """``json.dumps`` fallback for audit payloads.
+
+    Serializes ``Decimal`` money values as JSON numbers (not strings) so audit
+    detail dicts carrying ``get_total_budget()`` output stay serializable
+    (salesagent-wvry); anything else falls back to ``str``.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)
 
 
 class AuditLogger:
@@ -200,15 +233,8 @@ class AuditLogger:
                 should_notify = True
 
             # Check for high-value operations
-            if details and isinstance(details, dict):
-                if "budget" in details and isinstance(details["budget"], (int, float)) and details["budget"] > 10000:
-                    should_notify = True
-                if (
-                    "total_budget" in details
-                    and isinstance(details["total_budget"], (int, float))
-                    and details["total_budget"] > 10000
-                ):
-                    should_notify = True
+            if details and isinstance(details, dict) and _is_high_value_budget(details):
+                should_notify = True
 
             if should_notify:
                 from src.core.utils.tenant_utils import serialize_tenant_to_dict
@@ -334,7 +360,7 @@ class AuditLogger:
 
         try:
             with open(LOG_DIR / "structured.jsonl", "a") as f:
-                f.write(json.dumps(log_entry) + "\n")
+                f.write(json.dumps(log_entry, default=_audit_json_default) + "\n")
         except Exception as e:
             audit_logger.error(f"Failed to write structured log: {e}")
 
@@ -349,7 +375,7 @@ class AuditLogger:
 
         try:
             with open(LOG_DIR / "security.jsonl", "a") as f:
-                f.write(json.dumps(log_entry) + "\n")
+                f.write(json.dumps(log_entry, default=_audit_json_default) + "\n")
         except Exception as e:
             audit_logger.error(f"Failed to write security log: {e}")
 

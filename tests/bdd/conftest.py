@@ -56,6 +56,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
+    "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -2970,8 +2971,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
                 yield
-        elif any(t.startswith("T-UC-002-ext-") for t in marker_names):
+        elif any(t.startswith("T-UC-002-ext-") for t in marker_names) or "nfr-highvalue" in marker_names:
             # Extension/error scenarios: budget validation, pricing errors, etc.
+            # Plus the nfr-highvalue >$10k Seller-alert scenario (salesagent-wvry),
+            # which needs the same full create_media_buy flow to reach the
+            # pending-approval audit feed.
             # Use MediaBuyCreateEnv which calls _create_media_buy_impl with real DB.
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
