@@ -408,15 +408,18 @@ class AdCPAuthenticationError(AdCPError):
     "credentials missing" and "credentials presented but rejected", so it is
     the canonical code for every authentication failure.
 
-    Recovery defaults to ``terminal`` (inherited from ``AdCPError``), matching
-    ``AdCPAuthorizationError``, which also emits ``AUTH_REQUIRED``/``terminal``.
-    Keeping ``terminal`` here keeps the two ``AUTH_REQUIRED`` emitters
-    consistent; the AdCP 3.1 storyboards grade the wire error code, not the
-    recovery class.
+    Recovery is ``correctable`` per the pinned AdCP error-code enum
+    (``AUTH_REQUIRED.recovery == "correctable"``; released 3.1.0 agrees) —
+    not the ``terminal`` base default. The enum carries operationally distinct
+    sub-cases (missing credentials → retry; presented-but-rejected → escalate),
+    but its single canonical ``recovery`` classification is ``correctable``,
+    and the wire contract is graded against that enum (salesagent-xc2j,
+    superseding the earlier "storyboards grade only the code" judgment).
     """
 
     _default_status_code: ClassVar[int] = 401
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
@@ -430,14 +433,13 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
 class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
-    Same ``terminal`` default as ``AdCPAuthenticationError``, for the same
-    reason: recovery is intentionally terminal because the AdCP 3.1 storyboards
-    grade the wire error code, not the recovery class — see that class's
-    docstring.
+    Emits ``AUTH_REQUIRED`` with ``correctable`` recovery, matching the pinned
+    AdCP error-code enum and ``AdCPAuthenticationError`` (salesagent-xc2j).
     """
 
     _default_status_code: ClassVar[int] = 403
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPPolicyViolationError(AdCPAuthorizationError):

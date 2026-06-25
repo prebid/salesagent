@@ -56,14 +56,14 @@ class TestExtractErrorInfoAdCPError:
         assert recovery == "correctable"
 
     def test_adcp_auth_error_extracts_code_and_message(self):
-        """AdCPAuthenticationError → ('AUTH_REQUIRED', 'bad token', 'terminal')."""
+        """AdCPAuthenticationError → ('AUTH_REQUIRED', 'bad token', 'correctable')."""
         from src.core.tool_error_logging import extract_error_info
 
         exc = AdCPAuthenticationError("bad token")
         code, message, recovery = extract_error_info(exc)
         assert code == "AUTH_REQUIRED"
         assert message == "bad token"
-        assert recovery == "terminal"
+        assert recovery == "correctable"
 
     def test_adcp_not_found_extracts_code_and_message(self):
         """AdCPNotFoundError → ('NOT_FOUND', 'resource missing', 'terminal')."""
@@ -255,7 +255,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         )
 
     def test_adcp_auth_becomes_tool_error(self):
-        """AdCPAuthenticationError from tool → ToolError envelope with AUTH_REQUIRED + terminal.
+        """AdCPAuthenticationError from tool → ToolError envelope with AUTH_REQUIRED + correctable.
 
         AUTH_REQUIRED is the spec STANDARD code (passthrough, not mapped).
         AUTH_REQUIRED is reserved for AdCPAuthorizationError (403).
@@ -272,7 +272,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert_envelope_shape(exc_info.value, "AUTH_REQUIRED", check_mcp_tool_error=True, recovery="terminal")
+        assert_envelope_shape(exc_info.value, "AUTH_REQUIRED", check_mcp_tool_error=True, recovery="correctable")
 
     @pytest.mark.asyncio
     async def test_async_adcp_validation_becomes_tool_error(self):
@@ -386,7 +386,7 @@ class TestA2AHandlerExplicitSkillReraises:
 
     @pytest.mark.asyncio
     async def test_adcp_auth_propagates_for_dispatcher_wrap(self):
-        """AdCPAuthenticationError propagates with terminal recovery."""
+        """AdCPAuthenticationError propagates with correctable recovery."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
@@ -401,7 +401,7 @@ class TestA2AHandlerExplicitSkillReraises:
             assert "bad token" in exc_info.value.message
             # AdCPAuthenticationError pins error_code = "AUTH_REQUIRED" (spec STANDARD code).
             assert exc_info.value.error_code == "AUTH_REQUIRED"
-            assert exc_info.value.recovery == "terminal"
+            assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_adcp_adapter_propagates_for_dispatcher_wrap(self):
@@ -569,7 +569,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             )
 
     def test_adcp_auth_from_impl_returns_401(self):
-        """AdCPAuthenticationError raised in _impl → REST returns 401 with terminal recovery."""
+        """AdCPAuthenticationError raised in _impl → REST returns 401 with correctable recovery."""
         from starlette.testclient import TestClient
 
         from src.app import app
@@ -581,8 +581,9 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 401
-            # AUTH_REQUIRED is a spec STANDARD code (passthrough — not mapped to AUTH_REQUIRED).
-            assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="terminal")
+            # AUTH_REQUIRED is a spec STANDARD code (passthrough). Recovery is correctable
+            # per the pinned error-code enum (salesagent-xc2j).
+            assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="correctable")
 
     def test_adcp_not_found_from_impl_returns_404(self):
         """AdCPNotFoundError raised in _impl → REST returns 404 with terminal recovery."""
@@ -741,7 +742,7 @@ class TestRESTSymmetricValueErrorAndPermissionError:
             assert_envelope_shape(
                 response.json(),
                 "AUTH_REQUIRED",
-                recovery="terminal",
+                recovery="correctable",
                 message_substr="tenant scope mismatch",
             )
 
@@ -893,8 +894,8 @@ class TestToDictRecoveryField:
         cases = [
             (AdCPError("internal"), "terminal"),
             (AdCPValidationError("bad field"), "correctable"),
-            (AdCPAuthenticationError("bad token"), "terminal"),
-            (AdCPAuthorizationError("forbidden"), "terminal"),
+            (AdCPAuthenticationError("bad token"), "correctable"),
+            (AdCPAuthorizationError("forbidden"), "correctable"),
             (AdCPNotFoundError("missing"), "terminal"),
             (AdCPConflictError("duplicate"), "correctable"),
             (AdCPGoneError("expired"), "correctable"),
@@ -1054,8 +1055,8 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", "AUTH_REQUIRED", "terminal"),
-            (AdCPAuthorizationError, "forbidden", "AUTH_REQUIRED", "terminal"),
+            (AdCPAuthenticationError, "unauth", "AUTH_REQUIRED", "correctable"),
+            (AdCPAuthorizationError, "forbidden", "AUTH_REQUIRED", "correctable"),
             (AdCPNotFoundError, "missing", "INVALID_REQUEST", "terminal"),
             (AdCPConflictError, "dup", "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", "INVALID_STATE", "correctable"),
@@ -1117,8 +1118,8 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", "terminal"),
             (AdCPValidationError, "bad", "correctable"),
-            (AdCPAuthenticationError, "unauth", "terminal"),
-            (AdCPAuthorizationError, "forbidden", "terminal"),
+            (AdCPAuthenticationError, "unauth", "correctable"),
+            (AdCPAuthorizationError, "forbidden", "correctable"),
             (AdCPNotFoundError, "missing", "terminal"),
             (AdCPConflictError, "dup", "correctable"),
             (AdCPGoneError, "expired", "correctable"),
@@ -1165,8 +1166,8 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", 401, "AUTH_REQUIRED", "terminal"),
-            (AdCPAuthorizationError, "forbidden", 403, "AUTH_REQUIRED", "terminal"),
+            (AdCPAuthenticationError, "unauth", 401, "AUTH_REQUIRED", "correctable"),
+            (AdCPAuthorizationError, "forbidden", 403, "AUTH_REQUIRED", "correctable"),
             (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "terminal"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
             (AdCPGoneError, "expired", 410, "INVALID_STATE", "correctable"),

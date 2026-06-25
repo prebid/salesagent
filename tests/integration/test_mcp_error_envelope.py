@@ -253,9 +253,8 @@ class TestMcpWireErrorEnvelope:
         assert envelope is not None, "Error must include content text carrying the envelope"
 
         # AdCPAuthRequiredError -> AUTH_REQUIRED (AdCP 3.1 spec code, passed through unchanged).
-        # Recovery is terminal for AdCPAuthenticationError: a hardcoded class default,
-        # intentionally set because the 3.1 storyboards grade the error code, not the recovery class.
-        assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="terminal")
+        # Recovery is correctable per the pinned error-code enum (salesagent-xc2j).
+        assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()
         ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"

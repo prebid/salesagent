@@ -262,6 +262,6 @@ class TestTenantResolutionFailure:
         assert_envelope_shape(
             result.wire_error_envelope,
             "AUTH_REQUIRED",
-            recovery="terminal",
+            recovery="correctable",
             message_substr="tenant",
         )

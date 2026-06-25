@@ -175,10 +175,10 @@ def then_auth_before_business_logic(ctx: dict) -> None:
 
     result = auth_ctx.get("result")
     assert result is not None, "dispatch_request did not produce a TransportResult for the invalid-identity request"
-    # recovery="terminal" is explicit (not the pinned default "correctable"): production's
-    # auth errors are rejected/absent-credential cases, and the pinned AUTH_REQUIRED prose
-    # mandates NO auto-retry for rejected credentials (terminal), matching AdCPAuthorizationError.
-    result.assert_wire_error("AUTH_REQUIRED", recovery="terminal", message_substr="Principal ID not found")
+    # recovery omitted -> defaults to the pinned AUTH_REQUIRED enum (correctable). Do not
+    # pass an explicit recovery= that shadows the pinned enum (salesagent-xc2j: superseded
+    # the earlier terminal override; the pinned enum is the single source of truth).
+    result.assert_wire_error("AUTH_REQUIRED", message_substr="Principal ID not found")
 
     # Verify no business logic side effects occurred
     assert not mock_adapter.create_media_buy.called, (

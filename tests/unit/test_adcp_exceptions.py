@@ -216,19 +216,19 @@ class TestRecoveryClassification:
         exc = AdCPValidationError("invalid field")
         assert exc.recovery == "correctable"
 
-    def test_authentication_error_defaults_to_terminal(self):
-        """AdCPAuthenticationError defaults to recovery='terminal'."""
+    def test_authentication_error_defaults_to_correctable(self):
+        """AdCPAuthenticationError defaults to recovery='correctable' (pinned AUTH_REQUIRED enum)."""
         from src.core.exceptions import AdCPAuthenticationError
 
         exc = AdCPAuthenticationError("bad token")
-        assert exc.recovery == "terminal"
+        assert exc.recovery == "correctable"
 
-    def test_authorization_error_defaults_to_terminal(self):
-        """AdCPAuthorizationError defaults to recovery='terminal'."""
+    def test_authorization_error_defaults_to_correctable(self):
+        """AdCPAuthorizationError defaults to recovery='correctable' (pinned AUTH_REQUIRED enum)."""
         from src.core.exceptions import AdCPAuthorizationError
 
         exc = AdCPAuthorizationError("forbidden")
-        assert exc.recovery == "terminal"
+        assert exc.recovery == "correctable"
 
     def test_not_found_error_defaults_to_terminal(self):
         """AdCPNotFoundError (the *base*) defaults to recovery='terminal'.
@@ -507,7 +507,7 @@ class TestFastAPIExceptionHandlers:
         # AdCPAuthenticationError.error_code = "AUTH_REQUIRED" (spec STANDARD code,
         # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_REQUIRED, not
         # AUTH_REQUIRED (which is for AdCPAuthorizationError).
-        assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="terminal")
+        assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="correctable")
 
     def test_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
