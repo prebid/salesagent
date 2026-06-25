@@ -701,24 +701,19 @@ class AdCPCapabilityNotSupportedError(AdCPError):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
     .. note::
-        **Intentional spec divergence.** The AdCP spec classifies
-        ``UNSUPPORTED_FEATURE`` as ``terminal``; we emit ``correctable``.
-        The salesagent raises this exception only when the buyer holds the
-        recovery lever — they can fix the request by dropping the
-        unsupported feature (e.g. removing ``property_list`` targeting
-        against an adapter that doesn't compile it). Classifying it
-        ``terminal`` would tell the buyer agent to give up on a recoverable
-        condition.
+        **Spec-conformant.** The pinned AdCP error-code enum classifies
+        ``UNSUPPORTED_FEATURE`` as ``correctable`` ("check
+        get_adcp_capabilities and remove unsupported fields"), and we emit
+        ``correctable`` — so this matches the spec, it is not a divergence.
+        The buyer holds the recovery lever: they can fix the request by
+        dropping the unsupported feature (e.g. removing ``property_list``
+        targeting against an adapter that doesn't compile it).
 
-        **Revisit condition:** if the SDK runtime starts enforcing the
-        spec's ``terminal`` classification at the wire (rejecting our
-        ``correctable`` recovery hint), drop this override and update
-        affected raise-site call sites to either select a different code or
-        accept the ``terminal`` retry semantics. Until then this is the
-        documented, expected behavior — not a TODO.
-
-        FIXME(salesagent-unsupported-feature-recovery): grep tag for the
-        revisit condition above. Remove when the SDK enforces terminal.
+        Only the adcp SDK's ``STANDARD_ERROR_CODES`` table classifies it
+        ``terminal``; the SDK is not authoritative (the pinned spec enum is),
+        so its table diverges from the spec here. If the SDK runtime ever
+        starts enforcing ``terminal`` at the wire (rejecting our spec-correct
+        ``correctable`` hint), reconcile with the SDK then.
     """
 
     _default_status_code: ClassVar[int] = 422
