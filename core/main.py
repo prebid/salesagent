@@ -71,30 +71,35 @@ from adcp.server.mcp_tools import (
 )
 from adcp.server.spec_compat import _spec_compat_hooks_impl
 
-from src.core.slim_schemas import CREATE_MEDIA_BUY_SLIM_SCHEMA
+from src.core.slim_schemas import CREATE_MEDIA_BUY_SLIM_SCHEMA, UPDATE_MEDIA_BUY_SLIM_SCHEMA
 
-# Optionally replace the create_media_buy inputSchema with a compact version.
+# Optionally replace large tool inputSchemas with compact versions.
 #
 # adcp's _generate_pydantic_schemas() inlines all $refs, turning the
-# CreateMediaBuyRequest schema into ~93 000 lines of JSON.  That volume
-# fills an LLM context window on tools/list, making the tool unusable.
+# CreateMediaBuyRequest schema into ~93 000 lines of JSON (~2.2 MB) and the
+# UpdateMediaBuyRequest schema into an even larger blob (~4.2 MB).  Either
+# volume fills an LLM context window on tools/list, making the tool unusable.
 #
-# Set ADCP_COMPACT_TOOL_SCHEMAS=true to activate the slim schema.
+# Set ADCP_COMPACT_TOOL_SCHEMAS=true to activate the slim schemas.
 # When unset or false, the full adcp-generated schema is used (default).
 #
 # Strategy: call _ensure_pydantic_schemas_applied() eagerly so it sets
 # _schemas_applied=True.  Subsequent lazy calls on tools/list become
-# no-ops.  We then overwrite create_media_buy's inputSchema with our slim
+# no-ops.  We then overwrite each tool's inputSchema with our slim
 # version — it sticks for the lifetime of the process.
 #
-# Runtime validation is unchanged: the function still validates the
-# incoming request against the full Pydantic CreateMediaBuyRequest model.
+# Runtime validation is unchanged: the functions still validate the
+# incoming request against the full Pydantic request models.
 _ensure_pydantic_schemas_applied()
 if os.environ.get("ADCP_COMPACT_TOOL_SCHEMAS", "").lower() == "true":
+    _SLIM_SCHEMAS = {
+        "create_media_buy": CREATE_MEDIA_BUY_SLIM_SCHEMA,
+        "update_media_buy": UPDATE_MEDIA_BUY_SLIM_SCHEMA,
+    }
     for _tool in ADCP_TOOL_DEFINITIONS:
-        if _tool["name"] == "create_media_buy":
-            _tool["inputSchema"] = CREATE_MEDIA_BUY_SLIM_SCHEMA
-            break
+        _slim = _SLIM_SCHEMAS.get(_tool["name"])
+        if _slim is not None:
+            _tool["inputSchema"] = _slim
 from sqlalchemy import select
 
 # Import for side-effect: registers the SQLAlchemy session listener that

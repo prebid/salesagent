@@ -4,6 +4,7 @@ The adcp library generates input schemas from Pydantic models via
 ``_generate_pydantic_schemas()`` and then inlines all ``$ref`` nodes via
 ``_inline_refs()``.  For ``create_media_buy`` this produces ~93 000 lines of
 JSON that fills an LLM context window before any useful work can happen.
+``update_media_buy`` is even larger (~4.2 MB inlined vs ~2.2 MB).
 
 This module provides hand-crafted replacements that:
 * Cover every **required** field (enforced by ``test_slim_schema_guard.py``).
@@ -12,7 +13,7 @@ This module provides hand-crafted replacements that:
 
 Runtime behaviour is unchanged — the slim schema only affects what MCP
 clients see during tool discovery; the underlying function still validates
-against the full ``CreateMediaBuyRequest`` Pydantic model.
+against the full Pydantic request model.
 """
 
 from __future__ import annotations
@@ -266,6 +267,165 @@ CREATE_MEDIA_BUY_SLIM_SCHEMA: dict = {
                 "currency": {"type": "string"},
             },
             "required": ["amount", "currency"],
+        },
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# update_media_buy
+# ---------------------------------------------------------------------------
+# Required fields (3):  account, media_buy_id, idempotency_key
+# All other fields are optional — update is a partial patch (adcp 3.9+).
+# Top optional fields by test-corpus frequency:
+#   packages (53 files), start_time/end_time (34), paused (27),
+#   packages[].creative_ids (15), canceled (8),
+#   push_notification_config (6), reporting_webhook (3)
+# NOTE: top-level `budget` is intentionally absent — the request model
+# rejects it (AdCP has no media-buy-level budget update). Use per-package
+# `budget` or `ext.salesagent.budget` instead. See UpdateMediaBuyRequest.
+# ---------------------------------------------------------------------------
+
+UPDATE_MEDIA_BUY_SLIM_SCHEMA: dict = {
+    "type": "object",
+    "required": ["account", "media_buy_id", "idempotency_key"],
+    "properties": {
+        # ── required ──────────────────────────────────────────────────────
+        "account": {
+            "type": "object",
+            "description": (
+                "Account that owns the media buy. Either {account_id: str} or "
+                "{brand: {domain: str}, operator: str, sandbox?: bool}."
+            ),
+        },
+        "media_buy_id": {
+            "type": "string",
+            "description": "ID of the media buy to update (from create_media_buy).",
+        },
+        "idempotency_key": {
+            "type": "string",
+            "description": (
+                "Client-generated unique key (16-255 chars, alphanumeric + _.:-). "
+                "Re-send the same key to safely retry without applying the update twice."
+            ),
+        },
+        # ── media-buy-level updates (all optional) ─────────────────────────
+        "paused": {
+            "type": "boolean",
+            "description": "Pause (true) or resume (false) the entire media buy.",
+        },
+        "canceled": {
+            "type": "boolean",
+            "enum": [True],
+            "description": "Set to true to request cancellation of the media buy. Omit otherwise.",
+        },
+        "cancellation_reason": {
+            "type": "string",
+            "description": "Optional free-text reason when canceled=true.",
+        },
+        "start_time": {
+            "type": "string",
+            "description": "New campaign start: ISO 8601 datetime or the literal string 'asap'.",
+        },
+        "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "New campaign end: ISO 8601 datetime.",
+        },
+        "push_notification_config": {
+            "type": "object",
+            "description": (
+                "Webhook for async task-completion notifications. "
+                "Provide {url, authentication: {schemes, credentials}}."
+            ),
+            "properties": {
+                "url": {"type": "string", "format": "uri"},
+                "authentication": {"type": "object"},
+            },
+            "required": ["url"],
+        },
+        "reporting_webhook": {
+            "type": "object",
+            "description": (
+                "Webhook for periodic delivery-metrics reports. Provide {url, authentication, reporting_frequency}."
+            ),
+            "properties": {
+                "url": {"type": "string", "format": "uri"},
+                "authentication": {"type": "object"},
+                "reporting_frequency": {
+                    "type": "string",
+                    "enum": ["hourly", "daily", "monthly"],
+                },
+            },
+            "required": ["url", "authentication", "reporting_frequency"],
+        },
+        "ext": {
+            "type": "object",
+            "description": (
+                "Extension object. To change total budget (no media-buy-level budget exists in AdCP), "
+                "set {salesagent: {budget: number}} while adcontextprotocol/adcp#4241 is open."
+            ),
+        },
+        # ── per-package updates ────────────────────────────────────────────
+        "packages": {
+            "type": "array",
+            "description": (
+                "Partial updates to existing packages. One entry per package; only include "
+                "the fields you want to change. package_id is required to identify the package."
+            ),
+            "items": {
+                "type": "object",
+                "required": ["package_id"],
+                "properties": {
+                    "package_id": {
+                        "type": "string",
+                        "description": "ID of the package to update.",
+                    },
+                    "budget": {
+                        "type": "number",
+                        "description": "New package budget in the account currency.",
+                    },
+                    "impressions": {
+                        "type": "number",
+                        "description": "New impression goal for the package.",
+                    },
+                    "bid_price": {
+                        "type": "number",
+                        "description": "New bid price for the package.",
+                    },
+                    "pacing": {
+                        "type": "string",
+                        "enum": ["even", "asap", "front_loaded"],
+                        "description": "Delivery pacing strategy.",
+                    },
+                    "paused": {
+                        "type": "boolean",
+                        "description": "Pause (true) or resume (false) this package.",
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "New package flight start.",
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "New package flight end.",
+                    },
+                    "creative_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Replace the package's assigned creatives with these creative_ids "
+                            "(from sync_creatives / list_creatives)."
+                        ),
+                    },
+                    "targeting_overlay": {
+                        "type": "object",
+                        "description": "Replacement targeting constraints for this package.",
+                    },
+                },
+            },
         },
     },
 }
