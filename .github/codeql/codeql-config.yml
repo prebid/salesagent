@@ -8,7 +8,6 @@ queries:
 # Exclude generated / vendored / migration content from analysis to reduce noise.
 paths-ignore:
   - alembic/versions/
-  - src/adapters/google_ad_manager_original.py
   - tests/
   - htmlcov/
   - .venv/
