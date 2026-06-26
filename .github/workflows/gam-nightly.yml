@@ -26,6 +26,7 @@ jobs:
   gam-e2e:
     name: GAM E2E (requires_gam)
     if: github.ref == 'refs/heads/main'
+    environment: gam-nightly
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -50,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GAM_SERVICE_ACCOUNT_JSON}" ]; then
-            echo "::error::GAM_SERVICE_ACCOUNT_JSON is not configured. Add the secret under Settings → Secrets and variables → Actions (main branch only)."
+            echo "::error::GAM_SERVICE_ACCOUNT_JSON is not configured. Add it to the gam-nightly environment (Settings → Environments → gam-nightly → Environment secrets; restrict deployment branches to main)."
             exit 1
           fi
           uv run python -c 'import json, os; json.loads(os.environ["GAM_SERVICE_ACCOUNT_JSON"])'
