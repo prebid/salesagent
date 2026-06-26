@@ -45,18 +45,11 @@ def _wire_suggestion(ctx: dict) -> str | None:
     on IMPL / no-wire scenarios so callers fall back to the reconstructed
     exception (salesagent-ztl6.6).
     """
+    from tests.harness.transport import extract_wire_suggestion
+
     result = ctx.get("result")
     envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
-    if not envelope:
-        return None
-    errors = envelope.get("errors") or [{}]
-    adcp_error = envelope.get("adcp_error") or {}
-    return (
-        errors[0].get("suggestion")
-        or adcp_error.get("suggestion")
-        or (errors[0].get("details") or {}).get("suggestion")
-        or (adcp_error.get("details") or {}).get("suggestion")
-    )
+    return extract_wire_suggestion(envelope)
 
 
 def _wire_error_object(ctx: dict) -> dict | None:

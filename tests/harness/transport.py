@@ -38,6 +38,28 @@ def _pinned_error_metadata() -> dict[str, dict[str, str]]:
     return json.loads(_PINNED_ERROR_ENUM.read_text())["enumMetadata"]
 
 
+def extract_wire_suggestion(envelope: dict | None) -> str | None:
+    """The buyer-facing ``suggestion`` from a two-layer AdCP wire error envelope.
+
+    AdCP carries the suggestion either directly on the error object or nested
+    under ``details.suggestion`` (account/auth errors use the latter), in either
+    the ``errors[0]`` or the envelope-level ``adcp_error`` layer. Single source
+    of truth for both ``TransportResult.assert_wire_error`` and the BDD
+    ``_wire_suggestion`` step (salesagent-hm3r). Returns ``None`` when there is
+    no envelope (IMPL / no-wire).
+    """
+    if not envelope:
+        return None
+    errors = envelope.get("errors") or [{}]
+    adcp_error = envelope.get("adcp_error") or {}
+    return (
+        errors[0].get("suggestion")
+        or adcp_error.get("suggestion")
+        or (errors[0].get("details") or {}).get("suggestion")
+        or (adcp_error.get("details") or {}).get("suggestion")
+    )
+
+
 class Transport(StrEnum):
     """Dispatch transports for behavioral tests."""
 
@@ -157,15 +179,5 @@ class TransportResult:
         )
         assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr)
         if require_suggestion:
-            errors = envelope.get("errors") or [{}]
-            adcp_error = envelope.get("adcp_error", {})
-            # AdCP carries the suggestion either directly on the error object or
-            # nested under ``details.suggestion`` (account-resolution errors use
-            # the latter). Accept both, in either layer.
-            suggestion = (
-                errors[0].get("suggestion")
-                or adcp_error.get("suggestion")
-                or (errors[0].get("details") or {}).get("suggestion")
-                or (adcp_error.get("details") or {}).get("suggestion")
-            )
+            suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
