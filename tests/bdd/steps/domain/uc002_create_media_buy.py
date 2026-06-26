@@ -330,13 +330,16 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "natural_key_ambiguous":
         for i in range(3):
-            AccountFactory(
+            account = AccountFactory(
                 tenant=tenant,
                 account_id=f"acc-amb-{i}",
                 status="active",
                 brand={"domain": "ambiguous.com"},
                 operator="ambiguous.com",
             )
+            # Grant the requesting agent access so ambiguity is genuine FOR THIS AGENT —
+            # natural-key resolution is access-scoped (salesagent-ym1c).
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
         )
@@ -453,13 +456,16 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 
     elif config.startswith("brand+op") and "multi match" in config:
         for i in range(2):
-            AccountFactory(
+            account = AccountFactory(
                 tenant=tenant,
                 account_id=f"acc-multi-{i}",
                 status="active",
                 brand={"domain": "multi.com"},
                 operator="multi.com",
             )
+            # Access-scoped ambiguity (salesagent-ym1c): grant the agent access so the
+            # two matches are genuinely ambiguous for it.
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="multi.com"), operator="multi.com"),
         )
