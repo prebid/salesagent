@@ -1,0 +1,81 @@
+name: GAM Nightly Regression
+
+# Live GAM API tests (@pytest.mark.requires_gam) run here — not in per-PR CI.
+# Secrets are restricted to the default branch; fork PRs never receive them.
+# Tracking: #1477 (D13, #1233).
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # 07:00 UTC daily
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: gam-nightly
+  cancel-in-progress: false
+
+env:
+  GEMINI_API_KEY: test_key_for_mocking
+  GOOGLE_CLIENT_ID: test_client_id
+  GOOGLE_CLIENT_SECRET: test_client_secret
+  SUPER_ADMIN_EMAILS: test@example.com
+  ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+
+jobs:
+  gam-e2e:
+    name: GAM E2E (requires_gam)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+      - name: Ensure docker-compose alias exists
+        run: |
+          docker compose version
+          echo '#!/bin/bash' | sudo tee /usr/local/bin/docker-compose
+          echo 'exec docker compose "$@"' | sudo tee -a /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+      - name: Verify GAM credentials secret
+        env:
+          GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAM_SERVICE_ACCOUNT_JSON}" ]; then
+            echo "::error::GAM_SERVICE_ACCOUNT_JSON is not configured. Add the secret under Settings → Secrets and variables → Actions (main branch only)."
+            exit 1
+          fi
+          uv run python -c 'import json, os; json.loads(os.environ["GAM_SERVICE_ACCOUNT_JSON"])'
+      - name: Clean up lingering containers
+        run: |
+          docker ps -q | xargs -r docker kill || true
+          docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+          docker compose down -v 2>/dev/null || true
+          docker container prune -f 2>/dev/null || true
+          docker network prune -f 2>/dev/null || true
+          docker volume prune -f 2>/dev/null || true
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/e2e/
+          extra_args: -m requires_gam --timeout=300
+        env:
+          # conftest starts docker-compose.e2e.yml (same host-path pattern as CI E2E).
+          ADCP_TESTING: ""
+          ADCP_SALES_PORT: 8080
+          POSTGRES_PORT: 5435
+          # gam_lifecycle_db creates ephemeral databases on this server.
+          DATABASE_URL: postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
+          GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}
+          DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
