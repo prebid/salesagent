@@ -1524,6 +1524,16 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     packages: list[PackageRequest] | None = None
 
     @model_validator(mode="after")
+    def _check_idempotency_key(self):
+        """Reject a malformed idempotency_key with VALIDATION_ERROR (AdCP 16-255).
+
+        Parity with UpdateMediaBuyRequest: create now emits the same tailored
+        suggestion on a malformed key (salesagent-f7u4).
+        """
+        validate_idempotency_key_shape(self.idempotency_key)
+        return self
+
+    @model_validator(mode="after")
     def validate_timezone_aware(self):
         """Validate that datetime fields are timezone-aware.
 

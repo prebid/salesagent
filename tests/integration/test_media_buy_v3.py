@@ -493,7 +493,7 @@ class TestUpdateMediaBuyCreativeAssignments:
         )
         update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
 
-        assert not hasattr(update_result, "errors") or not update_result.errors
+        assert not update_result.response.errors
 
     @pytest.mark.asyncio
     async def test_invalid_placement_ids_rejected(
@@ -939,7 +939,7 @@ class TestUpdateMediaBuyAdapterError:
             try:
                 update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
                 # If it returns, should be an error response
-                assert hasattr(update_result, "errors") and update_result.errors
+                assert update_result.response.errors
             except (ConnectionError, Exception):
                 # Adapter error propagated -- acceptable behavior
                 pass
