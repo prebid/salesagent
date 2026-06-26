@@ -29,6 +29,7 @@ a decision without understanding its rationale.
 | [ADR-001](adr-001-single-source-pre-commit-deps.md) | uv.lock as single source of truth for pre-commit deps | Accepted |
 | [ADR-002](adr-002-solo-maintainer-bypass.md) | Solo-maintainer branch protection with bypass | Accepted |
 | [ADR-003](adr-003-pull-request-target-trust.md) | pull_request_target trust boundary for CLA and PR-title workflows | Accepted |
+| [ADR-007](adr-007-build-provenance.md) | Build provenance attestation (SLSA L2) | Accepted |
 | [ADR-008](adr-008-target-version-bump.md) | Defer black/ruff target-version bump out of #1234 | Accepted |
 
 ## How to add a new ADR
