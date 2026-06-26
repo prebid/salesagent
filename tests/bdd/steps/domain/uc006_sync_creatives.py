@@ -216,15 +216,18 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     access_denied_domains = {"other-agent.com"}
 
     if brand_domain == "multi.com":
-        # Ambiguous: create 3 accounts with same natural key
+        # Ambiguous: create 3 accounts with same natural key, all accessible to the
+        # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
+        # resolution is access-scoped (salesagent-ym1c).
         for i in range(3):
-            AccountFactory(
+            account = AccountFactory(
                 tenant=tenant,
                 account_id=f"acc-multi-{i}",
                 status="active",
                 brand={"domain": brand_domain},
                 operator=operator,
             )
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
