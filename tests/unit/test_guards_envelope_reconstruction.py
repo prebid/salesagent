@@ -27,8 +27,22 @@ def _find_function(tree: ast.AST, name: str) -> ast.FunctionDef | ast.AsyncFunct
     return None
 
 
+def _is_empty_constant(node: ast.AST) -> bool:
+    """True if the node is a literal ``None`` or empty string/collection.
+
+    salesagent-ixmh: ``suggestion=None`` satisfies "the kwarg is present" but
+    still drops the suggestion on the wire, so an empty literal must NOT count
+    as passing the value through.
+    """
+    return isinstance(node, ast.Constant) and not node.value
+
+
 def _calls_with_keyword(fn_node: ast.AST, callee: str, kwarg: str) -> bool:
-    """Return True if the function body calls `callee` with a positional or keyword arg named `kwarg`."""
+    """Return True if the function body calls `callee` passing a NON-EMPTY `kwarg`.
+
+    A literal ``kwarg=None`` (or empty string) does not count — it is present but
+    drops the value (salesagent-ixmh).
+    """
     for node in ast.walk(fn_node):
         if not isinstance(node, ast.Call):
             continue
@@ -36,14 +50,13 @@ def _calls_with_keyword(fn_node: ast.AST, callee: str, kwarg: str) -> bool:
         fn_name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
         if fn_name != callee:
             continue
-        # Check keyword arguments
-        if any(kw.arg == kwarg for kw in node.keywords):
+        # Keyword: kwarg=<expr>, but reject a literal None/"" (value dropped).
+        if any(kw.arg == kwarg and not _is_empty_constant(kw.value) for kw in node.keywords):
             return True
-        # Check positional: look up the callee's parameter list to find the index
-        # (looser: if ANY positional args are passed beyond the fixed ones, assume it's passed)
-        # For _adcp_error_from_code(error_code, message, recovery, details, suggestion, field)
-        # suggestion is at index 4 (0-based). We accept >=5 positional args.
-        if len(node.args) >= 5:
+        # Positional: for _adcp_error_from_code(error_code, message, recovery, details,
+        # suggestion, field), suggestion is index 4 (0-based) — accept >=5 positional
+        # args unless the index-4 arg is an empty literal.
+        if len(node.args) >= 5 and not _is_empty_constant(node.args[4]):
             return True
     return False
 
@@ -89,6 +102,21 @@ def _envelope_to_adcp_error(envelope):
         assert fn is not None
         result = _calls_with_keyword(fn, CALLED_FN, REQUIRED_KWARG)
         assert not result, "Negative meta-test: guard should detect missing suggestion"
+
+    def test_guard_catches_literal_none_suggestion(self):
+        """Negative meta-test (salesagent-ixmh): a literal suggestion=None is not a pass-through."""
+        source = """
+def _adcp_error_from_code(code, msg, recovery=None, details=None, suggestion=None, field=None):
+    pass
+
+def _envelope_to_adcp_error(envelope):
+    return _adcp_error_from_code('CODE', 'msg', recovery='terminal', details=None, suggestion=None)
+"""
+        tree = ast.parse(source)
+        fn = _find_function(tree, TARGET_FN)
+        assert fn is not None
+        result = _calls_with_keyword(fn, CALLED_FN, REQUIRED_KWARG)
+        assert not result, "Guard should reject suggestion=None (value dropped, not passed through)"
 
     def test_guard_passes_with_keyword_arg(self):
         """Positive meta-test: guard accepts a call that passes suggestion as keyword."""
