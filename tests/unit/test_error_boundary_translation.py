@@ -418,6 +418,27 @@ class TestA2ABoundaryAdCPErrorTranslation:
             # Should be the same ServerError, not wrapped in another
             assert exc_info.value.error.code == -32601
 
+    @pytest.mark.asyncio
+    async def test_permission_error_becomes_invalid_request(self):
+        """PermissionError from skill handler → ServerError(InvalidRequestError)."""
+        from a2a.utils.errors import ServerError
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+
+        async def mock_skill(params, token):
+            raise PermissionError("access denied")
+
+        with patch.object(handler, "_handle_get_products_skill", mock_skill):
+            with pytest.raises(ServerError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, "token")
+
+            error = exc_info.value.error
+            assert error.code == -32600
+            assert error.message == "access denied"
+            assert error.data is None
+
 
 # ---------------------------------------------------------------------------
 # REST Boundary: AdCPError → HTTP status code via exception handler
