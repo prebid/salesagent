@@ -363,12 +363,9 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
 async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
     # Coerce the raw account dict into an AccountReference so sync_creatives_raw
-    # resolves it at the transport boundary (mirror create_media_buy).
-    account_ref = None
-    if body.account is not None:
-        from adcp.types import AccountReference as LibraryAccountReference
-
-        account_ref = LibraryAccountReference.model_validate(body.account)
+    # resolves it at the transport boundary (mirror create_media_buy / the sibling
+    # handlers above — salesagent-hseb).
+    account_ref = to_account_reference(body.account)
 
     response = creatives_sync_module.sync_creatives_raw(
         creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
