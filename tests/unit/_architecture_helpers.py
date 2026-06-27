@@ -111,7 +111,7 @@ def parse_module(path: Path) -> ast.Module:
     return _parse_cached(str(path), path.stat().st_mtime)
 
 
-def base_expr_is_tenant(node: ast.expr) -> bool:
+def _base_expr_is_tenant(node: ast.expr) -> bool:
     """True when *node* is a tenant reference (``tenant``, ``self.tenant``, ``ctx.tenant``, …)."""
     if isinstance(node, ast.Name) and node.id == "tenant":
         return True
@@ -136,9 +136,9 @@ def find_tenant_config_violations(tree: ast.Module) -> list[int]:
     """Return line numbers of tenant.config / tenant['config'] access patterns."""
     lines: list[int] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and node.attr == "config" and base_expr_is_tenant(node.value):
+        if isinstance(node, ast.Attribute) and node.attr == "config" and _base_expr_is_tenant(node.value):
             lines.append(node.lineno)
-        elif isinstance(node, ast.Subscript) and base_expr_is_tenant(node.value):
+        elif isinstance(node, ast.Subscript) and _base_expr_is_tenant(node.value):
             sl = node.slice
             if isinstance(sl, ast.Constant) and sl.value == "config":
                 lines.append(node.lineno)
@@ -480,7 +480,7 @@ def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
             yield path, m.group(0)
 
 
-def iter_hardcoded_yaml_anchor(
+def _iter_hardcoded_yaml_anchor(
     repo: Path,
     line_regex: re.Pattern[str],
     *,
@@ -504,12 +504,12 @@ def iter_hardcoded_yaml_anchor(
 
 def iter_hardcoded_uv_version_env(repo: Path) -> Iterator[tuple[Path, int, str]]:
     """Yield workflow/action lines that hardcode ``UV_VERSION: "..."`` instead of reading ``.uv-version``."""
-    yield from iter_hardcoded_yaml_anchor(repo, _HARDCODED_UV_VERSION_ENV_RE)
+    yield from _iter_hardcoded_yaml_anchor(repo, _HARDCODED_UV_VERSION_ENV_RE)
 
 
 def iter_hardcoded_python_version_yaml(repo: Path) -> Iterator[tuple[Path, int, str]]:
     """Yield workflow/action lines that hardcode ``python-version:`` instead of ``python-version-file``."""
-    yield from iter_hardcoded_yaml_anchor(
+    yield from _iter_hardcoded_yaml_anchor(
         repo,
         _HARDCODED_PYTHON_VERSION_RE,
         skip_substr="python-version-file",
