@@ -6,6 +6,9 @@ queries:
   - uses: security-extended
 
 # Exclude generated / vendored / migration content from analysis to reduce noise.
+# Code Quality (github-code-quality[bot]) is configured at the org/repo level — its
+# path scope must mirror paths-ignore here. See docs/development/ci-pipeline.md
+# § "GitHub Code Quality vs CodeQL scoping" (#1422).
 paths-ignore:
   - alembic/versions/
   - tests/
