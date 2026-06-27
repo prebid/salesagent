@@ -235,7 +235,9 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
 
 # Patterns intentionally permissive: surfaces use varied formats. Each returns
 # a normalized version string ("3.12", "17", "0.11.7") via the first capture group.
-# ``anchor_kind`` labels the surface (e.g. ``target-version``) for ADR-008 exemptions.
+# ``anchor_kind`` labels the surface for ADR-008 exemptions. Each string mirrors
+# the config key on that surface (hyphens in TOML/YAML, underscores in ini —
+# e.g. ``requires-python`` vs ``python_version``).
 
 _DOCKERFILE_PYTHON_VERSION_PATTERN = r"^\s*ARG\s+PYTHON_VERSION=([0-9]+(?:\.[0-9]+)*)"
 

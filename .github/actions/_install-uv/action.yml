@@ -1,5 +1,8 @@
 name: Install uv
-description: Install the pinned uv from .uv-version (setup-uv SHA pinned here only). Python is resolved downstream by `uv sync` honoring .python-version.
+description: >
+  Install the pinned uv CLI from .uv-version (setup-uv SHA pinned here only).
+  Does not install Python directly — downstream _setup-env runs `uv sync`, which
+  provisions the interpreter from .python-version.
 runs:
   using: composite
   steps:
