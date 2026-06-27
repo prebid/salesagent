@@ -18,7 +18,7 @@ _SCENARIOS_CALL = re.compile(r"""scenarios\s*\(\s*["'](features/[^"']+)["']""")
 
 # Keep in sync with strategy.matrix.shard in .github/workflows/ci.yml (bdd-tests-shard).
 SHARD_COUNTS: dict[str, int] = {
-    "bdd": 2,
+    "bdd": 4,
 }
 
 SUITE_GLOBS: dict[str, str] = {

@@ -24,7 +24,7 @@ Run `./scripts/capture-rendered-names.sh` after any job rename. The frozen guard
 [`tests/unit/test_architecture_required_ci_checks_frozen.py`](../../tests/unit/test_architecture_required_ci_checks_frozen.py)
 must stay in sync.
 
-PR #1372 (PR3) establishes **18** checks. PR #1379 adds **2 BDD shard** checks
+PR #1372 (PR3) establishes **18** checks. PR #1379 adds **4 BDD shard** checks
 plus the aggregate `CI / BDD Tests` status proxy (replacing PR3's single BDD job).
 
 | Rendered check name | Job |
@@ -43,8 +43,10 @@ plus the aggregate `CI / BDD Tests` status proxy (replacing PR3's single BDD job
 | `CI / Integration (other)` | integration shard |
 | `CI / E2E Tests` | full stack |
 | `CI / Admin UI Tests` | admin suite |
-| `CI / BDD Tests (Shard 1/2)` | BDD greedy scenario shard |
-| `CI / BDD Tests (Shard 2/2)` | BDD greedy scenario shard |
+| `CI / BDD Tests (Shard 1/4)` | BDD greedy scenario shard |
+| `CI / BDD Tests (Shard 2/4)` | BDD greedy scenario shard |
+| `CI / BDD Tests (Shard 3/4)` | BDD greedy scenario shard |
+| `CI / BDD Tests (Shard 4/4)` | BDD greedy scenario shard |
 | `CI / BDD Tests` | aggregate status proxy (shard pass/fail) |
 | `CI / Migration Roundtrip` | alembic upgrade |
 | `CI / Coverage` | `--fail-under` from `.coverage-baseline` using unit + BDD artifacts |
@@ -52,7 +54,7 @@ plus the aggregate `CI / BDD Tests` status proxy (replacing PR3's single BDD job
 
 ## BDD Test Shards
 
-BDD tests (`tests/bdd/test_*.py`, 13 files) run in **2 parallel shards** via
+BDD tests (`tests/bdd/test_*.py`, 15 files) run in **4 parallel shards** via
 greedy min-load assignment by Gherkin scenario count (`scripts/ci/shard_split.py`).
 Each shard uploads coverage; the **Coverage** job combines unit + BDD shard
 artifacts and enforces `.coverage-baseline`. The aggregate `BDD Tests` job is
