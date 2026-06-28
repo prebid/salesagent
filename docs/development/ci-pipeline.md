@@ -269,3 +269,32 @@ See [`.pre-commit-coverage-map.yml`](../../.pre-commit-coverage-map.yml) for hoo
 `alembic/versions/` is excluded from `ruff format` in `pyproject.toml`. Never
 reformat or edit committed migration files in CI PRs — it violates project policy
 and creates review noise.
+
+## GitHub Code Quality vs CodeQL scoping (#1422)
+
+Two separate analyzers can comment on Python PRs:
+
+| Analyzer | Configured by | Alembic exclusions |
+|----------|---------------|-------------------|
+| **CodeQL** (security workflow) | In-repo [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml) | `paths-ignore: alembic/versions/` — honored |
+| **Code Quality** (`github-code-quality[bot]`) | GitHub org/repo **Advanced Security → Code Quality** settings | **Not** driven by `codeql-config.yml` |
+
+### Problem
+
+Code Quality flags alembic module globals (`revision`, `down_revision`, `branch_labels`, `depends_on`) as "Unused global variable". Those globals are Alembic's public migration API — false positives on every migration touch.
+
+### Maintainer action (org/repo settings)
+
+Keep Code Quality **enabled** (it catches real issues outside excluded paths) but scope it to mirror CodeQL:
+
+1. GitHub → **Settings** → **Code security and analysis** → **Code Quality** (org admins: org-level defaults).
+2. Add path exclusions matching `.github/codeql/codeql-config.yml` `paths-ignore`, at minimum:
+   - `alembic/versions/`
+3. After updating scope, dismiss/resolving stale bot comments on open migration PRs.
+
+### Verification
+
+- Push touching `alembic/versions/` → zero unused-global comments from `github-code-quality[bot]`.
+- Deliberate quality issue in `src/` → still flagged.
+
+Track: [#1422](https://github.com/prebid/salesagent/issues/1422).
