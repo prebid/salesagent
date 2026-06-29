@@ -246,20 +246,18 @@ Postgres version drift (guarded by `test_architecture_postgres_image_anchor`).
 
 ### Legacy `requires_server` tests removed (D11, #1233)
 
-Integration/admin tests that targeted a manual MCP server on `localhost:8080`
-or `:8100` never ran in tox or CI (`-m "not requires_server"`). Equivalent
-coverage lives in `tests/e2e/` via `live_server` / `docker_services_e2e`.
+Integration/admin tests marked ``@pytest.mark.requires_server`` were deselected
+by ``-m "not requires_server"`` in tox and CI and never executed (many used the
+in-process ``mcp_server`` fixture rather than an external server). Equivalent
+coverage lives in ``tests/e2e/`` via ``live_server`` / ``docker_services_e2e``.
 
-**Postponed — still #1233 scope, after #1234 epic closes** (see
-[#1233](https://github.com/prebid/salesagent/issues/1233) closure plan):
+**Post-#1234 follow-up — still #1233 scope:**
 
 | Item | Tracking | When |
 |------|----------|------|
 | `test_sell_readiness_browser.py` admin browser flows | #1233 D11 follow-up | Dedicated admin+e2e-stack CI job |
-| Nightly GAM `requires_gam` workflow | #1477 (D13) | Post-#1234; closes #1233 D13 when merged |
+| Nightly GAM `requires_gam` workflow | #1477 (D13) | #1485 |
 
-These are **not** #1234 rollout blockers; they remain on the #1233 checklist and
-will be picked up once #1234 merges.
 ## Layered pre-commit model (PR 4 of #1234)
 
 | Layer | Trigger | Enforcement |

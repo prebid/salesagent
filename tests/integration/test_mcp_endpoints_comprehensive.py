@@ -2,7 +2,8 @@
 
 Server-backed MCP endpoint coverage lives in ``tests/e2e/`` (``live_server`` /
 ``docker_services_e2e``). The former ``@pytest.mark.requires_server`` integration
-tests targeted a manual localhost:8080/8100 server and never executed in CI or tox.
+tests were deselected by ``-m "not requires_server"`` in tox/CI and never
+executed (many used the in-process ``mcp_server`` fixture, not an external server).
 See #1233 D11 and ``docs/development/ci-pipeline.md``.
 """
 
@@ -17,7 +18,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from tests.helpers.adcp_factories import create_test_package_request
 
 
-@pytest.mark.requires_db
+@pytest.mark.unit
 def test_schema_adcp_format() -> None:
     """AdCP schema validates create-media-buy requests per spec."""
     request = CreateMediaBuyRequest(
