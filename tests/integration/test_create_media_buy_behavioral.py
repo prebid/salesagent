@@ -1196,7 +1196,7 @@ class TestInlineCreativeObligations:
                 except Exception:
                     pass
 
-        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
+        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY, media_buy_brand=ANY)
 
     @pytest.mark.asyncio
     async def test_inline_creative_format_validation(self, integration_db):
