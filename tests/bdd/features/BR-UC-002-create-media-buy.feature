@@ -2679,11 +2679,11 @@ Feature: BR-UC-002 Create Media Buy
     And one of the following two outcomes should be observed:
     | outcome              | required behavior                                                                       |
     | zero_forecast_accept | buy accepted with packages reporting zero deliverable inventory and a mismatch message  |
-    | informative_error    | error code "INSUFFICIENT_INVENTORY" or "INVALID_TARGETING" with findings identifying lists |
+    | informative_error    | error code "PRODUCT_UNAVAILABLE" or "INVALID_REQUEST" with findings identifying lists |
     # inventory_list_no_match storyboard: the buyer references a PropertyListReference
     # and CollectionListReference that resolve to nothing in the seller's catalog.
     # The seller MUST either (a) accept the buy with zero-forecast reporting OR
-    # (b) reject with INSUFFICIENT_INVENTORY/INVALID_TARGETING carrying findings
+    # (b) reject with PRODUCT_UNAVAILABLE/INVALID_REQUEST carrying findings
     # identifying which list matched nothing. Silently-successful buys with normal
     # forecast numbers, crashes, or non-AdCP error shapes are compliance failures.
     # inventory_list_no_match: empty intersection MUST be surfaced truthfully

@@ -51,6 +51,15 @@ SHOULD_RE = re.compile(r'error code should be "([^"]+)"')
 # Quoted Examples cell form: `| error "X" with suggestion |`.
 CELL_RE = re.compile(r'\berror "([^"]+)"')
 
+# Prose form `... error code "X"` (and any `or "Y"` continuation on the same
+# line), distinct from the `should be` assertion above. Catches descriptive
+# outcome cells and inline rejections such as
+# `error code "INSUFFICIENT_INVENTORY" or "INVALID_TARGETING"` or
+# `rejected with error code "VALIDATION_ERROR"`, which neither SHOULD_RE
+# (needs `should be`) nor CELL_RE (needs `error "X"` without `code`) matches.
+PROSE_RE = re.compile(r'error code "')
+QUOTED_RE = re.compile(r'"([^"]+)"')
+
 # Gherkin block boundaries — placeholder resolution is scoped to the owning
 # Scenario Outline's Examples table (file-wide resolution bleeds across tables).
 BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):")
@@ -118,6 +127,17 @@ def expected_codes(feature: Path) -> list[tuple[int, str]]:
                         found.append((lineno, value))
                 else:
                     found.append((lineno, token))
+            # Prose `error code "X"` (plus any `or "Y"`): grade every quoted token
+            # on the line. The CODE_RE filter in find_non_canonical drops prose
+            # words, so over-matching quoted non-codes is harmless.
+            if PROSE_RE.search(line) and "should be" not in line:
+                for match in QUOTED_RE.finditer(line):
+                    token = match.group(1)
+                    if token.startswith("<") and token.endswith(">"):
+                        for value in columns.get(token[1:-1], []):
+                            found.append((lineno, value))
+                    else:
+                        found.append((lineno, token))
             if line.strip().startswith("|"):
                 for match in CELL_RE.finditer(line):
                     found.append((lineno, match.group(1)))
