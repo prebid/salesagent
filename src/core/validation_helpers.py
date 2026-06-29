@@ -33,7 +33,11 @@ def adcp_validation_boundary() -> Iterator[None]:
     try:
         yield
     except ValidationError as e:
-        raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
+        raise AdCPValidationError(
+            f"Invalid parameters: {e}",
+            field=first_validation_error_field(e),
+            suggestion=suggest_validation_fix(e),
+        ) from e
 
 
 def run_async_in_sync_context(coroutine):

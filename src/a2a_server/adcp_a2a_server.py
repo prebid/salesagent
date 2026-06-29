@@ -51,7 +51,7 @@ from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
@@ -108,8 +108,6 @@ from src.core.tools import (
 )
 from src.core.validation_helpers import (
     adcp_validation_boundary,
-    first_validation_error_field,
-    suggest_validation_fix,
 )
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -1574,18 +1572,12 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion=f"Required: {required_params}",
             )
 
-        # Explicit try/except (not adcp_validation_boundary) so the envelope carries a
-        # buyer-facing recovery suggestion (AdCP POST-F3, #1417): idempotency_key_missing /
-        # duplicate_product_id rejections must include a non-empty suggestion. The shared
-        # boundary helper only emits field+message, so the create boundary keeps its own path.
-        try:
+        # Validate via the shared boundary so every A2A handler emits the same
+        # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
+        # idempotency_key_missing / duplicate_product_id rejections include a
+        # non-empty suggestion derived by adcp_validation_boundary.
+        with adcp_validation_boundary():
             req = CreateMediaBuyRequest.model_validate(params)
-        except ValidationError as e:
-            raise AdCPValidationError(
-                f"Invalid parameters: {e}",
-                field=first_validation_error_field(e),
-                suggestion=suggest_validation_fix(e),
-            ) from e
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
