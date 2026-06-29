@@ -1,9 +1,9 @@
 """Guard: BDD wire-discipline — error handling goes through the wire, not test-side.
 
 Two complementary checks, locking in the universal-wire-dispatch invariant after the
-holdouts were migrated (epic salesagent-peje):
+holdouts were migrated:
 
-A. **No test-side error construction** (salesagent-0wby, dispatch-side). A step must NOT
+A. **No test-side error construction** (dispatch-side). A step must NOT
    fabricate the expected error via ``ctx["error"] = SomethingError(...)``. Dispatch the
    malformed/invalid request through the wire so *production* emits the error; assert it via
    ``ctx['result'].assert_wire_error(...)``. (The complementary ``env.call_impl`` bypass is
@@ -11,7 +11,7 @@ A. **No test-side error construction** (salesagent-0wby, dispatch-side). A step 
    ``test_architecture_bdd_no_partial_account_call_impl.py`` — there are currently zero
    ``call_impl`` calls in ``tests/bdd/steps/`` after the dlh8/osrl/zh85 migrations.)
 
-B. **No reconstructed-only error assertion** (salesagent-ztl6.8, assertion-side). An error
+B. **No reconstructed-only error assertion** (assertion-side). An error
    ``@then`` step must not assert purely on the lossy reconstructed ``ctx['error']`` via
    ``_get_error_code`` / ``_get_error_dict`` without reading the real wire envelope
    (``_wire_code`` / ``_wire_suggestion`` / ``assert_wire_error`` / ``wire_error_envelope`` /
@@ -19,7 +19,7 @@ B. **No reconstructed-only error assertion** (salesagent-ztl6.8, assertion-side)
    (yields ``RuntimeError`` for an unmapped code); the wire envelope is the buyer-facing
    contract.
 
-Both allowlists can only SHRINK. Each entry references a tracked production-gap issue.
+Both allowlists can only SHRINK. Each entry documents the production gap that keeps it.
 """
 
 from __future__ import annotations
@@ -44,12 +44,12 @@ _WIRE_REFERENCES = (
 # Keyed by "<relative path> <enclosing func> <ErrorClass>" (NOT line numbers — those
 # shift on unrelated edits). Each remaining entry is a 33r0-reclassified production gap.
 _ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
-    # FIXME(salesagent-482y): _SyntheticError wraps the REAL production per-creative error
+    # Production gap: _SyntheticError wraps the REAL production per-creative error
     # string — production emits unstructured per-creative errors (no machine code). Remove
-    # when 482y makes sync_creatives emit structured per-creative codes.
+    # when sync_creatives emits structured per-creative codes.
     "bdd/steps/domain/uc006_sync_creatives.py _promote_creative_errors_to_ctx _SyntheticError",
-    # FIXME(salesagent-7q4y): null-date state is UNREACHABLE through the wire (DB NOT-NULL);
-    # _compute_status has no null guard. Remove when 7q4y adds the guard so the scenario can
+    # Production gap: null-date state is UNREACHABLE through the wire (DB NOT-NULL);
+    # _compute_status has no null guard. Remove when a guard is added so the scenario can
     # dispatch a real request.
     "bdd/steps/domain/uc019_query_media_buys.py _create_media_buy_with_null_dates AdCPValidationError",
 }
