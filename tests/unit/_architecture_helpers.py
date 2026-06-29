@@ -400,7 +400,7 @@ _PG_IMAGE_LITERAL = re.compile(_PG_IMAGE_REF_PATTERN, re.MULTILINE)
 _PG_TAG_PATTERN = _PG_IMAGE_REF_PATTERN
 
 # ADR-008: ruff target-version stays py311 until post-#1234 follow-up PR.
-ADR_008_DEFERRED_TARGET_VERSION = "3.11"
+_ADR_008_DEFERRED_TARGET_VERSION = "3.11"
 
 
 def postgres_image_ref(tag: str) -> str:
@@ -524,11 +524,11 @@ def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]]
     drift = [
         f"{path.relative_to(repo)}: {version}"
         for path, version, anchor_kind in anchors
-        if anchor_kind == "target-version" and version != ADR_008_DEFERRED_TARGET_VERSION
+        if anchor_kind == "target-version" and version != _ADR_008_DEFERRED_TARGET_VERSION
     ]
     if drift:
         raise AssertionError(
-            f"ADR-008 target-version must stay py311 ({ADR_008_DEFERRED_TARGET_VERSION!r}):\n"
+            f"ADR-008 target-version must stay py311 ({_ADR_008_DEFERRED_TARGET_VERSION!r}):\n"
             + "\n".join(f"  {item}" for item in drift)
         )
 
@@ -619,13 +619,13 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
 # Pre-commit config helpers
 # ---------------------------------------------------------------------------
 
-PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
+_PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
 
 
 def load_pre_commit_config(path: Path | None = None, repo: Path | None = None) -> dict[str, Any]:
     """Load ``.pre-commit-config.yaml`` anchored to *repo* (default: repo root)."""
     root = repo or repo_root()
-    cfg_path = path or (root / PRE_COMMIT_CONFIG_PATH)
+    cfg_path = path or (root / _PRE_COMMIT_CONFIG_PATH)
     return yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
 
 
