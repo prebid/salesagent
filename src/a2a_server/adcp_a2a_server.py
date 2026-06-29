@@ -51,7 +51,7 @@ from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
@@ -106,7 +106,11 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from src.core.validation_helpers import first_validation_error_field, suggest_validation_fix
+from src.core.validation_helpers import (
+    adcp_validation_boundary,
+    first_validation_error_field,
+    suggest_validation_fix,
+)
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -1528,8 +1532,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = self._make_tool_context(identity, "create_media_buy")
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import CreateMediaBuyRequest
 
         # Pre-process: A2A field name translations
@@ -1572,6 +1574,10 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion=f"Required: {required_params}",
             )
 
+        # Explicit try/except (not adcp_validation_boundary) so the envelope carries a
+        # buyer-facing recovery suggestion (AdCP POST-F3, #1417): idempotency_key_missing /
+        # duplicate_product_id rejections must include a non-empty suggestion. The shared
+        # boundary helper only emits field+message, so the create boundary keeps its own path.
         try:
             req = CreateMediaBuyRequest.model_validate(params)
         except ValidationError as e:
@@ -1874,8 +1880,6 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import UpdateMediaBuyRequest
 
         # Pre-process: support legacy 'updates.packages' → 'packages'
@@ -1895,7 +1899,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')
-        try:
+        with adcp_validation_boundary():
             req = UpdateMediaBuyRequest(
                 media_buy_id=params.get("media_buy_id"),
                 paused=params.get("paused"),
@@ -1903,8 +1907,6 @@ class AdCPRequestHandler(RequestHandler):
                 end_time=params.get("end_time"),
                 context=params.get("context"),
             )
-        except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields + raw nested structures and identity
         response = core_update_media_buy_tool(
@@ -1955,7 +1957,8 @@ class AdCPRequestHandler(RequestHandler):
         if "media_buy_ids" not in params and "media_buy_id" in params:
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
-        req = GetMediaBuyDeliveryRequest.model_validate(params)
+        with adcp_validation_boundary():
+            req = GetMediaBuyDeliveryRequest.model_validate(params)
 
         # Call core function with validated fields (all optional per AdCP spec).
         # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
@@ -1973,10 +1976,9 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
-            # Wrap the raw dict into an AccountReference at the boundary — resolve_account
-            # does account_ref.root and crashes on a bare dict. GetMediaBuyDeliveryRequest
-            # has no account field, so this is the only coercion point (mirrors sync_creatives).
-            account=to_account_reference(params.get("account")),
+            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
+            # forward the validated model field rather than re-coercing the raw dict (#1438).
+            account=req.account,
             context=params.get("context"),
             identity=identity,
         )
@@ -1988,15 +1990,10 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import UpdatePerformanceIndexRequest
 
-        try:
+        with adcp_validation_boundary():
             req = UpdatePerformanceIndexRequest.model_validate(parameters)
-        except ValidationError as e:
-            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(

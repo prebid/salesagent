@@ -114,13 +114,17 @@ _ensure_image() {
 
 cmd_publish() {
     [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ] || { echo "CREATIVE_AGENT_GHCR_IMAGE required" >&2; return 1; }
+    local ref="$(_ghcr_ref)"
     if _ghcr_image_exists; then
-        echo "[creative-agent] $(_ghcr_ref) already published; nothing to do"
-        return 0
+        echo "[creative-agent] ${ref} already published; nothing to do"
+    else
+        _ensure_tarball
+        _retry 3 _build_for_ghcr
+        _retry 3 _push_to_ghcr
     fi
-    _ensure_tarball
-    _retry 3 _build_for_ghcr
-    _retry 3 _push_to_ghcr
+    if [ -n "${GITHUB_OUTPUT:-}" ]; then
+        echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+    fi
 }
 
 cmd_url() { echo "$CREATIVE_AGENT_URL"; }

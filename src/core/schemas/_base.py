@@ -144,6 +144,52 @@ def url(value: str) -> AnyUrl:
     return AnyUrl(value)  # Pydantic handles string -> AnyUrl conversion
 
 
+def canonical_agent_url(agent_url: object) -> str:
+    """Canonicalize an agent_url for identity comparison (spec MUST canonicalization).
+
+    Delegates to the SDK's ``adcp.signing.canonicalize_target_uri`` so federation
+    identity uses the *same* canonical form the spec mandates for target URIs —
+    lowercased scheme/host, dropped default ports, normalized percent-encoding, and
+    stripped userinfo + fragment (a hand-rolled normalizer such as yarl keeps those,
+    diverging from the spec). The SDK preserves a trailing slash, so we additionally
+    strip it to keep ``https://x.org`` and ``https://x.org/`` equal. This is the
+    single canonical form used both to compare two FormatId references for federation
+    identity (see ``format_id_identity``) and to key the creative-agent format cache
+    (``CreativeAgentRegistry._cache_key``).
+
+    Args:
+        agent_url: A URL string or ``AnyUrl`` (FormatId.agent_url, CreativeAgent.agent_url).
+
+    Returns:
+        The canonicalized URL string with any trailing slash removed.
+    """
+    from adcp.signing import canonicalize_target_uri
+
+    return canonicalize_target_uri(str(agent_url)).rstrip("/")
+
+
+def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:
+    """Return the federation identity of a FormatId: the ``(canonical agent_url, id)`` pair.
+
+    AdCP v3.1 makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
+    ``id`` (``core/format-id.json`` requires ``[agent_url, id]``; the ``list_formats``
+    storyboard step matches product/format references with ``match_keys: [agent_url,
+    id]``, ``scope.equals: $agent_url``, ``on_out_of_scope: warn``). Comparing on
+    ``id`` alone would mis-resolve a
+    third-party reference (foreign ``agent_url``) to a local format that merely
+    shares an ``id`` — fabricating a local entry for a format the seller does not
+    host. Works on both the library ``FormatId`` and our subclass (duck-typed on
+    ``agent_url``/``id``).
+
+    Args:
+        format_id: Any FormatId-like object exposing ``agent_url`` and ``id``.
+
+    Returns:
+        ``(canonical_agent_url, id)`` — the comparison key for federation identity.
+    """
+    return (canonical_agent_url(format_id.agent_url), format_id.id)
+
+
 class NestedModelSerializerMixin:
     """Mixin that ensures nested Pydantic models use their custom model_dump().
 

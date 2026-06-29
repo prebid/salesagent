@@ -240,30 +240,19 @@ docker-compose run --user $(id -u):$(id -g) adcp-server
 ```
 
 #### ModuleNotFoundError / Import Errors with Hot Reload
-**Symptoms**: `ModuleNotFoundError: No module named 'flask'` or similar import errors when using `docker-compose.override.yml` with volume mounts.
+**Symptoms**: `ModuleNotFoundError: No module named 'flask'` or `ImportError: cannot import name 'GovernanceAgent' from 'adcp...'` when using `docker compose up` with source bind mounts.
 
-**Cause**: When you mount your local directory over `/app`, the container's `.venv` with installed packages becomes inaccessible. Even with the `/app/.venv` volume exclusion, Python can't find packages unless PYTHONPATH is set.
+**Cause (historical)**: Older compose files used an anonymous `/app/.venv` volume to preserve the image venv under a `.:/app` bind mount. Anonymous volumes are populated once from the image and **persist across rebuilds**, so dependency bumps in `uv.lock` could leave a stale venv overlaying current source.
 
-**Fix**: Add PYTHONPATH to your `docker-compose.override.yml` (version must match Dockerfile):
-```yaml
-services:
-  adcp-server:
-    environment:
-      # Note: python3.12 must match Dockerfile version
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
-    volumes:
-      - .:/app
-      - /app/.venv  # Preserve container's venv
+**Current fix (#1310)**: The app Dockerfile installs the venv at `/opt/venv` (`UV_PROJECT_ENVIRONMENT`), outside `/app`. Bind-mounting `.:/app` no longer shadows installed packages — no anonymous venv volume is needed.
 
-  admin-ui:
-    environment:
-      PYTHONPATH: "/app/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
-    volumes:
-      - .:/app
-      - /app/.venv
+**If you still see import errors after pulling this fix**:
+```bash
+docker compose build --no-cache db-init adcp-server
+docker compose up
 ```
 
-See `docker-compose.override.example.yml` for complete configuration.
+**Custom override**: If you add your own `docker-compose.override.yml`, mount source at `/app` only — do **not** add a `/app/.venv` anonymous volume. Rely on `/opt/venv` from the image (packages on `PATH`, source on `PYTHONPATH=/app`).
 
 ### GAM Integration Issues
 

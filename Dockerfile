@@ -35,6 +35,9 @@ COPY --from=uv /uv /uvx /bin/
 ENV UV_CACHE_DIR=/cache/uv
 ENV UV_TOOL_DIR=/cache/uv-tools
 ENV UV_PYTHON_PREFERENCE=only-system
+# Outside /app so docker-compose `.:/app` bind mounts never shadow the venv
+# (anonymous /app/.venv volumes persist stale deps across image rebuilds — #1310).
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 
 # Copy project files
 WORKDIR /app
@@ -94,7 +97,7 @@ RUN echo "Cache bust: $CACHE_BUST"
 COPY . .
 
 # Copy pre-built virtual environment from builder stage (contains all compiled deps)
-COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /opt/venv /opt/venv
 
 # Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
 # Default: single-tenant (path-based routing, localhost upstreams)
@@ -107,10 +110,10 @@ COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 # Non-root runtime user (D34 — issue #1234 PR 5)
 RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app && \
     mkdir -p /var/log/nginx /var/run && \
-    chown -R app:app /app /var/log/nginx /var/run
+    chown -R app:app /app /opt/venv /var/log/nginx /var/run
 
-# Add .venv to PATH and set PYTHONPATH for module imports
-ENV PATH="/app/.venv/bin:$PATH"
+# Venv on PATH; PYTHONPATH points at bind-mounted source in dev compose
+ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH="/app"
 ENV PYTHONUNBUFFERED=1
 
@@ -129,4 +132,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 USER app:app
 
 # Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
-ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]
+ENTRYPOINT ["/opt/venv/bin/python", "scripts/deploy/run_all_services.py"]
