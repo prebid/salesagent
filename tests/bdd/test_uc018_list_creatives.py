@@ -1,12 +1,20 @@
-"""BDD scenario + steps for UC-018: list_creatives reflects recent sync state.
+"""BDD scenarios + steps for UC-018: list_creatives library queries.
 
-Binds the single storyboard scenario
-``T-UC-018-storyboard-list-all-creatives-after-sync`` (#1405): after the buyer
-syncs creatives across formats, ``list_creatives`` with no filters returns the
-account's library — schema-valid against ``list-creatives-response.json``, each
-entry exposing ``creative_id``, ``name``, ``format_id``, ``status``. Source
-obligation: adcp ``protocols/creative/index.yaml`` · ``list_all`` (pin
-v3.1-04f59d2d5).
+Binds the UC-018 feature; two storyboard scenarios are wired (the rest xfail at
+the conftest harness fixture):
+
+- ``T-UC-018-storyboard-list-all-creatives-after-sync`` (#1405): after the buyer
+  syncs creatives across formats, ``list_creatives`` with no filters returns the
+  account's library — schema-valid against ``list-creatives-response.json``, each
+  entry exposing ``creative_id``, ``name``, ``format_id``, ``status``. Source
+  obligation: adcp ``protocols/creative/index.yaml`` · ``list_all``.
+- ``T-UC-018-storyboard-filter-by-concept-id`` (#1407): ``filters.concept_ids``
+  scopes results to a concept; each returned creative exposes ``concept_id`` and
+  ``concept_name``. Source: adcp ``creative/list-creatives-request.json`` +
+  ``core/creative-filters.json`` (concept_ids) and ``list-creatives-response.json``
+  (concept_id/concept_name).
+
+Both pinned at v3.1-04f59d2d5 (adcp 3.1.0-beta.3).
 
 Wired to real production across all wire transports (auto-parametrized; UC-018
 -> CreativeListEnv via conftest ``_detect_uc`` / ``_harness_env``). The repo
@@ -179,3 +187,137 @@ def then_each_creative_exposes_core_fields(ctx: dict) -> None:
         assert isinstance(fid, dict) and fid.get("agent_url") and fid.get("id"), (
             f"format_id must be an object with agent_url and id, got: {fid!r}"
         )
+
+
+# ── @concept-id storyboard scenario (#1407) ─────────────────────────────
+#
+# v3.1 ADDED filters.concept_ids (array of concept-id strings, minItems 1).
+# Concepts group related creatives across sizes and formats; each returned
+# creative exposes concept_id and concept_name. Source obligation: adcp
+# creative/list-creatives-request.json + core/creative-filters.json (concept_ids)
+# and creative/list-creatives-response.json (creatives[].concept_id/concept_name),
+# pin v3.1-04f59d2d5. The concept identifier/name live on the creative's JSON data
+# blob (no native sync_creatives field in adcp 5.7.0 — concepts originate from
+# external creative-management systems), so they are seeded directly.
+
+# Human-readable label paired with the target concept_id, asserted non-empty by
+# the Then step. Two registered formats give the concept creatives genuinely
+# different sizes/formats (the point of a concept); the A2A path re-validates
+# format_id against the registry, so unregistered ids would be rejected there.
+_CONCEPT_NAME = "Summer 2026 Campaign"
+_CONCEPT_FORMATS = ("display_300x250", "video_640x480")
+_DECOY_CONCEPT_ID = "concept_winter_2025"
+
+
+@given(
+    parsers.parse(
+        'the authenticated principal has creatives grouped under concept "{concept_id}" '
+        "and other creatives under different concepts"
+    )
+)
+def given_creatives_grouped_under_concept(ctx: dict, concept_id: str) -> None:
+    """Seed concept-tagged creatives plus decoys so the filter is falsifiable.
+
+    Under the target concept: two approved creatives in two formats (concepts span
+    sizes/formats). Decoys: one under a different concept, one with no concept at
+    all. A broken filter that returned the whole library would surface a decoy
+    whose concept_id != the requested one (or is absent), failing the Then steps.
+
+    Seeded via CreativeFactory rather than a live sync (CreativeListEnv has no sync
+    patches; the obligation under test is the listing/filter contract). The
+    empty-but-present ``assets`` is mandatory — the repository drops rows whose
+    ``data["assets"]`` IS NULL (legacy guard).
+    """
+    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+
+    env = ctx["env"]
+    tenant = TenantFactory(tenant_id=env._tenant_id)
+    principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
+
+    in_concept_ids: list[str] = []
+    for fmt in _CONCEPT_FORMATS:
+        creative = CreativeFactory(
+            tenant=tenant,
+            principal=principal,
+            format=fmt,
+            status="approved",
+            data={"assets": {}, "concept_id": concept_id, "concept_name": _CONCEPT_NAME},
+        )
+        in_concept_ids.append(creative.creative_id)
+
+    # Decoy under a different concept.
+    CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        format=_CONCEPT_FORMATS[0],
+        status="approved",
+        data={"assets": {}, "concept_id": _DECOY_CONCEPT_ID, "concept_name": "Winter 2025 Campaign"},
+    )
+    # Decoy with no concept at all.
+    CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        format=_CONCEPT_FORMATS[0],
+        status="approved",
+        data={"assets": {}},
+    )
+
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["concept_id"] = concept_id
+    ctx["in_concept_creative_ids"] = in_concept_ids
+
+
+@when(parsers.re(r"the Buyer Agent sends list_creatives with filters\.concept_ids \[(?P<concept_list>.+)\]"))
+def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
+    """Dispatch list_creatives with a structured filters.concept_ids filter.
+
+    Parses the bracketed concept-id list from the step text and dispatches the
+    structured filter through the scenario's transport via the canonical helper.
+    The filter travels as a JSON dict (built through CreativeFilters so minItems/
+    field validation runs); each wire transport coerces it back to CreativeFilters
+    server-side (FastMCP TypeAdapter / A2A skill / REST body), so a dict is the one
+    shape that works uniformly across a2a/mcp/rest (IMPL is sunsetted in BDD).
+    """
+    import re
+
+    from adcp import CreativeFilters
+
+    from tests.bdd.steps.generic.when_request import _call_via
+
+    concept_ids = re.findall(r'"([^"]+)"', concept_list)
+    assert concept_ids, f"no concept ids parsed from {concept_list!r}"
+    ctx["requested_concept_ids"] = concept_ids
+    filters = CreativeFilters(concept_ids=concept_ids).model_dump(mode="json", exclude_none=True)
+    _call_via(ctx, ctx.get("transport"), filters=filters)
+
+
+@then(parsers.parse('the creatives array should only include creatives belonging to concept "{concept_id}"'))
+def then_only_creatives_in_concept(ctx: dict, concept_id: str) -> None:
+    """Assert every returned creative belongs to the requested concept (and the set is non-empty)."""
+    creatives = _serialized_response(ctx)["creatives"]
+    assert creatives, f"list_creatives returned no creatives for concept {concept_id!r}"
+    offenders = [
+        {"creative_id": entry.get("creative_id"), "concept_id": entry.get("concept_id")}
+        for entry in creatives
+        if entry.get("concept_id") != concept_id
+    ]
+    assert not offenders, f"concept_ids filter leaked creatives outside concept {concept_id!r}: {offenders}"
+    # Falsifiability anchor: the seeded in-concept creatives are exactly what comes back.
+    returned_ids = {entry["creative_id"] for entry in creatives}
+    assert returned_ids == set(ctx["in_concept_creative_ids"]), (
+        f"expected exactly the in-concept creatives {sorted(ctx['in_concept_creative_ids'])}, "
+        f"got {sorted(returned_ids)}"
+    )
+
+
+@then(parsers.parse('each returned creative should carry concept_id "{concept_id}" and a concept_name'))
+def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
+    """Assert each returned creative exposes concept_id (== requested) and a non-empty concept_name."""
+    creatives = _serialized_response(ctx)["creatives"]
+    assert creatives, "list_creatives returned an empty creatives array"
+    for entry in creatives:
+        assert entry.get("concept_id") == concept_id, (
+            f"creative {entry.get('creative_id')!r} concept_id mismatch: {entry}"
+        )
+        assert entry.get("concept_name"), f"creative {entry.get('creative_id')!r} missing concept_name: {entry}"

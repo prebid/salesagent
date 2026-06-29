@@ -157,6 +157,11 @@ def _list_creatives_impl(
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
 
+    # v3.1 concept_ids filter has no flat equivalent — it arrives only via the
+    # structured filters object and must be threaded into the DB query (not merely
+    # reported in filters_applied), or it would be silently dropped.
+    effective_concept_ids = structured_filters.concept_ids if structured_filters else None
+
     # Build pagination
     offset = (page - 1) * effective_limit
     # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
@@ -211,6 +216,7 @@ def _list_creatives_impl(
             created_before=created_before_dt,
             search=search,
             media_buy_ids=effective_media_buy_ids or None,
+            concept_ids=effective_concept_ids,
             sort_by=sort_by,
             sort_order=valid_sort_order,
             offset=offset,
@@ -299,6 +305,10 @@ def _list_creatives_impl(
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,
+                # v3.1 concept grouping (Flashtalking/Celtra/CM360-style), stored on
+                # the JSON data blob; omitted from the response when absent.
+                concept_id=db_creative.data.get("concept_id") if db_creative.data else None,
+                concept_name=db_creative.data.get("concept_name") if db_creative.data else None,
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )
@@ -319,6 +329,8 @@ def _list_creatives_impl(
             filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
         if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
+        if req.filters.concept_ids:
+            filters_applied.append(f"concept_ids={','.join(req.filters.concept_ids)}")
         if req.filters.created_after:
             filters_applied.append(f"created_after={req.filters.created_after.isoformat()}")
         if req.filters.created_before:

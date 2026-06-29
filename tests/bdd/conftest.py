@@ -2845,13 +2845,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             yield
 
     elif uc == "UC-018":
-        # list_creatives — only the @list-after-sync storyboard scenario is wired
-        # (#1405). The remaining UC-018 scenarios (main/partition/boundary/filter
-        # siblings) have no step definitions yet, so xfail fast at the fixture
-        # (mirrors UC-002/006/011) rather than spinning up a DB per scenario only
-        # to auto-xfail at the first missing step.
+        # list_creatives — the wired storyboard scenarios are @list-after-sync
+        # (#1405) and @concept-id (#1407). The remaining UC-018 scenarios
+        # (main/partition/boundary/other filter siblings) have no step definitions
+        # yet, so xfail fast at the fixture (mirrors UC-002/006/011) rather than
+        # spinning up a DB per scenario only to auto-xfail at the first missing step.
         marker_names = {m.name for m in request.node.iter_markers()}
-        if "list-after-sync" in marker_names:
+        if marker_names & {"list-after-sync", "concept-id"}:
             # CreativeListEnv mocks only the audit logger; DB, repository, and
             # query building are real. The Background auth step switches the env
             # principal; the seed step owns the creatives under it.
@@ -2862,7 +2862,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            pytest.xfail("UC-018 harness wired only for the @list-after-sync storyboard scenario (#1405)")
+            pytest.xfail(
+                "UC-018 harness wired only for the @list-after-sync (#1405) and @concept-id (#1407) storyboard scenarios"
+            )
 
     elif uc == "UC-011":
         marker_names = {m.name for m in request.node.iter_markers()}

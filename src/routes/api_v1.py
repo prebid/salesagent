@@ -117,6 +117,10 @@ class ListCreativesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel 
     media_buy_ids: list[str] | None = None
     status: str | None = None
     format: str | None = None
+    # Structured AdCP CreativeFilters object (statuses, concept_ids, format_ids,
+    # tags, date ranges, …). Coerced to a typed CreativeFilters in the handler so
+    # REST honours the same structured filters as MCP/A2A instead of dropping them.
+    filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -332,11 +336,15 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
 @router.post("/creatives")
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
+    from adcp import CreativeFilters
+
+    filters = CreativeFilters.model_validate(body.filters) if body.filters else None
     response = creatives_listing_module.list_creatives_raw(
         media_buy_id=body.media_buy_id,
         media_buy_ids=body.media_buy_ids,
         status=body.status,
         format=body.format,
+        filters=filters,
         identity=identity,
     )
     return response.model_dump(mode="json")

@@ -1649,6 +1649,14 @@ class AdCPRequestHandler(RequestHandler):
         # Create ToolContext from A2A auth info and resolve identity
         tool_context = self._make_tool_context(identity, "list_creatives")
 
+        # Structured AdCP CreativeFilters (statuses, concept_ids, format_ids, …)
+        # arrive over the wire as a JSON dict; coerce to the typed model the core
+        # function expects so they are honoured rather than dropped.
+        from adcp import CreativeFilters
+
+        filters_param = parameters.get("filters")
+        filters = CreativeFilters.model_validate(filters_param) if isinstance(filters_param, dict) else filters_param
+
         # Call core function with optional parameters (fixing original validation bug)
         response = core_list_creatives_tool(
             media_buy_id=parameters.get("media_buy_id"),
@@ -1658,6 +1666,7 @@ class AdCPRequestHandler(RequestHandler):
             created_after=parameters.get("created_after"),
             created_before=parameters.get("created_before"),
             search=parameters.get("search"),
+            filters=filters,
             page=parameters.get("page", 1),
             limit=parameters.get("limit", 50),
             sort_by=parameters.get("sort_by", "created_date"),
