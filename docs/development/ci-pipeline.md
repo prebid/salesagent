@@ -256,7 +256,32 @@ coverage lives in ``tests/e2e/`` via ``live_server`` / ``docker_services_e2e``.
 | Item | Tracking | When |
 |------|----------|------|
 | `test_sell_readiness_browser.py` admin browser flows | #1233 D11 follow-up | Dedicated admin+e2e-stack CI job |
-| Nightly GAM `requires_gam` workflow | #1477 (D13) | #1485 |
+
+### Nightly GAM regression (D13, #1477)
+
+~20 tests in `tests/e2e/test_gam_*.py` carry `@pytest.mark.requires_gam`. They
+call the live GAM sandbox network and are **excluded from per-PR CI** (quota,
+credential blast radius on fork PRs).
+
+| Property | Value |
+|----------|-------|
+| Workflow | [`.github/workflows/gam-nightly.yml`](../../.github/workflows/gam-nightly.yml) |
+| Trigger | Daily cron (`07:00 UTC`) + `workflow_dispatch` |
+| Branch | `main` only (`if: github.ref == 'refs/heads/main'`) |
+| Environment | `gam-nightly` — create under **Settings → Environments**, restrict deployment branches to `main` |
+| Secret | `GAM_SERVICE_ACCOUNT_JSON` on the `gam-nightly` environment (not repo-level; unavailable to fork PRs) |
+| Command | `pytest tests/e2e/ -m requires_gam` (GHA Postgres service on :5435 for `gam_lifecycle_db`; tests that request `docker_services_e2e` still start the e2e stack via conftest) |
+| `DATABASE_URL` | `postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres` — GHA `services.postgres` on host port 5435; `gam_lifecycle_db` creates ephemeral databases there |
+
+Failures notify repository watchers via GitHub's default workflow notifications.
+
+**Local equivalent** (requires credentials + Docker):
+
+```bash
+export GAM_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+export DATABASE_URL=postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
+uv run pytest tests/e2e/ -m requires_gam -v --timeout=300
+```
 
 ## Layered pre-commit model (PR 4 of #1234)
 
