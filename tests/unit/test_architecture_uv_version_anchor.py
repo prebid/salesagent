@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 from tests.unit._architecture_helpers import (
+    _HARDCODED_PYTHON_VERSION_RE,
+    _HARDCODED_UV_VERSION_ENV_RE,
+    _match_hardcoded_yaml_anchor_lines,
     anchor_consistency_detects_drift,
     assert_adr008_target_version_pinned,
     assert_anchor_consistency,
@@ -49,6 +52,21 @@ _KNOWN_BAD_TARGET_VERSION_SOURCES = [
 _KNOWN_BAD_SETUP_UV_PINS = [
     (Path(".github/actions/_install-uv/action.yml"), "astral-sh/setup-uv@1111111111111111111111111111111111111111"),
     (Path(".github/workflows/ci.yml"), "astral-sh/setup-uv@2222222222222222222222222222222222222222"),
+]
+
+# Built via concatenation so git-tracked test sources do not embed live scanner literals.
+_KNOWN_BAD_PYTHON_VERSION_YAML_LINES = [
+    "jobs:",
+    "  test:",
+    "    steps:",
+    "      - uses: actions/setup-python@v5",
+    "        with:",
+    "          python-" + "version: '3.12'",
+]
+
+_KNOWN_BAD_UV_VERSION_ENV_YAML_LINES = [
+    "env:",
+    "  UV_" + 'VERSION: "0.6.0"',
 ]
 
 
@@ -202,6 +220,31 @@ def test_target_version_anchor_must_stay_py311() -> None:
     assert bad_anchors, "known-bad fixture must yield a target-version anchor"
     with pytest.raises(AssertionError, match="ADR-008 target-version must stay py311"):
         assert_adr008_target_version_pinned(bad_anchors, repo)
+
+
+@pytest.mark.arch_guard
+def test_hardcoded_python_version_yaml_detector_catches_known_bad() -> None:
+    """Mutation self-test: hardcoded python-version YAML must be detected (#1497)."""
+    matches = list(
+        _match_hardcoded_yaml_anchor_lines(
+            _KNOWN_BAD_PYTHON_VERSION_YAML_LINES,
+            _HARDCODED_PYTHON_VERSION_RE,
+            skip_substr="python-version-file",
+        )
+    )
+    assert matches, "Detector must flag known-bad hardcoded python-version YAML"
+
+
+@pytest.mark.arch_guard
+def test_hardcoded_uv_version_env_detector_catches_known_bad() -> None:
+    """Mutation self-test: hardcoded UV_VERSION env YAML must be detected (#1497)."""
+    matches = list(
+        _match_hardcoded_yaml_anchor_lines(
+            _KNOWN_BAD_UV_VERSION_ENV_YAML_LINES,
+            _HARDCODED_UV_VERSION_ENV_RE,
+        )
+    )
+    assert matches, "Detector must flag known-bad hardcoded UV_VERSION env YAML"
 
 
 @pytest.mark.arch_guard
