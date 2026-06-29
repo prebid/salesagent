@@ -374,6 +374,17 @@ def _sync_creatives_impl(
         # CreativeUoW auto-commits on clean exit — no explicit commit needed
 
     # Process assignments (spec-compliant: creative_id → package_ids mapping)
+    # Only attempt assignments for creatives that were successfully synced;
+    # failed creatives are not in the DB so their assignments would violate
+    # the FK constraint on creative_assignments(creative_id, tenant_id, principal_id).
+    failed_creative_ids = {r.creative_id for r in results if r.action == "failed"}
+    if failed_creative_ids and assignments:
+        # Filter out assignments for failed creatives before processing
+        if isinstance(assignments, dict):
+            assignments = {cid: pkgs for cid, pkgs in assignments.items() if cid not in failed_creative_ids}
+        elif isinstance(assignments, list):
+            assignments = [a for a in assignments if a.get("creative_id") not in failed_creative_ids]
+
     assignment_list = _process_assignments(
         assignments=assignments,
         results=results,
