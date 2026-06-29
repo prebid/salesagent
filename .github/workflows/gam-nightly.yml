@@ -1,7 +1,7 @@
 name: GAM Nightly Regression
 
-# Live GAM API tests (@pytest.mark.requires_gam) run here — not in per-PR CI.
-# Secrets are restricted to the default branch; fork PRs never receive them.
+# Live GAM API tests (@pytest.mark.requires_gam, ~20) run here — not in per-PR CI.
+# Secrets are restricted to the gam-nightly environment on main; fork PRs never receive them.
 # Tracking: #1477 (D13, #1233).
 
 on:
@@ -53,12 +53,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-      - name: Ensure docker-compose alias exists
-        run: |
-          docker compose version
-          echo '#!/bin/bash' | sudo tee /usr/local/bin/docker-compose
-          echo 'exec docker compose "$@"' | sudo tee -a /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
       - name: Verify GAM credentials secret
         env:
           GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}
@@ -69,28 +63,12 @@ jobs:
             exit 1
           fi
           uv run python -c 'import json, os; json.loads(os.environ["GAM_SERVICE_ACCOUNT_JSON"])'
-      - name: Clean up lingering containers
-        run: |
-          docker ps -q | xargs -r docker kill || true
-          docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          docker compose down -v 2>/dev/null || true
-          docker container prune -f 2>/dev/null || true
-          docker network prune -f 2>/dev/null || true
-          docker volume prune -f 2>/dev/null || true
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/e2e/
           extra_args: -m requires_gam --timeout=300
         env:
-          # conftest starts docker-compose.e2e.yml (same host-path pattern as CI E2E).
           ADCP_TESTING: ""
-          ADCP_SALES_PORT: 8080
-          POSTGRES_PORT: 5435
-          # gam_lifecycle_db creates ephemeral databases on this server.
+          # gam_lifecycle_db connects to the postgres maintenance DB and CREATE DATABASE per test.
           DATABASE_URL: postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
           GAM_SERVICE_ACCOUNT_JSON: ${{ secrets.GAM_SERVICE_ACCOUNT_JSON }}
-          DOCKER_BUILDKIT: 1
-          COMPOSE_DOCKER_CLI_BUILD: 1
-      - name: Cleanup Docker services
-        if: always()
-        run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
