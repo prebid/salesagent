@@ -34,7 +34,7 @@ def _sync_creatives_impl(
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
-    media_buy_brand: BrandReference | None = None,
+    media_buy_brand: BrandReference | dict[str, Any] | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 
