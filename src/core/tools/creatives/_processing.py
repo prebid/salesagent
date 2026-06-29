@@ -26,6 +26,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_format_agent_url(format_obj: Any) -> str | None:
+    """Extract the agent_url from a format object, handling both shapes.
+
+    Handles two format shapes:
+    - Structured: ``format_obj.format_id`` is an object with ``.agent_url``
+      (the canonical AdCP FormatId shape from the SDK ``Format`` type).
+    - Legacy/mock: ``format_obj.agent_url`` is a top-level attribute
+      (used by some test mocks and older code paths).
+
+    Returns the agent_url string, or ``None`` if it cannot be determined.
+    """
+    # Try structured shape first (SDK Format objects: format_id.agent_url)
+    fmt_format_id = getattr(format_obj, "format_id", None)
+    if fmt_format_id is not None and not isinstance(fmt_format_id, str):
+        agent_url = getattr(fmt_format_id, "agent_url", None)
+        if agent_url is not None:
+            return str(agent_url)
+    # Fall back to legacy shape (top-level agent_url attribute)
+    agent_url = getattr(format_obj, "agent_url", None)
+    if agent_url is not None:
+        return str(agent_url)
+    return None
+
+
 def _find_format(all_formats: list[Any], creative_format: Any) -> Any | None:
     """Find a format by normalized composite (agent_url, id) key.
 
@@ -70,7 +94,7 @@ def _build_generative_manifest(creative_format: Any, format_obj: Any, creative: 
     construction logic is not duplicated.
     """
     manifest: dict[str, Any] = {
-        "format_id": {"id": creative_format.id, "agent_url": str(format_obj.agent_url)},
+        "format_id": {"id": creative_format.id, "agent_url": _get_format_agent_url(format_obj) or ""},
         "assets": _validate_creative_assets(creative.assets) if creative.assets else {},
     }
     return manifest
@@ -239,8 +263,9 @@ def _update_existing_creative(
 
             # Find matching format using normalized composite key (Change 1)
             format_obj = _find_format(all_formats, creative_format)
+            format_agent_url = _get_format_agent_url(format_obj) if format_obj else None
 
-            if format_obj and format_obj.agent_url:
+            if format_obj and format_agent_url:
                 # Check if format is generative (has output_format_ids)
                 is_generative = bool(getattr(format_obj, "output_format_ids", None))
 
@@ -275,14 +300,14 @@ def _update_existing_creative(
                         logger.info(
                             f"[sync_creatives] Calling build_creative for update: "
                             f"{existing_creative.creative_id} format {creative_format} "
-                            f"from agent {format_obj.agent_url}, "
+                            f"from agent {format_agent_url}, "
                             f"message_length={len(message) if message else 0}, "
                             f"context_id={context_id}"
                         )
 
                         build_result = run_async_in_sync_context(
                             registry.build_creative(
-                                agent_url=format_obj.agent_url,
+                                agent_url=format_agent_url,
                                 format_id=creative_format.id,
                                 message=message,
                                 promoted_offerings=promoted_offerings,
@@ -371,13 +396,13 @@ def _update_existing_creative(
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation (update): "
                         f"{existing_creative.creative_id} format {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
+                        f"from agent {format_agent_url}, has_assets={bool(creative.assets)}, "
                         f"has_url={bool(data.get('url'))}"
                     )
 
                     preview_result = run_async_in_sync_context(
                         registry.preview_creative(
-                            agent_url=format_obj.agent_url,
+                            agent_url=format_agent_url,
                             format_id=format_id_str,
                             creative_manifest=creative_manifest,
                         )
@@ -533,8 +558,9 @@ def _create_new_creative(
 
             # Find matching format using normalized composite key (Change 1)
             format_obj = _find_format(all_formats, creative_format)
+            format_agent_url = _get_format_agent_url(format_obj) if format_obj else None
 
-            if format_obj and format_obj.agent_url:
+            if format_obj and format_agent_url:
                 # Check if format is generative (has output_format_ids)
                 is_generative = bool(getattr(format_obj, "output_format_ids", None))
 
@@ -566,13 +592,13 @@ def _create_new_creative(
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling build_creative for generative format: "
-                        f"{format_id_str} from agent {format_obj.agent_url}, "
+                        f"{format_id_str} from agent {format_agent_url}, "
                         f"message_length={len(message) if message else 0}"
                     )
 
                     build_result = run_async_in_sync_context(
                         registry.build_creative(
-                            agent_url=format_obj.agent_url,
+                            agent_url=format_agent_url,
                             format_id=format_id_str,
                             message=message,
                             promoted_offerings=promoted_offerings,
@@ -639,13 +665,13 @@ def _create_new_creative(
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation: {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
+                        f"from agent {format_agent_url}, has_assets={bool(creative.assets)}, "
                         f"has_url={bool(data.get('url'))}"
                     )
 
                     preview_result = run_async_in_sync_context(
                         registry.preview_creative(
-                            agent_url=format_obj.agent_url,
+                            agent_url=format_agent_url,
                             format_id=format_id_str,
                             creative_manifest=creative_manifest,
                         )
