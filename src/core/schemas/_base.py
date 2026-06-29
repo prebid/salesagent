@@ -249,6 +249,30 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
+def _mirror_media_buy_status(model: Any) -> Any:
+    """Dual-emit ``media_buy_status`` and the deprecated ``status`` identically.
+
+    AdCP 3.1 (3.1.0-beta.3 create-/update-media-buy-response) adds
+    ``media_buy_status`` as the PREFERRED domain-status field on the
+    create/update RESPONSE body and DEPRECATES the body-level ``status``
+    (removed in 3.2). During the deprecation window sellers SHOULD emit BOTH
+    with IDENTICAL values, so this backfills whichever of ``status`` /
+    ``media_buy_status`` is set onto the other. Both fields are typed
+    ``MediaBuyStatus | None`` on the adcp 5.7 library base
+    (``CreateMediaBuySuccessResponse`` / ``UpdateMediaBuySuccessResponse``),
+    so callers may set either one and rely on identical dual-emit.
+
+    Shared by ``CreateMediaBuySuccess`` and ``UpdateMediaBuySuccess`` (DRY).
+    """
+    status = getattr(model, "status", None)
+    media_buy_status = getattr(model, "media_buy_status", None)
+    if media_buy_status is None and status is not None:
+        model.media_buy_status = status
+    elif status is None and media_buy_status is not None:
+        model.status = media_buy_status
+    return model
+
+
 class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     """Successful create_media_buy response extending adcp v1.2.1 type.
 
@@ -294,6 +318,11 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
         "field is persisted but won't yet affect targeting). Absent on a fully-honored buy.",
     )
+
+    @model_validator(mode="after")
+    def _dual_emit_media_buy_status(self):
+        """AdCP 3.1: emit ``media_buy_status`` and deprecated ``status`` identically."""
+        return _mirror_media_buy_status(self)
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -467,6 +496,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
         description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
         "field is persisted but won't yet affect targeting). Absent when fully honored.",
     )
+
+    @model_validator(mode="after")
+    def _dual_emit_media_buy_status(self):
+        """AdCP 3.1: emit ``media_buy_status`` and deprecated ``status`` identically."""
+        return _mirror_media_buy_status(self)
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):

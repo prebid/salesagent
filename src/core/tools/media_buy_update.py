@@ -19,6 +19,8 @@ from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, val
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from pydantic import Field
 
+from src.core.tools.media_buy_list import normalize_persisted_media_buy_status
+
 # ---------------------------------------------------------------------------
 # Financial policy constants (F-05)
 # ---------------------------------------------------------------------------
@@ -496,6 +498,9 @@ def _update_media_buy_impl(
                 # Build simulated response
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
+                    media_buy_status=normalize_persisted_media_buy_status(
+                        _dry_run_status
+                    ),  # AdCP 3.1: mirrors `status`
                     affected_packages=simulated_affected,
                     valid_actions=valid_actions_for_status(_dry_run_status),
                     context=req.context,
@@ -520,6 +525,9 @@ def _update_media_buy_impl(
                 _approval_status = _approval_mb.status if _approval_mb else ""
                 approval_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
+                    media_buy_status=normalize_persisted_media_buy_status(
+                        _approval_status
+                    ),  # AdCP 3.1: mirrors `status`
                     affected_packages=[],  # Not yet applied — pending approval
                     valid_actions=valid_actions_for_status(_approval_status),
                     context=req.context,
@@ -669,6 +677,9 @@ def _update_media_buy_impl(
                     )
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
+                        media_buy_status=normalize_persisted_media_buy_status(
+                            _post_action_status
+                        ),  # AdCP 3.1: mirrors `status`
                         affected_packages=affected_pkgs,
                         valid_actions=valid_actions_for_status(_post_action_status),
                         errors=property_list_unsupported_advisories(req.packages, adapter),
@@ -1316,6 +1327,7 @@ def _update_media_buy_impl(
             _final_status = _final_mb.status if _final_mb else ""
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
+                media_buy_status=normalize_persisted_media_buy_status(_final_status),  # AdCP 3.1: mirrors `status`
                 affected_packages=affected_packages_list,
                 valid_actions=valid_actions_for_status(_final_status),
                 context=req.context,

@@ -876,6 +876,12 @@ mappings:
       upstream_refs: ["BR-UC-002-ext-e"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-ext-dual-emit"
+      adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-ext-dual-emit"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-ext-f"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null
@@ -1891,6 +1897,12 @@ mappings:
       business_rules: []
       status: new
   UC-003:
+    - adcp_scenario_id: "T-UC-003-ext-dual-emit"
+      adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-003-ext-dual-emit"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-003-main"
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null

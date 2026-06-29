@@ -469,6 +469,20 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
 }
 
 
+def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
+    """Map a persisted ``MediaBuy.status`` string to its canonical AdCP ``MediaBuyStatus``.
+
+    Single source of truth for DB-status → AdCP-status coercion (``_PERSISTED_STATUS_TO_ADCP``),
+    so the create/update dual-emit of ``media_buy_status`` cannot inject a non-enum DB
+    value (e.g. legacy ``pending_approval``) into the typed response field. Returns
+    ``None`` for an empty/unknown status so callers omit the field rather than emit a
+    non-spec value.
+    """
+    if not status:
+        return None
+    return _PERSISTED_STATUS_TO_ADCP.get(status.lower())
+
+
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
     """Resolve a media buy's AdCP status from its persisted status column.
 

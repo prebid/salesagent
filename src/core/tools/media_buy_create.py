@@ -2963,6 +2963,7 @@ async def _create_media_buy_impl(
             _buy_result = CreateMediaBuyResult(
                 response=CreateMediaBuySuccess(
                     media_buy_id=media_buy_id,
+                    media_buy_status=MediaBuyStatus.pending_creatives.value,  # AdCP 3.1: mirrors deprecated `status`
                     creative_deadline=None,
                     packages=pending_packages,
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
@@ -3118,6 +3119,7 @@ async def _create_media_buy_impl(
             _buy_result = CreateMediaBuyResult(
                 response=CreateMediaBuySuccess(
                     media_buy_id=media_buy_id,
+                    media_buy_status=MediaBuyStatus.pending_start.value,  # AdCP 3.1: mirrors deprecated `status`
                     packages=response_packages,
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                     workflow_step_id=step.step_id,
@@ -3455,6 +3457,7 @@ async def _create_media_buy_impl(
             ]
             simulated_response = CreateMediaBuySuccess(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
+                media_buy_status=MediaBuyStatus.pending_start.value,  # AdCP 3.1: mirrors deprecated `status`
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
@@ -3977,6 +3980,7 @@ async def _create_media_buy_impl(
         # Create AdCP response with typed Package objects
         adcp_response = CreateMediaBuySuccess(
             media_buy_id=response.media_buy_id,
+            media_buy_status=media_buy_status,  # AdCP 3.1 preferred status; mirrors deprecated `status`
             packages=response_packages,
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=getattr(response, "creative_deadline", None),

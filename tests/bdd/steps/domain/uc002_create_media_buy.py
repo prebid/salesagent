@@ -1589,6 +1589,35 @@ def then_response_includes_field(ctx: dict, field: str) -> None:
         assert field in dumped, f"Response missing field '{field}'"
 
 
+@then("the response should include both status and media_buy_status with identical values")
+def then_dual_emit_media_buy_status(ctx: dict) -> None:
+    """AdCP 3.1 dual-emit: the create_media_buy success-response body carries both
+    the PREFERRED ``media_buy_status`` and the DEPRECATED ``status`` (removed in
+    3.2) with IDENTICAL ``MediaBuyStatus`` values.
+
+    This is the ``CreateMediaBuyResponse1`` body shape in the adcp 5.7 library
+    (``CreateMediaBuySuccessResponse``: both fields typed ``MediaBuyStatus | None``).
+    Asserts on the production-serialized response body — the wire envelope's
+    top-level ``status`` is the protocol TaskStatus and is a separate concern;
+    the deprecated-domain/``media_buy_status`` dual-emit lives on the body/payload.
+    Transport-stable: every dispatcher (incl. ``parse_rest_response``) yields a
+    ``CreateMediaBuyResult`` whose ``.response`` is the domain body.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    body = getattr(resp, "response", resp)  # CreateMediaBuyResult -> CreateMediaBuySuccess
+    dumped = body.model_dump(mode="json")
+    media_buy_status = dumped.get("media_buy_status")
+    status = dumped.get("status")
+    assert media_buy_status is not None, (
+        f"Expected 'media_buy_status' on the response body (AdCP 3.1 preferred field), got: {dumped}"
+    )
+    assert status is not None, f"Expected deprecated 'status' on the response body, got: {dumped}"
+    assert str(media_buy_status) == str(status), (
+        f"AdCP 3.1 dual-emit requires identical values: media_buy_status={media_buy_status!r} vs status={status!r}"
+    )
+
+
 @then(parsers.parse('I remember the "{field}" as "{alias}"'))
 def then_remember_field(ctx: dict, field: str, alias: str) -> None:
     """Remember a response field value for later comparison."""
