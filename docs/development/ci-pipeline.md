@@ -230,7 +230,7 @@ required (or stay blocked on stale `Test Suite / …` names).
 | `make quality` | Yes (`tests/unit/ -x`) | Local pre-commit habit |
 | `make quality-full` | Full suites via `run_all_tests.sh` | Pre-PR local gate |
 
-### Local vs CI Postgres isolation (D9)
+### Local vs CI Postgres isolation (D9, #1233)
 
 Local `tox -e integration` and `make test-int` reuse a **persistent** Postgres
 instance (agent-db or Docker stack on the host). CI integration/admin/BDD jobs
@@ -243,6 +243,20 @@ Cross-test isolation bugs that depend on process-wide factory binding (see
 shared Postgres, then compare with the same slice in CI. If a failure is
 isolation-specific, inspect factory session binding and tenant scoping — not
 Postgres version drift (guarded by `test_architecture_postgres_image_anchor`).
+
+### Legacy `requires_server` tests removed (D11, #1233)
+
+Integration/admin tests marked ``@pytest.mark.requires_server`` were deselected
+by ``-m "not requires_server"`` in tox and CI and never executed (many used the
+in-process ``mcp_server`` fixture rather than an external server). Equivalent
+coverage lives in ``tests/e2e/`` via ``live_server`` / ``docker_services_e2e``.
+
+**Post-#1234 follow-up — still #1233 scope:**
+
+| Item | Tracking | When |
+|------|----------|------|
+| `test_sell_readiness_browser.py` admin browser flows | #1233 D11 follow-up | Dedicated admin+e2e-stack CI job |
+| Nightly GAM `requires_gam` workflow | #1477 (D13) | #1485 |
 
 ## Layered pre-commit model (PR 4 of #1234)
 
