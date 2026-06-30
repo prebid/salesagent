@@ -922,6 +922,16 @@ class TestUpdateMediaBuyAdapterError:
         assert result.status == "completed"
         media_buy_id = result.response.media_buy_id
 
+        # Move the buy to 'active' so 'pause' passes the state-machine gate and
+        # actually reaches the adapter — a pending_creatives buy (no creatives)
+        # rejects 'pause' with AdCPGoneError BEFORE any adapter call, so the
+        # network-failure path would never be exercised (salesagent-clsi).
+        with get_db_session() as session:
+            buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+            assert buy is not None
+            buy.status = "active"
+            session.commit()
+
         # Mock adapter to simulate network failure
         with patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter:
             mock_adapter = MagicMock()
@@ -934,15 +944,13 @@ class TestUpdateMediaBuyAdapterError:
                 media_buy_id=media_buy_id,
                 paused=True,
             )
-            # _update_media_buy_impl propagates adapter exceptions as-is or returns error
-            # depending on the code path. Test that it either raises or returns error.
-            try:
-                update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
-                # If it returns, should be an error response
-                assert update_result.response.errors
-            except (ConnectionError, Exception):
-                # Adapter error propagated -- acceptable behavior
-                pass
+            # The pause path calls adapter.update_media_buy() with no local try/except
+            # and _update_media_buy_impl has no outer handler, so the adapter's
+            # ConnectionError propagates to the caller. Assert that deterministically
+            # OUTSIDE any catch-all (salesagent-clsi: the prior try/except swallowed
+            # both the propagated error and the unreachable assert, making this vacuous).
+            with pytest.raises(ConnectionError, match="Simulated network failure"):
+                _update_media_buy_impl(req=update_req, identity=mb_identity)
 
 
 class TestDeliveryIdentityValidation:
