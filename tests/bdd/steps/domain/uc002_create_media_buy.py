@@ -222,6 +222,27 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=owner, account=account)
 
 
+@given("the Buyer Agent's token resolves no principal")
+def given_unauthenticated_principal(ctx: dict) -> None:
+    """Force the dispatch identity to an unauthenticated one: a tenant is resolved
+    (from the host header, as MCP middleware does) but principal_id is None.
+
+    This is the exact shape an unauthenticated MCP caller presents — MCP resolves
+    a tenant from the host but no principal from a missing/invalid token, so account
+    resolution at the transport boundary runs with principal_id=None. A2A/REST raise
+    on the missing token before this point; forcing the identity here exercises the
+    shared ``enrich_identity_with_account`` boundary guard uniformly on every wire
+    transport. See salesagent-fb2l.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    ctx["dispatch_identity"] = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=env._tenant_id,
+    )
+
+
 @given(parsers.parse('the account "{account_id}" exists and is active'))
 def given_account_exists_active(ctx: dict, account_id: str) -> None:
     """Create an active account with agent access."""
@@ -715,7 +736,12 @@ def _dispatch_full_create(ctx: dict) -> None:
         ctx["error"] = e
         return
 
-    dispatch_request(ctx, req=req)
+    # No-auth scenarios (salesagent-fb2l) stash an unauthenticated identity so the
+    # transport-boundary account-resolution guard is exercised on the wire.
+    if "dispatch_identity" in ctx:
+        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
+    else:
+        dispatch_request(ctx, req=req)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:

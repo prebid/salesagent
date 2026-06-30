@@ -20,3 +20,14 @@ Feature: BR-UC-002 Account access scoping
     And the natural key matches 2 accounts but the agent can access 1
     When the Buyer Agent sends the create_media_buy request
     Then the result should be success
+
+  # salesagent-fb2l: an unauthenticated caller (tenant resolved, no principal) must be
+  # rejected with AUTH_REQUIRED at the account-resolution boundary — it must never reach
+  # natural-key resolution, which would disclose the tenant-wide match count (info leak).
+  @T-UC-002-fb2l-unauth-no-disclosure @account @error
+  Scenario: Unauthenticated natural-key resolution discloses no account information
+    Given a valid create_media_buy request with account natural key brand "leak-brand.com" operator "leak-agency.com"
+    And the natural key matches 2 accounts
+    And the Buyer Agent's token resolves no principal
+    When the Buyer Agent sends the create_media_buy request
+    Then the result should be error "AUTH_REQUIRED"

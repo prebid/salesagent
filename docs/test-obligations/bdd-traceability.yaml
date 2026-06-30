@@ -822,6 +822,12 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-fb2l-unauth-no-disclosure"
+      adcp_feature: "BR-UC-002-account-access.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-alt-asap"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null
