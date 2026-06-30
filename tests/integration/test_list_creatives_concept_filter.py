@@ -43,13 +43,14 @@ _ALL_WIRE = [Transport.A2A, Transport.MCP, Transport.REST]
 _HELPER_WIRE = [Transport.A2A, Transport.REST]
 
 
-def _seed_authenticated_principal(env: CreativeListEnv) -> None:
-    """Seed the tenant+principal the env authenticates as, so the request reaches
-    filter validation rather than failing auth first."""
+def _seed_authenticated_principal(env: CreativeListEnv):
+    """Seed (and return) the tenant+principal the env authenticates as, so the
+    request reaches filter validation / listing rather than failing auth first."""
     from tests.factories import PrincipalFactory, TenantFactory
 
     tenant = TenantFactory(tenant_id=env._tenant_id)
-    PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
+    principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
+    return tenant, principal
 
 
 class TestConceptIdsFilterValidation:
@@ -79,8 +80,32 @@ class TestConceptIdsFilterValidation:
             envelope = result.wire_error_envelope
             assert envelope is not None, f"{transport}: no wire error envelope captured"
             assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
-            # POST-F3: the buyer is told how to recover.
-            body = envelope.envelope if hasattr(envelope, "envelope") else envelope
-            assert body["errors"][0].get("suggestion"), (
-                f"{transport}: VALIDATION_ERROR envelope must carry a recovery suggestion: {body['errors'][0]}"
+            # POST-F3: the buyer is told how to recover. wire_error_envelope is always
+            # a dict here (the AdCPToolError accessor lives in assert_envelope_shape).
+            assert envelope["errors"][0].get("suggestion"), (
+                f"{transport}: VALIDATION_ERROR envelope must carry a recovery suggestion: {envelope['errors'][0]}"
             )
+
+
+class TestNumericConceptCoercion:
+    """A numeric concept_id/concept_name in the data blob (CM360-style group ids) is
+    coerced to the spec's string type, not crashed on. Regression guard for the #1
+    fix: reverting the str()-coercion reddens this (the listing raises mid-build)."""
+
+    def test_numeric_concept_id_is_coerced_to_string(self, integration_db):
+        from tests.factories import CreativeFactory
+
+        with CreativeListEnv() as env:
+            tenant, principal = _seed_authenticated_principal(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data={"assets": {}, "concept_id": 12345, "concept_name": 678},
+            )
+            result = env.call_via(Transport.REST)
+            assert not result.is_error, f"listing errored on a numeric concept_id: {result.error!r}"
+            creative = result.wire_response["creatives"][0]
+            assert creative["concept_id"] == "12345"
+            assert creative["concept_name"] == "678"

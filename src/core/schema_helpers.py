@@ -133,13 +133,13 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     A2A coerce identically (the MCP transport coerces via FastMCP's TypeAdapter on
     the tool signature).
 
-    Unlike the ``to_*`` converters above, an *invalid* structured filter is a loud
-    failure, not a silent ``None``: a malformed filter (e.g. ``concept_ids`` with an
-    empty array, violating the schema's ``minItems: 1``) is raised as an
-    ``AdCPValidationError`` carrying a recovery suggestion, so every transport
-    surfaces the spec's two-layer ``VALIDATION_ERROR`` envelope (with a suggestion,
-    per POST-F3) instead of a bare framework ``ValidationError`` that
-    ``normalize_to_adcp_error`` would flatten without a suggestion.
+    A malformed filter (e.g. ``concept_ids`` with an empty array, violating the
+    schema's ``minItems: 1``) is raised as a *typed* ``AdCPValidationError`` carrying
+    a recovery suggestion, so every transport surfaces the spec's two-layer
+    ``VALIDATION_ERROR`` envelope (with a suggestion, per POST-F3). Constructing the
+    model directly instead (as the ``to_*`` converters above do, via ``Model(**dict)``)
+    surfaces a raw pydantic ``ValidationError`` that ``normalize_to_adcp_error``
+    flattens into a suggestion-less envelope.
 
     Args:
         filters: Filters as a wire dict, an already-typed CreativeFilters, or None.

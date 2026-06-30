@@ -35,6 +35,24 @@ from src.core.validation_helpers import format_validation_error
 logger = logging.getLogger(__name__)
 
 
+def _coerce_concept_value(value: Any) -> str | None:
+    """Coerce an untyped concept blob value to the spec's string type.
+
+    ``concept_id``/``concept_name`` are strings per the AdCP response schema but
+    live in the untyped JSON ``data`` blob, where an out-of-band producer may write
+    a non-string scalar (e.g. a numeric CM360 group id). Scalars are stringified.
+    A non-scalar (list/dict) is corrupt for a string field, so it is dropped with a
+    warning — surfaced in logs (No Quiet Failures) rather than projected as a Python
+    repr — instead of crashing the whole listing on one bad row.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):  # bool is an int subclass; str(True)="True" is acceptable
+        return str(value)
+    logger.warning("Dropping non-scalar concept value of type %s from creative listing", type(value).__name__)
+    return None
+
+
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
     """Merge a structured CreativeFilters model into flat params (flat take precedence).
 
@@ -295,23 +313,17 @@ def _list_creatives_impl(
                 # Default to pending_review if invalid status
                 status_enum = CreativeStatus.pending_review
 
-            # v3.1 concept grouping (Flashtalking/Celtra/CM360-style), stored on the
-            # JSON data blob, omitted from the response when absent.
-            #
-            # Population is out-of-band by design: the AdCP sync_creatives request
-            # carries no concept field (concepts are seller/ad-server-assigned, not
-            # buyer-supplied), so concept_id/concept_name are written into data[] by
-            # the ingesting integration (e.g. an adapter mapping the ad server's
-            # native creative groups). Mapping GAM creative groups -> these fields is
-            # a separate, adapter-scoped follow-up; until then the field is populated
-            # only by external producers writing to the blob.
-            #
-            # The blob is untyped and external producers may write numeric ids (CM360
-            # group ids), so coerce to the spec's string type instead of letting a
+            # v3.1 concept grouping. AdCP exposes concept_id/concept_name on the
+            # list_creatives RESPONSE (a creative's concept membership, sourced from
+            # the buyer's creative-management platform — Flashtalking/Celtra/CM360),
+            # but standardizes no concept INPUT on sync_creatives, so the field is
+            # populated out-of-band into the data blob. (A seller-side mapping of GAM
+            # creative groups -> these fields is a separate enrichment/fallback
+            # follow-up, not the authoritative buyer-side concept.) The blob is
+            # untyped and an external producer may write numeric group ids, so coerce
+            # to the spec's string type via _coerce_concept_value rather than letting a
             # non-string value fail Creative validation and crash the whole listing.
             concept_data = db_creative.data or {}
-            concept_id_raw = concept_data.get("concept_id")
-            concept_name_raw = concept_data.get("concept_name")
 
             creative = Creative(
                 creative_id=db_creative.creative_id,
@@ -323,8 +335,8 @@ def _list_creatives_impl(
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,
-                concept_id=str(concept_id_raw) if concept_id_raw is not None else None,
-                concept_name=str(concept_name_raw) if concept_name_raw is not None else None,
+                concept_id=_coerce_concept_value(concept_data.get("concept_id")),
+                concept_name=_coerce_concept_value(concept_data.get("concept_name")),
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )

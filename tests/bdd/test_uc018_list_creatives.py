@@ -50,6 +50,7 @@ from typing import Any
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
+from tests.harness.transport import Transport
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 
 # Three genuinely-different formats (display / video / audio) for the "three
@@ -302,7 +303,14 @@ def _wire_creatives(ctx: dict) -> list[dict[str, Any]]:
     non-stashing path), so the step still has data to assert on.
     """
     wire = ctx.get("wire_response")
-    if wire and "creatives" in wire:
+    transport = ctx.get("transport")
+    # Loud guard (mirrors uc005_format_id_shape): a real-wire transport (a2a/mcp/rest/
+    # e2e_rest) that didn't stash wire_response must trip here, not silently fall back
+    # to a model_dump re-serialization and undercut the "real wire bytes" claim. IMPL
+    # (and the unparametrized None default) legitimately have no wire.
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if wire is not None:
         return wire["creatives"]
     return _serialized_response(ctx)["creatives"]
 
