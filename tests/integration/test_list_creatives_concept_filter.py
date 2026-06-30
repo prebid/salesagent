@@ -20,8 +20,8 @@ TypeAdapter rejects ``concept_ids=[]`` *before* the tool body runs — a raw inp
 ValidationError, not an ``AdCPError`` the MCP boundary could wrap into the envelope.
 Translating FastMCP TypeAdapter input errors into the two-layer envelope is a
 pre-existing, tool-agnostic MCP-boundary concern (it affects every typed param,
-not just concept_ids) and is tracked separately. Layer 1 still pins that MCP
-rejects the malformed filter.
+not just concept_ids) and is tracked separately in #1507. Layer 1 still pins that
+MCP rejects the malformed filter.
 
 Spec: ``core/creative-filters.json`` (concept_ids ``minItems: 1``) + the BR-UC-018
 ext-c contract (validation failure → VALIDATION_ERROR + suggestion).

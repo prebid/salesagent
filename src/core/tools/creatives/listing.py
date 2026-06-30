@@ -319,7 +319,7 @@ def _list_creatives_impl(
             # but standardizes no concept INPUT on sync_creatives, so the field is
             # populated out-of-band into the data blob. (A seller-side mapping of GAM
             # creative groups -> these fields is a separate enrichment/fallback
-            # follow-up, not the authoritative buyer-side concept.) The blob is
+            # follow-up (#1506), not the authoritative buyer-side concept.) The blob is
             # untyped and an external producer may write numeric group ids, so coerce
             # to the spec's string type via _coerce_concept_value rather than letting a
             # non-string value fail Creative validation and crash the whole listing.
