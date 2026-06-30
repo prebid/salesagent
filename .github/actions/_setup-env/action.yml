@@ -11,7 +11,7 @@ runs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-v4-py${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock') }}
+        key: ${{ runner.os }}-uv-v5-py${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
     - name: Install dependencies
       shell: bash

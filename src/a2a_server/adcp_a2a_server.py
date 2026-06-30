@@ -106,7 +106,7 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from src.core.validation_helpers import first_validation_error_field
+from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -1528,8 +1528,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = self._make_tool_context(identity, "create_media_buy")
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import CreateMediaBuyRequest
 
         # Pre-process: A2A field name translations
@@ -1572,10 +1570,8 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion=f"Required: {required_params}",
             )
 
-        try:
+        with adcp_validation_boundary():
             req = CreateMediaBuyRequest.model_validate(params)
-        except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1866,8 +1862,6 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import UpdateMediaBuyRequest
 
         # Pre-process: support legacy 'updates.packages' → 'packages'
@@ -1887,7 +1881,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')
-        try:
+        with adcp_validation_boundary():
             req = UpdateMediaBuyRequest(
                 media_buy_id=params.get("media_buy_id"),
                 paused=params.get("paused"),
@@ -1895,8 +1889,6 @@ class AdCPRequestHandler(RequestHandler):
                 end_time=params.get("end_time"),
                 context=params.get("context"),
             )
-        except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields + raw nested structures and identity
         response = core_update_media_buy_tool(
@@ -1947,7 +1939,8 @@ class AdCPRequestHandler(RequestHandler):
         if "media_buy_ids" not in params and "media_buy_id" in params:
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
-        req = GetMediaBuyDeliveryRequest.model_validate(params)
+        with adcp_validation_boundary():
+            req = GetMediaBuyDeliveryRequest.model_validate(params)
 
         # Call core function with validated fields (all optional per AdCP spec).
         # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
@@ -1965,7 +1958,7 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
-            account=params.get("account"),
+            account=req.account,
             context=params.get("context"),
             identity=identity,
         )
@@ -1977,15 +1970,10 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import UpdatePerformanceIndexRequest
 
-        try:
+        with adcp_validation_boundary():
             req = UpdatePerformanceIndexRequest.model_validate(parameters)
-        except ValidationError as e:
-            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(

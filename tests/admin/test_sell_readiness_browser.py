@@ -18,7 +18,6 @@ from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_tes
 pytestmark = [
     pytest.mark.admin,
     pytest.mark.e2e,
-    pytest.mark.requires_server,
     pytest.mark.slow,
 ]
 

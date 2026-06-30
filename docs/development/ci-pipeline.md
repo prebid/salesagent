@@ -230,6 +230,59 @@ required (or stay blocked on stale `Test Suite / …` names).
 | `make quality` | Yes (`tests/unit/ -x`) | Local pre-commit habit |
 | `make quality-full` | Full suites via `run_all_tests.sh` | Pre-PR local gate |
 
+### Local vs CI Postgres isolation (D9, #1233)
+
+Local `tox -e integration` and `make test-int` reuse a **persistent** Postgres
+instance (agent-db or Docker stack on the host). CI integration/admin/BDD jobs
+start a **fresh** `postgres:17-alpine` service container per job run.
+
+Cross-test isolation bugs that depend on process-wide factory binding (see
+`tests/admin/conftest.py`) can reproduce locally but not in CI, or vice versa.
+
+**Diagnostic:** run `tox -p` or `./run_all_tests.sh quick` locally against a
+shared Postgres, then compare with the same slice in CI. If a failure is
+isolation-specific, inspect factory session binding and tenant scoping — not
+Postgres version drift (guarded by `test_architecture_postgres_image_anchor`).
+
+### Legacy `requires_server` tests removed (D11, #1233)
+
+Integration/admin tests marked ``@pytest.mark.requires_server`` were deselected
+by ``-m "not requires_server"`` in tox and CI and never executed (many used the
+in-process ``mcp_server`` fixture rather than an external server). Equivalent
+coverage lives in ``tests/e2e/`` via ``live_server`` / ``docker_services_e2e``.
+
+**Post-#1234 follow-up — still #1233 scope:**
+
+| Item | Tracking | When |
+|------|----------|------|
+| `test_sell_readiness_browser.py` admin browser flows | #1233 D11 follow-up | Dedicated admin+e2e-stack CI job |
+
+### Nightly GAM regression (D13, #1477)
+
+~20 tests in `tests/e2e/test_gam_*.py` carry `@pytest.mark.requires_gam`. They
+call the live GAM sandbox network and are **excluded from per-PR CI** (quota,
+credential blast radius on fork PRs).
+
+| Property | Value |
+|----------|-------|
+| Workflow | [`.github/workflows/gam-nightly.yml`](../../.github/workflows/gam-nightly.yml) |
+| Trigger | Daily cron (`07:00 UTC`) + `workflow_dispatch` |
+| Branch | `main` only (`if: github.ref == 'refs/heads/main'`) |
+| Environment | `gam-nightly` — create under **Settings → Environments**, restrict deployment branches to `main` |
+| Secret | `GAM_SERVICE_ACCOUNT_JSON` on the `gam-nightly` environment (not repo-level; unavailable to fork PRs) |
+| Command | `pytest tests/e2e/ -m requires_gam` (GHA Postgres service on :5435 for `gam_lifecycle_db`; tests that request `docker_services_e2e` still start the e2e stack via conftest) |
+| `DATABASE_URL` | `postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres` — GHA `services.postgres` on host port 5435; `gam_lifecycle_db` creates ephemeral databases there |
+
+Failures notify repository watchers via GitHub's default workflow notifications.
+
+**Local equivalent** (requires credentials + Docker):
+
+```bash
+export GAM_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+export DATABASE_URL=postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
+uv run pytest tests/e2e/ -m requires_gam -v --timeout=300
+```
+
 ## Layered pre-commit model (PR 4 of #1234)
 
 | Layer | Trigger | Enforcement |
@@ -255,3 +308,32 @@ See [`.pre-commit-coverage-map.yml`](../../.pre-commit-coverage-map.yml) for hoo
 `alembic/versions/` is excluded from `ruff format` in `pyproject.toml`. Never
 reformat or edit committed migration files in CI PRs — it violates project policy
 and creates review noise.
+
+## GitHub Code Quality vs CodeQL scoping (#1422)
+
+Two separate analyzers can comment on Python PRs:
+
+| Analyzer | Configured by | Alembic exclusions |
+|----------|---------------|-------------------|
+| **CodeQL** (security workflow) | In-repo [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml) | `paths-ignore: alembic/versions/` — honored |
+| **Code Quality** (`github-code-quality[bot]`) | GitHub org/repo **Advanced Security → Code Quality** settings | **Not** driven by `codeql-config.yml` |
+
+### Problem
+
+Code Quality flags alembic module globals (`revision`, `down_revision`, `branch_labels`, `depends_on`) as "Unused global variable". Those globals are Alembic's public migration API — false positives on every migration touch.
+
+### Maintainer action (org/repo settings)
+
+Keep Code Quality **enabled** (it catches real issues outside excluded paths) but scope it to mirror CodeQL:
+
+1. GitHub → **Settings** → **Code security and analysis** → **Code Quality** (org admins: org-level defaults).
+2. Add path exclusions matching `.github/codeql/codeql-config.yml` `paths-ignore`, at minimum:
+   - `alembic/versions/`
+3. After updating scope, dismiss/resolving stale bot comments on open migration PRs.
+
+### Verification
+
+- Push touching `alembic/versions/` → zero unused-global comments from `github-code-quality[bot]`.
+- Deliberate quality issue in `src/` → still flagged.
+
+Track: [#1422](https://github.com/prebid/salesagent/issues/1422).
