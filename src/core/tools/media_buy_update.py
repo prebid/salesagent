@@ -17,6 +17,7 @@ from typing import Annotated, Any, Literal
 from adcp import PushNotificationConfig
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import MediaBuyStatus
 from pydantic import Field
 
 from src.core.tools.media_buy_list import normalize_persisted_media_buy_status
@@ -99,6 +100,22 @@ from src.services.targeting_capabilities import (
     validate_property_targeting_allowed,
     validate_unknown_targeting_fields,
 )
+
+
+def _adcp_status_and_actions(persisted_status: str | None) -> tuple[MediaBuyStatus | None, list[str]]:
+    """Map a persisted ``MediaBuy.status`` to ``(media_buy_status, valid_actions)``.
+
+    ``valid_actions`` is derived from the NORMALIZED AdCP status, not the raw
+    persisted string — otherwise a persisted status whose name differs from its
+    AdCP value (``scheduled``/``approved``/``pending_approval``/``failed``/``draft``)
+    feeds a non-AdCP token to ``valid_actions_for_status`` and yields ``[]`` (and a
+    null ``media_buy_status``), diverging from ``get_media_buys``' date-aware
+    ``_compute_status``. Single source of truth for the update-response status pair
+    so the four ``UpdateMediaBuySuccess`` sites cannot drift (salesagent-3ec1).
+    """
+    media_buy_status = normalize_persisted_media_buy_status(persisted_status)
+    valid_actions = valid_actions_for_status(media_buy_status.value) if media_buy_status else []
+    return media_buy_status, valid_actions
 
 
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
@@ -496,13 +513,12 @@ def _update_media_buy_impl(
                 _dry_run_status = _dry_run_mb.status if _dry_run_mb else ""
 
                 # Build simulated response
+                _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_status)
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
-                    media_buy_status=normalize_persisted_media_buy_status(
-                        _dry_run_status
-                    ),  # AdCP 3.1: mirrors `status`
+                    media_buy_status=_dry_run_mbs,  # AdCP 3.1: mirrors `status`
                     affected_packages=simulated_affected,
-                    valid_actions=valid_actions_for_status(_dry_run_status),
+                    valid_actions=_dry_run_actions,
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
@@ -523,13 +539,12 @@ def _update_media_buy_impl(
                 # This mirrors create_media_buy's raw_request pattern.
                 _approval_mb = uow.media_buys.get_by_id(req.media_buy_id)
                 _approval_status = _approval_mb.status if _approval_mb else ""
+                _approval_mbs, _approval_actions = _adcp_status_and_actions(_approval_status)
                 approval_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
-                    media_buy_status=normalize_persisted_media_buy_status(
-                        _approval_status
-                    ),  # AdCP 3.1: mirrors `status`
+                    media_buy_status=_approval_mbs,  # AdCP 3.1: mirrors `status`
                     affected_packages=[],  # Not yet applied — pending approval
-                    valid_actions=valid_actions_for_status(_approval_status),
+                    valid_actions=_approval_actions,
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
@@ -675,13 +690,12 @@ def _update_media_buy_impl(
                         if _post_action_mb and _post_action_mb.status
                         else ("paused" if req.paused else "active")
                     )
+                    _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_status)
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        media_buy_status=normalize_persisted_media_buy_status(
-                            _post_action_status
-                        ),  # AdCP 3.1: mirrors `status`
+                        media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
                         affected_packages=affected_pkgs,
-                        valid_actions=valid_actions_for_status(_post_action_status),
+                        valid_actions=_post_action_actions,
                         errors=property_list_unsupported_advisories(req.packages, adapter),
                     )
                     # Log successful update_media_buy (pause/resume)
@@ -1325,11 +1339,12 @@ def _update_media_buy_impl(
 
             _final_mb = uow.media_buys.get_by_id(req.media_buy_id)
             _final_status = _final_mb.status if _final_mb else ""
+            _final_mbs, _final_actions = _adcp_status_and_actions(_final_status)
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
-                media_buy_status=normalize_persisted_media_buy_status(_final_status),  # AdCP 3.1: mirrors `status`
+                media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`
                 affected_packages=affected_packages_list,
-                valid_actions=valid_actions_for_status(_final_status),
+                valid_actions=_final_actions,
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )

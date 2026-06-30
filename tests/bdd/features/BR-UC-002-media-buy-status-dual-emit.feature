@@ -59,3 +59,28 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     When the Buyer Agent sends the update_media_buy request
     Then the response should succeed
     And the response carries the domain media_buy_status and the protocol status separately
+
+  # salesagent-3ec1: a pre-flight 'scheduled' persisted status (set by admin approval)
+  # is not in the AdCP vocabulary. The update response must normalize it to the domain
+  # pending_start AND derive valid_actions from that normalized status — not emit a null
+  # media_buy_status + empty valid_actions (which diverges from get_media_buys' date-aware
+  # _compute_status, which reports pending_start).
+  @T-UC-003-ext-scheduled-status @main-flow
+  Scenario: update_media_buy on a scheduled buy normalizes status and reports valid_actions
+    Given the Buyer owns an existing media buy with media_buy_id "mb_existing"
+    And the media buy is in "scheduled" status
+    And the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 5000    |
+    And the package "pkg_001" exists in the media buy
+    And the updated daily spend does not exceed max_daily_package_spend
+    When the Buyer Agent sends the update_media_buy request
+    Then the response should succeed
+    And the wire media_buy_status should be "pending_start"
+    And the wire valid_actions should include "update_budget"
+    And the wire valid_actions should include "cancel"

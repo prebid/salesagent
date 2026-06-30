@@ -464,6 +464,9 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
     "draft": MediaBuyStatus.pending_start,
     "pending": MediaBuyStatus.pending_start,
     "pending_approval": MediaBuyStatus.pending_start,
+    # "scheduled" is set by admin approval pre-flight (operations.py / workflows.py);
+    # like the other pre-serving states it maps to pending_start (salesagent-3ec1).
+    "scheduled": MediaBuyStatus.pending_start,
     "pending_creatives": MediaBuyStatus.pending_creatives,
     "pending_start": MediaBuyStatus.pending_start,
 }

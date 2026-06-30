@@ -143,6 +143,35 @@ def given_buyer_owns_media_buy_with_id(ctx: dict, mb_id: str) -> None:
         ctx["existing_media_buy_id"] = mb_id
 
 
+@then(parsers.parse('the wire media_buy_status should be "{status}"'))
+def then_wire_media_buy_status_value(ctx: dict, status: str) -> None:
+    """Assert the REAL wire ``media_buy_status`` equals the expected DOMAIN status.
+
+    Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
+    payload. Used to pin that a persisted status whose name differs from its AdCP
+    value (e.g. 'scheduled') is normalized to the correct domain MediaBuyStatus on
+    the update response (salesagent-3ec1)."""
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    actual = wire.get("media_buy_status")
+    assert actual == status, f"Expected wire media_buy_status '{status}', got {actual!r} (wire keys: {sorted(wire)})"
+
+
+@then(parsers.parse('the wire valid_actions should include "{action}"'))
+def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
+    """Assert the REAL wire ``valid_actions`` list contains the expected action.
+
+    valid_actions must be derived from the NORMALIZED AdCP status, so a persisted
+    'scheduled' buy reports pending_start's actions (not [] from the raw string)
+    (salesagent-3ec1)."""
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    actions = wire.get("valid_actions") or []
+    assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
+
+
 @given(parsers.parse('the media buy is in "{status}" status'))
 def given_media_buy_status(ctx: dict, status: str) -> None:
     """Set precondition: mutate the existing media buy to the specified status.
