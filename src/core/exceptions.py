@@ -498,17 +498,27 @@ class AdCPAccountPaymentRequiredError(AdCPError):
 
 
 class AdCPConflictError(AdCPError):
-    """Resource conflict, e.g. duplicate idempotency key (409)."""
+    """Resource conflict, e.g. duplicate idempotency key (409).
+
+    Recovery=transient per the pinned error-code.json enumMetadata (CONFLICT):
+    a generic resource conflict (e.g. concurrent modification) is resolved by
+    retrying with backoff. Subclasses whose specific code the enum classifies as
+    correctable (ACCOUNT_AMBIGUOUS, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_EXPIRED)
+    override this (salesagent-xds6).
+    """
 
     _default_status_code: ClassVar[int] = 409
     _default_error_code: ClassVar[str] = "CONFLICT"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPAccountAmbiguousError(AdCPConflictError):
     """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
 
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
+    # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
+    # an explicit account_id) — override the transient CONFLICT parent (salesagent-xds6).
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPGoneError(AdCPError):
@@ -525,11 +535,16 @@ class AdCPGoneError(AdCPError):
 
 
 class AdCPBudgetExhaustedError(AdCPError):
-    """Budget or spend limit has been reached (422)."""
+    """Budget or spend limit has been reached (422).
+
+    Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
+    an exhausted budget cannot be recovered autonomously — an operator must add
+    budget — so the buyer agent must not retry (salesagent-xds6).
+    """
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "BUDGET_EXHAUSTED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPRateLimitError(AdCPError):

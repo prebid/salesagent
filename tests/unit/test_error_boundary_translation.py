@@ -74,16 +74,10 @@ class TestExtractErrorInfoAdCPError:
         assert message == "GAM down"
         assert recovery == "transient"
 
-    def test_adcp_conflict_error_extracts_code_and_message(self):
-        """AdCPConflictError → ('CONFLICT', 'duplicate key', 'correctable')."""
-        from src.core.exceptions import AdCPConflictError
-        from src.core.tool_error_logging import extract_error_info
-
-        exc = AdCPConflictError("duplicate key")
-        code, message, recovery = extract_error_info(exc)
-        assert code == "CONFLICT"
-        assert message == "duplicate key"
-        assert recovery == "correctable"
+    # AdCPConflictError recovery (CONFLICT → transient) and AdCPBudgetExhaustedError
+    # recovery (BUDGET_EXHAUSTED → terminal) are graded against the pinned enum by the
+    # recovery-conformance oracle (salesagent-xds6). The prior per-class literal methods
+    # asserted the old correctable values and are removed.
 
     def test_adcp_gone_error_extracts_code_and_message(self):
         """AdCPGoneError → ('INVALID_STATE', 'proposal expired', 'correctable').
@@ -98,17 +92,6 @@ class TestExtractErrorInfoAdCPError:
         code, message, recovery = extract_error_info(exc)
         assert code == "INVALID_STATE"
         assert message == "proposal expired"
-        assert recovery == "correctable"
-
-    def test_adcp_budget_exhausted_error_extracts_code_and_message(self):
-        """AdCPBudgetExhaustedError → ('BUDGET_EXHAUSTED', 'budget limit reached', 'correctable')."""
-        from src.core.exceptions import AdCPBudgetExhaustedError
-        from src.core.tool_error_logging import extract_error_info
-
-        exc = AdCPBudgetExhaustedError("budget limit reached")
-        code, message, recovery = extract_error_info(exc)
-        assert code == "BUDGET_EXHAUSTED"
-        assert message == "budget limit reached"
         assert recovery == "correctable"
 
     def test_adcp_service_unavailable_error_extracts_code_and_message(self):
@@ -565,7 +548,8 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 409
-            assert_envelope_shape(response.json(), "CONFLICT", recovery="correctable")
+            # CONFLICT recovery is transient per the pinned enum (salesagent-xds6).
+            assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_adcp_service_unavailable_from_impl_returns_503(self):
         """AdCPServiceUnavailableError raised in _impl → REST returns 503 with transient recovery."""
@@ -807,9 +791,9 @@ class TestToDictRecoveryField:
             (AdCPError("internal"), "terminal"),
             (AdCPValidationError("bad field"), "correctable"),
             (AdCPNotFoundError("missing"), "terminal"),
-            (AdCPConflictError("duplicate"), "correctable"),
+            (AdCPConflictError("duplicate"), "transient"),
             (AdCPGoneError("expired"), "correctable"),
-            (AdCPBudgetExhaustedError("no budget"), "correctable"),
+            (AdCPBudgetExhaustedError("no budget"), "terminal"),
             (AdCPRateLimitError("slow down"), "transient"),
             (AdCPAdapterError("GAM down"), "transient"),
             (AdCPServiceUnavailableError("unavailable"), "transient"),
@@ -964,9 +948,9 @@ class TestRecoveryRoundtrip:
             (AdCPError, "internal", "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", "INVALID_REQUEST", "terminal"),
-            (AdCPConflictError, "dup", "CONFLICT", "correctable"),
+            (AdCPConflictError, "dup", "CONFLICT", "transient"),
             (AdCPGoneError, "expired", "INVALID_STATE", "correctable"),
-            (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "correctable"),
+            (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "terminal"),
             (AdCPRateLimitError, "slow", "RATE_LIMITED", "transient"),
             (AdCPAdapterError, "down", "SERVICE_UNAVAILABLE", "transient"),
             (AdCPServiceUnavailableError, "offline", "SERVICE_UNAVAILABLE", "transient"),
@@ -1023,9 +1007,9 @@ class TestRecoveryRoundtrip:
             (AdCPError, "internal", "terminal"),
             (AdCPValidationError, "bad", "correctable"),
             (AdCPNotFoundError, "missing", "terminal"),
-            (AdCPConflictError, "dup", "correctable"),
+            (AdCPConflictError, "dup", "transient"),
             (AdCPGoneError, "expired", "correctable"),
-            (AdCPBudgetExhaustedError, "broke", "correctable"),
+            (AdCPBudgetExhaustedError, "broke", "terminal"),
             (AdCPRateLimitError, "slow", "transient"),
             (AdCPAdapterError, "down", "transient"),
             (AdCPServiceUnavailableError, "offline", "transient"),
@@ -1067,9 +1051,9 @@ class TestRecoveryRoundtrip:
             (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "terminal"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "terminal"),
-            (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
+            (AdCPConflictError, "dup", 409, "CONFLICT", "transient"),
             (AdCPGoneError, "expired", 410, "INVALID_STATE", "correctable"),
-            (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "correctable"),
+            (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "terminal"),
             (AdCPRateLimitError, "slow", 429, "RATE_LIMITED", "transient"),
             (AdCPAdapterError, "down", 502, "SERVICE_UNAVAILABLE", "transient"),
             (AdCPServiceUnavailableError, "offline", 503, "SERVICE_UNAVAILABLE", "transient"),

@@ -556,9 +556,10 @@ class TestMCPRecoveryInErrorResponses:
             ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
-            ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
+            # CONFLICT (transient) and BUDGET_EXHAUSTED (terminal) recovery is graded
+            # against the pinned enum by the recovery-conformance oracle (salesagent-xds6),
+            # so their per-class literals are not duplicated in this hardcoded table.
             ("AdCPGoneError", "expired", "INVALID_STATE", "correctable"),
-            ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
             ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPServiceUnavailableError", "offline", "SERVICE_UNAVAILABLE", "transient"),
@@ -619,9 +620,9 @@ class TestA2ARecoveryInErrorResponses:
             ("AdCPError", "internal", "terminal"),
             ("AdCPValidationError", "bad", "correctable"),
             ("AdCPNotFoundError", "missing", "terminal"),
-            ("AdCPConflictError", "dup", "correctable"),
+            ("AdCPConflictError", "dup", "transient"),
             ("AdCPGoneError", "expired", "correctable"),
-            ("AdCPBudgetExhaustedError", "broke", "correctable"),
+            ("AdCPBudgetExhaustedError", "broke", "terminal"),
             ("AdCPRateLimitError", "slow", "transient"),
             ("AdCPAdapterError", "down", "transient"),
             ("AdCPServiceUnavailableError", "offline", "transient"),
@@ -679,9 +680,9 @@ class TestRecoveryOverrideInSerialization:
         """to_dict() reflects custom recovery, not class default."""
         from src.core.exceptions import AdCPConflictError
 
-        # Default recovery is "correctable"
+        # Default recovery is "transient" (CONFLICT per the pinned enum, salesagent-xds6)
         default = AdCPConflictError("dup")
-        assert default.to_dict()["recovery"] == "correctable"
+        assert default.to_dict()["recovery"] == "transient"
 
         # Override to "terminal" (e.g., non-retryable conflict)
         overridden = AdCPConflictError("permanent conflict", recovery="terminal")

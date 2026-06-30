@@ -270,12 +270,12 @@ class TestRecoveryClassification:
         exc = AdCPAdapterError("GAM unavailable")
         assert exc.recovery == "transient"
 
-    def test_conflict_error_defaults_to_correctable(self):
-        """AdCPConflictError defaults to recovery='correctable'."""
+    def test_conflict_error_defaults_to_transient(self):
+        """AdCPConflictError defaults to recovery='transient' (CONFLICT per the pinned enum, salesagent-xds6)."""
         from src.core.exceptions import AdCPConflictError
 
         exc = AdCPConflictError("duplicate idempotency key")
-        assert exc.recovery == "correctable"
+        assert exc.recovery == "transient"
 
     def test_idempotency_conflict_defaults_to_correctable(self):
         """AdCPIdempotencyConflictError is recovery='correctable'.
@@ -313,16 +313,18 @@ class TestRecoveryClassification:
         exc = AdCPAccountPaymentRequiredError("invoice overdue")
         assert exc.recovery == "terminal"
 
-    def test_budget_exhausted_error_defaults_to_correctable(self):
-        """AdCPBudgetExhaustedError defaults to recovery='correctable'.
+    def test_budget_exhausted_error_defaults_to_terminal(self):
+        """AdCPBudgetExhaustedError defaults to recovery='terminal'.
 
-        Buyer can fix by increasing budget or adjusting spend caps.
+        BUDGET_EXHAUSTED is terminal per the pinned error-code.json enumMetadata
+        (salesagent-xds6): an exhausted budget cannot be recovered autonomously —
+        an operator must add budget — so the buyer agent must not retry.
         Covers: salesagent-u60m (PR #1083 review)
         """
         from src.core.exceptions import AdCPBudgetExhaustedError
 
         exc = AdCPBudgetExhaustedError("budget limit reached")
-        assert exc.recovery == "correctable"
+        assert exc.recovery == "terminal"
 
     def test_service_unavailable_error_defaults_to_transient(self):
         """AdCPServiceUnavailableError defaults to recovery='transient'."""
@@ -556,7 +558,8 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        assert_envelope_shape(response.json(), "CONFLICT", recovery="correctable")
+        # CONFLICT recovery is transient per the pinned enum (salesagent-xds6).
+        assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_gone_error_returns_410(self, exc_handler_test_app):
         """AdCPGoneError raised in a route must return 410."""
@@ -570,7 +573,8 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/budget")
         assert response.status_code == 422
-        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED", recovery="correctable")
+        # BUDGET_EXHAUSTED recovery is terminal per the pinned enum (salesagent-xds6).
+        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED", recovery="terminal")
 
     def test_service_unavailable_error_returns_503(self, exc_handler_test_app):
         """AdCPServiceUnavailableError raised in a route must return 503."""
