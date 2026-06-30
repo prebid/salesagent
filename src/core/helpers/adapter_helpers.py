@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+import logging
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 
 if TYPE_CHECKING:
     from adcp import AgentConfig
+    from adcp.exceptions import ADCPError
 
 
 class _HasAgentFields(Protocol):
@@ -42,6 +44,35 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
         auth_header=agent.auth_header or "x-adcp-auth",
         timeout=float(agent.timeout),
     )
+
+
+def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging.Logger) -> NoReturn:
+    """Translate an adcp SDK exception into the internal typed AdCPError taxonomy.
+
+    Shared by CreativeAgentRegistry and SignalsAgentRegistry so the SDK-to-internal
+    error mapping — and its recovery classification — has a single home: an
+    authentication failure surfaces as terminal (the caller must fix credentials),
+    a timeout or connection failure surfaces as a transient service outage (a retry
+    may succeed), and any other AdCP error maps to a generic adapter failure.
+
+    Always raises; the ``NoReturn`` annotation lets callers delegate from a single
+    ``except ADCPError`` arm without a trailing ``raise``.
+    """
+    from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPTimeoutError
+
+    from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
+
+    if isinstance(exc, ADCPAuthenticationError):
+        logger.error(f"Authentication failed for {agent_label}: {exc.message}")
+        raise AdCPAuthenticationError(f"Authentication failed: {exc.message}") from exc
+    if isinstance(exc, ADCPTimeoutError):
+        logger.error(f"Request timed out for {agent_label}: {exc.message}")
+        raise AdCPServiceUnavailableError(f"Request timed out: {exc.message}") from exc
+    if isinstance(exc, ADCPConnectionError):
+        logger.error(f"Connection failed for {agent_label}: {exc.message}")
+        raise AdCPServiceUnavailableError(f"Connection failed: {exc.message}") from exc
+    logger.error(f"AdCP error for {agent_label}: {exc.message}")
+    raise AdCPAdapterError(str(exc.message)) from exc
 
 
 from src.adapters.google_ad_manager import GoogleAdManager
