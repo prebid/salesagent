@@ -292,10 +292,25 @@ def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
     _call_via(ctx, ctx.get("transport"), filters=filters)
 
 
+def _wire_creatives(ctx: dict) -> list[dict[str, Any]]:
+    """Return the creatives array as the buyer sees it on the wire.
+
+    REST/A2A/MCP stash the real serialized response on ``ctx["wire_response"]``
+    (CreativeListEnv stashes on all three wire transports), so the concept-field
+    assertions check the actual on-the-wire bytes rather than a re-serialization.
+    Falls back to the production serializer only when no wire was captured (e.g. a
+    non-stashing path), so the step still has data to assert on.
+    """
+    wire = ctx.get("wire_response")
+    if wire and "creatives" in wire:
+        return wire["creatives"]
+    return _serialized_response(ctx)["creatives"]
+
+
 @then(parsers.parse('the creatives array should only include creatives belonging to concept "{concept_id}"'))
 def then_only_creatives_in_concept(ctx: dict, concept_id: str) -> None:
     """Assert every returned creative belongs to the requested concept (and the set is non-empty)."""
-    creatives = _serialized_response(ctx)["creatives"]
+    creatives = _wire_creatives(ctx)
     assert creatives, f"list_creatives returned no creatives for concept {concept_id!r}"
     offenders = [
         {"creative_id": entry.get("creative_id"), "concept_id": entry.get("concept_id")}
@@ -314,7 +329,7 @@ def then_only_creatives_in_concept(ctx: dict, concept_id: str) -> None:
 @then(parsers.parse('each returned creative should carry concept_id "{concept_id}" and a concept_name'))
 def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
     """Assert each returned creative exposes concept_id (== requested) and a non-empty concept_name."""
-    creatives = _serialized_response(ctx)["creatives"]
+    creatives = _wire_creatives(ctx)
     assert creatives, "list_creatives returned an empty creatives array"
     for entry in creatives:
         assert entry.get("concept_id") == concept_id, (

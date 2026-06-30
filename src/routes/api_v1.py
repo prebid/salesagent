@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
-from src.core.schema_helpers import to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -336,9 +336,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
 @router.post("/creatives")
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
-    from adcp import CreativeFilters
-
-    filters = CreativeFilters.model_validate(body.filters) if body.filters else None
+    filters = coerce_creative_filters(body.filters)
     response = creatives_listing_module.list_creatives_raw(
         media_buy_id=body.media_buy_id,
         media_buy_ids=body.media_buy_ids,

@@ -67,7 +67,7 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -1651,11 +1651,9 @@ class AdCPRequestHandler(RequestHandler):
 
         # Structured AdCP CreativeFilters (statuses, concept_ids, format_ids, …)
         # arrive over the wire as a JSON dict; coerce to the typed model the core
-        # function expects so they are honoured rather than dropped.
-        from adcp import CreativeFilters
-
-        filters_param = parameters.get("filters")
-        filters = CreativeFilters.model_validate(filters_param) if isinstance(filters_param, dict) else filters_param
+        # function expects so they are honoured rather than dropped. Invalid filters
+        # raise AdCPValidationError (VALIDATION_ERROR + suggestion) via the shared helper.
+        filters = coerce_creative_filters(parameters.get("filters"))
 
         # Call core function with optional parameters (fixing original validation bug)
         response = core_list_creatives_tool(

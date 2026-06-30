@@ -75,13 +75,12 @@ class CreativeListEnv(IntegrationEnv):
         for key in ("media_buy_id", "media_buy_ids", "buyer_ref", "status", "format"):
             if key in kwargs and kwargs[key] is not None:
                 body[key] = kwargs[key]
-        # The structured CreativeFilters object travels over REST as a JSON dict
-        # (the body field is typed dict and coerced to CreativeFilters server-side).
+        # The structured filters travel over REST as a JSON dict — the body field is
+        # typed dict and coerced to CreativeFilters server-side. Callers pass an
+        # already-serialized dict (see the UC-018 concept_ids When step).
         filters = kwargs.get("filters")
         if filters is not None:
-            body["filters"] = (
-                filters.model_dump(mode="json", exclude_none=True) if hasattr(filters, "model_dump") else filters
-            )
+            body["filters"] = filters
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativesResponse:
