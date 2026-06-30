@@ -1615,33 +1615,49 @@ def then_response_includes_field(ctx: dict, field: str) -> None:
         assert field in dumped, f"Response missing field '{field}'"
 
 
-@then("the response should include both status and media_buy_status with identical values")
+@then("the response carries the domain media_buy_status and the protocol status separately")
 def then_dual_emit_media_buy_status(ctx: dict) -> None:
-    """AdCP 3.1 dual-emit: the create_media_buy success-response body carries both
-    the PREFERRED ``media_buy_status`` and the DEPRECATED ``status`` (removed in
-    3.2) with IDENTICAL ``MediaBuyStatus`` values.
+    """AdCP 3.1 (beta.3) create/update-media-buy-response status fields, asserted on
+    the REAL wire (``ctx['wire_response']``) — not the reconstructed typed payload.
 
-    This is the ``CreateMediaBuyResponse1`` body shape in the adcp 5.7 library
-    (``CreateMediaBuySuccessResponse``: both fields typed ``MediaBuyStatus | None``).
-    Asserts on the production-serialized response body — the wire envelope's
-    top-level ``status`` is the protocol TaskStatus and is a separate concern;
-    the deprecated-domain/``media_buy_status`` dual-emit lives on the body/payload.
-    Transport-stable: every dispatcher (incl. ``parse_rest_response``) yields a
-    ``CreateMediaBuyResult`` whose ``.response`` is the domain body.
+    Grounding (beta.3 storyboard ``pending_creatives_to_start.yaml``):
+      - ``media_buy_status`` => ``field_value`` (REQUIRED): the DOMAIN status, a
+        ``MediaBuyStatus`` enum value.
+      - ``status`` => ``field_value_or_absent`` (the legacy body status is OPTIONAL).
+
+    On the flattened wire envelope, ``TaskResultEnvelope._serialize`` sets the
+    top-level ``status`` to the PROTOCOL ``TaskStatus`` (e.g. ``completed`` /
+    ``submitted``); the DOMAIN status survives under ``media_buy_status``. They are
+    DIFFERENT namespaces and are NOT identical — the earlier 'both identical' oracle
+    read the re-mirrored reconstructed payload (``_mirror_media_buy_status``) and so
+    could never observe this wire reality (salesagent-d45l).
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    body = getattr(resp, "response", resp)  # CreateMediaBuyResult -> CreateMediaBuySuccess
-    dumped = body.model_dump(mode="json")
-    media_buy_status = dumped.get("media_buy_status")
-    status = dumped.get("status")
-    assert media_buy_status is not None, (
-        f"Expected 'media_buy_status' on the response body (AdCP 3.1 preferred field), got: {dumped}"
+    from adcp.types import GeneratedTaskStatus as ProtocolTaskStatus
+    from adcp.types import MediaBuyStatus
+
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    domain_values = {e.value for e in MediaBuyStatus}
+    protocol_values = {e.value for e in ProtocolTaskStatus}
+
+    # media_buy_status is REQUIRED (storyboard field_value) and carries the DOMAIN status.
+    assert "media_buy_status" in wire, f"Expected 'media_buy_status' on the wire, got keys: {sorted(wire)}"
+    media_buy_status = wire["media_buy_status"]
+    assert media_buy_status in domain_values, (
+        f"Expected 'media_buy_status' to be a domain MediaBuyStatus value on the wire "
+        f"(one of {sorted(domain_values)}), got {media_buy_status!r}"
     )
-    assert status is not None, f"Expected deprecated 'status' on the response body, got: {dumped}"
-    assert str(media_buy_status) == str(status), (
-        f"AdCP 3.1 dual-emit requires identical values: media_buy_status={media_buy_status!r} vs status={status!r}"
-    )
+
+    # status is OPTIONAL (storyboard field_value_or_absent). When the flattened envelope
+    # carries it, it is the PROTOCOL TaskStatus (a different namespace from the domain
+    # status), NOT necessarily equal to media_buy_status.
+    if "status" in wire:
+        status = wire["status"]
+        assert status in protocol_values, (
+            f"Expected top-level 'status' to be a protocol TaskStatus value on the wire "
+            f"(one of {sorted(protocol_values)}), got {status!r}"
+        )
 
 
 @then(parsers.parse('I remember the "{field}" as "{alias}"'))

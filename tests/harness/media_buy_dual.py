@@ -171,7 +171,13 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
                 flat.pop(key, None)
             flat.update(kwargs)
             kwargs = flat
-        return update_media_buy_raw(**kwargs)
+        result = update_media_buy_raw(**kwargs)
+        # Stash the serialized success-path wire body so Then steps can assert on
+        # what the buyer receives (salesagent-d45l). model_dump runs the envelope
+        # _serialize (flattens the body, sets top-level status to the protocol
+        # TaskStatus) — the real wire shape, not the re-mirrored inner payload.
+        self._last_wire_response = result.model_dump(mode="json") if hasattr(result, "model_dump") else None
+        return result
 
     def _call_update_mcp(self, **kwargs: Any) -> Any:
         import asyncio
@@ -215,6 +221,9 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         wrapped_update_media_buy = with_error_logging(update_media_buy)
         tool_result = asyncio.run(wrapped_update_media_buy(ctx=mock_ctx, **kwargs))
         data = dict(tool_result.structured_content)
+        # structured_content IS the real MCP wire body — stash it before
+        # _parse_update_rest_response mutates it (.pop("status")) (salesagent-d45l).
+        self._last_wire_response = dict(data)
         return self._parse_update_rest_response(data)
 
     def _build_update_rest_body(self, **kwargs: Any) -> dict[str, Any]:

@@ -70,5 +70,10 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
             ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
         else:
             ctx["response"] = result.payload
+            # Propagate the real serialized success-path wire body so Then steps
+            # can assert on what the buyer actually receives (ctx["wire_response"]),
+            # not the reconstructed typed payload. None on IMPL / non-stashing envs;
+            # the wire_field() helper guards against silent tautologies (salesagent-d45l).
+            ctx["wire_response"] = result.wire_response
     except Exception as exc:
         ctx["error"] = exc
