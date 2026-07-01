@@ -13,7 +13,7 @@ from typing import Any
 
 # Import types from adcp library - use public API when available
 from adcp import Format, Property
-from adcp.types import CreativeAsset, FormatId
+from adcp.types import CreativeAsset, FormatId, Identifier, PropertyIdentifierTypes
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
@@ -144,6 +144,60 @@ def create_product_with_empty_pricing(**overrides) -> Product:
         Product with empty pricing_options list
     """
     return create_test_product(pricing_options=[], **overrides)
+
+
+def create_test_property_list_create_params(product_id: str) -> dict[str, Any]:
+    """create_media_buy params (dict form) with one property_list-targeted package.
+
+    Shared by the property_list wire tests (reject + advisory sides) so the
+    request shape under test is defined once: a single package carrying
+    ``TEST_PROPERTY_LIST_TARGETING_OVERLAY`` over a future flight window.
+    Usable directly as A2A skill_params / MCP arguments, or splatted into
+    ``CreateMediaBuyRequest(**params)``.
+    """
+    from tests.utils.database_helpers import future_iso_date_range
+
+    start, end = future_iso_date_range()
+    return {
+        "brand": {"domain": "testbrand.com"},
+        "packages": [
+            create_test_package_request_dict(
+                product_id=product_id,
+                pricing_option_id="cpm_usd_fixed",
+                budget=5000.0,
+                targeting_overlay=TEST_PROPERTY_LIST_TARGETING_OVERLAY,
+            )
+        ],
+        "start_time": start,
+        "end_time": end,
+        # Required on every mutating request (AdCP 3.1 idempotency); unique per
+        # call so wire retries don't replay. Callers splatting this into
+        # CreateMediaBuyRequest(**params) inherit it.
+        "idempotency_key": f"prop-list-{uuid.uuid4().hex}",
+    }
+
+
+def create_test_identifier(value: str, type_: str = "domain") -> Identifier:
+    """Create a typed AdCP property ``Identifier``.
+
+    Args:
+        value: The identifier value (e.g. a domain like "espn.com").
+        type_: Identifier type name from ``PropertyIdentifierTypes``
+            (e.g. "domain", "subdomain", "ios_bundle").
+
+    Example:
+        ident = create_test_identifier("espn.com")
+    """
+    return Identifier(type=PropertyIdentifierTypes(type_), value=value)
+
+
+def create_test_identifiers(*values: str, type_: str = "domain") -> list[Identifier]:
+    """Create a list of typed identifiers — the shape a resolved property_list has.
+
+    Example:
+        buyers = create_test_identifiers("espn.com", "cnn.com")
+    """
+    return [create_test_identifier(value, type_=type_) for value in values]
 
 
 def create_test_format_id(
@@ -418,6 +472,20 @@ def create_test_package(
         )
     """
     return Package(package_id=package_id, paused=paused, product_id=product_id, **kwargs)
+
+
+# Canonical ``targeting_overlay.property_list`` shape used across property_list
+# integration tests. Extracted to avoid the 14-line builder block duplicating
+# between ``test_property_targeting_allowed_enforcement.py`` (the product-flag
+# gate) and ``test_property_list_unsupported_capability.py`` (the adapter-
+# capability gate) — the same on-the-wire targeting body exercises both gates,
+# only the tenant/product configuration differs.
+TEST_PROPERTY_LIST_TARGETING_OVERLAY: dict[str, dict[str, str]] = {
+    "property_list": {
+        "agent_url": "https://gov.example",
+        "list_id": "v1",
+    },
+}
 
 
 def create_test_package_request(

@@ -1,7 +1,7 @@
 import logging
 import random
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, date, datetime
+from typing import TYPE_CHECKING, Any, ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,16 @@ class MockAdServer(AdServerAdapter):
         "provider": "mock",
         "notes": "Simulated delivery measurement for testing",
     }
+
+    # The mock's "compile path" is the simulation itself: targeting_overlay
+    # (property_list included) persists into package_config via _impl and
+    # round-trips through get_media_buys, and the simulated ad server has no
+    # native payload the field could be silently dropped FROM. Declaring
+    # support makes the spec storyboards (inventory_list_targeting/no_match)
+    # and the UC-002/003 round-trip obligations exercisable through the real
+    # tool path on test tenants; the honest-declaration REJECT path is pinned
+    # by tests that explicitly patch this back to False.
+    supports_property_list_targeting: ClassVar[bool] = True
     _media_buys: dict[str, dict[str, Any]] = {}
 
     # Schema and capabilities
@@ -1380,6 +1390,21 @@ class MockAdServer(AdServerAdapter):
             result.setdefault(media_buy_id, {})[package_id] = snapshot
 
         return result
+
+    def update_package_targeting(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        targeting_overlay: Any,
+        today: date,
+    ) -> None:
+        """No-op by design: Mock's persistence layer IS its compile path.
+
+        The simulation reads targeting straight from the persisted
+        package_config on every delivery tick, so the updated overlay takes
+        effect without a push step. Documented override of the fail-loud base.
+        """
+        return None
 
     def update_media_buy_performance_index(
         self, media_buy_id: str, package_performance: list[PackagePerformance]

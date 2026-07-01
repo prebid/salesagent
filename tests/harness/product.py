@@ -1,7 +1,7 @@
 """ProductEnv — integration test environment for _get_products_impl.
 
 Patches: PolicyCheckService, generate_variants_for_brief,
-         get_factory (ranking), resolve_property_list.
+         get_factory (ranking), resolve_property_list_typed.
 Real: ProductUoW, get_principal_object, convert_product_model_to_schema,
       DynamicPricingService, adapter metadata, audit logger, get_db_session.
 
@@ -24,7 +24,7 @@ Available mocks via env.mock:
     "policy_service"       -- PolicyCheckService class mock
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
     "ranking_factory"      -- get_factory mock (AI ranking)
-    "resolve_property_list" -- resolve_property_list AsyncMock
+    "resolve_property_list" -- resolve_property_list_typed AsyncMock
 
 Transport support:
     call_impl(**kw)          -- direct _get_products_impl (sync wrapper around async)
@@ -68,7 +68,7 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         "policy_service": "src.core.tools.products.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
         "ranking_factory": "src.services.ai.factory.get_factory",
-        "resolve_property_list": "src.core.property_list_resolver.resolve_property_list",
+        "resolve_property_list": "src.core.property_list_resolver.resolve_property_list_typed",
     }
 
     ASYNC_PATCHES = {"dynamic_variants", "resolve_property_list"}
@@ -110,9 +110,9 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         """Convert kwargs to GetProductsBody shape for REST POST.
 
         GetProductsBody (src/routes/api_v1.py) accepts:
-            brief, brand, filters, adcp_version
+            brief, brand, filters, property_list, adcp_version
         """
-        _BODY_FIELDS = ("brief", "brand", "filters", "adcp_version")
+        _BODY_FIELDS = ("brief", "brand", "filters", "property_list", "adcp_version")
         return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:

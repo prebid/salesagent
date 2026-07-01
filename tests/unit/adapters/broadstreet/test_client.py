@@ -3,8 +3,10 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src.adapters.broadstreet.client import BroadstreetAPIError, BroadstreetClient
+from src.core.exceptions import AdCPAdapterError, build_two_layer_error_envelope
 
 
 class TestBroadstreetClient:
@@ -137,7 +139,10 @@ class TestBroadstreetClient:
         with pytest.raises(BroadstreetAPIError) as exc_info:
             client.get_network()
 
-        assert exc_info.value.status_code == 403
+        # status_code is the mapped AdCP class default (uniform with wrap_request_errors),
+        # not the upstream 403; the upstream 403 stays in the message ("(HTTP 403)").
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.recovery == "terminal"
         assert "Auth Denied" in str(exc_info.value)
 
     @patch("src.adapters.broadstreet.client.requests.request")
@@ -157,7 +162,11 @@ class TestBroadstreetClient:
         with pytest.raises(BroadstreetAPIError) as exc_info:
             client.get_advertiser("nonexistent")
 
-        assert exc_info.value.status_code == 404
+        # Mapped class default (uniform with wrap), not the upstream 404; the upstream
+        # 404 stays in the message ("Resource not found (HTTP 404)").
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.recovery == "correctable"
+        assert "not found" in str(exc_info.value).lower()
 
     @patch("src.adapters.broadstreet.client.requests.request")
     def test_handle_500_error(self, mock_request):
@@ -176,5 +185,69 @@ class TestBroadstreetClient:
         with pytest.raises(BroadstreetAPIError) as exc_info:
             client.get_network()
 
-        assert exc_info.value.status_code == 500
+        # An upstream 5xx maps to AdCPAdapterError's 502 (uniform with wrap); the
+        # upstream 500 stays in the message ("server error (HTTP 500)").
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.recovery == "transient"
         assert "server error" in str(exc_info.value)
+
+    @patch("src.adapters.broadstreet.client.requests.request")
+    def test_transport_failure_message_does_not_leak_access_token(self, mock_request):
+        # A requests error stringifies the request URL, which carries the operator's
+        # ?access_token=... query param. The buyer-facing message (which reaches the wire
+        # via the typed-error boundary) MUST NOT contain it. Failing oracle: reverting the
+        # client.py sanitization to ``f"Request failed: {e}"`` reddens this.
+        secret = "SUPER_SECRET_TOKEN_xyz"  # noqa: S105 — test fixture, not a real credential
+        mock_request.side_effect = requests.exceptions.ConnectionError(
+            f"HTTPSConnectionPool(host='api.broadstreetads.com', port=443): Max retries exceeded "
+            f"with url: /api/0/networks/42/advertisers?access_token={secret} (Caused by ...)"
+        )
+        client = BroadstreetClient(access_token=secret, network_id="42")
+
+        with pytest.raises(BroadstreetAPIError) as exc_info:
+            client.get_network()
+
+        assert secret not in str(exc_info.value), "access_token leaked into the BroadstreetAPIError message"
+        wire_message = build_two_layer_error_envelope(exc_info.value)["errors"][0]["message"]
+        assert secret not in wire_message, "access_token leaked onto the buyer wire envelope"
+
+
+class TestBroadstreetAPIErrorRecoveryTaxonomy:
+    """BroadstreetAPIError must carry the AdCP recovery taxonomy (F01).
+
+    Broadstreet uses manual ``response.status_code`` checks rather than
+    ``raise_for_status()``, so it is invisible to the
+    ``test_architecture_adapter_http_writes_wrapped`` AST guard. These tests are
+    the regression net in its place: a Broadstreet write outage must surface a
+    transient ``AdCPAdapterError`` (``SERVICE_UNAVAILABLE``) rather than
+    normalizing to ``INTERNAL_ERROR``/``terminal`` (which tells a buyer agent to
+    escalate to a human on a transient ad-server outage), and the per-status
+    refinement must hold.
+    """
+
+    def test_is_adcp_adapter_error_subclass(self):
+        # If this ever reverts to a plain Exception, every Broadstreet write
+        # outage silently becomes INTERNAL_ERROR/terminal again.
+        assert issubclass(BroadstreetAPIError, AdCPAdapterError)
+
+    @pytest.mark.parametrize(
+        ("status_code", "expected_code", "expected_recovery", "expected_status"),
+        [
+            (None, "SERVICE_UNAVAILABLE", "transient", 502),  # transport outage (RequestException)
+            (500, "SERVICE_UNAVAILABLE", "transient", 502),
+            (503, "SERVICE_UNAVAILABLE", "transient", 502),
+            (429, "RATE_LIMITED", "transient", 429),  # rate limited — retry with backoff, not a client error
+            (403, "CONFIGURATION_ERROR", "terminal", 500),  # operator access_token denied
+            (404, "VALIDATION_ERROR", "correctable", 400),
+            (400, "VALIDATION_ERROR", "correctable", 400),
+        ],
+    )
+    def test_status_maps_to_recovery(self, status_code, expected_code, expected_recovery, expected_status):
+        err = BroadstreetAPIError("boom", status_code=status_code)
+        assert err.error_code == expected_code
+        assert err.recovery == expected_recovery
+        # status_code is the MAPPED AdCP class default — the SAME the wrap_request_errors
+        # factory path yields for this status — NOT the upstream ad-server status. One
+        # ad-server event yields one buyer-facing REST status regardless of adapter; the
+        # upstream status stays in the message text / response_body.
+        assert err.status_code == expected_status

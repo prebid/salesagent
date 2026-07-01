@@ -12,6 +12,8 @@ import requests
 from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
+from src.adapters.utils import wrap_request_errors
+from src.core.exceptions import AdCPConfigurationError
 from src.core.retry_utils import api_retry
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -206,6 +208,8 @@ logger = logging.getLogger(__name__)
 class XandrAdapter(AdServerAdapter):
     """Adapter for Microsoft Xandr (formerly AppNexus) platform."""
 
+    adapter_name = "xandr"
+
     def __init__(self, config: dict[str, Any], principal: Principal, tenant_id: str | None = None):
         """Initialize Xandr adapter with configuration and principal."""
         super().__init__(config, principal, tenant_id=tenant_id)
@@ -241,22 +245,22 @@ class XandrAdapter(AdServerAdapter):
         auth_url = f"{self.api_endpoint}/auth"
         auth_data = {"auth": {"username": self.username, "password": self.password}}
 
-        try:
+        # A transport outage is transient (wrap_request_errors -> SERVICE_UNAVAILABLE,
+        # recovery transient -> buyer retries); a rejected credential is the buyer's
+        # server config to fix (AdCPConfigurationError -> terminal), not a retry.
+        with wrap_request_errors():
             response = requests.post(auth_url, json=auth_data)
             response.raise_for_status()
 
-            data = response.json()
-            if data.get("response", {}).get("status") == "OK":
-                self.token = data["response"]["token"]
-                # Xandr tokens typically last 2 hours
-                self.token_expiry = datetime.now(UTC) + timedelta(hours=2)
-                logger.info("Successfully authenticated with Xandr")
-            else:
-                raise Exception(f"Authentication failed: {data}")
-
-        except Exception as e:
-            logger.error(f"Xandr authentication error: {e}")
-            raise
+        data = response.json()
+        if data.get("response", {}).get("status") == "OK":
+            self.token = data["response"]["token"]
+            # Xandr tokens typically last 2 hours
+            self.token_expiry = datetime.now(UTC) + timedelta(hours=2)
+            logger.info("Successfully authenticated with Xandr")
+        else:
+            logger.error("Xandr authentication rejected: %s", data)
+            raise AdCPConfigurationError(f"Xandr authentication failed: {data}")
 
     @api_retry
     def _make_request(self, method: str, endpoint: str, data: dict | None = None) -> dict:
@@ -267,7 +271,7 @@ class XandrAdapter(AdServerAdapter):
 
         url = f"{self.api_endpoint}{endpoint}"
 
-        try:
+        with wrap_request_errors():
             if method == "GET":
                 response = requests.get(url, headers=headers, params=data)
             elif method == "POST":
@@ -281,10 +285,6 @@ class XandrAdapter(AdServerAdapter):
 
             response.raise_for_status()
             return response.json()
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Xandr API request failed: {e}")
-            raise
 
     def _requires_manual_approval(self, operation: str) -> bool:
         """Check if an operation requires manual approval."""
@@ -479,7 +479,12 @@ class XandrAdapter(AdServerAdapter):
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
-        """Create insertion order and line items in Xandr."""
+        """Create insertion order and line items in Xandr.
+
+        Xandr keeps ``supports_property_list_targeting = False``; the
+        ``_create_media_buy_impl`` boundary check rejects property_list
+        requests up-front before this adapter runs.
+        """
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
                 "create_media_buy",

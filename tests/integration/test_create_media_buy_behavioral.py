@@ -61,6 +61,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
@@ -1036,8 +1037,9 @@ class TestManualApprovalObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"  # Not "completed"
+        assert result.response.task_id is not None
 
     def test_adapter_requires_review_enters_manual_path(self, integration_db):
         """Adapter with manual_approval_required=true enters manual approval flow.
@@ -1055,7 +1057,7 @@ class TestManualApprovalObligations:
             mock_adapter.manual_approval_operations = ["create_media_buy"]
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"
 
     def test_seller_notification_sent_on_manual_approval(self, integration_db):
@@ -1097,8 +1099,10 @@ class TestManualApprovalObligations:
             result = env.call_impl(req=req)
 
         assert result.status == "submitted"
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        # task_id IS the workflow step id — and unlike the old internal
+        # workflow_step_id (popped from every wire), it reaches the buyer.
+        assert result.response.task_id is not None
 
     def test_no_adapter_execution_before_approval(self, integration_db):
         """Adapter is NOT called when manual approval is required.
@@ -1135,7 +1139,7 @@ class TestManualApprovalObligations:
 
         # Pending approval means it's ready for accept/reject
         assert result.status == "submitted"
-        assert result.response.workflow_step_id is not None
+        assert result.response.task_id is not None
 
     def test_buyer_can_poll_approval_progress(self, integration_db):
         """Response includes workflow_step_id for polling.
@@ -1153,8 +1157,8 @@ class TestManualApprovalObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id is not None
 
 
 class TestInlineCreativeObligations:
@@ -1372,7 +1376,7 @@ class TestCrossCuttingObligations:
             # Manual path: adapter was NOT called, but records were persisted
             assert result.status == "submitted"
             env.mock["adapter"].return_value.create_media_buy.assert_not_called()
-            assert result.response.media_buy_id is not None
+            assert result.response.task_id is not None
 
     def test_manual_approval_calls_link_workflow_to_object(self, integration_db):
         """Manual-approval path calls link_workflow_to_object to create the ObjectWorkflowMapping row.
@@ -1391,14 +1395,20 @@ class TestCrossCuttingObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-            assert result.response.media_buy_id is not None
+            # Submitted variant (spec-shaped): the manual-approval response carries task_id, not
+            # media_buy_id (the buy id arrives on the completion artifact). The created buy's id is
+            # the object_id production passes to link_workflow_to_object — verify the link by shape
+            # and that a real buy id was linked.
             ctx_mgr_mock = env.mock["context_mgr"].return_value
             ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
                 step_id=ANY,
                 object_type="media_buy",
-                object_id=result.response.media_buy_id,
+                object_id=ANY,
                 action="create",
                 tenant_id=ANY,
+            )
+            assert ctx_mgr_mock.link_workflow_to_object.call_args.kwargs["object_id"], (
+                "manual-approval path must link the created media_buy's id"
             )
 
     @pytest.mark.asyncio

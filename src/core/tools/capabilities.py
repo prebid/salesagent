@@ -33,12 +33,13 @@ from fastmcp.tools.tool import ToolResult
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.ext_namespace import prebid_ext
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
-from src.services.targeting_capabilities import supports_property_list_filtering
+from src.services.targeting_capabilities import supports_property_list_targeting
 
 logger = logging.getLogger(__name__)
 
@@ -164,21 +165,25 @@ def _get_adcp_capabilities_impl(
     features = MediaBuyFeatures(
         # inline_creative_management: We have sync_creatives/list_creatives tools
         inline_creative_management=True,
-        # property_list_filtering: True iff the bound adapter actually compiles
-        # `targeting_overlay.property_list` into native ad-server targeting.
-        # Today no adapter sets this — capability remains False; create/update
-        # emit per-package UNSUPPORTED_FEATURE advisories on the success envelope
-        # so buyers can see the silent-drop window. Kevel's siteId resolver flips
-        # this True and the other 4 adapters hard-reject — same source of truth
-        # via `supports_property_list_filtering()`.
-        property_list_filtering=supports_property_list_filtering(adapter),
+        # property_list_filtering (spec: "Honors property_list parameter in
+        # get_products to filter results"): True unconditionally — the
+        # get_products PropertyIntersection runs for every tenant,
+        # adapter-independent, and emits property_list_applied=true. The
+        # CREATE-side capability (compiling targeting_overlay.property_list
+        # into native ad-server targeting) is a different feature with no
+        # standard flag at 3.1.0-beta.3; it is signaled via
+        # ext.prebid.property_list_targeting on this response and enforced
+        # at the boundary by raise_if_property_list_unsupported.
+        property_list_filtering=True,
         # catalog_management: declared False until a sync_catalogs tool ships.
         # AdCP spec binds this flag to the buyer-driven sync_catalogs task
         # (SyncCatalogsRequest with account + catalogs[] + delete_missing) —
         # NOT the internal admin CRUD over the products table. Declaring True
         # without the tool would let buyers reach the boundary and get
         # UNSUPPORTED_FEATURE there instead of being warned at capability
-        # discovery. Mirrors the property_list_filtering=False rationale above.
+        # discovery — the same honest-declaration principle property_list_filtering
+        # (True, because the filter exists) and ext.prebid.property_list_targeting
+        # follow above: declare a capability only when it can be honored.
         catalog_management=False,
     )
 
@@ -269,6 +274,12 @@ def _get_adcp_capabilities_impl(
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,
+        # Create-side property_list capability: whether the bound adapter
+        # compiles targeting_overlay.property_list into native targeting
+        # (Kevel → siteIds; mock → simulation). No standard flag exists at
+        # 3.1.0-beta.3 for the targeting side, so it rides the response's ext,
+        # vendor-namespaced per the spec's ExtensionObject guidance.
+        ext=prebid_ext(property_list_targeting=supports_property_list_targeting(adapter)),
         last_updated=datetime.now(UTC),
     )
 

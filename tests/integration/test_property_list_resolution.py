@@ -23,7 +23,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories import (
+    AuthorizedPropertyFactory,
+    PricingOptionFactory,
+    PrincipalFactory,
+    ProductFactory,
+    TenantFactory,
+)
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -44,6 +50,11 @@ def _make_property_list_ref(
     if auth_token is not None:
         ref["auth_token"] = auth_token
     return ref
+
+
+def _dom(value: str) -> list[dict]:
+    """AuthorizedProperty ``identifiers`` payload for one domain value."""
+    return [{"type": "domain", "value": value}]
 
 
 def _mock_http_response(
@@ -98,6 +109,10 @@ class TestPropertyListResolution:
         with ProductEnv(tenant_id="proplist-resolve", principal_id="proplist-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-resolve", subdomain="proplist-resolve")
             PrincipalFactory(tenant=tenant, principal_id="proplist-principal")
+            # by_id slugs resolve through the repo to these identifier values (domains).
+            AuthorizedPropertyFactory(tenant=tenant, property_id="prop_alpha", identifiers=_dom("alpha.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="prop_beta", identifiers=_dom("beta.com"))
+            AuthorizedPropertyFactory(tenant=tenant, property_id="prop_gamma", identifiers=_dom("gamma.com"))
 
             # Product with specific property IDs via by_id selector
             p1 = ProductFactory(
@@ -148,8 +163,8 @@ class TestPropertyListResolution:
             )
             PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
 
-            # Mock resolve_property_list to return identifiers matching p1
-            env.set_property_list(["prop_alpha", "prop_beta"])
+            # Buyer's resolved list = the identifier values of p1's properties.
+            env.set_property_list(["alpha.com", "beta.com"])
 
             response = await env.call_impl(
                 brief="property list test",
@@ -167,7 +182,7 @@ class TestPropertyListResolution:
 
         Covers: BR-RULE-077-01
         """
-        from src.core.property_list_resolver import clear_cache, resolve_property_list
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
 
         clear_cache()
 
@@ -200,13 +215,11 @@ class TestPropertyListResolution:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with patch("src.core.property_list_resolver._validate_agent_url"):
-                result = await resolve_property_list(ref)
+            with patch("src.core.property_list_resolver._validated_agent_ip", return_value="93.184.216.34"):
+                result = await resolve_property_list_typed(ref)
 
-        # Resolver should return identifiers from the response
-        assert len(result) == 2
-        assert "site1.com" in result
-        assert "site2.com" in result
+        # Resolver should return typed identifiers from the response
+        assert [ident.value for ident in result] == ["site1.com", "site2.com"]
 
         clear_cache()
 
@@ -216,7 +229,7 @@ class TestPropertyListResolution:
 
         Covers: BR-RULE-077-01
         """
-        from src.core.property_list_resolver import clear_cache, resolve_property_list
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
 
         clear_cache()
 
@@ -244,8 +257,8 @@ class TestPropertyListResolution:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with patch("src.core.property_list_resolver._validate_agent_url"):
-                result = await resolve_property_list(ref)
+            with patch("src.core.property_list_resolver._validated_agent_ip", return_value="93.184.216.34"):
+                result = await resolve_property_list_typed(ref)
 
         assert result == [], "Exhausted cursor should yield empty identifier list"
 
@@ -257,7 +270,7 @@ class TestPropertyListResolution:
 
         Covers: BR-RULE-077-01
         """
-        from src.core.property_list_resolver import clear_cache, resolve_property_list
+        from src.core.property_list_resolver import clear_cache, resolve_property_list_typed
 
         clear_cache()
 
@@ -288,8 +301,8 @@ class TestPropertyListResolution:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
 
-            with patch("src.core.property_list_resolver._validate_agent_url"):
-                result = await resolve_property_list(ref)
+            with patch("src.core.property_list_resolver._validated_agent_ip", return_value="93.184.216.34"):
+                result = await resolve_property_list_typed(ref)
 
         # The resolver returns exactly the identifiers from the current page
         assert len(result) == page_size, (
@@ -303,7 +316,7 @@ class TestPropertyListResolution:
     async def test_resolve_filters_applied_at_resolution_time(self, integration_db):
         """Filters (countries_all AND, channels_any OR) are applied at resolution time.
 
-        When resolve_property_list returns identifiers, only products whose
+        When the property_list resolves to identifiers, only products whose
         publisher_properties overlap with those identifiers are included.
         This verifies that filtering happens after resolution, not before.
 
@@ -312,6 +325,34 @@ class TestPropertyListResolution:
         with ProductEnv(tenant_id="proplist-filter", principal_id="proplist-filter-principal") as env:
             tenant = TenantFactory(tenant_id="proplist-filter", subdomain="proplist-filter")
             PrincipalFactory(tenant=tenant, principal_id="proplist-filter-principal")
+            # by_id slugs resolve through the repo to these identifier values
+            # (domains). Lookups are publisher-scoped (the spec requires
+            # publisher_domain on by_id selectors), so each row carries the
+            # publisher its selector references.
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="us_site_1", publisher_domain="us-publisher.com", identifiers=_dom("us1.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="us_site_2", publisher_domain="us-publisher.com", identifiers=_dom("us2.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="eu_site_1", publisher_domain="eu-publisher.com", identifiers=_dom("eu1.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant, property_id="eu_site_2", publisher_domain="eu-publisher.com", identifiers=_dom("eu2.com")
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant,
+                property_id="mixed_us_site",
+                publisher_domain="mixed-publisher.com",
+                identifiers=_dom("us1.com"),
+            )
+            AuthorizedPropertyFactory(
+                tenant=tenant,
+                property_id="mixed_other_site",
+                publisher_domain="mixed-publisher.com",
+                identifiers=_dom("other.com"),
+            )
 
             # Product targeting US sites (specific property IDs)
             p_us = ProductFactory(
@@ -358,7 +399,7 @@ class TestPropertyListResolution:
                 properties=[
                     {
                         "publisher_domain": "mixed-publisher.com",
-                        "property_ids": ["us_site_1", "eu_site_1", "other_site"],
+                        "property_ids": ["mixed_us_site", "mixed_other_site"],
                         "selection_type": "by_id",
                     }
                 ],
@@ -366,9 +407,8 @@ class TestPropertyListResolution:
             )
             PricingOptionFactory(product=p_mixed, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
 
-            # Simulate resolution returning only US identifiers
-            # The external service has already applied countries_all=["US"] AND channels_any=["web"]
-            env.set_property_list(["us_site_1", "us_site_2"])
+            # Simulate resolution returning only US identifiers (the values of us_site_1/us_site_2).
+            env.set_property_list(["us1.com", "us2.com"])
 
             response = await env.call_impl(
                 brief="US property list test",
@@ -387,7 +427,7 @@ class TestPropertyListResolution:
             )
             # Mixed product included (property_targeting_allowed=True, has partial overlap)
             assert "mixed_sites_product" in product_ids, (
-                "Mixed product should match: property_targeting_allowed=True and has overlap with us_site_1"
+                "Mixed product should match: property_targeting_allowed=True and mixed_us_site's value overlaps"
             )
 
     @pytest.mark.asyncio

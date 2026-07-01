@@ -56,9 +56,13 @@ from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.enums.media_buy_valid_action import (
     MediaBuyValidAction,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.media_buy.create_media_buy_response import (  # TODO: no stable alias in adcp.types
+    CreateMediaBuyResponse3 as AdCPCreateMediaBuySubmitted,
+)
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPNotFoundError
+from src.core.ext_namespace import PROPERTY_LIST_ADVISORIES_KEY, prebid_vendor
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -247,21 +251,59 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
-    """Successful create_media_buy response extending adcp v1.2.1 type.
+def _ext_property_list_advisories(ext: Any) -> list | None:
+    """Advisory entries from ``ext.prebid.property_list_advisories``, tolerating model or dict ``ext``.
 
-    Extends the official adcp CreateMediaBuySuccess type with internal workflow tracking.
-    Per AdCP PR #113, this response contains ONLY domain data.
-    Protocol fields (status, task_id, message, context_id) are added by the
-    protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
+    ``ext`` is an ExtensionObject model on the construction path but a plain
+    dict after a JSON round-trip; ``getattr`` alone returns ``None`` for a dict
+    and would silently drop the advisory from the protocol ``message`` — the
+    storyboard's named not-acceptable outcome.
+    """
+    vendor = prebid_vendor(ext)
+    if vendor is None:
+        return None
+    entries = vendor.get(PROPERTY_LIST_ADVISORIES_KEY)
+    return entries if isinstance(entries, list) else None
 
-    AdCP spec 3.0.0 ``error-handling.mdx`` allows non-fatal errors on the
-    success envelope ("populate only the payload... MUST NOT populate
-    ``adcp_error``"). The ``errors`` field below carries per-package
-    advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
-    cannot yet honor (e.g. ``property_list_filtering=False`` window). Mirrors
-    the pattern used by ``GetProductsResponse``, ``ListCreativeFormatsResponse``,
-    ``SyncAccountsResponse``.
+
+class _ForbidsErrorsExtra:
+    """Wire-discriminator enforcement for success variants.
+
+    The success variants of the create/update response oneOf carry
+    ``not: {required: ["errors"]}`` — an errors key on a success response
+    matches NO spec variant. The classes inherit ``extra="allow"`` (needed:
+    the A2A reconstruction path round-trips protocol fields through extras),
+    so without this validator a future ``errors=`` kwarg at any construction
+    site would serialize silently and ship an unparseable response.
+    """
+
+    @model_validator(mode="after")
+    def _reject_errors_extra(self):
+        extra = getattr(self, "model_extra", None) or {}
+        if extra.get("errors") is not None:
+            raise ValueError(
+                "the success variant forbids 'errors' — advisories ride ext/message, failures use the error variant"
+            )
+        return self
+
+
+class CreateMediaBuySuccess(_ForbidsErrorsExtra, AdCPCreateMediaBuySuccess):
+    """Successful create_media_buy response extending the adcp library type.
+
+    Extends the official adcp CreateMediaBuySuccess type with internal workflow
+    tracking. Per AdCP PR #113, this response contains ONLY domain data;
+    protocol fields are added by the protocol layer per transport.
+
+    The spec's create-success variant explicitly FORBIDS an ``errors`` key
+    (``create-media-buy-response.json`` ``not: {required: ["errors"]}`` — an
+    intentional success/error discriminator), so this class deliberately has
+    no errors field — and ``message`` stays protocol-layer per AdCP PR #113
+    (pinned by spec-compliance and webhook-regression tests). Non-fatal
+    context (e.g. a zero-overlap property_list advisory) rides the spec
+    payload field ``ext`` as machine detail, and ``__str__`` (each
+    transport's protocol-message source) derives the human-readable text from
+    it. Pending-approval creates use ``CreateMediaBuySubmitted``, whose
+    ``message``/``errors`` are genuine spec fields of that variant.
     """
 
     # SDK 5.7 removed these from parent — declare locally
@@ -278,16 +320,14 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
     valid_actions: list[MediaBuyValidAction] | None = None
     context: ContextObject | None = None
+    # SDK 5.7 dropped ext from the parent, but __str__ reads it (the property_list
+    # zero-overlap advisory rides ext.prebid) and production emits it. Without a
+    # local declaration ``self.ext`` AttributeErrors when ext is unset (it rode on
+    # extra='allow'). Declare it typed.
+    ext: dict[str, Any] | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
-
-    # Non-fatal advisories — see class docstring for the spec basis.
-    errors: list[Error] | None = Field(
-        default=None,
-        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
-        "field is persisted but won't yet affect targeting). Absent on a fully-honored buy.",
-    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -326,8 +366,52 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         return self.model_dump(context={"include_internal": True}, **kwargs)
 
     def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope.
+
+        The A2A serializer uses ``str(response)`` as the wire ``message`` (and
+        MCP's content text is ``str(result)``), so the advisory context stored
+        under ``ext.prebid.property_list_advisories`` surfaces here — the payload
+        itself carries no protocol ``message`` field per AdCP PR #113.
+        """
+        base = f"Media buy {self.media_buy_id} created successfully."
+        ext_advisories = _ext_property_list_advisories(self.ext)
+        if ext_advisories:
+            joined = " ".join(
+                advisory.get("message", "") for advisory in ext_advisories if isinstance(advisory, dict)
+            ).strip()
+            if joined:
+                return f"{base} {joined}"
+        return base
+
+
+class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
+    """Pending create_media_buy response (the spec's ``submitted`` oneOf variant).
+
+    Carries the REQUIRED ``task_id`` (the workflow step id — resolvable via
+    ``get_task`` on MCP) plus optional ``message`` and non-blocking advisory
+    ``errors`` (the spec-blessed advisory slot on this variant). The spec
+    FORBIDS ``media_buy_id``/``packages`` here — they arrive on the completion
+    artifact once approval resolves, so buyers track the task, not the buy.
+
+    SDK 5.7's generated submitted base (``CreateMediaBuyResponse3``) dropped two
+    things the spec still defines, so both are re-declared locally (mirroring the
+    re-declarations on ``CreateMediaBuySuccess``):
+
+    - ``errors`` — the spec's advisory slot. Without a local declaration it rode
+      on ``extra='allow'`` and degraded ``Error``→``dict`` on the idempotency
+      cache round-trip; the adcp ``Error`` type keeps it typed and round-trip-safe.
+    - ``message`` ``maxLength`` (2000, per the create-media-buy-response submitted
+      variant) — restored so ``_submitted_message_max`` keeps deriving the spec
+      cap from the model rather than a hand-copied constant.
+    """
+
+    errors: list[Error] | None = None
+    message: str | None = Field(default=None, max_length=2000)
+
+    def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        return f"Media buy {self.media_buy_id} created successfully."
+        base = f"Media buy submitted for approval; track task {self.task_id}."
+        return f"{base} {self.message}" if self.message else base
 
 
 class CreateMediaBuyError(AdCPCreateMediaBuyError):
@@ -345,7 +429,10 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
             return "Media buy creation failed."
 
 
-# Union type for create_media_buy operation
+# Union type for create_media_buy operation — the ADAPTER contract: adapters
+# return success or error; the submitted variant exists only at the tool
+# envelope layer (CreateMediaBuyResult.response), produced by _impl's
+# approval paths, never by an ad server.
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
@@ -360,7 +447,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     """
 
     status: str
-    response: CreateMediaBuySuccess | CreateMediaBuyError
+    response: CreateMediaBuySuccess | CreateMediaBuySubmitted | CreateMediaBuyError
 
     # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
     # envelope / top of the structured result). Set True ONLY when this response
@@ -410,7 +497,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
+class UpdateMediaBuySuccess(_ForbidsErrorsExtra, AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     """Successful update_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking.
@@ -418,11 +505,12 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     Protocol fields (status, task_id, message, context_id) are added by the
     protocol layer (MCP, A2A, REST) via ProtocolEnvelope wrapper.
 
-    Carries an optional ``errors`` field for non-fatal advisories on the
-    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.0 error-handling
-    "non-fatal in payload" rule). Used today for per-package
-    ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
-    not yet compiled by the adapter.
+    Like the create variant, the spec's update-success schema explicitly
+    FORBIDS an ``errors`` key (``not: {required: ["errors"]}`` — the
+    success/error discriminator), so this class deliberately has no errors
+    field; a populated one would match no oneOf variant on the wire. The
+    approval-pending update response is the spec ``submitted`` variant
+    (``UpdateMediaBuySubmitted``), which carries the advisory ``errors`` slot.
     """
 
     # Override affected_packages to use our extended AffectedPackage type
@@ -431,15 +519,14 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
 
+    # SDK 5.7 dropped valid_actions/context from the parent, but production emits
+    # both (media_buy_update.py success paths). Declare them typed so the wire
+    # contract is deliberate and round-trip-safe, mirroring CreateMediaBuySuccess.
+    valid_actions: list[MediaBuyValidAction] | None = None
+    context: ContextObject | None = None
+
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
-
-    # Non-fatal advisories — see class docstring for the spec basis.
-    errors: list[Error] | None = Field(
-        default=None,
-        description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
-        "field is persisted but won't yet affect targeting). Absent when fully honored.",
-    )
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -499,6 +586,34 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
             return f"Media buy update encountered {len(self.errors)} error(s)."
         else:
             return "Media buy update failed."
+
+
+class UpdateMediaBuySubmitted(SalesAgentBaseModel):
+    """Approval-pending update_media_buy response (the spec's ``submitted`` variant).
+
+    adcp 5.7's ``update_media_buy_response`` codegen emitted only the success and
+    error variants, NOT the spec's ``submitted`` variant — an SDK-vs-spec gap
+    (3.1.0-beta.3 update-media-buy-response.json defines it with ``task_id`` and a
+    ``submitted`` status const). So this is a codebase-owned model with adcp-typed
+    fields, mirroring ``SyncResponseAccount`` (also owned for an SDK gap).
+
+    Carries the REQUIRED ``task_id`` (the workflow step id), the ``submitted``
+    task-status discriminator the transports key on, an optional ``message`` (spec
+    cap 2000), and the non-blocking advisory ``errors`` slot. ``media_buy_id`` /
+    ``affected_packages`` are FORBIDDEN here per the variant schema — buyers track
+    the task, not the buy.
+    """
+
+    status: Literal["submitted"] = "submitted"
+    task_id: str
+    message: str | None = Field(default=None, max_length=2000)
+    errors: list[Error] | None = None
+    context: ContextObject | None = None
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope."""
+        base = f"Media buy update submitted for approval; track task {self.task_id}."
+        return f"{base} {self.message}" if self.message else base
 
 
 # Union type for update_media_buy operation

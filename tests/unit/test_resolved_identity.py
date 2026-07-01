@@ -165,3 +165,54 @@ class TestAuthConsolidation:
         # After consolidation, auth.get_principal_from_token should be
         # the same function as auth_utils.get_principal_from_token
         assert auth.get_principal_from_token is auth_utils.get_principal_from_token
+
+
+class TestTestingContextHeaderParity:
+    """resolve_identity derives the testing context from headers uniformly.
+
+    The AdCP testing hooks (X-Dry-Run, X-Test-Session-Id, …) must behave
+    identically on every transport: before this default, MCP and A2A
+    extracted the context at their boundaries while REST dropped it — a
+    REST buyer's X-Dry-Run create booked for real (quiet failure).
+    """
+
+    @patch("src.core.auth_utils.get_principal_from_token")
+    @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
+    @patch("src.core.resolved_identity.get_tenant_by_subdomain", return_value=None)
+    def test_dry_run_header_populates_testing_context(self, _sub, _vh, mock_token):
+        mock_token.return_value = ("principal_1", {"tenant_id": "t1"})
+        identity = resolve_identity(
+            headers={"x-dry-run": "true", "x-adcp-auth": "tok"},
+            auth_token="tok",
+            protocol="rest",
+        )
+        assert identity.testing_context is not None
+        assert identity.testing_context.dry_run is True
+
+    @patch("src.core.auth_utils.get_principal_from_token")
+    @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
+    @patch("src.core.resolved_identity.get_tenant_by_subdomain", return_value=None)
+    def test_no_test_headers_keeps_context_none(self, _sub, _vh, mock_token):
+        mock_token.return_value = ("principal_1", {"tenant_id": "t1"})
+        identity = resolve_identity(
+            headers={"x-adcp-auth": "tok"},
+            auth_token="tok",
+            protocol="rest",
+        )
+        assert identity.testing_context is None
+
+    @patch("src.core.auth_utils.get_principal_from_token")
+    @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
+    @patch("src.core.resolved_identity.get_tenant_by_subdomain", return_value=None)
+    def test_explicit_context_is_not_overridden(self, _sub, _vh, mock_token):
+        from src.core.testing_hooks import AdCPTestContext
+
+        mock_token.return_value = ("principal_1", {"tenant_id": "t1"})
+        explicit = AdCPTestContext(dry_run=False, test_session_id="explicit-session")
+        identity = resolve_identity(
+            headers={"x-dry-run": "true", "x-adcp-auth": "tok"},
+            auth_token="tok",
+            protocol="mcp",
+            testing_context=explicit,
+        )
+        assert identity.testing_context is explicit

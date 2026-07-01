@@ -20,6 +20,7 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
 from src.core.exceptions import (
+    AdCPConfigurationError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
@@ -30,7 +31,7 @@ from src.core.exceptions import (
 # ---------------------------------------------------------------------------
 
 #: Fixed enum for the ``error_type`` label. Keep <= 5 values.
-ERROR_TYPE_VALUES = ("validation", "timeout", "model_error", "other")
+ERROR_TYPE_VALUES = ("validation", "timeout", "configuration", "model_error", "other")
 
 #: Closed set of ``policy_triggered`` values emitted by the AI review flow.
 #: Anything outside this set (e.g. an AI-generated free-form reason) collapses
@@ -58,6 +59,11 @@ def categorize_error(error: BaseException) -> str:
     # AdCP errors that mean "service unavailable" are timeout-ish operationally.
     if isinstance(error, TimeoutError | AdCPServiceUnavailableError | AdCPRateLimitError):
         return "timeout"
+    # Operator/server configuration failures (e.g. an ad-server credential denied,
+    # a secret that won't decrypt) need human action, not a buyer retry or fix —
+    # a distinct bucket so they stay visible instead of collapsing into "other".
+    if isinstance(error, AdCPConfigurationError):
+        return "configuration"
     if isinstance(error, ValueError | TypeError | KeyError | AdCPValidationError):
         return "validation"
     # AI/model layer surfaces failures as RuntimeError or connection errors.

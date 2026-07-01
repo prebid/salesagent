@@ -17,6 +17,7 @@ Usage:
 
 from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, TenantNotConfiguredError
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
@@ -38,6 +39,7 @@ __all__ = [
     "AccountUoW",
     "AdapterConfigRepository",
     "TenantNotConfiguredError",
+    "AuthorizedPropertyRepository",
     "CurrencyLimitRepository",
     "IdempotencyAttemptRepository",
     "MediaBuyRepository",

@@ -76,6 +76,7 @@ from src.core.schemas import (
     Budget,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
+    UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -89,12 +90,11 @@ from src.core.tools.financial_validation import (
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.targeting_capabilities import (
-    property_list_unsupported_advisories,
+    collect_overlay_targeting_violations,
+    raise_if_overlay_targeting_violations,
+    raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
-    validate_geo_overlap,
-    validate_overlay_targeting,
     validate_property_targeting_allowed,
-    validate_unknown_targeting_fields,
 )
 
 
@@ -163,7 +163,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-) -> UpdateMediaBuySuccess | UpdateMediaBuyError:
+) -> UpdateMediaBuySuccess | UpdateMediaBuySubmitted | UpdateMediaBuyError:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
     Callers construct the validated UpdateMediaBuyRequest at their boundary
@@ -197,9 +197,13 @@ def _update_media_buy_impl(
     # orphaned in ``in_progress`` forever, which suppresses the
     # buyer-facing ``status="failed"`` push notification fired from
     # ``context_manager.update_workflow_step:330-332``.
-    # Mirrors ``media_buy_create.py:3688-3697`` exactly.
+    # Mirrors the create-side workflow-step failure handling in ``media_buy_create.py``.
     ctx_manager = get_context_manager()
     step = None
+    # property_list overlay recompile-and-PUTs are collected here during the
+    # package loop and executed in a single post-commit push phase (F03), so no
+    # live-flight mutation can precede a later in-transaction raise.
+    pending_targeting_pushes: list[tuple[str, str, Any]] = []
 
     with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
@@ -288,6 +292,7 @@ def _update_media_buy_impl(
             principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
             adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+
             today = req.today or date.today()
 
             # AdCP 3.0.0 spec (core/product.json `property_targeting_allowed`): reject property_list targeting
@@ -306,11 +311,8 @@ def _update_media_buy_impl(
                 for pkg_update in req.packages:
                     if pkg_update.targeting_overlay is None:
                         continue
-                    overlay_violations.extend(validate_unknown_targeting_fields(pkg_update.targeting_overlay))
-                    overlay_violations.extend(validate_overlay_targeting(pkg_update.targeting_overlay))
-                    overlay_violations.extend(validate_geo_overlap(pkg_update.targeting_overlay))
-                if overlay_violations:
-                    raise AdCPValidationError(f"Targeting validation failed: {'; '.join(overlay_violations)}")
+                    overlay_violations.extend(collect_overlay_targeting_violations(pkg_update.targeting_overlay))
+                raise_if_overlay_targeting_violations(overlay_violations)
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:
@@ -331,6 +333,35 @@ def _update_media_buy_impl(
                     if violation:
                         property_targeting_violations.append(violation)
                 raise_if_property_targeting_violations(property_targeting_violations)
+
+            # Honest-declaration check for property_list targeting. Runs AFTER
+            # the product-flag gate above so a buyer asking for property_list
+            # on a product whose ``property_targeting_allowed=False`` sees the
+            # product-specific VALIDATION_ERROR first (smaller-scope correction:
+            # switch product within same seller). If the request is well-formed
+            # against the product but the seller's adapter cannot compile
+            # property_list, this check fires with UNSUPPORTED_FEATURE
+            # (recovery=correctable; suggestion: drop the field or pick a
+            # capable seller). Both gates fire BEFORE the dry_run branch so
+            # all transports + dry_run honor the contract uniformly.
+            raise_if_property_list_unsupported(req.packages, adapter)
+
+            # Adapter-specific compile gate (e.g. Kevel's identifier-type
+            # check) — runs before the dry_run early-return so dry-run updates
+            # validate identically to live ones, mirroring create's
+            # pre-booking gate.
+            if req.packages:
+                adapter.validate_targeting_update(req.packages)
+
+            # The zero-overlap advisory (``_build_property_list_advisories``)
+            # is create-only today: create returns BUYER-VISIBLE advisories
+            # (message/ext on success, the submitted variant's errors slot),
+            # while update enforces the hard gates above plus the adapter
+            # recompile seam — a zero-overlap property_list update succeeds
+            # with no buyer context. The spec's update-success variant forbids
+            # ``errors`` and has no submitted variant, so update parity means
+            # a message-channel advisory; deliberately deferred (it needs its
+            # own message-composition design), not an oversight.
 
             # Dry-run mode: Return simulated response without any database writes
             # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
@@ -360,7 +391,6 @@ def _update_media_buy_impl(
                     affected_packages=simulated_affected,
                     valid_actions=valid_actions_for_status(_dry_run_status),
                     context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
 
                 return dry_run_response
@@ -377,14 +407,13 @@ def _update_media_buy_impl(
                 # Store the original request alongside the response so the approval
                 # execution path can re-execute the update after human approval.
                 # This mirrors create_media_buy's raw_request pattern.
-                _approval_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                _approval_status = _approval_mb.status if _approval_mb else ""
-                approval_response = UpdateMediaBuySuccess(
-                    media_buy_id=req.media_buy_id or "",
-                    affected_packages=[],  # Not yet applied — pending approval
-                    valid_actions=valid_actions_for_status(_approval_status),
+                # Spec ``submitted`` variant: task_id is the buyer's tracking
+                # handle; media_buy_id/affected_packages are forbidden here (they
+                # arrive on the completion artifact once approval resolves).
+                approval_response = UpdateMediaBuySubmitted(
+                    task_id=step.step_id,
+                    message="Awaiting publisher approval for the media buy update.",
                     context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
                 ctx_manager.audit_workflow_step_result(
                     step.step_id,
@@ -532,7 +561,6 @@ def _update_media_buy_impl(
                         media_buy_id=media_buy_id,
                         affected_packages=affected_pkgs,
                         valid_actions=valid_actions_for_status(_post_action_status),
-                        errors=property_list_unsupported_advisories(req.packages, adapter),
                     )
                     # Log successful update_media_buy (pause/resume)
                     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -1062,6 +1090,19 @@ def _update_media_buy_impl(
                         # Flag the JSON field as modified so SQLAlchemy persists it
                         attributes.flag_modified(media_package, "package_config")
                         session.flush()
+
+                        # property_list overlays must reach the live flight, not
+                        # just package_config. The recompile-and-PUT is DEFERRED
+                        # to a single post-commit push phase (see the end of this
+                        # function) so no live-flight mutation can precede a later
+                        # in-transaction raise — a sibling package's budget /
+                        # min-budget check, or the top-level budget / date-range
+                        # validation below. package_config is the source of truth;
+                        # the post-commit push reconciles the flight forward.
+                        if pkg_update.targeting_overlay.property_list is not None:
+                            pending_targeting_pushes.append(
+                                (req.media_buy_id, pkg_update.package_id, pkg_update.targeting_overlay)
+                            )
                         logger.info(
                             f"[update_media_buy] Updated package {pkg_update.package_id} targeting: {pkg_update.targeting_overlay}"
                         )
@@ -1228,7 +1269,6 @@ def _update_media_buy_impl(
                 affected_packages=affected_packages_list,
                 valid_actions=valid_actions_for_status(_final_status),
                 context=req.context,
-                errors=property_list_unsupported_advisories(req.packages, adapter),
             )
 
             # Log successful update_media_buy call
@@ -1248,10 +1288,29 @@ def _update_media_buy_impl(
                 },
             )
 
-            # Persist success with response data, then return
-            # Use mode="json" to ensure enums are serialized as strings for JSONB storage
-            ctx_manager.audit_workflow_step_result(step.step_id, final_response)
+            # NOTE: the workflow step result (which fires the completion webhook)
+            # is recorded AFTER the post-commit targeting push below, so a buyer
+            # never sees "completed" before the live flight carries the overlay.
 
+        # --- Post-commit targeting push phase (F03) ---
+        # package_config is now durably committed and is the source of truth.
+        # Pushing the recompiled property_list overlay to the live flight only
+        # AFTER commit guarantees no flight is ever ahead of a rolled-back config:
+        # previously the PUT ran inside the per-package loop, so a later
+        # in-transaction raise (a sibling package's budget/min-budget check, the
+        # top-level budget/date-range validation) could roll package_config back
+        # to the old overlay while the live Kevel flight already served the new
+        # siteIds — a silent config/flight skew the buyer could not see. A push
+        # failure here surfaces a transient AdCPAdapterError and leaves config
+        # ahead of flight — the benign, self-healing direction (a retry re-pushes
+        # from the committed overlay; audit_workflow_step_failure_ctx marks the
+        # step failed so no completion webhook fires).
+        for _push_media_buy_id, _push_package_id, _push_overlay in pending_targeting_pushes:
+            adapter.update_package_targeting(_push_media_buy_id, _push_package_id, _push_overlay, today)
+
+        # Record success (and fire the completion webhook) now that the live
+        # flight reflects the persisted overlay.
+        ctx_manager.audit_workflow_step_result(step.step_id, final_response)
         return final_response
 
 
