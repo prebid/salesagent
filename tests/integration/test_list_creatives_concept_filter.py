@@ -109,3 +109,35 @@ class TestNumericConceptCoercion:
             creative = result.wire_response["creatives"][0]
             assert creative["concept_id"] == "12345"
             assert creative["concept_name"] == "678"
+
+
+class TestNonScalarConceptValueDropped:
+    """A non-scalar concept_id/concept_name (corrupt external value) is dropped to
+    null and logged, not projected as a repr and not crashed on — regression guard
+    for the _coerce_concept_value non-scalar branch (the symmetric half of the
+    numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
+
+    def test_non_scalar_concept_value_is_dropped(self, integration_db, caplog):
+        import logging
+
+        from tests.factories import CreativeFactory
+
+        with CreativeListEnv() as env:
+            tenant, principal = _seed_authenticated_principal(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
+            )
+            with caplog.at_level(logging.WARNING):
+                result = env.call_via(Transport.REST)
+
+            assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
+            creative = result.wire_response["creatives"][0]
+            # Dropped to None → exclude_none omits the keys from the wire entirely.
+            assert "concept_id" not in creative
+            assert "concept_name" not in creative
+            # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
+            assert "Dropping non-scalar concept value" in caplog.text

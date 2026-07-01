@@ -330,6 +330,9 @@ def _list_creatives_impl(
                 name=db_creative.name,
                 format_id=format_obj,
                 assets=assets_dict,
+                # FIXME(#1508): raw untyped blob into typed list[str] — a malformed
+                # tags value (bare string, or [1, 2]) crashes the whole listing, the
+                # same hazard _coerce_concept_value handles for concept fields.
                 tags=db_creative.data.get("tags") if db_creative.data else None,
                 # AdCP spec fields (listing Creative)
                 status=status_enum,
