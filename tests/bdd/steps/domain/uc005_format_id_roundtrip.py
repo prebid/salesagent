@@ -13,12 +13,16 @@ import asyncio
 
 from pytest_bdd import given, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.domain.uc005_format_id_shape import _serialized_formats
+from tests.helpers.format_assertions import assert_wire_format_id_is_object
 
 # Shared by ProductFactory defaults and mock creative registry (_get_mock_formats).
 _AGENT_URL = "https://creative.adcontextprotocol.org"
 # Must match a format_id.id in _get_mock_formats() so the filter returns a result.
-# "display_300x250_image" is index 0 in that list, ensuring formats[0] roundtrips correctly.
+# Production filters list_creative_formats on the (agent_url, id) pair via
+# format_id_identity (creative_formats.py:279-280), so the returned formats[]
+# contains only the single matching entry regardless of catalog order --
+# formats[0] is always the captured pair.
 _FORMAT_ID = "display_300x250_image"
 
 
@@ -70,9 +74,7 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
 @when("the Buyer Agent sends list_creative_formats with format_ids [{captured agent_url, captured id}]")
 def when_send_list_creative_formats_with_captured_format_id(ctx: dict) -> None:
     """Send list_creative_formats filtered to the captured format_id."""
-    from adcp.types import FormatId
-
-    from src.core.schemas import ListCreativeFormatsRequest
+    from src.core.schemas import FormatId, ListCreativeFormatsRequest
     from tests.bdd.steps.generic.when_request import _call_via
 
     captured = ctx["captured_format_id"]
@@ -81,62 +83,55 @@ def when_send_list_creative_formats_with_captured_format_id(ctx: dict) -> None:
     _call_via(ctx, ctx["transport"], req=req)
 
 
+def _assert_formats_non_empty(ctx: dict, failure_message: str) -> list[dict]:
+    """Shared non-empty check for the two storyboard steps that assert the same predicate."""
+    formats = _serialized_formats(ctx)
+    assert formats, failure_message
+    return formats
+
+
 @then("the response should be schema-valid against list-creative-formats-response.json")
 def then_response_schema_valid(ctx: dict) -> None:
-    """Assert the response is a valid ListCreativeFormatsResponse.
+    """Assert the serialized wire response carries a formats list.
 
-    A typed payload returned by the harness cannot be schema-invalid by
-    construction — Pydantic validates on deserialisation. This step asserts
-    the success envelope arrived (no error) and has a formats attribute.
+    Asserts the actual wire payload (``ctx["wire_response"]`` on a2a/mcp/rest, or
+    the production-serialized payload on IMPL) via ``_serialized_formats`` — not
+    the typed ``ListCreativeFormatsResponse``, whose fields are already coerced
+    to their declared types and so cannot observe a serialization regression.
     """
-    response = _require_response(ctx)
-    # Pydantic validates the payload on deserialisation, so schema validity is
-    # guaranteed by construction. We verify the envelope by asserting formats is
-    # a list — the required field that distinguishes a success response.
-    assert isinstance(response.formats, list), (
-        f"Expected formats to be a list, got {type(response.formats).__name__!r}: {response!r}"
-    )
+    formats = _serialized_formats(ctx)
+    assert isinstance(formats, list), f"Expected formats to be a list, got {type(formats).__name__!r}"
 
 
 @then("the formats array should contain at least one entry")
 def then_formats_array_non_empty(ctx: dict) -> None:
     """Assert formats[] is non-empty — an empty array is a compliance failure."""
-    response = _require_response(ctx)
-    assert response.formats, (
+    _assert_formats_non_empty(
+        ctx,
         "formats[] is empty. The sales agent advertised this format_id on its products "
         "but cannot resolve it through list_creative_formats. "
-        "(AdCP list_formats_integrity: format_ids on products MUST resolve through list_creative_formats)"
+        "(AdCP list_formats_integrity: format_ids on products MUST resolve through list_creative_formats)",
     )
 
 
 @then("formats[0].format_id should roundtrip verbatim with the captured {agent_url, id}")
 def then_format_id_roundtrip_verbatim(ctx: dict) -> None:
-    """Assert the captured format_id roundtrips verbatim through list_creative_formats.
+    """Assert the captured format_id roundtrips verbatim as formats[0].format_id.
 
-    The _list_creative_formats_impl filter uses only format_id.id (not agent_url):
-        format_ids_set = {fmt.id for fmt in req.format_ids}
-    The mock registry returns FormatId objects with both fields set, so the
-    verbatim check asserts agent_url is also preserved end-to-end.
-
-    For REST transport, build_rest_body() drops the format_ids filter (the REST
-    endpoint only accepts adcp_version). All mock formats are returned sorted by
-    name — "Display HTML" sorts before "Medium Rectangle", so formats[0] is not
-    the captured id. We search the full list for the captured id instead.
+    Production filters list_creative_formats on the (agent_url, id) pair via
+    format_id_identity (creative_formats.py:279-280), so the mock registry's
+    single seeded match for the captured pair is exactly formats[0] on every
+    transport. Asserts the wire object-shape (agent_url + id present, never a
+    bare string) plus id verbatim — the falsifiable core; the agent_url value
+    can't diverge since the filter only returns pair-matches.
     """
     captured = ctx["captured_format_id"]
-    response = _require_response(ctx)
-    assert response.formats, "formats[] is empty — cannot verify roundtrip"
+    formats = _assert_formats_non_empty(ctx, "formats[] is empty — cannot verify roundtrip")
 
-    actual_fid = next(
-        (f.format_id for f in response.formats if str(f.format_id.id) == captured["id"]),
-        None,
-    )
-    assert actual_fid is not None, (
-        f"captured format_id {captured['id']!r} not found in formats[] — "
-        f"got: {[str(f.format_id.id) for f in response.formats]}"
-    )
-    assert str(actual_fid.agent_url) == captured["agent_url"], (
-        f"agent_url mismatch: expected {captured['agent_url']!r}, got {str(actual_fid.agent_url)!r}"
+    format_id = formats[0]["format_id"]
+    assert_wire_format_id_is_object(format_id)
+    assert format_id["id"] == captured["id"], (
+        f"formats[0].format_id.id mismatch: expected {captured['id']!r}, got {format_id['id']!r}"
     )
 
 
@@ -149,10 +144,10 @@ def then_empty_formats_is_compliance_failure(ctx: dict) -> None:
     the media buy is committed. The assertion message names this as a compliance
     failure per AdCP list_formats_integrity.
     """
-    response = _require_response(ctx)
-    assert response.formats, (
+    _assert_formats_non_empty(
+        ctx,
         "COMPLIANCE FAILURE: formats[] is empty. The format_id was advertised on a "
         "product but cannot be resolved through list_creative_formats. A buyer who "
         "committed a media buy against this product would fail silently at "
-        "sync_creatives. (AdCP list_formats_integrity phase)"
+        "sync_creatives. (AdCP list_formats_integrity phase)",
     )
