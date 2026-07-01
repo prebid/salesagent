@@ -53,6 +53,27 @@ def _coerce_concept_value(value: Any) -> str | None:
     return None
 
 
+# Defense-in-depth cap on the length of list-valued filters. On the pinned adcp
+# schema only creative_ids is bounded (MaxLen 100); its sibling list filters
+# (statuses, format_ids, concept_ids, ...) are not, so an over-long filter would
+# expand into a very large SQL IN (...) clause. We reject past the same bound the
+# SDK already enforces for creative_ids, turning it into a clean VALIDATION_ERROR.
+_MAX_FILTER_LIST_LEN = 100
+
+# List-valued fields on CreativeFilters that expand into IN (...) predicates.
+_CAPPED_FILTER_FIELDS = (
+    "statuses",
+    "format_ids",
+    "concept_ids",
+    "creative_ids",
+    "tags",
+    "tags_any",
+    "media_buy_ids",
+    "accounts",
+    "assigned_to_packages",
+)
+
+
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
     """Merge a structured CreativeFilters model into flat params (flat take precedence).
 
@@ -144,6 +165,18 @@ def _list_creatives_impl(
 
     # Enforce max limit
     effective_limit = min(limit, 1000)
+
+    # Enforce max filter-list length (defense-in-depth). Reject an over-long
+    # list filter with a clean VALIDATION_ERROR rather than running a huge
+    # IN (...) query. Mirrors the effective_limit cap above.
+    if filters is not None:
+        for _field in _CAPPED_FILTER_FIELDS:
+            _values = getattr(filters, _field, None)
+            if _values is not None and len(_values) > _MAX_FILTER_LIST_LEN:
+                raise AdCPValidationError(
+                    f"filters.{_field} has {len(_values)} entries; the maximum is {_MAX_FILTER_LIST_LEN}.",
+                    suggestion=f"Send at most {_MAX_FILTER_LIST_LEN} values in filters.{_field}, or narrow the query.",
+                )
 
     # Build spec-compliant filters from flat parameters
     # Library CreativeFilters uses plural field names (statuses, formats)
