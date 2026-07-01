@@ -18,19 +18,12 @@ import unittest.mock
 from unittest.mock import MagicMock, patch
 
 from src.core.database.models import TMPProvider
+from tests.unit._tmp_helpers import make_super_admin_client
 
 
 def _make_tmp_provider_client():
     """Create a Flask test client authenticated as super admin for TMP provider endpoints."""
-    from src.admin.app import create_app
-
-    app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["test_user"] = "test_super_admin@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["authenticated"] = True
-    return client
+    return make_super_admin_client()
 
 
 def _mock_uow_with_tenant(mock_uow, tenant_id="default"):

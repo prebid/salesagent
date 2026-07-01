@@ -5,10 +5,11 @@ UoW mock factories across the four TMP test files (CLAUDE.md DRY invariant).
 
 Usage::
 
-    from tests.unit._tmp_helpers import _make_tenant_uow, _make_tmp_uow, _make_provider
+    from tests.unit._tmp_helpers import _make_tenant_uow, _make_tmp_uow, _make_provider, make_super_admin_client
 
     mock_tenant_uow_cls = _make_tenant_uow(tenant)
     mock_tmp_uow_cls = _make_tmp_uow(providers)
+    client = make_super_admin_client()
 """
 
 from __future__ import annotations
@@ -16,6 +17,24 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from src.core.database.models import TMPProvider
+
+
+def make_super_admin_client():
+    """Create a Flask test client authenticated as super admin.
+
+    Shared by test_ssrf_url_validator.py and test_tmp_providers_blueprint.py
+    to avoid duplicating the identical app-creation + session-setup block
+    (CLAUDE.md DRY invariant).
+    """
+    from src.admin.app import create_app
+
+    app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["test_user"] = "test_super_admin@example.com"
+        sess["test_user_role"] = "super_admin"
+        sess["authenticated"] = True
+    return client
 
 
 def _make_provider(
