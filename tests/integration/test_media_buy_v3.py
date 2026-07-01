@@ -968,3 +968,22 @@ class TestDeliveryIdentityValidation:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_nonexistent"])
         with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity=None)
+
+
+class TestUpdateMediaBuyMissingPackageId:
+    """UC-003 ext-h: a package update entry lacking package_id (and buyer_ref) is rejected."""
+
+    def test_package_update_without_identifier_is_rejected(self):
+        """UC-003-H01: a package update with no package_id raises INVALID_REQUEST.
+
+        Covers: UC-003-EXT-H-01
+        The request-shape validator (_validate_package_update_shape) enforces
+        PRE-BIZ7 (package XOR identification): a package entry must carry a
+        package_id (or buyer_ref). Missing both raises AdCPInvalidRequestError
+        (wire INVALID_REQUEST). Live wire coverage: BDD @T-UC-003-ext-h.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        with pytest.raises(AdCPInvalidRequestError, match="package_id is required"):
+            UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"budget": 5000.0}])
