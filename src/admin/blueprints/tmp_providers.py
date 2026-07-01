@@ -24,7 +24,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.models import TMPProvider
 from src.core.database.repositories.uow import TMPProviderUoW
-from src.core.security.url_validator import check_url_ssrf
+from src.core.security.url_validator import check_url_ssrf, sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,11 @@ def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
 
     is_safe, ssrf_error = check_url_ssrf(endpoint)
     if not is_safe:
-        logger.warning("[SECURITY] TMP provider rejected unsafe URL %r: %s", endpoint, ssrf_error)
+        logger.warning(
+            "[SECURITY] TMP provider rejected unsafe URL %s: %s",
+            sanitize_for_log(endpoint),
+            sanitize_for_log(ssrf_error),
+        )
         return {}, f"Endpoint URL is not allowed: {ssrf_error}"
 
     # At least one of context_match or identity_match must be true

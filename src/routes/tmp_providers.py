@@ -58,6 +58,7 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPServiceUnavailableError,
 )
+from src.core.security.url_validator import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_
 
     logger.debug(
         "[TMP discovery] tenant=%s returned %d provider(s)",
-        tenant_id,
+        sanitize_for_log(tenant_id),
         len(provider_list),
     )
 
