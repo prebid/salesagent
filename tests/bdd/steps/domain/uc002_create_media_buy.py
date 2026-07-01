@@ -210,16 +210,23 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
     operator = ctx.get("request_operator", "agency.com")
     other_principal = PrincipalFactory(tenant=tenant)
 
+    accessible_ids: list[str] = []
     for i in range(total):
+        account_id = f"acc-scope-{i}"
         account = AccountFactory(
             tenant=tenant,
-            account_id=f"acc-scope-{i}",
+            account_id=account_id,
             status="active",
             brand={"domain": brand},
             operator=operator,
         )
         owner = principal if i < accessible else other_principal
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=owner, account=account)
+        if i < accessible:
+            accessible_ids.append(account_id)
+    # Record the accessible account id(s) so a Then step can pin the resolved
+    # account to the one the agent can actually access (salesagent-lyb8).
+    ctx["accessible_account_ids"] = accessible_ids
 
 
 @given("the Buyer Agent's token resolves no principal")
@@ -829,6 +836,37 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         _assert_task_list_outcome(ctx, outcome)
     else:
         raise ValueError(f"Unknown outcome: {outcome!r}")
+
+
+@then("the resolved account is the one the agent can access")
+def then_resolved_account_is_accessible(ctx: dict) -> None:
+    """Pin the resolved account to the accessible one (salesagent-lyb8).
+
+    A bare 'success' assertion proves the create did not error, but not that the
+    ACCESS-SCOPED resolution actually returned the account the agent can access
+    (rather than, say, an inaccessible sibling matching the same natural key).
+    The created MediaBuy persists identity.account_id, so assert its account_id
+    equals the single accessible account seeded by given_natural_key_partial_access.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    accessible = ctx.get("accessible_account_ids")
+    assert accessible, "given_natural_key_partial_access must record ctx['accessible_account_ids']"
+
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a create success response, got error: {ctx.get('error')}"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, f"Expected a media_buy_id in the create response, got: {resp!r}"
+
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    env._commit_factory_data()
+    mb = MediaBuyRepository(env._session, tenant.tenant_id).get_by_id(media_buy_id)
+    assert mb is not None, f"Media buy {media_buy_id!r} not found in DB"
+    assert mb.account_id == accessible[0], (
+        f"Access-scoped resolution should return the accessible account {accessible[0]!r}, "
+        f"but the created media buy resolved to account_id={mb.account_id!r}"
+    )
 
 
 def _assert_account_resolution_succeeds(ctx: dict) -> None:

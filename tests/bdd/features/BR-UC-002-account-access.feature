@@ -20,6 +20,7 @@ Feature: BR-UC-002 Account access scoping
     And the natural key matches 2 accounts but the agent can access 1
     When the Buyer Agent sends the create_media_buy request
     Then the result should be success
+    And the resolved account is the one the agent can access
 
   # salesagent-fb2l: an unauthenticated caller (tenant resolved, no principal) must be
   # rejected with AUTH_REQUIRED at the account-resolution boundary — it must never reach
