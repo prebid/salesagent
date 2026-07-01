@@ -535,7 +535,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
     def test_adcp_conflict_from_impl_returns_409(self):
-        """AdCPConflictError raised in _impl → REST returns 409 with correctable recovery."""
+        """AdCPConflictError raised in _impl → REST returns 409 with transient recovery."""
         from starlette.testclient import TestClient
 
         from src.app import app
