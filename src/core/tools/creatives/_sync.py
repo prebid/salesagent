@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types import BrandReference, ContextObject, CreativeAction, CreativeAsset
+from adcp.types import ContextObject, CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
@@ -34,7 +34,7 @@ def _sync_creatives_impl(
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
-    media_buy_brand: BrandReference | dict[str, Any] | None = None,
+    media_buy_brand: dict[str, Any] | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 
@@ -114,18 +114,6 @@ def _sync_creatives_impl(
     logger.info(f"[sync_creatives] Tenant approval_mode field: {tenant.get('approval_mode', 'NOT FOUND')}")
     approval_mode = tenant.get("approval_mode", "require-human")
     logger.info(f"[sync_creatives] Final approval mode: {approval_mode} (from tenant: {tenant.get('tenant_id')})")
-
-    # Serialize media_buy_brand to a plain dict at the _impl boundary so that
-    # _update_existing_creative and _create_new_creative (internal helpers) always
-    # receive dict[str, Any] | None — never a Pydantic model.  This keeps
-    # model_dump() out of the internal helpers (architecture guard).
-    brand_dict: dict[str, Any] | None
-    if media_buy_brand is None:
-        brand_dict = None
-    elif isinstance(media_buy_brand, dict):
-        brand_dict = media_buy_brand
-    else:
-        brand_dict = media_buy_brand.model_dump(mode="json")
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)
     # This avoids async HTTP calls inside database savepoints which cause transaction errors
@@ -243,7 +231,7 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
-                            media_buy_brand=brand_dict,
+                            media_buy_brand=media_buy_brand,
                         )
 
                         # Handle failed updates
@@ -304,7 +292,7 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
-                            media_buy_brand=brand_dict,
+                            media_buy_brand=media_buy_brand,
                         )
 
                         # Handle failed creates

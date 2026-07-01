@@ -40,7 +40,7 @@ from adcp import ADCPMultiAgentClient, BuildCreativeRequest, ListCreativeFormats
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
-from adcp.types import (
+from adcp.types import (  # type: ignore[attr-defined]
     FormatReferenceStructuredObject,
     ImageFormatAsset,
     VideoFormatAsset,
@@ -236,7 +236,7 @@ def _create_mock_format_multi(format_id_str: str, name: str, asset_types: list[s
     # the validator.  Any code that reads format.assets[i].asset_type will see
     # "image" for all slots — including the "url" slot — which is incorrect.
     # Track upstream fix: adcontextprotocol/adcp-client-python#913 (StrEnum).
-    assets: list[ImageFormatAsset | VideoFormatAsset] = []  # type: ignore[valid-type]
+    assets: list[ImageFormatAsset | VideoFormatAsset] = []
     for i, asset_type in enumerate(asset_types):
         asset_id = asset_type if i == 0 else f"{asset_type}_{i}"
         assets.append(
@@ -1036,8 +1036,8 @@ class CreativeAgentRegistry:
             ),
             idempotency_key=idempotency_key,
             finalize=finalize,
-            creative_manifest=creative_manifest,  # type: ignore[arg-type]
-            brand=brand_ref,  # type: ignore[arg-type]
+            creative_manifest=creative_manifest,
+            brand=brand_ref,
         )
 
         # Build a transient CreativeAgent for this URL so we can use _build_adcp_client.
