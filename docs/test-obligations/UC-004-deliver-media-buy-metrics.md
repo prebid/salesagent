@@ -74,15 +74,6 @@ Source: BR-UC-004-main-mcp.md
 **Business Rule** BR-RULE-030 (INV-4: neither provided = all for principal)
 **Priority** P1
 
-#### Scenario: media_buy_ids takes precedence over buyer_refs
-**Obligation ID** UC-004-MAIN-05
-**Layer** behavioral
-**Given** an authenticated buyer
-**When** the buyer sends `get_media_buy_delivery` with BOTH `media_buy_ids` and `buyer_refs`
-**Then** the system resolves by `media_buy_ids` only; `buyer_refs` is ignored
-**Business Rule** BR-RULE-030 (INV-3: media_buy_ids wins)
-**Priority** P1
-
 #### Scenario: Default date range applied when not specified
 **Obligation ID** UC-004-MAIN-06
 **Layer** schema
@@ -499,15 +490,6 @@ Source: BR-UC-004-ext-c.md
 **Then** per BR-RULE-030 INV-5, partial results are returned (mb_1 only). However, ext-c says error is returned. Test must verify which behavior the implementation follows.
 **Business Rule** BR-RULE-030 (INV-5 partial resolution) vs ext-c (error for not found) -- VERIFY IMPLEMENTATION
 **Priority** P1 -- specification conflict to resolve
-
-#### Scenario: buyer_ref does not resolve
-**Obligation ID** UC-004-EXT-C-03
-**Layer** behavioral
-**Given** an authenticated buyer
-**When** the buyer requests delivery for `buyer_refs: ["no_such_ref"]`
-**Then** the system returns error `media_buy_not_found`
-**Business Rule** BR-RULE-030
-**Priority** P1
 
 ---
 

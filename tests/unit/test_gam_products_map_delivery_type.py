@@ -84,12 +84,10 @@ def test_products_map_includes_delivery_type():
 
     # Create request packages (need real string attributes for Pydantic response construction)
     mock_req_package = Mock()
-    mock_req_package.buyer_ref = "buyer_ref_001"
     mock_req_package.package_id = "pkg_prod_abc_001"
 
     # Create a request
     mock_request = Mock()
-    mock_request.buyer_ref = "buyer_test"
     mock_request.packages = [mock_req_package]
     mock_request.get_total_budget = Mock(return_value=10000)
 

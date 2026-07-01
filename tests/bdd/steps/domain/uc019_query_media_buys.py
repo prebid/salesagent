@@ -245,22 +245,6 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
     env._commit_factory_data()
 
 
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with buyer_ref "{ref}"'))
-def given_principal_owns_with_ref(ctx: dict, principal_id: str, mb_id: str, ref: str) -> None:
-    """Create a media buy (buyer_ref removed in adcp 3.12, creates without it)."""
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
-
-
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with an active package "{pkg_id}"'))
 def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, pkg_id: str) -> None:
     """Create a media buy with an active package, verifying principal_id consistency."""
@@ -1112,11 +1096,6 @@ def when_query_mcp_no_filters(ctx: dict) -> None:
         ctx["error"] = exc
 
 
-@when(parsers.parse("the Buyer Agent sends a get_media_buys request with buyer_refs {refs}"))
-def when_query_by_refs(ctx: dict, refs: str) -> None:
-    pass  # buyer_ref removed in adcp 3.12
-
-
 @when("the Buyer Agent sends a get_media_buys request with include_snapshot true")
 def when_query_with_snapshot(ctx: dict) -> None:
     """Send get_media_buys with include_snapshot=True."""
@@ -1370,27 +1349,18 @@ def then_creative_approval_state(ctx: dict) -> None:
     )
 
 
-@then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
-def then_buyer_refs_for_correlation(ctx: dict) -> None:
+@then("each media buy should include buyer_campaign_ref for correlation")
+def then_buyer_campaign_ref_for_correlation(ctx: dict) -> None:
     """Assert buyer_campaign_ref on each response media buy matches the seeded value.
 
-    buyer_ref was removed in adcp 3.12; buyer_campaign_ref is the surviving
-    correlation identifier.  The step text still mentions buyer_ref because the
-    feature file is auto-generated from the spec.  We explicitly assert buyer_ref
-    is absent to document the removal.
+    buyer_campaign_ref is the surviving correlation identifier (top-level buyer_ref
+    was removed from the schema in adcp 3.12).
     """
     buys = _get_media_buys(ctx)
     seeded = ctx.get("seeded_media_buys", {})
     checked = 0
     for buy in buys:
         buy_id = buy.media_buy_id
-
-        # buyer_ref was removed in adcp 3.12 — assert it is absent on the
-        # response schema to document the removal.
-        assert not hasattr(buy, "buyer_ref") or getattr(buy, "buyer_ref", None) is None, (
-            f"Media buy '{buy_id}' unexpectedly has buyer_ref="
-            f"{getattr(buy, 'buyer_ref', None)!r}; buyer_ref was removed in adcp 3.12"
-        )
 
         # buyer_campaign_ref is the surviving correlation identifier.
         # Match it against the value seeded via factory raw_request.

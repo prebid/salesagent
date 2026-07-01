@@ -810,6 +810,24 @@ mappings:
       upstream_refs: ["BR-UC-002-nfr-006"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-nfr-highvalue"
+      adcp_feature: "BR-UC-002-nfr-enforcement.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-ym1c-access-scope"
+      adcp_feature: "BR-UC-002-account-access.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-fb2l-unauth-no-disclosure"
+      adcp_feature: "BR-UC-002-account-access.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-alt-asap"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null
@@ -862,6 +880,12 @@ mappings:
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-002-ext-e"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-ext-dual-emit"
+      adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-ext-dual-emit"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-002-ext-f"
@@ -1879,6 +1903,18 @@ mappings:
       business_rules: []
       status: new
   UC-003:
+    - adcp_scenario_id: "T-UC-003-ext-dual-emit"
+      adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-003-ext-dual-emit"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-003-ext-scheduled-status"
+      adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-003-main"
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null
@@ -5777,18 +5813,6 @@ mappings:
       adcp_feature: "BR-UC-009-update-performance-index.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-009-main-mcp", "BR-RULE-021"]
-      business_rules: ["BR-RULE-021"]
-      status: new
-    - adcp_scenario_id: "T-UC-009-inv-021-1-buyerref"
-      adcp_feature: "BR-UC-009-update-performance-index.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-009-main-mcp", "BR-RULE-021"]
-      business_rules: ["BR-RULE-021"]
-      status: new
-    - adcp_scenario_id: "T-UC-009-inv-021-2"
-      adcp_feature: "BR-UC-009-update-performance-index.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-009-ext-b", "BR-RULE-021"]
       business_rules: ["BR-RULE-021"]
       status: new
     - adcp_scenario_id: "T-UC-009-inv-021-3"
@@ -12074,12 +12098,6 @@ mappings:
       upstream_refs: ["BR-UC-022-main-delivery-mcp"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-022-main-delivery-buyer-ref"
-      adcp_feature: "BR-UC-022-creative-delivery-features.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-022-main-delivery-mcp", "BR-RULE-169"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-022-main-delivery-creative-ids"
       adcp_feature: "BR-UC-022-creative-delivery-features.feature"
       obligation_id: null
@@ -12135,12 +12153,6 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-022-ext-b"
-      adcp_feature: "BR-UC-022-creative-delivery-features.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-022-ext-b"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-022-ext-b-ref"
       adcp_feature: "BR-UC-022-creative-delivery-features.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-022-ext-b"]

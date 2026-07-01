@@ -40,7 +40,7 @@ class TestDeliveryPollEnvContract:
         with DeliveryPollEnv() as env:
             for i in range(3):
                 mb_id = f"mb_{i:03d}"
-                env.add_buy(media_buy_id=mb_id, buyer_ref=f"ref_{i}")
+                env.add_buy(media_buy_id=mb_id)
                 env.set_adapter_response(mb_id, impressions=1000 * (i + 1))
 
             response = env.call_impl(media_buy_ids=["mb_000", "mb_001", "mb_002"])
@@ -93,7 +93,6 @@ class TestDeliveryPollEnvContract:
             env.add_buy(
                 media_buy_id="mb_001",
                 raw_request={
-                    "buyer_ref": "ref_001",
                     "packages": [{"package_id": "pkg_001", "product_id": "prod_001", "pricing_option_id": "1"}],
                 },
             )
@@ -129,7 +128,6 @@ class TestDeliveryPollEnvContract:
             env.add_buy(
                 media_buy_id="mb_multi",
                 raw_request={
-                    "buyer_ref": "ref_multi",
                     "packages": [
                         {"package_id": "pkg_A", "product_id": "prod_001"},
                         {"package_id": "pkg_B", "product_id": "prod_002"},

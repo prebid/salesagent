@@ -746,7 +746,7 @@ def then_response_no_success_fields(ctx: dict) -> None:
     BR-RULE-018 INV-2: a validation failure must produce an error response with
     an errors array AND NO success-only domain fields. CreateMediaBuyError
     legitimately has {errors, context, ext}; everything else from
-    CreateMediaBuySuccess (media_buy_id, buyer_ref, buyer_campaign_ref, account,
+    CreateMediaBuySuccess (media_buy_id, buyer_campaign_ref, account,
     creative_deadline, packages, planned_delivery, sandbox, workflow_step_id)
     must be absent or falsy on the error response.
     """

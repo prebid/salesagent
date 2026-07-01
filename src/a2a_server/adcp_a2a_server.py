@@ -106,7 +106,9 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from src.core.validation_helpers import adcp_validation_boundary
+from src.core.validation_helpers import (
+    adcp_validation_boundary,
+)
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -1570,6 +1572,10 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion=f"Required: {required_params}",
             )
 
+        # Validate via the shared boundary so every A2A handler emits the same
+        # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
+        # idempotency_key_missing / duplicate_product_id rejections include a
+        # non-empty suggestion derived by adcp_validation_boundary.
         with adcp_validation_boundary():
             req = CreateMediaBuyRequest.model_validate(params)
 
@@ -1585,7 +1591,11 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config=push_notification_config,
             reporting_webhook=params.get("reporting_webhook"),
             context=params.get("context"),
-            account=params.get("account"),
+            # Wrap for boundary-pattern consistency with delivery/sync_creatives. A crash is
+            # structurally impossible here (create_media_buy_raw re-coerces via
+            # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
+            # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
+            account=to_account_reference(params.get("account")),
             idempotency_key=params.get("idempotency_key"),
             identity=identity,
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are
@@ -1958,6 +1968,8 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
+            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
+            # forward the validated model field rather than re-coercing the raw dict (#1438).
             account=req.account,
             context=params.get("context"),
             identity=identity,

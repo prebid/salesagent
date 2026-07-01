@@ -226,7 +226,6 @@ class TestCreateMediaBuyFieldForwarding:
 UPDATE_FILE = Path("src/core/tools/media_buy_update.py")
 
 # AdCP spec fields that must reach the UpdateMediaBuyRequest via _build_update_request
-# buyer_ref removed in adcp 3.12
 UPDATE_SPEC_FIELDS = {
     "media_buy_id",
     "paused",

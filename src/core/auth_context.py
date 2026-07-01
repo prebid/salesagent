@@ -99,13 +99,16 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
 def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity":
     """FastAPI dependency: resolve identity (auth-required, raises 401 if missing).
 
-    Returns ResolvedIdentity on success. Raises AdCPAuthenticationError if
-    no token is present or the token is invalid.
+    Returns ResolvedIdentity on success. Raises AdCPAuthRequiredError if
+    no token is present or the token is invalid. The error carries the shared
+    AUTH_REQUIRED suggestion so the REST 401 envelope tells the buyer how to
+    recover (parity with require_identity on the _impl path; AdCP POST-F3).
     """
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.auth import AUTH_REQUIRED_SUGGESTION
+    from src.core.exceptions import AdCPAuthRequiredError
 
     if not auth_ctx.auth_token:
-        raise AdCPAuthenticationError("Authentication required")
+        raise AdCPAuthRequiredError("Authentication required", details={"suggestion": AUTH_REQUIRED_SUGGESTION})
 
     from src.core.resolved_identity import resolve_identity
 
@@ -117,7 +120,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     )
 
     if not identity.principal_id:
-        raise AdCPAuthenticationError("Authentication required")
+        raise AdCPAuthRequiredError("Authentication required", details={"suggestion": AUTH_REQUIRED_SUGGESTION})
 
     # Set tenant ContextVar at the REST transport boundary
     if identity.tenant:

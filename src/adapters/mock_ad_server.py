@@ -1128,8 +1128,6 @@ class MockAdServer(AdServerAdapter):
         else:
             status = "delivering"
 
-        # Get buyer_ref from stored media buy data (legacy, may not exist for new buys)
-
         return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
 
     def get_media_buy_delivery(

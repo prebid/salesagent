@@ -187,15 +187,29 @@ class McpDispatcher:
         try:
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
+            # REAL wire only: the raw MCP ToolError JSON when present, else
+            # the envelope the harness reconstruction stashed on the AdCPError
+            # as ``_wire_error_envelope`` (same stash A2A uses). NEVER the
+            # synthesized fallback — a dead MCP wire path must yield None here
+            # (failing assert_envelope_shape), not an envelope regenerated
+            # from the lossy reconstructed exception.
+            wire = _envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None)
+            # When a wire envelope came from the raw ToolError JSON, exc is an
+            # AdCPToolError carrying that envelope (an env that dispatched through
+            # the production with_error_logging boundary). Unwrap it so
+            # result.error is the typed AdCPError — error-code assertions resolve
+            # to the real wire code, not "AdCPToolError". Typed errors (raw JSON
+            # absent, the path taken by every _run_mcp_client-based env, which
+            # unwraps internally) pass through unchanged, so this is a no-op for
+            # them.
+            error = exc
+            if _envelope_from_mcp_error(exc) is not None:
+                from tests.harness._base import _unwrap_mcp_tool_error
+
+                error = _unwrap_mcp_tool_error(exc)
             return TransportResult(
-                error=exc,
-                # REAL wire only: the raw MCP ToolError JSON when present, else
-                # the envelope the harness reconstruction stashed on the AdCPError
-                # as ``_wire_error_envelope`` (same stash A2A uses). NEVER the
-                # synthesized fallback — a dead MCP wire path must yield None here
-                # (failing assert_envelope_shape), not an envelope regenerated
-                # from the lossy reconstructed exception.
-                wire_error_envelope=_envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None),
+                error=error,
+                wire_error_envelope=wire,
                 # What production WOULD emit for the same exception — see the
                 # ImplDispatcher caveat; never a substitute for the wire field.
                 synthesized_error_envelope=_envelope_from_adcp_error(exc),
@@ -293,11 +307,21 @@ class RestE2EDispatcher:
             )
 
         try:
-            payload = env.parse_rest_response(response.json())
+            wire_response = response.json()
+            payload = env.parse_rest_response(wire_response)
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
 
-        return TransportResult(payload=payload, envelope=envelope, error=None, raw_response=response)
+        # Expose the serialized success body as wire_response (parallel to
+        # wire_error_envelope on the error path) so success Then-steps assert on the
+        # real HTTP body rather than re-deriving from the typed payload (#rlgl.3).
+        return TransportResult(
+            payload=payload,
+            envelope=envelope,
+            error=None,
+            wire_response=wire_response,
+            raw_response=response,
+        )
 
 
 class McpE2EDispatcher:
