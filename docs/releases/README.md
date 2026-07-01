@@ -7,7 +7,7 @@ explain what actually shipped and why it matters.
 
 ## Convention
 
-- One file per release: `docs/releases/<MAJOR.MINOR.PATCH>.md` (e.g. `1.8.0.md`).
+- One file per release: `docs/releases/<MAJOR.MINOR.PATCH>.md` (e.g. `2.0.0.md`).
 - Notes are reconstructed from the **final merged diffs**, not PR titles or descriptions
   (which drift as scope grows during review).
 - Dependency and security version bumps are out of scope; a consequential security fix is
