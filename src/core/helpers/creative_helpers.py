@@ -577,8 +577,13 @@ def process_and_upload_package_creatives(
 
         try:
             # Step 1: Upload creatives to database via sync_creatives.
-            # Pass BrandReference directly — no dict conversion here.
-            # _build_creative_data serializes to dict at the DB boundary.
+            # _sync_creatives_impl expects dict[str, Any] | None for media_buy_brand;
+            # serialize BrandReference to dict at this boundary (same as sync_wrappers.py).
+            brand_dict: dict | None
+            if media_buy_brand is None or isinstance(media_buy_brand, dict):
+                brand_dict = media_buy_brand
+            else:
+                brand_dict = media_buy_brand.model_dump(mode="json")
             sync_response = _sync_creatives_impl(
                 creatives=pkg.creatives,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
@@ -587,7 +592,7 @@ def process_and_upload_package_creatives(
                 validation_mode="strict",
                 push_notification_config=None,
                 identity=context,  # ResolvedIdentity for principal_id extraction
-                media_buy_brand=media_buy_brand,
+                media_buy_brand=brand_dict,
             )
 
             # Extract creative IDs from response
@@ -710,7 +715,7 @@ def extract_media_url_and_dimensions(
         - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
+    from adcp.types import ImageFormatAsset as Assets  # type: ignore[attr-defined]
     from adcp.utils import get_individual_assets, has_assets
 
     url = None
@@ -723,9 +728,9 @@ def extract_media_url_and_dimensions(
             # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
             if not isinstance(asset_spec, Assets):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            asset_type = str(asset_spec.asset_type).lower()
             if asset_type in MEDIA_ASSET_TYPES:
-                asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
+                asset_id = asset_spec.asset_id
                 if asset_id in creative_data["assets"]:
                     asset_obj = creative_data["assets"][asset_id]
                     if isinstance(asset_obj, dict):
@@ -835,7 +840,7 @@ def extract_click_url(
         Click-through URL string (optionally with macros substituted), or None if not found.
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
+    from adcp.types import ImageFormatAsset as Assets  # type: ignore[attr-defined]
     from adcp.utils import get_individual_assets, has_assets
 
     click_url = None
@@ -845,7 +850,7 @@ def extract_click_url(
         for asset_spec in get_individual_assets(format_spec):
             if not isinstance(asset_spec, Assets):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            asset_type = str(asset_spec.asset_type).lower()
             if asset_type == "url":
                 requirements = getattr(asset_spec, "requirements", None)
                 if requirements:
@@ -855,7 +860,7 @@ def extract_click_url(
                     elif hasattr(requirements, "url_type"):
                         req_url_type = requirements.url_type
                     if req_url_type == "clickthrough":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
+                        asset_id = asset_spec.asset_id
                         if asset_id in creative_data["assets"]:
                             asset_obj = creative_data["assets"][asset_id]
                             if isinstance(asset_obj, dict) and asset_obj.get("url"):
@@ -902,7 +907,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
         Impression tracker URL string or None if not found.
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
+    from adcp.types import ImageFormatAsset as Assets  # type: ignore[attr-defined]
     from adcp.utils import get_individual_assets, has_assets
 
     tracker_url = None
@@ -913,7 +918,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
         for asset_spec in get_individual_assets(format_spec):
             if not isinstance(asset_spec, Assets):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            asset_type = str(asset_spec.asset_type).lower()
             if asset_type == "url":
                 # Check if this is a tracker_pixel by looking at requirements.url_type
                 requirements = getattr(asset_spec, "requirements", None)
@@ -925,7 +930,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
                         req_url_type = requirements.url_type
                     # Only match tracker_pixel type
                     if req_url_type == "tracker_pixel":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
+                        asset_id = asset_spec.asset_id
                         if asset_id in creative_data["assets"]:
                             asset_obj = creative_data["assets"][asset_id]
                             if isinstance(asset_obj, dict) and asset_obj.get("url"):
