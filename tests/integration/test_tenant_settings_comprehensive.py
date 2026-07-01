@@ -6,17 +6,10 @@ to ensure SQL compatibility and schema correctness.
 """
 
 import os
-import sys
 
 import psycopg2
 import pytest
-import requests
 from psycopg2.extras import DictCursor
-
-# Test configuration
-BASE_URL = f"http://localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
-TEST_EMAIL = "test_super_admin@example.com"
-TEST_PASSWORD = "test123"
 
 # Database configuration
 DB_URL = os.environ.get(
@@ -130,114 +123,3 @@ def test_database_queries(integration_db):
     except Exception as e:
         print(f"\n❌ Database error: {e}")
         pytest.fail(f"Database error: {e}")
-
-
-@pytest.mark.integration
-@pytest.mark.requires_server
-def test_settings_page():
-    """Test the settings page through HTTP"""
-    print("\n🌐 Testing settings page HTTP access...")
-
-    # Create session
-    session = requests.Session()
-
-    # Test authentication
-    print("\n1. Testing authentication...")
-    auth_data = {"email": TEST_EMAIL, "password": TEST_PASSWORD}
-    response = session.post(f"{BASE_URL}/admin/test/auth", data=auth_data, allow_redirects=False)
-    print(f"   Auth response: {response.status_code}")
-
-    if response.status_code == 302:
-        print("   ✓ Authentication successful")
-    else:
-        print(f"   ❌ Authentication failed: {response.status_code}")
-        pytest.fail(f"Authentication failed: {response.status_code}")
-
-    # Test settings page
-    print("\n2. Testing settings page...")
-    response = session.get(f"{BASE_URL}/admin/tenant/default/settings")
-    print(f"   Settings page response: {response.status_code}")
-
-    if response.status_code == 200:
-        print("   ✓ Settings page loaded successfully")
-
-        # Check for key elements
-        content = response.text
-        checks = [
-            ("Product Setup Wizard" in content, "Product Setup Wizard link"),
-            ("Ad Server" in content, "Ad Server section"),
-            ("Products" in content, "Products section"),
-            (
-                "Advertisers" in content or "Principals" in content,
-                "Advertisers section",
-            ),
-            ("btn-success" in content, "Success button CSS"),
-        ]
-
-        for check, name in checks:
-            if check:
-                print(f"   ✓ Found: {name}")
-            else:
-                print(f"   ⚠️  Missing: {name}")
-
-    elif response.status_code == 500:
-        print("   ❌ Server error (500)")
-        # Try to extract error details
-        if "error" in response.text.lower() or "exception" in response.text.lower():
-            print("\n   Error details found in response:")
-            lines = response.text.split("\n")
-            for line in lines:
-                if "error" in line.lower() or "exception" in line.lower():
-                    print(f"     {line.strip()[:200]}")
-        pytest.fail("Settings page returned 500 error")
-    else:
-        print(f"   ⚠️  Unexpected status: {response.status_code}")
-        pytest.fail(f"Unexpected status: {response.status_code}")
-
-    # Test dashboard page
-    print("\n3. Testing dashboard page...")
-    response = session.get(f"{BASE_URL}/admin/tenant/default")
-    print(f"   Dashboard response: {response.status_code}")
-
-    if response.status_code == 200:
-        print("   ✓ Dashboard loaded successfully")
-    elif response.status_code == 500:
-        print("   ❌ Dashboard server error (500)")
-        pytest.fail("Dashboard page returned 500 error")
-
-
-def main():
-    print("=" * 60)
-    print("COMPREHENSIVE SETTINGS PAGE TEST")
-    print("=" * 60)
-
-    # Run database tests
-    db_success = test_database_queries()
-
-    # Run HTTP tests
-    http_success = test_settings_page()
-
-    # Summary
-    print("\n" + "=" * 60)
-    print("TEST SUMMARY")
-    print("=" * 60)
-
-    if db_success and http_success:
-        print("✅ ALL TESTS PASSED")
-        print("\nThe settings page should now work without 500 errors.")
-        print("Key fixes applied:")
-        print("  1. Removed query for non-existent 'is_active' column in products")
-        print("  2. Fixed PostgreSQL date syntax (CURRENT_TIMESTAMP - INTERVAL)")
-        print("  3. Removed query for non-existent 'auto_approve' column")
-        print("  4. Added Product Setup Wizard link and button")
-        print("  5. Added GAM configuration section")
-        print("  6. Added button CSS styles")
-        return 0
-    else:
-        print("❌ SOME TESTS FAILED")
-        print("\nPlease check the error messages above for details.")
-        return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

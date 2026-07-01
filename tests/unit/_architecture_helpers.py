@@ -112,7 +112,7 @@ def parse_module(path: Path) -> ast.Module:
     return _parse_cached(str(path), path.stat().st_mtime)
 
 
-def base_expr_is_tenant(node: ast.expr) -> bool:
+def _base_expr_is_tenant(node: ast.expr) -> bool:
     """True when *node* is a tenant reference (``tenant``, ``self.tenant``, ``ctx.tenant``, …)."""
     if isinstance(node, ast.Name) and node.id == "tenant":
         return True
@@ -137,9 +137,9 @@ def find_tenant_config_violations(tree: ast.Module) -> list[int]:
     """Return line numbers of tenant.config / tenant['config'] access patterns."""
     lines: list[int] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and node.attr == "config" and base_expr_is_tenant(node.value):
+        if isinstance(node, ast.Attribute) and node.attr == "config" and _base_expr_is_tenant(node.value):
             lines.append(node.lineno)
-        elif isinstance(node, ast.Subscript) and base_expr_is_tenant(node.value):
+        elif isinstance(node, ast.Subscript) and _base_expr_is_tenant(node.value):
             sl = node.slice
             if isinstance(sl, ast.Constant) and sl.value == "config":
                 lines.append(node.lineno)
@@ -455,7 +455,7 @@ _PG_IMAGE_LITERAL = re.compile(_PG_IMAGE_REF_PATTERN, re.MULTILINE)
 _PG_TAG_PATTERN = _PG_IMAGE_REF_PATTERN
 
 # ADR-008: ruff target-version stays py311 until post-#1234 follow-up PR.
-ADR_008_DEFERRED_TARGET_VERSION = "3.11"
+_ADR_008_DEFERRED_TARGET_VERSION = "3.11"
 
 
 def postgres_image_ref(tag: str) -> str:
@@ -535,7 +535,7 @@ def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
             yield path, m.group(0)
 
 
-def iter_hardcoded_yaml_anchor(
+def _iter_hardcoded_yaml_anchor(
     repo: Path,
     line_regex: re.Pattern[str],
     *,
@@ -559,12 +559,12 @@ def iter_hardcoded_yaml_anchor(
 
 def iter_hardcoded_uv_version_env(repo: Path) -> Iterator[tuple[Path, int, str]]:
     """Yield workflow/action lines that hardcode ``UV_VERSION: "..."`` instead of reading ``.uv-version``."""
-    yield from iter_hardcoded_yaml_anchor(repo, _HARDCODED_UV_VERSION_ENV_RE)
+    yield from _iter_hardcoded_yaml_anchor(repo, _HARDCODED_UV_VERSION_ENV_RE)
 
 
 def iter_hardcoded_python_version_yaml(repo: Path) -> Iterator[tuple[Path, int, str]]:
     """Yield workflow/action lines that hardcode ``python-version:`` instead of ``python-version-file``."""
-    yield from iter_hardcoded_yaml_anchor(
+    yield from _iter_hardcoded_yaml_anchor(
         repo,
         _HARDCODED_PYTHON_VERSION_RE,
         skip_substr="python-version-file",
@@ -579,11 +579,11 @@ def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]]
     drift = [
         f"{path.relative_to(repo)}: {version}"
         for path, version, anchor_kind in anchors
-        if anchor_kind == "target-version" and version != ADR_008_DEFERRED_TARGET_VERSION
+        if anchor_kind == "target-version" and version != _ADR_008_DEFERRED_TARGET_VERSION
     ]
     if drift:
         raise AssertionError(
-            f"ADR-008 target-version must stay py311 ({ADR_008_DEFERRED_TARGET_VERSION!r}):\n"
+            f"ADR-008 target-version must stay py311 ({_ADR_008_DEFERRED_TARGET_VERSION!r}):\n"
             + "\n".join(f"  {item}" for item in drift)
         )
 
@@ -674,13 +674,13 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
 # Pre-commit config helpers
 # ---------------------------------------------------------------------------
 
-PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
+_PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
 
 
 def load_pre_commit_config(path: Path | None = None, repo: Path | None = None) -> dict[str, Any]:
     """Load ``.pre-commit-config.yaml`` anchored to *repo* (default: repo root)."""
     root = repo or repo_root()
-    cfg_path = path or (root / PRE_COMMIT_CONFIG_PATH)
+    cfg_path = path or (root / _PRE_COMMIT_CONFIG_PATH)
     return yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
 
 

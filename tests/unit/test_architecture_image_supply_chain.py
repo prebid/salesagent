@@ -37,6 +37,7 @@ def _job_uses_docker(job: dict[str, Any]) -> bool:
                 "docker/build-push-action@",
                 "docker/setup-buildx-action@",
                 "docker/setup-qemu-action@",
+                "ossf/scorecard-action@",
             )
         ):
             return True
@@ -330,12 +331,15 @@ def test_creative_agent_scan_uses_publish_output_ref() -> None:
 
 @pytest.mark.arch_guard
 def test_scorecard_workflow_present() -> None:
-    """OpenSSF Scorecard self-host workflow must exist."""
+    """OpenSSF Scorecard self-host workflow must exist and omit disable-sudo (needs Docker)."""
     path = repo_root() / ".github/workflows/scorecard.yml"
     assert path.exists()
     text = path.read_text(encoding="utf-8")
     assert "ossf/scorecard-action" in text
     assert "publish_results: true" in text
+    jobs = _load_workflow(path).get("jobs", {})
+    analysis = jobs.get("analysis", {})
+    _assert_harden_runner_job("scorecard.yml", "analysis", analysis)
 
 
 @pytest.mark.arch_guard

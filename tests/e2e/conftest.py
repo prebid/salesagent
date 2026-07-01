@@ -123,11 +123,6 @@ def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
     raise RuntimeError(f"No free ports found in range {start_port}-{end_port}")
 
 
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line("markers", "requires_gam: mark test as requiring real GAM credentials")
-
-
 def pytest_addoption(parser):
     """Add custom command line options for E2E tests."""
     parser.addoption(

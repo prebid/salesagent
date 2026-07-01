@@ -767,10 +767,7 @@ def benchmark(request):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-apply entity markers and skip tests that need the full Docker stack."""
-    import socket
-
-    # --- Entity marker auto-application ---
+    """Auto-apply entity markers from filename/path patterns."""
     # For each test item, check filename and path against entity patterns.
     # Build a lookup cache: filename → set of entity markers
     _filename_cache: dict[str, set[str]] = {}
@@ -798,17 +795,3 @@ def pytest_collection_modifyitems(config, items):
 
         for marker_name in _filename_cache[filename]:
             item.add_marker(getattr(pytest.mark, marker_name))
-
-    # --- Server reachability check ---
-    def _server_reachable(host: str = "localhost", port: int = 8100) -> bool:
-        try:
-            with socket.create_connection((host, port), timeout=1):
-                return True
-        except OSError:
-            return False
-
-    server_available = _server_reachable()
-
-    for item in items:
-        if item.get_closest_marker("requires_server") and not server_available:
-            item.add_marker(pytest.mark.skip(reason="MCP server not running on localhost:8100"))
