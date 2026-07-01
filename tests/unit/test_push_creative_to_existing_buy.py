@@ -7,6 +7,8 @@ time due to pending_review status (prebid#1038).
 
 from unittest.mock import ANY, MagicMock, patch
 
+from src.core.schemas import AssetStatus
+
 # Patch targets
 _MODULE = "src.core.tools.media_buy_create"
 _UOW_PATCH = "src.core.database.repositories.uow.AdminCreativeUoW"
@@ -77,10 +79,13 @@ def _make_package(
 
 
 def _make_adapter(*, status: str = "success") -> MagicMock:
-    asset_status = MagicMock()
-    asset_status.creative_id = "cre_1"
-    asset_status.status = status
-    asset_status.message = "Adapter error" if status == "failed" else None
+    # Real AssetStatus (not a bare MagicMock) so concept enrichment fields default
+    # to None — faithfully representing an adapter that derives no seller concept.
+    asset_status = AssetStatus(
+        creative_id="cre_1",
+        status=status,
+        message="Adapter error" if status == "failed" else None,
+    )
 
     adapter = MagicMock()
     adapter.creatives_manager.add_creative_assets.return_value = [asset_status]

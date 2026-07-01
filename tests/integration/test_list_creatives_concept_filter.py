@@ -141,3 +141,55 @@ class TestNonScalarConceptValueDropped:
             assert "concept_name" not in creative
             # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
             assert "Dropping non-scalar concept value" in caplog.text
+
+
+class TestSellerConceptEnrichmentIsFilterable:
+    """The seller-side concept the GAM producer writes (#1506) is findable by the
+    #1407 concept_ids filter and surfaced on the wire. This chains the real producer
+    helper → data blob → filter, so a key-name drift between the producer and the
+    reader (e.g. writing ``concept`` while the filter reads ``concept_id``) reddens
+    this end-to-end. It is the production data source #1506 exists to provide."""
+
+    def _enriched_data(self, order_id: str):
+        from src.core.schemas import AssetStatus
+        from src.core.tools.media_buy_create import _merge_creative_enrichment
+
+        # Exactly what the GAM adapter surfaces for a creative pushed into an order,
+        # folded into the data blob by the production writeback path.
+        status = AssetStatus(
+            creative_id=f"gam_{order_id}",
+            status="approved",
+            concept_id=f"gam-order-{order_id}",
+            concept_name=f"GAM Order {order_id}",
+            concept_source="gam_order",
+        )
+        return _merge_creative_enrichment({"assets": {}}, status)
+
+    def test_gam_order_concept_is_filterable_end_to_end(self, integration_db):
+        from tests.factories import CreativeFactory
+
+        with CreativeListEnv() as env:
+            tenant, principal = _seed_authenticated_principal(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data=self._enriched_data("789"),
+            )
+            # A creative enriched from a different order must NOT match the filter.
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data=self._enriched_data("000"),
+            )
+
+            result = env.call_via(Transport.REST, filters={"concept_ids": ["gam-order-789"]})
+
+            assert not result.is_error, f"concept filter errored: {result.error!r}"
+            creatives = result.wire_response["creatives"]
+            assert len(creatives) == 1, f"expected only the order-789 creative, got {creatives!r}"
+            assert creatives[0]["concept_id"] == "gam-order-789"
+            assert creatives[0]["concept_name"] == "GAM Order 789"
