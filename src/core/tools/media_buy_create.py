@@ -126,6 +126,7 @@ from src.core.helpers.creative_helpers import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object, to_reporting_webhook
 from src.core.schemas import (
+    AssetStatus,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
@@ -185,6 +186,31 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
         List of creative IDs if present, None otherwise
     """
     return getattr(package, "creative_ids", None)
+
+
+def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) -> dict:
+    """Merge an adapter's push result into a creative's ``data`` blob.
+
+    Returns a new dict; does not mutate the input. Two enrichments are folded in,
+    both fill-only-when-absent so an existing value is never overwritten:
+
+    - ``platform_creative_id`` — the ad server's creative id, used to associate
+      already-synced creatives and to skip re-pushing on re-approval.
+    - ``concept_id`` / ``concept_name`` / ``concept_source`` — the seller-side
+      concept enrichment (#1506). AdCP exposes concept_id/concept_name read-only on
+      list_creatives but carries no concept on sync_creatives, so an adapter may
+      derive a fallback (e.g. the GAM Order). ``concept_source`` records provenance;
+      because we only fill when absent, a buyer-supplied concept (a future
+      spec-defined field) is preserved and takes precedence over this fallback.
+    """
+    data = dict(existing_data or {})
+    if status.creative_id and not data.get("platform_creative_id"):
+        data["platform_creative_id"] = status.creative_id
+    if status.concept_id and not data.get("concept_id"):
+        data["concept_id"] = status.concept_id
+        data["concept_name"] = status.concept_name
+        data["concept_source"] = status.concept_source or "adapter_enrichment"
+    return data
 
 
 def _determine_media_buy_status(
@@ -1207,12 +1233,13 @@ def push_creative_to_existing_buy(
                 if status.creative_id == creative_id:
                     if status.status == "failed":
                         return False, status.message or "Adapter reported upload failure"
-                    if status.creative_id and not (creative.data or {}).get("platform_creative_id"):
-                        updated_data = dict(creative.data or {})
-                        updated_data["platform_creative_id"] = status.creative_id
-                        uow.creatives.update_data(creative, updated_data)
+                    merged_data = _merge_creative_enrichment(creative.data, status)
+                    if merged_data != (creative.data or {}):
+                        uow.creatives.update_data(creative, merged_data)
                         logger.info(
-                            f"[GATE-PUSH] Updated creative {creative_id} with platform_creative_id={status.creative_id}"
+                            f"[GATE-PUSH] Enriched creative {creative_id} from adapter push "
+                            f"(platform_creative_id={merged_data.get('platform_creative_id')}, "
+                            f"concept_source={merged_data.get('concept_source')})"
                         )
                     logger.info(
                         f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
@@ -3800,21 +3827,18 @@ async def _create_media_buy_impl(
 
                                     if upload_result and len(upload_result) > 0:
                                         uploaded_status = upload_result[0]
-                                        if uploaded_status.creative_id and not creative.data.get(
-                                            "platform_creative_id"
-                                        ):
-                                            creative.data["platform_creative_id"] = uploaded_status.creative_id
+                                        merged_data = _merge_creative_enrichment(creative.data, uploaded_status)
+                                        if merged_data != (creative.data or {}):
+                                            creative.data = merged_data
                                             session.add(creative)
-                                            platform_creative_ids.append(uploaded_status.creative_id)
                                             logger.info(
-                                                f"Updated creative {creative_id} with platform_creative_id={uploaded_status.creative_id}"
+                                                f"Enriched creative {creative_id} from adapter push "
+                                                f"(platform_creative_id={merged_data.get('platform_creative_id')}, "
+                                                f"concept_source={merged_data.get('concept_source')})"
                                             )
-                                        elif creative.data.get("platform_creative_id"):
-                                            logger.info(
-                                                f"Preserving existing platform_creative_id={creative.data.get('platform_creative_id')} "
-                                                f"for creative {creative_id}, not overwriting with upload result"
-                                            )
-                                            platform_creative_ids.append(creative.data["platform_creative_id"])
+                                        pcid = merged_data.get("platform_creative_id")
+                                        if pcid:
+                                            platform_creative_ids.append(pcid)
                                 except AdCPError:
                                     raise
                                 except Exception as upload_error:

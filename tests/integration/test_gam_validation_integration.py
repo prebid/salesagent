@@ -248,6 +248,76 @@ class TestGAMValidationIntegration:
             assert len(result) == 1
             assert result[0].status == "approved"
 
+    def test_approved_creative_carries_seller_side_concept_from_order(self):
+        """Approved creatives carry a GAM-Order-derived seller-side concept (#1506).
+
+        AdCP exposes concept_id/concept_name read-only on list_creatives but carries
+        no concept on sync_creatives, so there is no protocol writer. GAM has no
+        first-class creative group, so the adapter falls back to the GAM Order as the
+        closest native grouping. The value is namespaced (``gam-order-<id>``) and
+        tagged with ``concept_source`` so it stays distinguishable from a future
+        buyer-supplied concept.
+        """
+        with patch.object(GoogleAdManager, "_init_client"):
+            adapter = GoogleAdManager(
+                config=self.config,
+                principal=self.principal,
+                network_code=self.config["network_code"],
+                advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
+                trafficker_id=self.config["trafficker_id"],
+                dry_run=True,
+                tenant_id="test_tenant",
+            )
+
+        asset = {
+            "creative_id": "html5_creative_1",
+            "name": "HTML5 Banner",
+            "format": "display_970x250",
+            "media_url": "https://example.com/creative.html",
+            "click_url": "https://example.com/landing",
+            "package_assignments": ["test_package"],
+        }
+
+        with patch.object(adapter, "_validate_creative_for_gam", return_value=[]):
+            result = adapter.add_creative_assets("order_789", [asset], datetime.now())
+
+        assert len(result) == 1
+        status = result[0]
+        assert status.status == "approved"
+        assert status.concept_id == "gam-order-order_789"
+        assert status.concept_name == "GAM Order order_789"
+        assert status.concept_source == "gam_order"
+
+    def test_failed_creative_carries_no_concept_enrichment(self):
+        """A creative that fails GAM validation is never pushed, so it gets no concept (#1506)."""
+        with patch.object(GoogleAdManager, "_init_client"):
+            adapter = GoogleAdManager(
+                config=self.config,
+                principal=self.principal,
+                network_code=self.config["network_code"],
+                advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
+                trafficker_id=self.config["trafficker_id"],
+                dry_run=True,
+                tenant_id="test_tenant",
+            )
+
+        invalid_asset = {
+            "creative_id": "bad_creative_1",
+            "url": "http://example.com/oversized.jpg",
+            "width": 2000,
+            "height": 90,
+        }
+
+        with patch.object(adapter, "_validate_creative_for_gam", return_value=["Width exceeds GAM limit"]):
+            result = adapter.add_creative_assets("order_789", [invalid_asset], datetime.now())
+
+        assert len(result) == 1
+        status = result[0]
+        assert status.status == "failed"
+        assert status.concept_id is None
+        assert status.concept_name is None
+        assert status.concept_source is None
+
     def test_validation_handles_different_creative_types(self):
         """Test validation works for different creative types."""
         with patch.object(GoogleAdManager, "_init_client"):
