@@ -1,0 +1,10 @@
+# Extracted config for actions/dependency-review-action (PR 6 of #1234).
+fail-on-severity: moderate
+comment-summary-in-pr: on-failure
+deny-licenses:
+  - GPL-3.0
+  - GPL-3.0-only
+  - GPL-3.0-or-later
+  - AGPL-3.0
+  - AGPL-3.0-only
+  - AGPL-3.0-or-later

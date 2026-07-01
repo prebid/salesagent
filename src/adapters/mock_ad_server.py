@@ -45,6 +45,34 @@ from src.core.schemas import (
 )
 
 
+def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict]]:
+    """Return deterministic geo + device_type splits for mock delivery data.
+
+    Weights are distinct and descending so sort/truncation behaviour is
+    verifiable in tests.  Real adapters replace this with actual platform data.
+
+    Returns:
+        (geo, device_type) — lists of raw dicts ready for AdapterPackageDelivery.
+    """
+    device_type = [
+        {"device_type": "mobile", "impressions": impressions * 0.50, "spend": spend * 0.50},
+        {"device_type": "desktop", "impressions": impressions * 0.35, "spend": spend * 0.35},
+        {"device_type": "tablet", "impressions": impressions * 0.15, "spend": spend * 0.15},
+    ]
+    _geo_codes = ["US", "GB", "DE", "FR", "CA", "AU", "JP", "BR", "IN", "MX"]
+    _geo_weights = [0.30, 0.15, 0.12, 0.10, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03]
+    geo = [
+        {
+            "geo_code": geo_code,
+            "geo_level": "country",
+            "impressions": impressions * weight,
+            "spend": spend * weight,
+        }
+        for geo_code, weight in zip(_geo_codes, _geo_weights, strict=False)
+    ]
+    return geo, device_type
+
+
 class MockConnectionConfig(BaseConnectionConfig):
     """Connection config for Mock adapter."""
 
@@ -1276,11 +1304,17 @@ class MockAdServer(AdServerAdapter):
                         package_spend = spend / len(packages) if packages else spend
                         package_impressions = int(impressions / len(packages) if packages else impressions)
 
+                    simulated_geo, simulated_device_type = simulate_breakdowns(
+                        float(package_impressions), float(package_spend)
+                    )
+
                     by_package.append(
                         AdapterPackageDelivery(
                             package_id=package_id,
                             impressions=package_impressions,
                             spend=package_spend,
+                            by_geo=simulated_geo,
+                            by_device_type=simulated_device_type,
                         )
                     )
 
