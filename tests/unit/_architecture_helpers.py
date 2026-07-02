@@ -480,21 +480,6 @@ def iter_setup_uv_action_pins(repo: Path) -> Iterator[tuple[Path, str]]:
             yield path, m.group(0)
 
 
-def _match_hardcoded_yaml_anchor_lines(
-    lines: Iterable[str],
-    line_regex: re.Pattern[str],
-    *,
-    skip_substr: str | None = None,
-) -> Iterator[tuple[int, str]]:
-    """Yield ``(lineno, stripped_line)`` for hardcoded YAML anchor violations in *lines*."""
-    for lineno, line in enumerate(lines, 1):
-        stripped = line.strip()
-        if skip_substr and skip_substr in stripped:
-            continue
-        if line_regex.search(stripped):
-            yield lineno, stripped
-
-
 def _iter_hardcoded_yaml_anchor(
     repo: Path,
     line_regex: re.Pattern[str],
@@ -509,8 +494,12 @@ def _iter_hardcoded_yaml_anchor(
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError):
             continue
-        for lineno, stripped in _match_hardcoded_yaml_anchor_lines(lines, line_regex, skip_substr=skip_substr):
-            yield path, lineno, stripped
+        for lineno, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if skip_substr and skip_substr in stripped:
+                continue
+            if line_regex.search(stripped):
+                yield path, lineno, stripped
 
 
 def iter_hardcoded_uv_version_env(repo: Path) -> Iterator[tuple[Path, int, str]]:

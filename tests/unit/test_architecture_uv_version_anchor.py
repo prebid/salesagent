@@ -6,14 +6,12 @@ and the setup-env composite action.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from tests.unit._architecture_helpers import (
-    _HARDCODED_PYTHON_VERSION_RE,
-    _HARDCODED_UV_VERSION_ENV_RE,
-    _match_hardcoded_yaml_anchor_lines,
     anchor_consistency_detects_drift,
     assert_adr008_target_version_pinned,
     assert_anchor_consistency,
@@ -54,20 +52,35 @@ _KNOWN_BAD_SETUP_UV_PINS = [
     (Path(".github/workflows/ci.yml"), "astral-sh/setup-uv@2222222222222222222222222222222222222222"),
 ]
 
-# Built via concatenation so git-tracked test sources do not embed live scanner literals.
-_KNOWN_BAD_PYTHON_VERSION_YAML_LINES = [
-    "jobs:",
-    "  test:",
-    "    steps:",
-    "      - uses: actions/setup-python@v5",
-    "        with:",
-    "          python-" + "version: '3.12'",
-]
+_BAD_PYTHON_VERSION_WORKFLOW = """\
+jobs:
+  test:
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+"""
 
-_KNOWN_BAD_UV_VERSION_ENV_YAML_LINES = [
-    "env:",
-    "  UV_" + 'VERSION: "0.6.0"',
-]
+_GOOD_PYTHON_VERSION_WORKFLOW = """\
+jobs:
+  test:
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+"""
+
+_BAD_UV_VERSION_WORKFLOW = 'env:\n  UV_VERSION: "0.6.0"\n'
+
+
+def _github_yaml_repo(tmp_path: Path, rel: str, content: str) -> Path:
+    """Throwaway git repo with one tracked workflow file (detector scans via ``git ls-files``)."""
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    return tmp_path
 
 
 def _read(path_suffix: str) -> str:
@@ -223,28 +236,24 @@ def test_target_version_anchor_must_stay_py311() -> None:
 
 
 @pytest.mark.arch_guard
-def test_hardcoded_python_version_yaml_detector_catches_known_bad() -> None:
-    """Mutation self-test: hardcoded python-version YAML must be detected (#1497)."""
-    matches = list(
-        _match_hardcoded_yaml_anchor_lines(
-            _KNOWN_BAD_PYTHON_VERSION_YAML_LINES,
-            _HARDCODED_PYTHON_VERSION_RE,
-            skip_substr="python-version-file",
-        )
-    )
-    assert matches, "Detector must flag known-bad hardcoded python-version YAML"
+def test_hardcoded_python_version_yaml_detector_catches_known_bad(tmp_path: Path) -> None:
+    """Full-chain self-test: a hardcoded python-version workflow must be flagged (#1497)."""
+    repo = _github_yaml_repo(tmp_path, ".github/workflows/ci.yml", _BAD_PYTHON_VERSION_WORKFLOW)
+    assert list(iter_hardcoded_python_version_yaml(repo)), "detector must flag hardcoded python-version"
 
 
 @pytest.mark.arch_guard
-def test_hardcoded_uv_version_env_detector_catches_known_bad() -> None:
-    """Mutation self-test: hardcoded UV_VERSION env YAML must be detected (#1497)."""
-    matches = list(
-        _match_hardcoded_yaml_anchor_lines(
-            _KNOWN_BAD_UV_VERSION_ENV_YAML_LINES,
-            _HARDCODED_UV_VERSION_ENV_RE,
-        )
-    )
-    assert matches, "Detector must flag known-bad hardcoded UV_VERSION env YAML"
+def test_hardcoded_python_version_yaml_detector_skips_version_file(tmp_path: Path) -> None:
+    """python-version-file must NOT be flagged — exercises skip path and guards over-broad matching."""
+    repo = _github_yaml_repo(tmp_path, ".github/workflows/ci.yml", _GOOD_PYTHON_VERSION_WORKFLOW)
+    assert list(iter_hardcoded_python_version_yaml(repo)) == []
+
+
+@pytest.mark.arch_guard
+def test_hardcoded_uv_version_env_detector_catches_known_bad(tmp_path: Path) -> None:
+    """Full-chain self-test: a hardcoded UV_VERSION env block must be flagged (#1497)."""
+    repo = _github_yaml_repo(tmp_path, ".github/workflows/ci.yml", _BAD_UV_VERSION_WORKFLOW)
+    assert list(iter_hardcoded_uv_version_env(repo)), "detector must flag hardcoded UV_VERSION env"
 
 
 @pytest.mark.arch_guard
