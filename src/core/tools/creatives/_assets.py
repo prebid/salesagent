@@ -147,7 +147,7 @@ def _build_creative_data(
     creative: CreativeAsset,
     url: str | None,
     context: dict[str, Any] | BaseModel | None = None,
-    media_buy_brand: dict[str, Any] | None = None,
+    media_buy_brand: dict[str, Any] | BaseModel | None = None,
 ) -> dict[str, Any]:
     """Build the data dict for a creative from a CreativeAsset model.
 
@@ -159,9 +159,10 @@ def _build_creative_data(
         creative: CreativeAsset model from the sync payload.
         url: Extracted URL (from _extract_url_from_assets).
         context: Optional application-level context per AdCP spec.
-        media_buy_brand: Optional brand dict (already serialized from BrandReference
-            at the helper boundary) so adapters can read ``brand.domain`` from
-            stored creative data.
+        media_buy_brand: Optional brand — either a plain dict or a BrandReference
+            Pydantic model. Serialized with ``exclude_none=True`` before storage
+            so only populated fields (e.g. ``{"domain": "acme.com"}``) are written
+            to the JSONType column, not the full model with all-None optional fields.
 
     Returns:
         Data dict for storing in the creative's data field.
@@ -195,8 +196,12 @@ def _build_creative_data(
         elif isinstance(provenance, dict):
             data["provenance"] = provenance
     # Persist brand so adapters can read brand.domain from stored creative data.
-    # Already a plain dict (serialized at the helper boundary in
-    # process_and_upload_package_creatives) — assign directly to the JSONType column.
+    # Accepts either a plain dict or a BrandReference Pydantic model — serialize
+    # with exclude_none=True so only populated fields (e.g. {"domain": "acme.com"})
+    # are stored, not the full model with all-None optional fields.
     if media_buy_brand is not None:
-        data["brand"] = media_buy_brand
+        if isinstance(media_buy_brand, BaseModel):
+            data["brand"] = media_buy_brand.model_dump(mode="json", exclude_none=True)
+        else:
+            data["brand"] = media_buy_brand
     return data

@@ -1,12 +1,9 @@
 """Creative Agent Registry for dynamic format discovery per AdCP v2.4.
 
 SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [valid-type] on lines ~179, ~192: ImageFormatAsset | VideoFormatAsset union
-  annotation. SDK asset classes are dynamically resolved type factories; mypy
-  cannot validate the union. Permanent until upstream ships StrEnum.
-- [attr-defined] on line ~39: FormatReferenceStructuredObject and ImageFormatAsset
-  live under adcp.types at runtime but mypy stubs don't expose them at the
-  top-level namespace. Permanent until upstream updates stubs.
+- [attr-defined] on line ~35: FormatReferenceStructuredObject, ImageFormatAsset,
+  and VideoFormatAsset live under adcp.types at runtime but mypy stubs don't
+  expose them at the top-level namespace. Permanent until upstream updates stubs.
 
 This module provides:
 1. Creative agent registry (system defaults + tenant-specific)
@@ -33,10 +30,10 @@ import typing
 import uuid as _uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 # FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import ADCPMultiAgentClient, BuildCreativeRequest, ListCreativeFormatsRequest
+from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
@@ -44,6 +41,10 @@ from adcp.types import (  # type: ignore[attr-defined]
     FormatReferenceStructuredObject,
     ImageFormatAsset,
     VideoFormatAsset,
+)
+from adcp.types.generated_poc.core.format import BaseIndividualAsset
+from adcp.types.generated_poc.media_buy.build_creative_request import (
+    BuildCreativeRequest as _BuildCreativeRequestConcrete,
 )
 from pydantic import ValidationError
 from yarl import URL as _URL
@@ -188,7 +189,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
     # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
     # ImageFormatAsset = image, VideoFormatAsset = video. Pass asset_type as plain string (not enum).
     if asset_type == "video":
-        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(
+        asset_item: BaseIndividualAsset = VideoFormatAsset(
             item_type="individual",
             asset_id="primary",
             asset_type="video",
@@ -201,7 +202,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
             asset_type="image",
             required=True,
         )
-    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]
+    assets: list[BaseIndividualAsset] = [asset_item]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(
@@ -236,7 +237,7 @@ def _create_mock_format_multi(format_id_str: str, name: str, asset_types: list[s
     # the validator.  Any code that reads format.assets[i].asset_type will see
     # "image" for all slots — including the "url" slot — which is incorrect.
     # Track upstream fix: adcontextprotocol/adcp-client-python#913 (StrEnum).
-    assets: list[ImageFormatAsset | VideoFormatAsset] = []
+    assets: list[BaseIndividualAsset] = []
     for i, asset_type in enumerate(asset_types):
         asset_id = asset_type if i == 0 else f"{asset_type}_{i}"
         assets.append(
@@ -1028,7 +1029,7 @@ class CreativeAgentRegistry:
 
         idempotency_key = str(_uuid.uuid4())
 
-        request = BuildCreativeRequest.model_construct(  # type: ignore[attr-defined]
+        request = _BuildCreativeRequestConcrete.model_construct(  # type: ignore[attr-defined]
             message=message,
             target_format_id=FormatReferenceStructuredObject(
                 agent_url=agent_url,
@@ -1036,8 +1037,9 @@ class CreativeAgentRegistry:
             ),
             idempotency_key=idempotency_key,
             finalize=finalize,
-            creative_manifest=creative_manifest,
-            brand=brand_ref,
+            # model_construct() bypasses validation — dicts are intentional at the SDK boundary
+            creative_manifest=cast(Any, creative_manifest),
+            brand=cast(Any, brand_ref),
         )
 
         # Build a transient CreativeAgent for this URL so we can use _build_adcp_client.
