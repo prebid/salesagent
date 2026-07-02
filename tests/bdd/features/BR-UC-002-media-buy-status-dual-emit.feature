@@ -1,12 +1,14 @@
 # Hand-authored feature — not compiled from adcp-req (safe from compile_bdd.py --merge overwrite).
-# Grounds AdCP 3.1 (3.1.0-beta.3) create-/update-media-buy-response status fields, asserted
-# on the REAL wire (salesagent-d45l). beta.3 adds `media_buy_status` as the PREFERRED DOMAIN
-# status (MediaBuyStatus enum); storyboard pending_creatives_to_start.yaml grades it
-# `field_value` (REQUIRED). On the flattened wire envelope, TaskResultEnvelope._serialize sets
-# the top-level `status` to the PROTOCOL TaskStatus (GeneratedTaskStatus, e.g. completed/
-# submitted) — a DIFFERENT namespace from the domain status. They are NOT identical; the
-# domain status survives under `media_buy_status`. (The earlier "both identical" wording read
-# the re-mirrored reconstructed payload and could never observe this wire reality.)
+# Grounds AdCP 3.1 create-/update-media-buy-response status fields to the target GA behavior,
+# asserted on the REAL wire. Graded by the 3.1.0-rc.12 storyboard pending_creatives_to_start.yaml
+# (latest published compliance; no GA 3.1.0 dir exists yet). rc.12 grades `media_buy_status`
+# `field_value` (REQUIRED, the PREFERRED DOMAIN status, MediaBuyStatus enum) and the top-level
+# `status` `field_value` 'completed' (the PROTOCOL TaskStatus). This DIVERGES from the pinned
+# SDK's beta.3 storyboard (which graded `status` field_value_or_absent MUST-equal media_buy_status,
+# the deprecated "both identical" model, #4908). On the flattened wire envelope,
+# TaskResultEnvelope._serialize sets top-level `status` to the protocol TaskStatus (e.g. completed/
+# submitted) — a DIFFERENT namespace from the domain status; they are NOT identical. The domain
+# status survives under `media_buy_status`. See docs/adcp-spec-version.md "Behavior target vs SDK pin".
 
 @schema-v3.1 @media-buy-status-dual-emit
 Feature: AdCP 3.1 media_buy_status on create/update responses
@@ -40,6 +42,11 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the response carries the domain media_buy_status and the protocol status separately
+    # Pin the exact DOMAIN value (not mere membership): a protocol value in the
+    # MediaBuyStatus∩TaskStatus overlap {completed,canceled,rejected} leaked into
+    # media_buy_status would pass a membership check. A fresh auto-approved buy with
+    # no creatives is pending_creatives (rc.12 storyboard L147-149).
+    And the wire media_buy_status should be "pending_creatives"
 
   # @T-UC-003-ext-dual-emit routes through MediaBuyDualEnv with a seeded existing
   # media buy, exercising the real _update_media_buy_impl flow (conftest _harness_env).
@@ -59,6 +66,10 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     When the Buyer Agent sends the update_media_buy request
     Then the response should succeed
     And the response carries the domain media_buy_status and the protocol status separately
+    # Pin the exact DOMAIN value (not mere membership) — closes the overlap hole where
+    # a protocol value {completed,canceled,rejected} leaked into media_buy_status would
+    # still pass a MediaBuyStatus membership check.
+    And the wire media_buy_status should be "pending_start"
 
   # salesagent-3ec1: a pre-flight 'scheduled' persisted status (set by admin approval)
   # is not in the AdCP vocabulary. The update response must normalize it to the domain

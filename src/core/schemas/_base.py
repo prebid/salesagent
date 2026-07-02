@@ -250,17 +250,25 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
 
 
 def _mirror_media_buy_status(model: Any) -> Any:
-    """Dual-emit ``media_buy_status`` and the deprecated ``status`` identically.
+    """Backfill the deprecated body-level ``status`` from the domain ``media_buy_status``.
 
-    AdCP 3.1 (3.1.0-beta.3 create-/update-media-buy-response) adds
-    ``media_buy_status`` as the PREFERRED domain-status field on the
-    create/update RESPONSE body and DEPRECATES the body-level ``status``
-    (removed in 3.2). During the deprecation window sellers SHOULD emit BOTH
-    with IDENTICAL values, so this backfills whichever of ``status`` /
-    ``media_buy_status`` is set onto the other. Both fields are typed
-    ``MediaBuyStatus | None`` on the adcp 5.7 library base
-    (``CreateMediaBuySuccessResponse`` / ``UpdateMediaBuySuccessResponse``),
-    so callers may set either one and rely on identical dual-emit.
+    AdCP 3.1 create-/update-media-buy-response adds ``media_buy_status`` as the
+    PREFERRED domain-status field on the RESPONSE BODY (a ``MediaBuyStatus`` value)
+    and DEPRECATES the body-level ``status`` (removed in 3.2). This validator only
+    backfills whichever of the two BODY fields is set onto the other, so the
+    deprecated body ``status`` still carries the domain value during the deprecation
+    window. Both body fields are typed ``MediaBuyStatus | None`` on the adcp 5.7
+    library base (``CreateMediaBuySuccessResponse`` / ``UpdateMediaBuySuccessResponse``).
+
+    This does NOT govern the WIRE top-level ``status``. On the flattened envelope,
+    ``TaskResultEnvelope._serialize`` OVERWRITES the top-level ``status`` with the
+    PROTOCOL ``TaskStatus`` (``submitted`` / ``completed``), so on the wire the
+    top-level ``status`` and ``media_buy_status`` are DIFFERENT namespaces and are
+    NOT identical. This is the target GA model graded by the 3.1.0-rc.12 storyboard
+    ``pending_creatives_to_start.yaml`` (status=field_value 'completed'), which
+    diverges from the pinned SDK's beta.3 storyboard (status=field_value_or_absent,
+    MUST-equal media_buy_status; #4908). See docs/adcp-spec-version.md
+    "Behavior target vs SDK pin".
 
     Shared by ``CreateMediaBuySuccess`` and ``UpdateMediaBuySuccess`` (DRY).
     """
@@ -321,7 +329,16 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
     @model_validator(mode="after")
     def _dual_emit_media_buy_status(self):
-        """AdCP 3.1: emit ``media_buy_status`` and deprecated ``status`` identically."""
+        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+
+        Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
+        ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
+        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        top-level protocol value never lands on this body field (the envelope owns it), so no
+        enum widening is needed here — the SDK type is not authoritative for the wire status.
+        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "Behavior target vs SDK pin".
+        """
         return _mirror_media_buy_status(self)
 
     @model_serializer(mode="wrap")
@@ -499,7 +516,16 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
 
     @model_validator(mode="after")
     def _dual_emit_media_buy_status(self):
-        """AdCP 3.1: emit ``media_buy_status`` and deprecated ``status`` identically."""
+        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+
+        Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
+        ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
+        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        top-level protocol value never lands on this body field (the envelope owns it), so no
+        enum widening is needed here — the SDK type is not authoritative for the wire status.
+        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "Behavior target vs SDK pin".
+        """
         return _mirror_media_buy_status(self)
 
     @model_serializer(mode="wrap")

@@ -1655,20 +1655,26 @@ def then_response_includes_field(ctx: dict, field: str) -> None:
 
 @then("the response carries the domain media_buy_status and the protocol status separately")
 def then_dual_emit_media_buy_status(ctx: dict) -> None:
-    """AdCP 3.1 (beta.3) create/update-media-buy-response status fields, asserted on
-    the REAL wire (``ctx['wire_response']``) — not the reconstructed typed payload.
+    """AdCP 3.1 create/update-media-buy-response status fields, asserted on the REAL
+    wire (``ctx['wire_response']``) — not the reconstructed typed payload.
 
-    Grounding (beta.3 storyboard ``pending_creatives_to_start.yaml``):
+    Grounded to the target GA behavior graded by the 3.1.0-rc.12 storyboard
+    ``pending_creatives_to_start.yaml`` (latest published compliance; no GA
+    ``3.1.0`` dir exists yet). rc.12 grades the two fields as SEPARATE namespaces:
       - ``media_buy_status`` => ``field_value`` (REQUIRED): the DOMAIN status, a
-        ``MediaBuyStatus`` enum value.
-      - ``status`` => ``field_value_or_absent`` (the legacy body status is OPTIONAL).
+        ``MediaBuyStatus`` enum value (rc.12 L147-149).
+      - ``status`` => ``field_value`` ``'completed'``: the PROTOCOL ``TaskStatus``
+        on the flattened envelope (rc.12 L150-152, "protocol-envelope task-status").
 
-    On the flattened wire envelope, ``TaskResultEnvelope._serialize`` sets the
-    top-level ``status`` to the PROTOCOL ``TaskStatus`` (e.g. ``completed`` /
-    ``submitted``); the DOMAIN status survives under ``media_buy_status``. They are
-    DIFFERENT namespaces and are NOT identical — the earlier 'both identical' oracle
-    read the re-mirrored reconstructed payload (``_mirror_media_buy_status``) and so
-    could never observe this wire reality (salesagent-d45l).
+    This DIVERGES from the pinned SDK's 3.1.0-beta.3 storyboard, which graded
+    ``status`` as ``field_value_or_absent`` that MUST equal ``media_buy_status``
+    (the deprecated "both identical" model, #4908). We target GA, so the two fields
+    are DIFFERENT namespaces and are NOT identical: ``TaskResultEnvelope._serialize``
+    sets the top-level ``status`` to the protocol ``TaskStatus`` (e.g. ``completed`` /
+    ``submitted``) while the DOMAIN status survives under ``media_buy_status``. The
+    earlier "both identical" oracle read the re-mirrored reconstructed payload
+    (``_mirror_media_buy_status``) and so could never observe this wire reality.
+    See docs/adcp-spec-version.md "Behavior target vs SDK pin".
     """
     from adcp.types import GeneratedTaskStatus as ProtocolTaskStatus
     from adcp.types import MediaBuyStatus
