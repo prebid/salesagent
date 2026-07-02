@@ -10,8 +10,6 @@ from typing import Any
 from adcp.types import CreativeAsset
 from pydantic import BaseModel
 
-from src.core.helpers.creative_helpers import _brand_str_to_ref
-
 logger = logging.getLogger(__name__)
 
 
@@ -149,7 +147,7 @@ def _build_creative_data(
     creative: CreativeAsset,
     url: str | None,
     context: dict[str, Any] | BaseModel | None = None,
-    media_buy_brand: Any | None = None,
+    media_buy_brand: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the data dict for a creative from a CreativeAsset model.
 
@@ -161,9 +159,9 @@ def _build_creative_data(
         creative: CreativeAsset model from the sync payload.
         url: Extracted URL (from _extract_url_from_assets).
         context: Optional application-level context per AdCP spec.
-        media_buy_brand: Optional brand value from the media buy (str, dict, or
-            Pydantic model).  Serialized to a ``BrandRef``-shaped dict so adapters
-            can read ``brand.domain`` from stored creative data.
+        media_buy_brand: Optional brand dict (already serialized from BrandReference
+            at the helper boundary) so adapters can read ``brand.domain`` from
+            stored creative data.
 
     Returns:
         Data dict for storing in the creative's data field.
@@ -196,12 +194,9 @@ def _build_creative_data(
             data["provenance"] = provenance.model_dump(mode="json")
         elif isinstance(provenance, dict):
             data["provenance"] = provenance
-    # Persist brand so adapters can read brand.domain from stored creative data (Change 5)
+    # Persist brand so adapters can read brand.domain from stored creative data.
+    # Already a plain dict (serialized at the helper boundary in
+    # process_and_upload_package_creatives) — assign directly to the JSONType column.
     if media_buy_brand is not None:
-        if isinstance(media_buy_brand, str):
-            data["brand"] = _brand_str_to_ref(media_buy_brand)
-        elif isinstance(media_buy_brand, BaseModel):
-            data["brand"] = media_buy_brand.model_dump(mode="json")
-        elif isinstance(media_buy_brand, dict):
-            data["brand"] = media_buy_brand
+        data["brand"] = media_buy_brand
     return data

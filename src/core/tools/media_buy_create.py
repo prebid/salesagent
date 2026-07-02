@@ -2562,9 +2562,8 @@ async def _create_media_buy_impl(
             try:
                 logger.info("[INLINE_CREATIVE_DEBUG] Calling process_and_upload_package_creatives")
                 # Cast packages to local PackageRequest type (runtime compatible, mypy list invariance)
-                # Pass req.brand as-is (model or None); process_and_upload_package_creatives
-                # serializes it to a plain dict at the helper boundary so that model_dump()
-                # stays out of _impl functions (architecture guard: test_no_model_dump_in_impl).
+                # req.brand is BrandReference | None here — string shorthand was coerced in
+                # _build_create_request() before CreateMediaBuyRequest was constructed.
                 updated_packages, uploaded_ids = process_and_upload_package_creatives(
                     packages=cast(list[PackageRequest], req.packages),
                     context=identity,

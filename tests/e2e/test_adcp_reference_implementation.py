@@ -167,27 +167,8 @@ class TestAdCPReferenceImplementation:
             assert len(sync_data["creatives"]) == 2, "Should sync 2 creatives"
             # action != "failed" proves persistence: rejected creatives are echoed with
             # action="failed" and not persisted, surfacing only as an empty PHASE 7 list.
-            # However, transient failures from the external creative agent (e.g. 429
-            # rate-limit) are not a bug in *this* server — skip creative verification
-            # when every failure is transient (recovery="transient").
-            failed_creatives = [c for c in sync_data["creatives"] if c.get("action") == "failed"]
-            creatives_rate_limited = failed_creatives and all(
-                any(
-                    e.get("code") == "SERVICE_UNAVAILABLE" and e.get("recovery") == "transient"
-                    for e in (c.get("errors") or [])
-                )
-                for c in failed_creatives
-            )
-            if creatives_rate_limited:
-                print(
-                    f"   ⚠ Creative agent rate-limited ({len(failed_creatives)} creative(s) "
-                    f"failed with recovery=transient) — skipping creative verification"
-                )
-            else:
-                for c in sync_data["creatives"]:
-                    assert c.get("action") != "failed", (
-                        f"Creative {c.get('creative_id')} failed to sync: {c.get('errors')}"
-                    )
+            for c in sync_data["creatives"]:
+                assert c.get("action") != "failed", f"Creative {c.get('creative_id')} failed to sync: {c.get('errors')}"
             print(f"   ✓ Synced {len(sync_data['creatives'])} creatives")
             print(f"   ✓ Creative IDs: {creative_id_1}, {creative_id_2}")
 
@@ -244,13 +225,10 @@ class TestAdCPReferenceImplementation:
             assert "creatives" in list_data, "Response must contain creatives"
             print(f"   ✓ Listed {len(list_data['creatives'])} creatives")
 
-            if creatives_rate_limited:
-                print("   ⚠ Skipping creative list verification (creative agent was rate-limited)")
-            else:
-                creative_ids_in_list = {c["creative_id"] for c in list_data["creatives"]}
-                assert creative_id_1 in creative_ids_in_list, f"Creative {creative_id_1} should be in list"
-                assert creative_id_2 in creative_ids_in_list, f"Creative {creative_id_2} should be in list"
-                print("   ✓ Both synced creatives found in list")
+            creative_ids_in_list = {c["creative_id"] for c in list_data["creatives"]}
+            assert creative_id_1 in creative_ids_in_list, f"Creative {creative_id_1} should be in list"
+            assert creative_id_2 in creative_ids_in_list, f"Creative {creative_id_2} should be in list"
+            print("   ✓ Both synced creatives found in list")
 
             print("\n" + "=" * 80)
             print("✅ REFERENCE TEST PASSED - Complete Campaign Lifecycle")

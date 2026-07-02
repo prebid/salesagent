@@ -241,63 +241,69 @@ class TestA2AWrapperPncJsonSerialization:
 
 
 class TestBrandStrToRef:
-    """_brand_str_to_ref converts plain brand strings to AdCP BrandRef dicts (Change 5).
+    """_brand_str_to_ref converts plain brand strings to typed BrandReference (Change 5).
 
-    AdCP 3.1 BrandRef.domain requires a bare hostname (no scheme, no path).
+    AdCP 3.1 BrandReference.domain requires a bare hostname (no scheme, no path).
     The helper must strip URL scheme and path components so adapters can read
     ``brand.domain`` from stored creative data.
+
+    Returns a typed BrandReference — not a loose dict — so the brand stays typed
+    end-to-end inside the application (serialization to dict happens only at the
+    DB/SDK boundary).
     """
 
     def test_plain_domain_unchanged(self):
         """A bare domain string is returned as-is in the domain field."""
         result = _brand_str_to_ref("example.com")
-        assert result == {"domain": "example.com"}
+        assert result.domain == "example.com"
 
     def test_https_scheme_stripped(self):
         """https:// scheme is stripped, leaving only the hostname."""
         result = _brand_str_to_ref("https://example.com")
-        assert result == {"domain": "example.com"}
+        assert result.domain == "example.com"
 
     def test_http_scheme_stripped(self):
         """http:// scheme is stripped, leaving only the hostname."""
         result = _brand_str_to_ref("http://example.com")
-        assert result == {"domain": "example.com"}
+        assert result.domain == "example.com"
 
     def test_path_stripped(self):
         """URL path is stripped — only the hostname is kept."""
         result = _brand_str_to_ref("https://example.com/path/to/page")
-        assert result == {"domain": "example.com"}
+        assert result.domain == "example.com"
 
     def test_query_string_stripped(self):
         """Query string is stripped — only the hostname is kept."""
         result = _brand_str_to_ref("https://example.com/path?q=1&foo=bar")
-        assert result == {"domain": "example.com"}
+        assert result.domain == "example.com"
 
     def test_fragment_stripped(self):
         """URL fragment is stripped — only the hostname is kept."""
         result = _brand_str_to_ref("https://example.com/page#section")
-        assert result == {"domain": "example.com"}
+        assert result.domain == "example.com"
 
     def test_full_url_all_components_stripped(self):
         """Full URL with scheme, path, query, and fragment → bare hostname."""
         result = _brand_str_to_ref("https://example.com/path?q=1#anchor")
-        assert result == {"domain": "example.com"}
+        assert result.domain == "example.com"
 
-    def test_result_is_dict_with_domain_key(self):
-        """Result is always a dict with exactly a 'domain' key."""
+    def test_result_is_brand_reference(self):
+        """Result is always a typed BrandReference, not a loose dict."""
+        from adcp.types import BrandReference
+
         result = _brand_str_to_ref("https://example.com")
-        assert isinstance(result, dict)
-        assert "domain" in result
+        assert isinstance(result, BrandReference)
+        assert result.domain == "example.com"
 
     def test_domain_is_lowercase(self):
         """Domain is lowercased for consistent comparison."""
         result = _brand_str_to_ref("https://Example.COM/Path")
-        assert result["domain"] == "example.com"
+        assert result.domain == "example.com"
 
     def test_subdomain_preserved(self):
         """Subdomains are preserved in the domain field."""
         result = _brand_str_to_ref("https://ads.example.com/campaign")
-        assert result == {"domain": "ads.example.com"}
+        assert result.domain == "ads.example.com"
 
 
 def _make_brand_propagation_env(product: MagicMock) -> tuple:

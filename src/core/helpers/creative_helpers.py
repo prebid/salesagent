@@ -8,9 +8,11 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from adcp import FormatId as LibraryFormatId
+from adcp.types import BrandReference
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -24,21 +26,19 @@ from src.core.schemas import Creative
 logger = logging.getLogger(__name__)
 
 
-def _brand_str_to_ref(brand_str: str) -> dict[str, str]:
-    """Convert a plain brand string to a minimal valid AdCP BrandRef dict.
+def _brand_str_to_ref(brand_str: str) -> BrandReference:
+    """Convert a plain brand string to a minimal valid AdCP BrandReference.
 
     Strips URL scheme and path components so the result is a bare hostname,
-    which is what ``BrandRef.domain`` requires per AdCP 3.1.
+    which is what ``BrandReference.domain`` requires per AdCP 3.1.
 
     Examples:
-        "https://example.com/path?q=1" → {"domain": "example.com"}
-        "example.com"                  → {"domain": "example.com"}
+        "https://example.com/path?q=1" → BrandReference(domain="example.com")
+        "example.com"                  → BrandReference(domain="example.com")
     """
-    import re
-
     domain = re.sub(r"^https?://", "", brand_str, flags=re.IGNORECASE)
     domain = domain.split("/")[0].split("?")[0].split("#")[0]
-    return {"domain": domain.lower().strip()}
+    return BrandReference(domain=domain.lower().strip())
 
 
 class FormatParameters(TypedDict, total=False):
@@ -521,7 +521,7 @@ def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
     context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
-    media_buy_brand: "Any | None" = None,
+    media_buy_brand: "BrandReference | None" = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
@@ -538,9 +538,9 @@ def process_and_upload_package_creatives(
         packages: List of Package objects to process
         context: FastMCP context (for principal_id extraction)
         testing_ctx: Optional testing context for dry_run mode
-        media_buy_brand: Optional brand dict from the media buy request (e.g.
-            ``{"domain": "acme.com"}``).  Forwarded to ``_sync_creatives_impl``
-            so adapters can read ``brand.domain`` from stored creative data.
+        media_buy_brand: Optional BrandReference from the media buy request.
+            Forwarded to ``_sync_creatives_impl`` so adapters can read
+            ``brand.domain`` from stored creative data.
 
     Returns:
         Tuple of (updated_packages, uploaded_ids_by_product):
@@ -576,24 +576,9 @@ def process_and_upload_package_creatives(
         logger.info(f"Processing {len(pkg.creatives)} creatives for package with product_id {product_id}")
 
         try:
-            # Serialize media_buy_brand at the transport/helper boundary so that
-            # _sync_creatives_impl (and downstream _impl functions) always receive
-            # a plain dict — never a Pydantic model.  This keeps model_dump() out
-            # of _impl functions (architecture guard: test_no_model_dump_in_impl).
-            from pydantic import BaseModel as _BaseModel
-
-            brand_dict: dict | None
-            if media_buy_brand is None:
-                brand_dict = None
-            elif isinstance(media_buy_brand, dict):
-                brand_dict = media_buy_brand
-            elif isinstance(media_buy_brand, _BaseModel):
-                brand_dict = media_buy_brand.model_dump(mode="json")
-            else:
-                brand_dict = None
-
-            # Step 1: Upload creatives to database via sync_creatives
-            # Phase 1a: Pass models directly (impl handles both models and dicts)
+            # Step 1: Upload creatives to database via sync_creatives.
+            # Pass BrandReference directly — no dict conversion here.
+            # _build_creative_data serializes to dict at the DB boundary.
             sync_response = _sync_creatives_impl(
                 creatives=pkg.creatives,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
@@ -602,7 +587,7 @@ def process_and_upload_package_creatives(
                 validation_mode="strict",
                 push_notification_config=None,
                 identity=context,  # ResolvedIdentity for principal_id extraction
-                media_buy_brand=brand_dict,
+                media_buy_brand=media_buy_brand,
             )
 
             # Extract creative IDs from response
