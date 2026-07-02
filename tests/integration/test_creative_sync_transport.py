@@ -1099,19 +1099,27 @@ class TestStaticPreviewFailed:
 
 @pytest.mark.requires_db
 class TestGeminiKeyMissing:
-    """Generative format without GEMINI_API_KEY → per-creative failure.
+    """Generative format without GEMINI_API_KEY → build succeeds (Change 3).
+
+    Change 3 removed the gemini_api_key dependency from build_creative.
+    The generative path now uses ADCPMultiAgentClient, so the absence of
+    gemini_api_key must NOT cause a per-creative failure across any transport.
 
     Covers: UC-006-EXT-I-01
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_generative_no_gemini_key_fails(self, integration_db, transport):
-        """Generative format + no gemini_api_key → action=failed."""
+    def test_generative_no_gemini_key_succeeds(self, integration_db, transport):
+        """Generative format + no gemini_api_key → action=created (Change 3).
+
+        Before Change 3, missing gemini_api_key caused action=failed.
+        After Change 3, ADCPMultiAgentClient is used — the key is never read.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build(gemini_api_key="")
 
-            # Override: remove the gemini key after setup
+            # Explicitly remove the key — must not affect the outcome
             env.mock["config"].return_value.gemini_api_key = None
 
             result = env.call_via(
@@ -1130,8 +1138,8 @@ class TestGeminiKeyMissing:
         assert result.is_success
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
-        assert creative_result.action == "failed"
-        assert any("gemini" in e.lower() for e in _error_messages(creative_result.errors))
+        # Change 3: build_creative uses ADCPMultiAgentClient — no gemini key needed
+        assert creative_result.action == "created"
 
 
 # ---------------------------------------------------------------------------

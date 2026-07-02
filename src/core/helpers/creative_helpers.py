@@ -521,7 +521,7 @@ def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
     context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
-    media_buy_brand: dict | None = None,
+    media_buy_brand: "Any | None" = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
@@ -576,6 +576,22 @@ def process_and_upload_package_creatives(
         logger.info(f"Processing {len(pkg.creatives)} creatives for package with product_id {product_id}")
 
         try:
+            # Serialize media_buy_brand at the transport/helper boundary so that
+            # _sync_creatives_impl (and downstream _impl functions) always receive
+            # a plain dict — never a Pydantic model.  This keeps model_dump() out
+            # of _impl functions (architecture guard: test_no_model_dump_in_impl).
+            from pydantic import BaseModel as _BaseModel
+
+            brand_dict: dict | None
+            if media_buy_brand is None:
+                brand_dict = None
+            elif isinstance(media_buy_brand, dict):
+                brand_dict = media_buy_brand
+            elif isinstance(media_buy_brand, _BaseModel):
+                brand_dict = media_buy_brand.model_dump(mode="json")
+            else:
+                brand_dict = None
+
             # Step 1: Upload creatives to database via sync_creatives
             # Phase 1a: Pass models directly (impl handles both models and dicts)
             sync_response = _sync_creatives_impl(
@@ -586,7 +602,7 @@ def process_and_upload_package_creatives(
                 validation_mode="strict",
                 push_notification_config=None,
                 identity=context,  # ResolvedIdentity for principal_id extraction
-                media_buy_brand=media_buy_brand,
+                media_buy_brand=brand_dict,
             )
 
             # Extract creative IDs from response
