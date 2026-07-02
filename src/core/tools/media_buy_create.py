@@ -2502,6 +2502,7 @@ async def _create_media_buy_impl(
                     packages=cast(list[PackageRequest], req.packages),
                     context=identity,
                     testing_ctx=testing_ctx,
+                    media_buy_brand=req.brand.model_dump(mode="json") if req.brand else None,
                 )
                 # Replace packages with updated versions (functional approach)
                 req.packages = cast(list[AdcpPackageRequest], updated_packages)  # type: ignore[assignment]

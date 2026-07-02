@@ -5,6 +5,14 @@ wrappers must use model_dump(mode='json') so that Pydantic v2 AnyUrl fields and
 enum instances are converted to plain Python strings before reaching _impl and
 SQLAlchemy String columns.
 
+Also covers brand propagation (Change 5): _brand_str_to_ref() must convert
+plain brand strings to AdCP BrandRef-shaped dicts (bare hostname, no scheme/path).
+
+Also covers media_buy_brand propagation (Bug 4 fix): _create_media_buy_impl must
+pass req.brand.model_dump(mode='json') as media_buy_brand to
+process_and_upload_package_creatives so adapters can read brand.domain from
+stored creative data.
+
 Obligation IDs:
   UC-002-TRANSPORT-PNC-SERIALIZATION-01  (MCP wrapper)
   UC-002-TRANSPORT-PNC-SERIALIZATION-02  (A2A wrapper)
@@ -12,9 +20,87 @@ Obligation IDs:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
 import pytest
 
+from src.core.helpers.creative_helpers import _brand_str_to_ref
+from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import CreateMediaBuyRequest
 from tests.helpers.create_media_buy_capture import capture_a2a_forwarded_pnc, capture_mcp_forwarded_pnc
+
+# ---------------------------------------------------------------------------
+# Shared helpers for TestMediaBuyBrandPropagation
+# ---------------------------------------------------------------------------
+
+
+def _future(days: int = 7) -> str:
+    """Return an ISO 8601 datetime string N days in the future."""
+    dt = datetime.now(UTC) + timedelta(days=days)
+    return dt.isoformat()
+
+
+def _make_request(**overrides) -> CreateMediaBuyRequest:
+    """Build a minimal valid CreateMediaBuyRequest with one inline-creative package."""
+    defaults = {
+        "brand": {"domain": "acme.com"},
+        "start_time": _future(1),
+        "end_time": _future(8),
+        "packages": [
+            {
+                "product_id": "prod_1",
+                "budget": 5000.0,
+                "pricing_option_id": "cpm_usd_fixed",
+                "creatives": [
+                    {
+                        "creative_id": "inline_1",
+                        "name": "Test Ad",
+                        "format_id": {
+                            "agent_url": "https://creative.example.com/",
+                            "id": "display_300x250_image",
+                        },
+                        "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
+                        "variants": [],
+                    }
+                ],
+            }
+        ],
+    }
+    defaults.update(overrides)
+    return CreateMediaBuyRequest(**defaults)
+
+
+def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
+    """Create a mock DB Product with a single pricing option."""
+    pricing_option = MagicMock(spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"])
+    pricing_option.pricing_model = "cpm"
+    pricing_option.currency = currency
+    pricing_option.is_fixed = True
+    pricing_option.rate = Decimal("5.00")
+    pricing_option.min_spend_per_package = None
+    pricing_option.root = pricing_option
+
+    product = MagicMock()
+    product.product_id = product_id
+    product.pricing_options = [pricing_option]
+    return product
+
+
+def _make_identity() -> ResolvedIdentity:
+    """Build a minimal ResolvedIdentity for unit tests."""
+    return ResolvedIdentity(
+        principal_id="p_test",
+        tenant_id="t_test",
+        tenant={
+            "tenant_id": "t_test",
+            "name": "Test Tenant",
+            "subdomain": "test",
+            "approval_mode": "auto-approve",
+        },
+        protocol="mcp",
+    )
 
 
 class TestMCPWrapperPncJsonSerialization:
@@ -153,3 +239,184 @@ class TestA2AWrapperPncJsonSerialization:
                 f"authentication.schemes entries must be plain str after model_dump(mode='json'), "
                 f"got {type(scheme).__name__!r} — enum instances cause SQLAlchemy coercion errors."
             )
+
+
+class TestBrandStrToRef:
+    """_brand_str_to_ref converts plain brand strings to AdCP BrandRef dicts (Change 5).
+
+    AdCP 3.1 BrandRef.domain requires a bare hostname (no scheme, no path).
+    The helper must strip URL scheme and path components so adapters can read
+    ``brand.domain`` from stored creative data.
+    """
+
+    def test_plain_domain_unchanged(self):
+        """A bare domain string is returned as-is in the domain field."""
+        result = _brand_str_to_ref("example.com")
+        assert result == {"domain": "example.com"}
+
+    def test_https_scheme_stripped(self):
+        """https:// scheme is stripped, leaving only the hostname."""
+        result = _brand_str_to_ref("https://example.com")
+        assert result == {"domain": "example.com"}
+
+    def test_http_scheme_stripped(self):
+        """http:// scheme is stripped, leaving only the hostname."""
+        result = _brand_str_to_ref("http://example.com")
+        assert result == {"domain": "example.com"}
+
+    def test_path_stripped(self):
+        """URL path is stripped — only the hostname is kept."""
+        result = _brand_str_to_ref("https://example.com/path/to/page")
+        assert result == {"domain": "example.com"}
+
+    def test_query_string_stripped(self):
+        """Query string is stripped — only the hostname is kept."""
+        result = _brand_str_to_ref("https://example.com/path?q=1&foo=bar")
+        assert result == {"domain": "example.com"}
+
+    def test_fragment_stripped(self):
+        """URL fragment is stripped — only the hostname is kept."""
+        result = _brand_str_to_ref("https://example.com/page#section")
+        assert result == {"domain": "example.com"}
+
+    def test_full_url_all_components_stripped(self):
+        """Full URL with scheme, path, query, and fragment → bare hostname."""
+        result = _brand_str_to_ref("https://example.com/path?q=1#anchor")
+        assert result == {"domain": "example.com"}
+
+    def test_result_is_dict_with_domain_key(self):
+        """Result is always a dict with exactly a 'domain' key."""
+        result = _brand_str_to_ref("https://example.com")
+        assert isinstance(result, dict)
+        assert "domain" in result
+
+    def test_domain_is_lowercase(self):
+        """Domain is lowercased for consistent comparison."""
+        result = _brand_str_to_ref("https://Example.COM/Path")
+        assert result["domain"] == "example.com"
+
+    def test_subdomain_preserved(self):
+        """Subdomains are preserved in the domain field."""
+        result = _brand_str_to_ref("https://ads.example.com/campaign")
+        assert result == {"domain": "ads.example.com"}
+
+
+class TestMediaBuyBrandPropagation:
+    """Bug 4 fix: req.brand propagated as media_buy_brand to process_and_upload_package_creatives.
+
+    The fix at media_buy_create.py passes
+    ``req.brand.model_dump(mode='json') if req.brand else None``
+    as the ``media_buy_brand`` kwarg to ``process_and_upload_package_creatives``,
+    which forwards it to ``_sync_creatives_impl`` so adapters can read
+    ``brand.domain`` from stored creative data.
+    """
+
+    @pytest.mark.asyncio
+    async def test_process_and_upload_called_with_media_buy_brand(self):
+        """When req.brand is set, process_and_upload_package_creatives receives media_buy_brand.
+
+        Anchors: media_buy_create.py — ``media_buy_brand=req.brand.model_dump(mode='json') if req.brand else None``
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request(brand={"domain": "acme.com"})
+        identity = _make_identity()
+        product = _mock_product("prod_1")
+
+        mock_product_repo = MagicMock()
+        mock_product_repo.get_by_ids.return_value = [product]
+        mock_product_repo.get_by_id.return_value = product
+
+        mock_currency_repo = MagicMock()
+        mock_currency_repo.get_by_currency.return_value = None
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.products = mock_product_repo
+        mock_uow.currency_limits = mock_currency_repo
+
+        with (
+            patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+            patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
+            patch("src.core.tools.media_buy_create.get_slack_notifier"),
+            patch("src.core.tools.media_buy_create.activity_feed"),
+            patch("src.core.tools.media_buy_create.get_audit_logger"),
+            patch("src.core.tools.media_buy_create.MediaBuyUoW", return_value=mock_uow),
+        ):
+            mock_upload.return_value = (req.packages, {})
+            mock_adapter = MagicMock()
+            mock_adapter.manual_approval_required = True
+            mock_adapter.manual_approval_operations = ["create_media_buy"]
+            mock_adapter_fn.return_value = mock_adapter
+
+            try:
+                await _create_media_buy_impl(req=req, identity=identity)
+            except Exception:
+                pass  # Downstream failures are fine — we only care about the upload call
+
+        # Verify process_and_upload_package_creatives was called with media_buy_brand
+        mock_upload.assert_called_once()
+        call_kwargs = mock_upload.call_args[1]
+        assert "media_buy_brand" in call_kwargs, (
+            "process_and_upload_package_creatives must receive media_buy_brand kwarg"
+        )
+        assert call_kwargs["media_buy_brand"] == {"domain": "acme.com"}, (
+            f"media_buy_brand must be req.brand.model_dump(mode='json'), got {call_kwargs['media_buy_brand']!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_and_upload_called_with_none_brand_when_no_brand(self):
+        """When req.brand is None, process_and_upload_package_creatives receives media_buy_brand=None.
+
+        Anchors: media_buy_create.py — ``req.brand.model_dump(mode='json') if req.brand else None``
+        """
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        req = _make_request()
+        # Override brand to None after construction (schema may default it)
+        object.__setattr__(req, "brand", None)
+        identity = _make_identity()
+        product = _mock_product("prod_1")
+
+        mock_product_repo = MagicMock()
+        mock_product_repo.get_by_ids.return_value = [product]
+        mock_product_repo.get_by_id.return_value = product
+
+        mock_currency_repo = MagicMock()
+        mock_currency_repo.get_by_currency.return_value = None
+
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.products = mock_product_repo
+        mock_uow.currency_limits = mock_currency_repo
+
+        with (
+            patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
+            patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
+            patch("src.core.tools.media_buy_create.get_slack_notifier"),
+            patch("src.core.tools.media_buy_create.activity_feed"),
+            patch("src.core.tools.media_buy_create.get_audit_logger"),
+            patch("src.core.tools.media_buy_create.MediaBuyUoW", return_value=mock_uow),
+        ):
+            mock_upload.return_value = (req.packages, {})
+            mock_adapter = MagicMock()
+            mock_adapter.manual_approval_required = True
+            mock_adapter.manual_approval_operations = ["create_media_buy"]
+            mock_adapter_fn.return_value = mock_adapter
+
+            try:
+                await _create_media_buy_impl(req=req, identity=identity)
+            except Exception:
+                pass  # Downstream failures are fine — we only care about the upload call
+
+        # Verify process_and_upload_package_creatives was called with media_buy_brand=None
+        mock_upload.assert_called_once()
+        call_kwargs = mock_upload.call_args[1]
+        assert "media_buy_brand" in call_kwargs, (
+            "process_and_upload_package_creatives must receive media_buy_brand kwarg even when brand is None"
+        )
+        assert call_kwargs["media_buy_brand"] is None, (
+            f"media_buy_brand must be None when req.brand is None, got {call_kwargs['media_buy_brand']!r}"
+        )

@@ -24,6 +24,23 @@ from src.core.schemas import Creative
 logger = logging.getLogger(__name__)
 
 
+def _brand_str_to_ref(brand_str: str) -> dict[str, str]:
+    """Convert a plain brand string to a minimal valid AdCP BrandRef dict.
+
+    Strips URL scheme and path components so the result is a bare hostname,
+    which is what ``BrandRef.domain`` requires per AdCP 3.1.
+
+    Examples:
+        "https://example.com/path?q=1" → {"domain": "example.com"}
+        "example.com"                  → {"domain": "example.com"}
+    """
+    import re
+
+    domain = re.sub(r"^https?://", "", brand_str, flags=re.IGNORECASE)
+    domain = domain.split("/")[0].split("?")[0].split("#")[0]
+    return {"domain": domain.lower().strip()}
+
+
 class FormatParameters(TypedDict, total=False):
     """Optional format parameters for parameterized FormatId (AdCP 2.5)."""
 
@@ -504,6 +521,7 @@ def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
     context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
+    media_buy_brand: dict | None = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
@@ -520,6 +538,9 @@ def process_and_upload_package_creatives(
         packages: List of Package objects to process
         context: FastMCP context (for principal_id extraction)
         testing_ctx: Optional testing context for dry_run mode
+        media_buy_brand: Optional brand dict from the media buy request (e.g.
+            ``{"domain": "acme.com"}``).  Forwarded to ``_sync_creatives_impl``
+            so adapters can read ``brand.domain`` from stored creative data.
 
     Returns:
         Tuple of (updated_packages, uploaded_ids_by_product):
@@ -565,6 +586,7 @@ def process_and_upload_package_creatives(
                 validation_mode="strict",
                 push_notification_config=None,
                 identity=context,  # ResolvedIdentity for principal_id extraction
+                media_buy_brand=media_buy_brand,
             )
 
             # Extract creative IDs from response
