@@ -715,7 +715,7 @@ def extract_media_url_and_dimensions(
         - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets  # type: ignore[attr-defined]
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
     from adcp.utils import get_individual_assets, has_assets
 
     url = None
@@ -726,9 +726,9 @@ def extract_media_url_and_dimensions(
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
             # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
-            if not isinstance(asset_spec, Assets):
+            if not isinstance(asset_spec, BaseIndividualAsset):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()
+            asset_type = str(getattr(asset_spec, "asset_type", "")).lower()
             if asset_type in MEDIA_ASSET_TYPES:
                 asset_id = asset_spec.asset_id
                 if asset_id in creative_data["assets"]:
@@ -840,7 +840,7 @@ def extract_click_url(
         Click-through URL string (optionally with macros substituted), or None if not found.
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets  # type: ignore[attr-defined]
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
     from adcp.utils import get_individual_assets, has_assets
 
     click_url = None
@@ -848,9 +848,9 @@ def extract_click_url(
     # Priority 1: Use format spec to find clickthrough URL (url_type == 'clickthrough')
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
+            if not isinstance(asset_spec, BaseIndividualAsset):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()
+            asset_type = str(getattr(asset_spec, "asset_type", "")).lower()
             if asset_type == "url":
                 requirements = getattr(asset_spec, "requirements", None)
                 if requirements:
@@ -907,7 +907,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
         Impression tracker URL string or None if not found.
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets  # type: ignore[attr-defined]
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
     from adcp.utils import get_individual_assets, has_assets
 
     tracker_url = None
@@ -916,9 +916,9 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
     # Match url assets where requirements.url_type == 'tracker_pixel'
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
+            if not isinstance(asset_spec, BaseIndividualAsset):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()
+            asset_type = str(getattr(asset_spec, "asset_type", "")).lower()
             if asset_type == "url":
                 # Check if this is a tracker_pixel by looking at requirements.url_type
                 requirements = getattr(asset_spec, "requirements", None)
