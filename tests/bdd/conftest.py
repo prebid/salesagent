@@ -57,6 +57,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc005_format_id_shape",
+    "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
