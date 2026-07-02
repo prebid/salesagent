@@ -17,13 +17,11 @@ be graded against an enum that does not contain them; they are reported by
 
 from __future__ import annotations
 
-import inspect
 import json
 from pathlib import Path
 
 import pytest
 
-import src.core.exceptions as exceptions_module
 from src.core.exceptions import AdCPError
 
 _PINNED_ENUM_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
@@ -39,11 +37,11 @@ _RECOVERY_BY_CODE = _pinned_recovery_by_code()
 
 
 def _adcp_error_subclasses() -> list[type[AdCPError]]:
-    return [
-        obj
-        for _, obj in inspect.getmembers(exceptions_module, inspect.isclass)
-        if issubclass(obj, AdCPError) and obj is not AdCPError
-    ]
+    # Walk the concrete-subclass tree (the production single source of truth used by
+    # tool_error_logging._build_error_code_to_status), not just the exceptions module
+    # namespace — future-proofs the oracle against a subclass defined outside
+    # exceptions.py that inspect.getmembers would silently miss. (#1417)
+    return list(AdCPError.iter_concrete_subclasses())
 
 
 _GRADED_CLASSES = sorted(
