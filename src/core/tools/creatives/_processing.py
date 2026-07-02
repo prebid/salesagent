@@ -225,6 +225,12 @@ def _update_existing_creative(
     url = _extract_url_from_assets(creative)
     data = _build_creative_data(creative, url, context, media_buy_brand=media_buy_brand)
 
+    # Carry forward stored brand when no new brand is provided (Change 5 preservation).
+    # _build_creative_data only sets data["brand"] when media_buy_brand is not None.
+    # Without this, update_data() replaces the entire stored dict and erases the brand.
+    if media_buy_brand is None and existing_creative.data and existing_creative.data.get("brand"):
+        data["brand"] = existing_creative.data["brand"]
+
     # ALWAYS validate updates with creative agent
     if creative_format:
         try:

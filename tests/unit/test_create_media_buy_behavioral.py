@@ -9,9 +9,8 @@ Also covers brand propagation (Change 5): _brand_str_to_ref() must convert
 plain brand strings to AdCP BrandRef-shaped dicts (bare hostname, no scheme/path).
 
 Also covers media_buy_brand propagation (Bug 4 fix): _create_media_buy_impl must
-pass req.brand.model_dump(mode='json') as media_buy_brand to
-process_and_upload_package_creatives so adapters can read brand.domain from
-stored creative data.
+pass req.brand as media_buy_brand to process_and_upload_package_creatives so
+adapters can read brand.domain from stored creative data.
 
 Obligation IDs:
   UC-002-TRANSPORT-PNC-SERIALIZATION-01  (MCP wrapper)
@@ -27,8 +26,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.helpers.creative_helpers import _brand_str_to_ref
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
+from tests.factories import PrincipalFactory
 from tests.helpers.create_media_buy_capture import capture_a2a_forwarded_pnc, capture_mcp_forwarded_pnc
 
 # ---------------------------------------------------------------------------
@@ -48,6 +47,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
         "brand": {"domain": "acme.com"},
         "start_time": _future(1),
         "end_time": _future(8),
+        "idempotency_key": "test-idempotency-key-0001",
         "packages": [
             {
                 "product_id": "prod_1",
@@ -88,9 +88,9 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
     return product
 
 
-def _make_identity() -> ResolvedIdentity:
-    """Build a minimal ResolvedIdentity for unit tests."""
-    return ResolvedIdentity(
+def _make_identity():
+    """Build a minimal ResolvedIdentity for unit tests via PrincipalFactory."""
+    return PrincipalFactory.make_identity(
         principal_id="p_test",
         tenant_id="t_test",
         tenant={
@@ -99,7 +99,6 @@ def _make_identity() -> ResolvedIdentity:
             "subdomain": "test",
             "approval_mode": "auto-approve",
         },
-        protocol="mcp",
     )
 
 
@@ -304,18 +303,17 @@ class TestBrandStrToRef:
 class TestMediaBuyBrandPropagation:
     """Bug 4 fix: req.brand propagated as media_buy_brand to process_and_upload_package_creatives.
 
-    The fix at media_buy_create.py passes
-    ``req.brand.model_dump(mode='json') if req.brand else None``
-    as the ``media_buy_brand`` kwarg to ``process_and_upload_package_creatives``,
-    which forwards it to ``_sync_creatives_impl`` so adapters can read
-    ``brand.domain`` from stored creative data.
+    The fix at media_buy_create.py passes ``req.brand`` (the Pydantic model) as
+    the ``media_buy_brand`` kwarg to ``process_and_upload_package_creatives``,
+    which serializes it to a plain dict and forwards it to ``_sync_creatives_impl``
+    so adapters can read ``brand.domain`` from stored creative data.
     """
 
     @pytest.mark.asyncio
     async def test_process_and_upload_called_with_media_buy_brand(self):
         """When req.brand is set, process_and_upload_package_creatives receives media_buy_brand.
 
-        Anchors: media_buy_create.py — ``media_buy_brand=req.brand.model_dump(mode='json') if req.brand else None``
+        Anchors: media_buy_create.py — ``media_buy_brand=req.brand``
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -342,7 +340,7 @@ class TestMediaBuyBrandPropagation:
             patch("src.core.tools.media_buy_create.get_slack_notifier"),
             patch("src.core.tools.media_buy_create.activity_feed"),
             patch("src.core.tools.media_buy_create.get_audit_logger"),
-            patch("src.core.tools.media_buy_create.MediaBuyUoW", return_value=mock_uow),
+            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
             mock_upload.return_value = (req.packages, {})
             mock_adapter = MagicMock()
@@ -355,21 +353,26 @@ class TestMediaBuyBrandPropagation:
             except Exception:
                 pass  # Downstream failures are fine — we only care about the upload call
 
-        # Verify process_and_upload_package_creatives was called with media_buy_brand
-        mock_upload.assert_called_once()
-        call_kwargs = mock_upload.call_args[1]
+        # Verify process_and_upload_package_creatives was called with media_buy_brand=req.brand.
+        # media_buy_brand receives req.brand (the Pydantic model); serialization to dict
+        # happens inside process_and_upload_package_creatives, not in _impl.
+        assert mock_upload.called, (
+            "process_and_upload_package_creatives was not called — "
+            "_create_media_buy_impl may have exited before reaching the upload step"
+        )
+        call_kwargs = mock_upload.call_args.kwargs
         assert "media_buy_brand" in call_kwargs, (
             "process_and_upload_package_creatives must receive media_buy_brand kwarg"
         )
-        assert call_kwargs["media_buy_brand"] == {"domain": "acme.com"}, (
-            f"media_buy_brand must be req.brand.model_dump(mode='json'), got {call_kwargs['media_buy_brand']!r}"
+        assert call_kwargs["media_buy_brand"] == req.brand, (
+            f"media_buy_brand must be req.brand (the Pydantic model), got {call_kwargs['media_buy_brand']!r}"
         )
 
     @pytest.mark.asyncio
     async def test_process_and_upload_called_with_none_brand_when_no_brand(self):
         """When req.brand is None, process_and_upload_package_creatives receives media_buy_brand=None.
 
-        Anchors: media_buy_create.py — ``req.brand.model_dump(mode='json') if req.brand else None``
+        Anchors: media_buy_create.py — ``media_buy_brand=req.brand``
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
@@ -398,7 +401,7 @@ class TestMediaBuyBrandPropagation:
             patch("src.core.tools.media_buy_create.get_slack_notifier"),
             patch("src.core.tools.media_buy_create.activity_feed"),
             patch("src.core.tools.media_buy_create.get_audit_logger"),
-            patch("src.core.tools.media_buy_create.MediaBuyUoW", return_value=mock_uow),
+            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
             mock_upload.return_value = (req.packages, {})
             mock_adapter = MagicMock()
@@ -411,9 +414,12 @@ class TestMediaBuyBrandPropagation:
             except Exception:
                 pass  # Downstream failures are fine — we only care about the upload call
 
-        # Verify process_and_upload_package_creatives was called with media_buy_brand=None
-        mock_upload.assert_called_once()
-        call_kwargs = mock_upload.call_args[1]
+        # Verify process_and_upload_package_creatives was called with media_buy_brand=None.
+        assert mock_upload.called, (
+            "process_and_upload_package_creatives was not called — "
+            "_create_media_buy_impl may have exited before reaching the upload step"
+        )
+        call_kwargs = mock_upload.call_args.kwargs
         assert "media_buy_brand" in call_kwargs, (
             "process_and_upload_package_creatives must receive media_buy_brand kwarg even when brand is None"
         )

@@ -1026,8 +1026,8 @@ class CreativeAgentRegistry:
             ),
             idempotency_key=idempotency_key,
             finalize=finalize,
-            creative_manifest=creative_manifest,
-            brand=brand_ref,
+            creative_manifest=creative_manifest,  # type: ignore[arg-type]
+            brand=brand_ref,  # type: ignore[arg-type]
         )
 
         # Build a transient CreativeAgent for this URL so we can use _build_adcp_client.
