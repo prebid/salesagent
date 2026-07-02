@@ -110,6 +110,56 @@ def test_get_products_response_str_anonymous_user():
     )
 
 
+def test_get_products_response_str_v3_fixed_price_is_not_anonymous():
+    """Regression for #1246: v3 fixed_price options are buyer-visible pricing."""
+    product = Product(
+        product_id="test-v3-fixed",
+        name="Test V3 Fixed",
+        description="A test",
+        format_ids=[create_test_format_id("banner")],
+        delivery_type="guaranteed",
+        delivery_measurement={"provider": "test_provider", "notes": "Test measurement"},
+        publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
+        pricing_options=[
+            {
+                "pricing_option_id": "cpm_usd_fixed",
+                "pricing_model": "cpm",
+                "currency": "USD",
+                "fixed_price": 10.0,
+            }
+        ],
+    )
+
+    response = GetProductsResponse(products=[product])
+
+    assert str(response) == "Found 1 product that matches your requirements."
+
+
+def test_get_products_response_str_v3_floor_price_is_not_anonymous():
+    """Regression for #1246: v3 floor_price auction options are buyer-visible pricing."""
+    product = Product(
+        product_id="test-v3-auction",
+        name="Test V3 Auction",
+        description="A test",
+        format_ids=[create_test_format_id("banner")],
+        delivery_type="guaranteed",
+        delivery_measurement={"provider": "test_provider", "notes": "Test measurement"},
+        publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
+        pricing_options=[
+            {
+                "pricing_option_id": "cpm_usd_auction",
+                "pricing_model": "cpm",
+                "currency": "USD",
+                "floor_price": 5.0,
+            }
+        ],
+    )
+
+    response = GetProductsResponse(products=[product])
+
+    assert str(response) == "Found 1 product that matches your requirements."
+
+
 def test_get_products_response_model_dump_still_has_full_data():
     """Verify that model_dump() still returns full structured data."""
     product = Product(
