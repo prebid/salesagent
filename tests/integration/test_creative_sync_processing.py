@@ -12,6 +12,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from adcp.types import BrandReference
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -824,6 +825,9 @@ class TestBrandPersistence:
     Verifies that brand information from the media buy request is propagated
     through _sync_creatives_impl and persisted in the creative's data field
     so adapters can read brand.domain for routing decisions.
+
+    media_buy_brand is typed as BrandReference end-to-end; serialization to
+    dict happens only at the DB boundary inside _build_creative_data().
     """
 
     def test_create_media_buy_brand_stored_in_data(self, integration_db):
@@ -840,7 +844,7 @@ class TestBrandPersistence:
 
             result = env.call_impl(
                 creatives=[creative],
-                media_buy_brand={"domain": "acme.com"},
+                media_buy_brand=BrandReference(domain="acme.com"),
             )
 
             assert result.creatives[0].action == "created"
@@ -865,7 +869,7 @@ class TestBrandPersistence:
                 format_id=fmt,
                 assets=build_assets(text_spec("message", content="Initial")),
             )
-            env.call_impl(creatives=[creative], media_buy_brand={"domain": "original.com"})
+            env.call_impl(creatives=[creative], media_buy_brand=BrandReference(domain="original.com"))
 
             # Second sync (UPDATE) without media_buy_brand — should NOT overwrite
             creative2 = _creative(
@@ -882,32 +886,50 @@ class TestBrandPersistence:
                 # Original brand preserved — no media_buy_brand on update means no overwrite
                 assert db.data.get("brand") == {"domain": "original.com"}
 
-    def test_create_media_buy_brand_takes_priority_over_creative_brand(self, integration_db):
-        """CREATE: media_buy_brand kwarg takes priority over creative.brand.
+    def test_media_buy_brand_overwrites_previously_stored_brand(self, integration_db):
+        """UPDATE: a new media_buy_brand overwrites the previously stored brand.
 
-        When both media_buy_brand and creative.brand are provided,
-        media_buy_brand wins (it's the buyer-level brand from the media buy request).
+        Priority semantics: when media_buy_brand is provided on an update sync,
+        it replaces whatever brand was stored from the previous sync.  This is the
+        buyer-level brand from the media buy request and always takes precedence.
+
+        Note: CreativeAsset has no ``brand`` field in the SDK schema — the
+        priority axis is between successive media_buy_brand values across syncs,
+        not between media_buy_brand and a creative-level brand field.
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build()
 
-            creative = _creative(
-                creative_id="c_brand_priority",
-                format_id=fmt,
-                assets=build_assets(text_spec("message", content="Build me an ad")),
+            # First CREATE with one brand
+            env.call_impl(
+                creatives=[
+                    _creative(
+                        creative_id="c_brand_priority",
+                        format_id=fmt,
+                        assets=build_assets(text_spec("message", content="Initial")),
+                    )
+                ],
+                media_buy_brand={"domain": "original.com"},
             )
-            creative["brand"] = {"domain": "creative.com"}
 
+            # UPDATE with a different media_buy_brand — must overwrite the stored brand
             result = env.call_impl(
-                creatives=[creative],
+                creatives=[
+                    _creative(
+                        creative_id="c_brand_priority",
+                        format_id=fmt,
+                        assets=build_assets(text_spec("message", content="Updated")),
+                    )
+                ],
                 media_buy_brand={"domain": "mediabuy.com"},
             )
 
-            assert result.creatives[0].action == "created"
+            assert result.creatives[0].action == "updated"
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_brand_priority")).first()
+                # New media_buy_brand must overwrite the previously stored brand
                 assert db.data.get("brand") == {"domain": "mediabuy.com"}
 
     def test_update_media_buy_brand_propagated(self, integration_db):
@@ -936,7 +958,7 @@ class TestBrandPersistence:
 
             result = env.call_impl(
                 creatives=[creative],
-                media_buy_brand={"domain": "mediabuy.com"},
+                media_buy_brand=BrandReference(domain="mediabuy.com"),
             )
 
             assert result.creatives[0].action == "updated"

@@ -35,18 +35,19 @@ def _get_format_agent_url(format_obj: Any) -> str | None:
     - Legacy/mock: ``format_obj.agent_url`` is a top-level attribute
       (used by some test mocks and older code paths).
 
-    Returns the agent_url string, or ``None`` if it cannot be determined.
+    Returns the normalized agent_url string (trailing slash stripped per
+    AdCP URL canonicalization), or ``None`` if it cannot be determined.
     """
     # Try structured shape first (SDK Format objects: format_id.agent_url)
     fmt_format_id = getattr(format_obj, "format_id", None)
     if fmt_format_id is not None and not isinstance(fmt_format_id, str):
         agent_url = getattr(fmt_format_id, "agent_url", None)
         if agent_url is not None:
-            return str(agent_url)
+            return normalize_agent_url(str(agent_url))
     # Fall back to legacy shape (top-level agent_url attribute)
     agent_url = getattr(format_obj, "agent_url", None)
     if agent_url is not None:
-        return str(agent_url)
+        return normalize_agent_url(str(agent_url))
     return None
 
 
@@ -92,9 +93,22 @@ def _build_generative_manifest(creative_format: Any, format_obj: Any, creative: 
     ``format_id`` object (never a bare string).  Used by both
     ``_update_existing_creative`` and ``_create_new_creative`` so the
     construction logic is not duplicated.
+
+    Raises:
+        AdCPConfigurationError: When the format object has no resolvable
+            ``agent_url``.  An empty agent_url would produce an invalid
+            manifest that the creative agent would reject — fail fast here
+            rather than silently emit a broken request.
     """
+    agent_url = _get_format_agent_url(format_obj)
+    if not agent_url:
+        raise AdCPConfigurationError(
+            f"Cannot build creative manifest for format {creative_format.id!r}: "
+            f"format object has no resolvable agent_url. "
+            f"Ensure the format was fetched from a registered creative agent."
+        )
     manifest: dict[str, Any] = {
-        "format_id": {"id": creative_format.id, "agent_url": _get_format_agent_url(format_obj) or ""},
+        "format_id": {"id": creative_format.id, "agent_url": agent_url},
         "assets": _validate_creative_assets(creative.assets) if creative.assets else {},
     }
     return manifest
@@ -137,7 +151,7 @@ def _update_existing_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
-    media_buy_brand: Any | None = None,
+    media_buy_brand: dict[str, Any] | None = None,
 ) -> tuple[SyncCreativeResult, bool]:
     """Update an existing creative with upsert semantics (AdCP 2.5).
 
@@ -525,7 +539,7 @@ def _create_new_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
-    media_buy_brand: Any | None = None,
+    media_buy_brand: dict[str, Any] | None = None,
 ) -> tuple[SyncCreativeResult, bool]:
     """Create a new creative and persist it to the database (AdCP 2.5).
 
@@ -773,7 +787,6 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (i6k: model attribute assignment)
-    # SDK 5.7: CreativeAsset is now a RootModel; __getattr__ proxies to .root
     if not creative.creative_id:
         creative.creative_id = db_creative.creative_id
 

@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
+from src.core.exceptions import AdCPConfigurationError
 from src.core.tools.creatives._processing import _build_generative_manifest, _find_format
 
 # ---------------------------------------------------------------------------
@@ -208,11 +211,14 @@ class TestBuildGenerativeManifest:
         creative.assets = assets
         return creative
 
+    def _make_format_obj(self, agent_url: str) -> MagicMock:
+        """Build a mock Format object (structured SDK shape) with format_id.agent_url set."""
+        return _make_format(agent_url, "unused_id")
+
     def test_format_id_is_structured_object(self):
         """format_id must be a dict with 'id' and 'agent_url' keys (not a bare string)."""
         creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
-        format_obj = MagicMock()
-        format_obj.agent_url = "https://creative.example.com"
+        format_obj = self._make_format_obj("https://creative.example.com")
         creative = self._make_creative()
 
         manifest = _build_generative_manifest(creative_format, format_obj, creative)
@@ -226,8 +232,7 @@ class TestBuildGenerativeManifest:
     def test_assets_always_present(self):
         """'assets' key must always be present in the manifest."""
         creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
-        format_obj = MagicMock()
-        format_obj.agent_url = "https://creative.example.com"
+        format_obj = self._make_format_obj("https://creative.example.com")
         creative = self._make_creative(assets=None)
 
         manifest = _build_generative_manifest(creative_format, format_obj, creative)
@@ -237,8 +242,7 @@ class TestBuildGenerativeManifest:
     def test_assets_empty_dict_when_no_assets(self):
         """When creative has no assets, manifest['assets'] is an empty dict."""
         creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
-        format_obj = MagicMock()
-        format_obj.agent_url = "https://creative.example.com"
+        format_obj = self._make_format_obj("https://creative.example.com")
         creative = self._make_creative(assets=None)
 
         manifest = _build_generative_manifest(creative_format, format_obj, creative)
@@ -250,8 +254,7 @@ class TestBuildGenerativeManifest:
     def test_no_creative_id_in_manifest(self):
         """Manifest must NOT contain 'creative_id' at the top level."""
         creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
-        format_obj = MagicMock()
-        format_obj.agent_url = "https://creative.example.com"
+        format_obj = self._make_format_obj("https://creative.example.com")
         creative = self._make_creative()
 
         manifest = _build_generative_manifest(creative_format, format_obj, creative)
@@ -261,8 +264,7 @@ class TestBuildGenerativeManifest:
     def test_no_name_in_manifest(self):
         """Manifest must NOT contain 'name' at the top level."""
         creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
-        format_obj = MagicMock()
-        format_obj.agent_url = "https://creative.example.com"
+        format_obj = self._make_format_obj("https://creative.example.com")
         creative = self._make_creative()
 
         manifest = _build_generative_manifest(creative_format, format_obj, creative)
@@ -270,10 +272,9 @@ class TestBuildGenerativeManifest:
         assert "name" not in manifest, "manifest must NOT contain 'name' — AdCP 3.1 removed this field"
 
     def test_agent_url_from_format_obj(self):
-        """agent_url in format_id comes from format_obj.agent_url (not creative_format)."""
+        """agent_url in format_id comes from format_obj.format_id.agent_url (structured SDK shape)."""
         creative_format = _make_creative_format("https://creative.example.com/mcp", "display_300x250")
-        format_obj = MagicMock()
-        format_obj.agent_url = "https://creative.example.com"  # canonical form
+        format_obj = self._make_format_obj("https://creative.example.com")  # canonical form
         creative = self._make_creative()
 
         manifest = _build_generative_manifest(creative_format, format_obj, creative)
@@ -284,10 +285,25 @@ class TestBuildGenerativeManifest:
     def test_format_id_from_creative_format(self):
         """format_id.id in manifest comes from creative_format.id."""
         creative_format = _make_creative_format("https://creative.example.com", "video_standard_30s")
-        format_obj = MagicMock()
-        format_obj.agent_url = "https://creative.example.com"
+        format_obj = self._make_format_obj("https://creative.example.com")
         creative = self._make_creative()
 
         manifest = _build_generative_manifest(creative_format, format_obj, creative)
 
         assert manifest["format_id"]["id"] == "video_standard_30s"
+
+    def test_raises_when_format_obj_has_no_agent_url(self):
+        """Raises AdCPConfigurationError when format_obj has no resolvable agent_url.
+
+        An empty agent_url would produce an invalid manifest that the creative
+        agent would reject — _build_generative_manifest must fail fast rather
+        than silently emit a broken request with agent_url="".
+        """
+        creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
+        # format_obj with neither format_id.agent_url nor top-level agent_url
+        format_obj = MagicMock(spec=[])  # spec=[] means no attributes at all
+
+        creative = self._make_creative()
+
+        with pytest.raises(AdCPConfigurationError, match="no resolvable agent_url"):
+            _build_generative_manifest(creative_format, format_obj, creative)

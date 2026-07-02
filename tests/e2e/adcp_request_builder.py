@@ -334,9 +334,7 @@ async def create_media_buy_via_client(
     if brand is None:
         brand = {"domain": "testbrand.com"}
 
-    products_data = parse_tool_result(
-        await client.call_tool("get_products", {"brand": brand, "brief": brief})
-    )
+    products_data = parse_tool_result(await client.call_tool("get_products", {"brand": brand, "brief": brief}))
     assert products_data.get("products"), f"get_products returned no products; got: {products_data}"
     product = products_data["products"][0]
     assert product.get("pricing_options"), (

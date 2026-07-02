@@ -30,6 +30,7 @@ import copy
 import logging
 import os
 import typing
+import uuid as _uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -45,12 +46,14 @@ from adcp.types import (
     VideoFormatAsset,
 )
 from pydantic import ValidationError
+from yarl import URL as _URL
 
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
+from src.core.helpers.creative_helpers import _brand_str_to_ref
 from src.core.schemas import Format, FormatId, canonical_agent_url, url
 
 
@@ -227,7 +230,13 @@ def _create_mock_format_multi(format_id_str: str, name: str, asset_types: list[s
     discoverable; the ``_KNOWN_ASSET_TYPES`` extension (Change 4) is what
     actually makes the validator accept ``"url"`` assets from real agents.
     """
-    assets: list[ImageFormatAsset | VideoFormatAsset] = []
+    # FIXME(#1490): The SDK's discriminated union only accepts a closed set of
+    # asset_type Literals (image, video, …).  We encode the intended type in
+    # asset_id (e.g. asset_id="url") and force asset_type="image" to satisfy
+    # the validator.  Any code that reads format.assets[i].asset_type will see
+    # "image" for all slots — including the "url" slot — which is incorrect.
+    # Track upstream fix: adcontextprotocol/adcp-client-python#913 (StrEnum).
+    assets: list[ImageFormatAsset | VideoFormatAsset] = []  # type: ignore[valid-type]
     for i, asset_type in enumerate(asset_types):
         asset_id = asset_type if i == 0 else f"{asset_type}_{i}"
         assets.append(
@@ -1006,15 +1015,12 @@ class CreativeAgentRegistry:
             - status: "draft" or "finalized"
             - creative_output: Generated creative manifest with output_format
         """
-        import uuid as _uuid
-
-        from src.core.helpers.creative_helpers import _brand_str_to_ref
-
-        # Resolve brand to a BrandRef-shaped dict for the SDK request
+        # Resolve brand to a BrandRef-shaped dict for the SDK request.
+        # This is the SDK boundary — serialization to dict is correct here.
         brand_ref: dict[str, Any] | None = None
         if brand is not None:
             if isinstance(brand, str):
-                brand_ref = _brand_str_to_ref(brand)
+                brand_ref = _brand_str_to_ref(brand).model_dump(mode="json")
             elif hasattr(brand, "model_dump"):
                 brand_ref = brand.model_dump(mode="json")
             elif isinstance(brand, dict):
@@ -1036,8 +1042,6 @@ class CreativeAgentRegistry:
 
         # Build a transient CreativeAgent for this URL so we can use _build_adcp_client.
         # The agent name is derived from the URL (used as the routing key in the client).
-        from yarl import URL as _URL
-
         agent_name = _URL(str(agent_url)).host or str(agent_url)
         transient_agent = CreativeAgent(agent_url=str(agent_url), name=agent_name)
         client = self._build_adcp_client([transient_agent])
