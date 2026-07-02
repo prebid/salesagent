@@ -13,7 +13,7 @@ Philosophy:
 from typing import Any
 
 # FIXME(#1388): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
-from adcp import GetProductsResponse, Product
+from adcp import CreativeFilters, GetProductsResponse, Product
 
 # FIXME(#1388): ProductFilters has a local subclass; import from src.core.schemas.
 from adcp.types import (
@@ -24,8 +24,11 @@ from adcp.types import (
     PropertyListReference,
     ReportingWebhook,
 )
+from pydantic import ValidationError
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
+from src.core.validation_helpers import format_validation_error
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -123,6 +126,41 @@ def to_property_list_reference(
     return None  # Fallback for unexpected types
 
 
+def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) -> CreativeFilters | None:
+    """Coerce a raw list_creatives filters value into a typed CreativeFilters.
+
+    Single source of truth for the dict -> CreativeFilters boundary so REST and
+    A2A coerce identically (the MCP transport coerces via FastMCP's TypeAdapter on
+    the tool signature).
+
+    A malformed filter (e.g. ``concept_ids`` with an empty array, violating the
+    schema's ``minItems: 1``) is raised as a *typed* ``AdCPValidationError`` carrying
+    a recovery suggestion, so every transport surfaces the spec's two-layer
+    ``VALIDATION_ERROR`` envelope (with a suggestion, per POST-F3). Constructing the
+    model directly instead (as the ``to_*`` converters above do, via ``Model(**dict)``)
+    surfaces a raw pydantic ``ValidationError`` that ``normalize_to_adcp_error``
+    flattens into a suggestion-less envelope.
+
+    Args:
+        filters: Filters as a wire dict, an already-typed CreativeFilters, or None.
+
+    Returns:
+        CreativeFilters or None (when no filter was supplied).
+
+    Raises:
+        AdCPValidationError: when ``filters`` is a dict that fails CreativeFilters validation.
+    """
+    if filters is None or isinstance(filters, CreativeFilters):
+        return filters
+    try:
+        return CreativeFilters.model_validate(filters)
+    except ValidationError as e:
+        raise AdCPValidationError(
+            format_validation_error(e, context="list_creatives filters"),
+            suggestion="Fix the filters object — e.g. concept_ids must contain at least 1 concept id.",
+        ) from e
+
+
 def create_get_products_request(
     brief: str = "",
     brand: dict[str, Any] | BrandReference | str | None = None,
@@ -172,9 +210,11 @@ __all__ = [
     "to_brand_reference",
     "to_context_object",
     "to_reporting_webhook",
+    "coerce_creative_filters",
     "create_get_products_request",
     # Re-export types for type hints
     "BrandReference",
+    "CreativeFilters",
     "GetProductsRequest",
     "GetProductsResponse",
     "Product",
