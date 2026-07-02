@@ -159,25 +159,35 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             req = UMR(**kwargs)
         return _update_media_buy_impl(req=req, identity=identity)
 
-    def _call_update_a2a(self, **kwargs: Any) -> Any:
-        from src.core.tools.media_buy_update import update_media_buy_raw
+    def _flatten_update_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Flatten an ``UpdateMediaBuyRequest`` into flat A2A/MCP skill parameters.
 
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
+        Pops ``req`` and expands it (dropping wrapper-unsupported fields), then
+        overlays any explicit kwargs. Shared by the A2A and MCP update paths (DRY).
+        """
         req = kwargs.pop("req", None)
-        if req is not None:
-            flat = req.model_dump(mode="json", exclude_none=True)
-            for key in _WRAPPER_UNSUPPORTED_FIELDS:
-                flat.pop(key, None)
-            flat.update(kwargs)
-            kwargs = flat
-        result = update_media_buy_raw(**kwargs)
-        # Stash the serialized success-path wire body so Then steps can assert on
-        # what the buyer receives (salesagent-d45l). model_dump runs the envelope
-        # _serialize (flattens the body, sets top-level status to the protocol
-        # TaskStatus) — the real wire shape, not the re-mirrored inner payload.
-        self._last_wire_response = result.model_dump(mode="json") if hasattr(result, "model_dump") else None
-        return result
+        if req is None:
+            return dict(kwargs)
+        flat = req.model_dump(mode="json", exclude_none=True)
+        for key in _WRAPPER_UNSUPPORTED_FIELDS:
+            flat.pop(key, None)
+        flat.update(kwargs)
+        return flat
+
+    def _call_update_a2a(self, **kwargs: Any) -> Any:
+        # Drive the REAL on_message_send → _serialize_for_a2a → Task/Artifact
+        # pipeline (mirrors the create path's call_a2a), so _run_a2a_handler stashes
+        # the true artifact DataPart as the wire_response. A prior version synthesized
+        # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
+        # model rather than the assembled envelope — an update-envelope regression
+        # would not be caught. The update_media_buy skill routes through the real A2A
+        # handler; _parse_update_rest_response recovers the success|error union from
+        # the flattened artifact (needs the top-level status the plain model drops).
+        return self._run_a2a_handler(
+            "update_media_buy",
+            lambda **data: self._parse_update_rest_response(data),
+            **self._flatten_update_request(kwargs),
+        )
 
     def _call_update_mcp(self, **kwargs: Any) -> Any:
         import asyncio
@@ -191,13 +201,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         self._commit_factory_data()
 
-        req = kwargs.pop("req", None)
-        if req is not None:
-            flat = req.model_dump(mode="json", exclude_none=True)
-            for key in _WRAPPER_UNSUPPORTED_FIELDS:
-                flat.pop(key, None)
-            flat.update(kwargs)
-            kwargs = flat
+        kwargs = self._flatten_update_request(kwargs)
 
         identity = kwargs.pop("identity", self.identity_for(Transport.MCP))
         mock_ctx = MM(spec=Context)
