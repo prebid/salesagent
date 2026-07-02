@@ -249,6 +249,28 @@ def _update_media_buy_impl(
                         suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
                     )
 
+            # Package-level lookup guard (AdCP 3.1 invalid_transitions Phase 3):
+            # every referenced package must belong to the resolved media buy,
+            # raising the typed PACKAGE_NOT_FOUND — distinct from
+            # MEDIA_BUY_NOT_FOUND so the buyer knows whether to fix the buy
+            # reference or the package reference. Runs before the dry_run
+            # early return so dry_run requests are also rejected (parity with
+            # the property_targeting validation below).
+            #
+            # Precedence is intentional: package existence is a structural
+            # precondition, so PACKAGE_NOT_FOUND preempts the budget /
+            # state-machine / targeting validators below. A package's budget or
+            # state is meaningless if the package does not exist, and the buyer
+            # must fix the reference before any field-level error is actionable.
+            # Pinned by test_a2a_error_responses
+            # ::test_update_media_buy_absent_package_preempts_budget_wire_envelope.
+            if req.packages:
+                for _pkg_update in req.packages:
+                    if _pkg_update.package_id:
+                        uow.media_buys.get_package_or_raise(
+                            media_buy_id_to_use, _pkg_update.package_id, context=req.context
+                        )
+
             # Extract testing context early (needed for dry_run check)
             testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 

@@ -66,6 +66,22 @@ def _get_error_dict(error: Exception) -> dict:
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
 
+def _resolve_wire_envelope(ctx: dict) -> dict:
+    """Return the two-layer error envelope captured by the dispatcher.
+
+    ``wire_error_envelope`` carries the real wire bytes on A2A/MCP/REST;
+    ``synthesized_error_envelope`` carries the production builder's output on
+    IMPL (no wire). One of the two is always present on an error, so error
+    Then steps assert on the envelope rather than the lossy reconstructed
+    exception.
+    """
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    assert isinstance(envelope, dict), (
+        f"No wire/synthesized error envelope captured for this transport — error: {ctx.get('error')!r}"
+    )
+    return envelope
+
+
 # ── Shared validation ───────────────────────────────────────────────
 
 
@@ -333,6 +349,43 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
     else:
         raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
+
+
+@then("the error recovery hint should indicate correctable")
+def then_error_recovery_correctable(ctx: dict) -> None:
+    """Assert recovery=correctable on the wire envelope (both layers agree)."""
+    from tests.helpers import assert_envelope_shape
+
+    envelope = _resolve_wire_envelope(ctx)
+    code = envelope["errors"][0]["code"]
+    assert_envelope_shape(envelope, code, recovery="correctable")
+
+
+@then("the response should echo the context.correlation_id unchanged")
+def then_error_echoes_correlation_id(ctx: dict) -> None:
+    """Assert the wire envelope echoes the request's context.correlation_id."""
+    sent = ctx.get("sent_correlation_id")
+    assert sent, "When step did not record ctx['sent_correlation_id'] — cannot verify echo"
+    envelope = _resolve_wire_envelope(ctx)
+    context = envelope.get("context")
+    echoed = context.get("correlation_id") if isinstance(context, dict) else None
+    assert echoed == sent, f"Expected correlation_id '{sent}' echoed unchanged, got '{echoed}'"
+
+
+@then("the response should NOT be a 500 or non-AdCP error shape")
+def then_error_is_structured_adcp_shape(ctx: dict) -> None:
+    """Assert the failure surfaced as the two-layer AdCP envelope, not a 500.
+
+    A bare 500 / non-AdCP body does not parse into the two-layer
+    ``{adcp_error, errors[]}`` shape, so a well-formed envelope is itself the
+    "not a 500" assertion.
+    """
+    from tests.helpers import assert_envelope_shape
+
+    envelope = _resolve_wire_envelope(ctx)
+    code = envelope["errors"][0]["code"]
+    recovery = envelope["errors"][0].get("recovery")
+    assert_envelope_shape(envelope, code, recovery=recovery)
 
 
 @then('the error should include a "suggestion" field')
