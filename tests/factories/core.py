@@ -1,6 +1,6 @@
 """Factory_boy factories for core tenant-related models.
 
-Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
+Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory, UserFactory
 """
 
 from __future__ import annotations

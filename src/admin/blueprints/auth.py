@@ -561,18 +561,25 @@ def google_callback():
             next_url = _safe_redirect(session.pop("login_next_url", None), fallback=url_for("core.index"))
             return redirect(next_url)
 
-        # Check if this is a signup flow (only for non-super-admin users)
-        if session.get("signup_flow"):
-            # Redirect to onboarding wizard for new tenant signup
-            flash(f"Welcome {user.get('name', email)}!", "success")
-            return redirect(url_for("public.signup_onboarding"))
-
-        # Unified flow: Always show tenant selector (with option to create new tenant)
-        # No distinction between signup and login - keeps UX simple and consistent
+        # Resolve tenant access before checking signup_flow to prevent
+        # stale flags from bypassing tenant lookup for returning users
         from src.admin.domain_access import get_user_tenant_access
 
-        # Get all accessible tenants
         tenant_access = get_user_tenant_access(email)
+
+        # Only redirect to onboarding if user genuinely has no tenants
+        if session.get("signup_flow"):
+            if tenant_access["total_access"] == 0:
+                flash(f"Welcome {user.get('name', email)}!", "success")
+                return redirect(url_for("public.signup_onboarding"))
+            # Stale flag — user already has tenant access, clear and continue
+            session.pop("signup_flow", None)
+            session.pop("signup_step", None)
+            logger.info(
+                "Cleared stale signup_flow for %s (has %d tenants)",
+                email,
+                tenant_access["total_access"],
+            )
 
         # Build tenant list for selector (empty list is fine - user can create new tenant)
         # Use a dict to track tenants by tenant_id to avoid duplicates
