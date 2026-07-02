@@ -91,7 +91,7 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error, package_field_path
+from src.core.validation_helpers import format_validation_error, package_field_path, suggest_validation_fix
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -301,12 +301,10 @@ def _verify_principal(
         )
         raise AdCPAuthorizationError(
             f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.",
-            details={
-                "suggestion": (
-                    "Verify your x-adcp-auth token identifies the principal that owns this media buy; "
-                    "contact the seller if the token should be authorized."
-                )
-            },
+            suggestion=(
+                "Verify your x-adcp-auth token identifies the principal that owns this media buy; "
+                "contact the seller if the token should be authorized."
+            ),
         )
 
 
@@ -1449,7 +1447,10 @@ def _build_update_request(
     try:
         req = UpdateMediaBuyRequest(**request_params)
     except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="update_media_buy request")) from e
+        raise AdCPValidationError(
+            format_validation_error(e, context="update_media_buy request"),
+            suggestion=suggest_validation_fix(e),
+        ) from e
 
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier)
     if not req.has_updatable_fields():

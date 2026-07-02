@@ -51,7 +51,76 @@ class TestUC003McpUpdateErrorCapture:
             ctx: dict = {}
             _setup_existing_media_buy(ctx, env, tenant, principal, product)
             env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
+            env._owner_tenant = tenant
             yield env, ctx["existing_media_buy"]
+
+    @staticmethod
+    def _top_level_suggestion(envelope) -> str | None:
+        """Read the SPEC top-level ``suggestion`` from the two-layer envelope.
+
+        Per /schemas/3.0.9/core/error.json the buyer-facing ``suggestion`` is a
+        DISTINCT top-level property, sibling to ``details`` — NOT ``details.suggestion``.
+        Accepts a dict envelope (A2A/REST) or an AdCPToolError (MCP, ``.envelope``).
+        """
+        env = envelope.envelope if hasattr(envelope, "envelope") else envelope
+        adcp_error = env.get("adcp_error", {}) if isinstance(env, dict) else {}
+        return adcp_error.get("suggestion")
+
+    def test_update_request_validation_error_carries_top_level_suggestion(self, env_with_media_buy):
+        """A request that fails Pydantic validation at the update boundary
+        (_build_update_request) must carry the buyer-facing correction hint in the
+        SPEC top-level ``suggestion`` field, not leave it empty (#1417 / 3rqe fix B).
+
+        Fails before the fix: _build_update_request raised AdCPValidationError with
+        no ``suggestion=`` so the wire ``suggestion`` field is empty. Passing a
+        ``req`` routes to the update path; the uncoercible ``budget`` override reaches
+        _build_update_request's generic Pydantic ValidationError branch at the boundary.
+        """
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        env, media_buy = env_with_media_buy
+        result = env.call_via(
+            Transport.A2A,
+            req=UpdateMediaBuyRequest(media_buy_id=media_buy.media_buy_id, paused=True),
+            # package_id present (passes the shape check) but an uncoercible budget ->
+            # UpdateMediaBuyRequest(**params) raises a Pydantic ValidationError at the boundary.
+            packages=[{"package_id": "pkg_001", "budget": "notanumber"}],
+        )
+
+        assert result.is_error, "expected a validation error"
+        assert result.wire_error_envelope is not None, "wire envelope not captured"
+        assert_envelope_shape(result.wire_error_envelope, "VALIDATION_ERROR", recovery="correctable")
+        suggestion = self._top_level_suggestion(result.wire_error_envelope)
+        assert suggestion, (
+            f"update request-validation error must carry a non-empty TOP-LEVEL "
+            f"'suggestion' (spec error.json), got {suggestion!r}"
+        )
+
+    def test_ownership_error_suggestion_is_top_level_not_details(self, env_with_media_buy):
+        """The ownership AdCPAuthorizationError must expose its hint in the SPEC
+        top-level ``suggestion`` field, not buried in ``details['suggestion']``
+        (#1417 / 3rqe fix C). Asserted on the real A2A wire envelope."""
+        from src.core.schemas import UpdateMediaBuyRequest
+        from tests.factories import PrincipalFactory
+
+        env, media_buy = env_with_media_buy
+        # A different principal (not the media buy's owner) triggers _verify_principal.
+        PrincipalFactory(tenant=env._owner_tenant, principal_id="principal_other")
+        env._commit_factory_data()
+        other_identity = PrincipalFactory.make_identity(tenant_id=media_buy.tenant_id, principal_id="principal_other")
+
+        result = env.call_via(
+            Transport.A2A,
+            req=UpdateMediaBuyRequest(media_buy_id=media_buy.media_buy_id, paused=True),
+            identity=other_identity,
+        )
+
+        assert result.is_error, "expected an ownership authorization error"
+        assert result.wire_error_envelope is not None
+        suggestion = self._top_level_suggestion(result.wire_error_envelope)
+        assert suggestion and "own" in suggestion.lower(), (
+            f"ownership error must carry the hint in the TOP-LEVEL 'suggestion' field, got {suggestion!r}"
+        )
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
     def test_empty_update_surfaces_wire_error_envelope(self, env_with_media_buy, transport):

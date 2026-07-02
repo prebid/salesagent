@@ -19,7 +19,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import format_validation_error, suggest_validation_fix
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +241,10 @@ def _build_activate_signal_request(
             context=context,
         )
     except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="activate_signal request")) from e
+        raise AdCPValidationError(
+            format_validation_error(e, context="activate_signal request"),
+            suggestion=suggest_validation_fix(e),
+        ) from e
 
 
 async def _activate_signal_impl(
