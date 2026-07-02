@@ -27,7 +27,7 @@ integration-other:
     - uses: ./.github/actions/_pytest
       with:
         paths: tests/integration/
-        extra_args: -m "not requires_server and not skip_ci and not creative and not product and not media_buy and not delivery and not transport and not auth and not tenant and not adapter and not inventory and not schema and not admin and not architecture and not targeting and not workflow and not policy and not agent"
+        extra_args: -m "not skip_ci and not creative and not product and not media_buy and not delivery and not transport and not auth and not tenant and not adapter and not inventory and not schema and not admin and not architecture and not targeting and not workflow and not policy and not agent"
 ```
 
 ## Tests Included

@@ -57,10 +57,12 @@ rules:
   # unpinned-images — ci.yml postgres service containers use the unified rolling
   # tag postgres:17-alpine (PR 5 / ADR-008). Digest pin for service containers
   # is deferred; test_architecture_postgres_image_anchor enforces tag consistency.
+  # gam-nightly.yml uses the same GHA postgres service pattern for gam_lifecycle_db.
   # ─────────────────────────────────────────────────────────────────────────────
   unpinned-images:
     ignore:
       - ci.yml
+      - gam-nightly.yml
 
   # ─────────────────────────────────────────────────────────────────────────────
   # secrets-outside-env — release-please.yml publishes to Docker Hub via repo

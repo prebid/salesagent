@@ -230,7 +230,7 @@ required (or stay blocked on stale `Test Suite / …` names).
 | `make quality` | Yes (`tests/unit/ -x`) | Local pre-commit habit |
 | `make quality-full` | Full suites via `run_all_tests.sh` | Pre-PR local gate |
 
-### Local vs CI Postgres isolation (D9)
+### Local vs CI Postgres isolation (D9, #1233)
 
 Local `tox -e integration` and `make test-int` reuse a **persistent** Postgres
 instance (agent-db or Docker stack on the host). CI integration/admin/BDD jobs
@@ -243,6 +243,45 @@ Cross-test isolation bugs that depend on process-wide factory binding (see
 shared Postgres, then compare with the same slice in CI. If a failure is
 isolation-specific, inspect factory session binding and tenant scoping — not
 Postgres version drift (guarded by `test_architecture_postgres_image_anchor`).
+
+### Legacy `requires_server` tests removed (D11, #1233)
+
+Integration/admin tests marked ``@pytest.mark.requires_server`` were deselected
+by ``-m "not requires_server"`` in tox and CI and never executed (many used the
+in-process ``mcp_server`` fixture rather than an external server). Equivalent
+coverage lives in ``tests/e2e/`` via ``live_server`` / ``docker_services_e2e``.
+
+**Post-#1234 follow-up — still #1233 scope:**
+
+| Item | Tracking | When |
+|------|----------|------|
+| `test_sell_readiness_browser.py` admin browser flows | #1233 D11 follow-up | Dedicated admin+e2e-stack CI job |
+
+### Nightly GAM regression (D13, #1477)
+
+~20 tests in `tests/e2e/test_gam_*.py` carry `@pytest.mark.requires_gam`. They
+call the live GAM sandbox network and are **excluded from per-PR CI** (quota,
+credential blast radius on fork PRs).
+
+| Property | Value |
+|----------|-------|
+| Workflow | [`.github/workflows/gam-nightly.yml`](../../.github/workflows/gam-nightly.yml) |
+| Trigger | Daily cron (`07:00 UTC`) + `workflow_dispatch` |
+| Branch | `main` only (`if: github.ref == 'refs/heads/main'`) |
+| Environment | `gam-nightly` — create under **Settings → Environments**, restrict deployment branches to `main` |
+| Secret | `GAM_SERVICE_ACCOUNT_JSON` on the `gam-nightly` environment (not repo-level; unavailable to fork PRs) |
+| Command | `pytest tests/e2e/ -m requires_gam` (GHA Postgres service on :5435 for `gam_lifecycle_db`; tests that request `docker_services_e2e` still start the e2e stack via conftest) |
+| `DATABASE_URL` | `postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres` — GHA `services.postgres` on host port 5435; `gam_lifecycle_db` creates ephemeral databases there |
+
+Failures notify repository watchers via GitHub's default workflow notifications.
+
+**Local equivalent** (requires credentials + Docker):
+
+```bash
+export GAM_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+export DATABASE_URL=postgresql://adcp_user:secure_password_change_me@127.0.0.1:5435/postgres
+uv run pytest tests/e2e/ -m requires_gam -v --timeout=300
+```
 
 ## Layered pre-commit model (PR 4 of #1234)
 

@@ -239,7 +239,7 @@ jobs:
         with:
           paths: tests/integration/
           disable_randomly: "true"
-          extra_args: --timeout=60 -m "(${{ matrix.marker }}) and not requires_server and not skip_ci"
+          extra_args: --timeout=60 -m "(${{ matrix.marker }}) and not skip_ci"
         env:
           CREATIVE_AGENT_URL: ${{ matrix.group == 'creative' && 'http://localhost:9999/api/creative-agent' || '' }}
       - name: Cleanup pinned creative agent
@@ -328,7 +328,7 @@ jobs:
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/admin/
-          extra_args: -m "not requires_server and not slow"
+          extra_args: -m "not slow"
 
   bdd-tests-shard:
     name: BDD Tests (Shard ${{ matrix.shard }}/${{ strategy.job-total }})
