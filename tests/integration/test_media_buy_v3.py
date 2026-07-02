@@ -1005,3 +1005,49 @@ class TestUpdateMediaBuyMissingPackageId:
 
         with pytest.raises(AdCPInvalidRequestError, match="package_id is required"):
             UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}])
+
+
+class TestGetMediaBuysStatusIsPersistedAuthoritative:
+    """get_media_buys status is persisted-authoritative, in agreement with update (#1417 / 8plg).
+
+    Core invariant: the read path never recomputes status from the flight window
+    ("persist status, never recompute from dates"). A past-end 'active'-persisted
+    buy reports 'active' — the active->completed transition is owned by the
+    media_buy_status_scheduler on the persisted column, and the update-response
+    reads that same column via normalize_persisted_media_buy_status, so the two
+    paths agree instead of diverging (update='active' vs list='completed').
+    """
+
+    def test_past_end_active_buy_reports_active_not_completed(self, integration_db):
+        from datetime import date
+
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from tests.factories import MediaBuyFactory
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        # MediaBuyDualEnv binds the ORM factory session and provides real ORM
+        # tenant/principal so the seeded buy is owned by the calling identity.
+        with MediaBuyDualEnv() as env:
+            tenant, principal, _product, _ = env.setup_media_buy_data()
+            # Persisted 'active', flight ended years ago (scheduler has not yet run).
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="active",
+                start_date=date(2020, 1, 1),
+                end_date=date(2020, 12, 31),
+            )
+            env._commit_factory_data()
+
+            get_req = GetMediaBuysRequest(
+                media_buy_ids=[buy.media_buy_id],
+                status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
+            )
+            response = _get_media_buys_impl(get_req, identity=env.identity)
+
+        assert len(response.media_buys) == 1, f"Expected the buy; errors: {response.errors}"
+        assert response.media_buys[0].status == MediaBuyStatus.active, (
+            "past-end 'active'-persisted buy must report persisted 'active' (agreeing with the "
+            "update path), NOT date-derived 'completed'"
+        )
