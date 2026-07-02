@@ -264,7 +264,8 @@ class TestSignalsAgentRegistry:
         """Test _get_signals_from_agent maps a generic ADCPError to AdCPAdapterError.
 
         The catch-all arm forwards the raw SDK message (no ``AdCP error:`` prefix),
-        so this pins both the 502/transient classification and the message shape.
+        so this pins both the SERVICE_UNAVAILABLE/transient classification and the
+        message shape.
         """
         registry = SignalsAgentRegistry()
 
