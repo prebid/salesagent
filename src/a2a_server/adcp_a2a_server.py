@@ -54,12 +54,14 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
+    AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
     AdCPValidationError,
@@ -598,10 +600,21 @@ class AdCPRequestHandler(RequestHandler):
                 if non_discovery_skills:
                     requires_auth = True
 
-            # Require authentication for non-public skills
+            # Require authentication for non-public skills. Stay a JSON-RPC
+            # InvalidRequestError (protocol-level rejection, top-level error), but
+            # carry the two-layer envelope in ``data`` so the buyer-facing
+            # AUTH_REQUIRED code + AUTH_REQUIRED_SUGGESTION reach the A2A wire —
+            # matching REST's no-identity envelope (auth_context.py), which the
+            # bare A2AError previously dropped. (#1417)
             if requires_auth and not auth_token:
                 raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header"
+                    message="Missing authentication token - Bearer token required in Authorization header",
+                    data=build_two_layer_error_envelope(
+                        AdCPAuthRequiredError(
+                            "Authentication required - Bearer token required in Authorization header",
+                            details={"suggestion": AUTH_REQUIRED_SUGGESTION},
+                        )
+                    ),
                 )
 
             # ── Transport boundary: resolve identity ONCE ──
