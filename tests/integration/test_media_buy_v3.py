@@ -987,3 +987,21 @@ class TestUpdateMediaBuyMissingPackageId:
 
         with pytest.raises(AdCPInvalidRequestError, match="package_id is required"):
             UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"budget": 5000.0}])
+
+    def test_package_update_with_buyer_ref_but_no_package_id_is_rejected(self):
+        """UC-003-H02: a package update identified by buyer_ref (not package_id) is
+        STILL rejected — buyer_ref is not accepted as a package identifier (gap G38).
+
+        Covers: UC-003-EXT-H-02
+        Distinct input from H-01 (which supplies NEITHER identifier): here buyer_ref
+        IS present but package_id is absent. _validate_package_update_shape checks only
+        ``package_id`` and never resolves the package by buyer_ref, so it raises
+        AdCPInvalidRequestError (wire INVALID_REQUEST). This documents the known gap
+        G38 (docs/test-obligations/UC-003-update-media-buy.md): the update path does
+        not support buyer_ref-based package identification.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        with pytest.raises(AdCPInvalidRequestError, match="package_id is required"):
+            UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}])
