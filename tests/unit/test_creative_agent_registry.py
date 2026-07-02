@@ -346,6 +346,23 @@ class TestKnownAssetTypes:
             "_KNOWN_ASSET_TYPES must be a frozenset so it cannot be mutated at runtime"
         )
 
+    def test_known_asset_types_derived_from_enum(self):
+        """_KNOWN_ASSET_TYPES must include image, video, and text from the AssetContentType enum.
+
+        The pre-5.7 annotation-walk over Format.assets collected nothing under the
+        Annotated[…, Discriminator] shape introduced in adcp 5.7.  The fix derives
+        from the enum directly so the set is never silently empty.
+        """
+        assert "image" in _KNOWN_ASSET_TYPES, (
+            "'image' must be in _KNOWN_ASSET_TYPES — derivation from AssetContentType enum is broken"
+        )
+        assert "video" in _KNOWN_ASSET_TYPES, (
+            "'video' must be in _KNOWN_ASSET_TYPES — derivation from AssetContentType enum is broken"
+        )
+        assert "text" in _KNOWN_ASSET_TYPES, (
+            "'text' must be in _KNOWN_ASSET_TYPES — derivation from AssetContentType enum is broken"
+        )
+
     def test_text_ad_search_mock_format_present(self):
         """text_ad_search mock format must be in _get_mock_formats() (Change 4)."""
         mock_formats = _get_mock_formats()
@@ -449,8 +466,9 @@ class TestBuildCreativeUsesADCPClient:
 
     @pytest.mark.asyncio
     async def test_build_creative_brand_str_converted_to_ref(self):
-        """build_creative converts brand string to BrandRef dict before the request."""
+        """build_creative converts brand string to typed BrandReference before the request."""
         from adcp import BuildCreativeRequest
+        from adcp.types import BrandReference
 
         registry = CreativeAgentRegistry()
 
@@ -476,11 +494,10 @@ class TestBuildCreativeUsesADCPClient:
 
         assert len(captured_request) == 1
         req = captured_request[0]
-        # brand must be a BrandRef-shaped dict, not the raw string
+        # brand must be a typed BrandReference, not a raw string or dict
         assert req.brand is not None, "brand must be forwarded to BuildCreativeRequest"
-        assert isinstance(req.brand, dict), "brand must be converted to a BrandRef dict (not a raw string)"
-        assert "domain" in req.brand, "BrandRef dict must have 'domain' key"
-        assert req.brand["domain"] == "advertiser.example.com"
+        assert isinstance(req.brand, BrandReference), "brand must be a typed BrandReference (not a raw string or dict)"
+        assert req.brand.domain == "advertiser.example.com"
 
     @pytest.mark.asyncio
     async def test_build_creative_returns_dict(self):

@@ -910,7 +910,7 @@ class TestBrandPersistence:
                         assets=build_assets(text_spec("message", content="Initial")),
                     )
                 ],
-                media_buy_brand={"domain": "original.com"},
+                media_buy_brand=BrandReference(domain="original.com"),
             )
 
             # UPDATE with a different media_buy_brand — must overwrite the stored brand
@@ -922,7 +922,7 @@ class TestBrandPersistence:
                         assets=build_assets(text_spec("message", content="Updated")),
                     )
                 ],
-                media_buy_brand={"domain": "mediabuy.com"},
+                media_buy_brand=BrandReference(domain="mediabuy.com"),
             )
 
             assert result.creatives[0].action == "updated"
