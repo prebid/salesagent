@@ -556,9 +556,11 @@ class TestMCPRecoveryInErrorResponses:
             ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
-            # CONFLICT (transient) and BUDGET_EXHAUSTED (terminal) recovery is graded
-            # against the pinned enum by the recovery-conformance oracle (salesagent-xds6),
-            # so their per-class literals are not duplicated in this hardcoded table.
+            # The recovery-conformance oracle grades the CLASS ATTRIBUTE
+            # (_default_recovery), not the MCP wire, so these two MUST stay here to pin
+            # the real MCP ToolError recovery — matching the A2A table below. (#1417)
+            ("AdCPConflictError", "duplicate", "CONFLICT", "transient"),
+            ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "terminal"),
             ("AdCPGoneError", "expired", "INVALID_STATE", "correctable"),
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
             ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
