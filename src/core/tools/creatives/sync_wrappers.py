@@ -116,14 +116,6 @@ def sync_creatives_raw(
 
     identity = enrich_identity_with_account(identity, account)
 
-    # Normalize BrandReference → dict at the transport boundary so _impl
-    # only ever receives dict[str, Any] | None (architecture guard: no model_dump in _impl).
-    brand_dict: dict | None
-    if media_buy_brand is None or isinstance(media_buy_brand, dict):
-        brand_dict = media_buy_brand
-    else:
-        brand_dict = media_buy_brand.model_dump(mode="json")
-
     return _sync_creatives_impl(
         creatives=creatives,
         assignments=assignments,
@@ -134,5 +126,5 @@ def sync_creatives_raw(
         push_notification_config=push_notification_config,
         context=context,
         identity=identity,
-        media_buy_brand=brand_dict,
+        media_buy_brand=media_buy_brand,
     )

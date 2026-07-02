@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from adcp.types import CreativeAsset
+from adcp.types import BrandReference, CreativeAsset
 from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
@@ -151,7 +151,7 @@ def _update_existing_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
-    media_buy_brand: dict[str, Any] | None = None,
+    media_buy_brand: BrandReference | None = None,
 ) -> tuple[SyncCreativeResult, bool]:
     """Update an existing creative with upsert semantics (AdCP 2.5).
 
@@ -539,7 +539,7 @@ def _create_new_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
-    media_buy_brand: dict[str, Any] | None = None,
+    media_buy_brand: BrandReference | None = None,
 ) -> tuple[SyncCreativeResult, bool]:
     """Create a new creative and persist it to the database (AdCP 2.5).
 

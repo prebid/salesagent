@@ -26,22 +26,23 @@ Testing:
 import copy
 import logging
 import os
-import typing
 import uuid as _uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any
 
 # FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
-from adcp.types import Error as AdCPResponseError
 from adcp.types import (  # type: ignore[attr-defined]
+    BrandReference,
     FormatReferenceStructuredObject,
     ImageFormatAsset,
     VideoFormatAsset,
 )
+from adcp.types import Error as AdCPResponseError
+from adcp.types.generated_poc.core.creative_manifest import CreativeManifest
 from adcp.types.generated_poc.core.format import BaseIndividualAsset
 from adcp.types.generated_poc.media_buy.build_creative_request import (
     BuildCreativeRequest as _BuildCreativeRequestConcrete,
@@ -55,29 +56,25 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
 )
 from src.core.helpers.creative_helpers import _brand_str_to_ref
+from src.core.schema_helpers import to_brand_reference
 from src.core.schemas import Format, FormatId, canonical_agent_url, url
 
 
 def _known_asset_types() -> frozenset[str]:
-    """Asset-type Literals adcp's closed discriminated union models.
+    """Asset-type Literals the adcp SDK models.
 
-    Derived dynamically from the adcp schema (not hardcoded) so the tolerant
+    Derived from the AssetContentType enum (adcp 5.7+) so the tolerant
     ingestion stays correct across adcp version bumps — what counts as
-    "additive" is always "not in the union the pinned library knows about".
+    "additive" is always "not in the enum the pinned library knows about".
+
+    The pre-5.7 annotation-walk over Format.assets collected nothing under
+    the Annotated[…, Discriminator] shape introduced in 5.7, so we derive
+    from the enum directly instead.
     """
-    literals: set[str] = set()
-    assets_field = Format.model_fields["assets"].annotation
-    # annotation shape: list[Union[ImageFormatAsset, VideoFormatAsset, ...]] | None
-    for outer in typing.get_args(assets_field):
-        for inner in typing.get_args(outer):  # the Union inside list[...]
-            for arm in typing.get_args(inner):
-                asset_type_field = getattr(arm, "model_fields", {}).get("asset_type")
-                if asset_type_field is not None:
-                    literals.update(typing.get_args(asset_type_field.annotation))
-    return frozenset(literals)
+    return frozenset(m.value for m in AssetType)
 
 
-_KNOWN_ASSET_TYPES = _known_asset_types() | frozenset({"url"})
+_KNOWN_ASSET_TYPES = _known_asset_types()
 _SCHEMA_VALIDATION_FAILURE_MARKERS = (
     "doesn't match expected schema",
     "does not match expected schema",
@@ -1016,30 +1013,32 @@ class CreativeAgentRegistry:
             - status: "draft" or "finalized"
             - creative_output: Generated creative manifest with output_format
         """
-        # Resolve brand to a BrandRef-shaped dict for the SDK request.
-        # This is the SDK boundary — serialization to dict is correct here.
-        brand_ref: dict[str, Any] | None = None
-        if brand is not None:
-            if isinstance(brand, str):
-                brand_ref = _brand_str_to_ref(brand).model_dump(mode="json")
-            elif hasattr(brand, "model_dump"):
-                brand_ref = brand.model_dump(mode="json")
-            elif isinstance(brand, dict):
-                brand_ref = brand
+        # Resolve brand to a typed BrandReference for the SDK request.
+        # to_brand_reference() handles str/dict/model → BrandReference uniformly.
+        brand_typed: BrandReference | None = (
+            _brand_str_to_ref(brand) if isinstance(brand, str) else to_brand_reference(brand)
+        )
+
+        # Validate creative_manifest via model_validate (not model_construct) so the
+        # ≥16-char idempotency_key constraint and other field validators are enforced.
+        # CreativeManifest(…) trips mypy under adcp 5.7 (alias hides kwargs) — use
+        # .model_validate(dict) instead.
+        manifest: CreativeManifest | None = (
+            CreativeManifest.model_validate(creative_manifest) if creative_manifest else None
+        )
 
         idempotency_key = str(_uuid.uuid4())
 
-        request = _BuildCreativeRequestConcrete.model_construct(  # type: ignore[attr-defined]
+        request = _BuildCreativeRequestConcrete(  # type: ignore[operator]
             message=message,
             target_format_id=FormatReferenceStructuredObject(
                 agent_url=agent_url,
                 id=format_id,
             ),
             idempotency_key=idempotency_key,
-            finalize=finalize,
-            # model_construct() bypasses validation — dicts are intentional at the SDK boundary
-            creative_manifest=cast(Any, creative_manifest),
-            brand=cast(Any, brand_ref),
+            finalize=finalize,  # rides via extra="allow"
+            creative_manifest=manifest,
+            brand=brand_typed,
         )
 
         # Build a transient CreativeAgent for this URL so we can use _build_adcp_client.

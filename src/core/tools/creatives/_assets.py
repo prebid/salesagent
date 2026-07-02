@@ -7,7 +7,7 @@ scattering the same RootModel-unwrapping logic across multiple modules.
 import logging
 from typing import Any
 
-from adcp.types import CreativeAsset
+from adcp.types import BrandReference, CreativeAsset
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,7 @@ def _build_creative_data(
     creative: CreativeAsset,
     url: str | None,
     context: dict[str, Any] | BaseModel | None = None,
-    media_buy_brand: dict[str, Any] | BaseModel | None = None,
+    media_buy_brand: BrandReference | None = None,
 ) -> dict[str, Any]:
     """Build the data dict for a creative from a CreativeAsset model.
 
@@ -159,10 +159,10 @@ def _build_creative_data(
         creative: CreativeAsset model from the sync payload.
         url: Extracted URL (from _extract_url_from_assets).
         context: Optional application-level context per AdCP spec.
-        media_buy_brand: Optional brand — either a plain dict or a BrandReference
-            Pydantic model. Serialized with ``exclude_none=True`` before storage
-            so only populated fields (e.g. ``{"domain": "acme.com"}``) are written
-            to the JSONType column, not the full model with all-None optional fields.
+        media_buy_brand: Optional typed BrandReference. Serialized once here
+            at the DB boundary with ``exclude_none=True`` so only populated
+            fields (e.g. ``{"domain": "acme.com"}``) are written to the
+            JSONType column, not the full model with all-None optional fields.
 
     Returns:
         Data dict for storing in the creative's data field.
@@ -196,12 +196,7 @@ def _build_creative_data(
         elif isinstance(provenance, dict):
             data["provenance"] = provenance
     # Persist brand so adapters can read brand.domain from stored creative data.
-    # Accepts either a plain dict or a BrandReference Pydantic model — serialize
-    # with exclude_none=True so only populated fields (e.g. {"domain": "acme.com"})
-    # are stored, not the full model with all-None optional fields.
+    # Serialize once here at the DB boundary — callers pass the typed model through.
     if media_buy_brand is not None:
-        if isinstance(media_buy_brand, BaseModel):
-            data["brand"] = media_buy_brand.model_dump(mode="json", exclude_none=True)
-        else:
-            data["brand"] = media_buy_brand
+        data["brand"] = media_buy_brand.model_dump(mode="json", exclude_none=True)
     return data

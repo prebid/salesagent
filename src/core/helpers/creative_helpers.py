@@ -577,13 +577,8 @@ def process_and_upload_package_creatives(
 
         try:
             # Step 1: Upload creatives to database via sync_creatives.
-            # _sync_creatives_impl expects dict[str, Any] | None for media_buy_brand;
-            # serialize BrandReference to dict at this boundary (same as sync_wrappers.py).
-            brand_dict: dict | None
-            if media_buy_brand is None or isinstance(media_buy_brand, dict):
-                brand_dict = media_buy_brand
-            else:
-                brand_dict = media_buy_brand.model_dump(mode="json")
+            # Pass BrandReference typed model directly — _sync_creatives_impl now
+            # accepts BrandReference | None and serializes once at the DB boundary.
             sync_response = _sync_creatives_impl(
                 creatives=pkg.creatives,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
@@ -592,7 +587,7 @@ def process_and_upload_package_creatives(
                 validation_mode="strict",
                 push_notification_config=None,
                 identity=context,  # ResolvedIdentity for principal_id extraction
-                media_buy_brand=brand_dict,
+                media_buy_brand=media_buy_brand,
             )
 
             # Extract creative IDs from response
