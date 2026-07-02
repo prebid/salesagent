@@ -326,19 +326,29 @@ class TestGenerativeUpdatePromotedOfferings:
             assert call_args[1]["promoted_offerings"] is not None
 
 
-class TestGenerativeUpdateGeminiKeyMissing:
-    """Generative update without GEMINI_API_KEY returns failure.
+class TestGenerativeUpdateNoBuildConfig:
+    """Generative update proceeds without GEMINI_API_KEY (Change 3).
 
-    BDD: UC-006-EXT-I-01 (update path)
+    Change 3 removed the gemini_api_key dependency from build_creative.
+    The generative path now uses ADCPMultiAgentClient, so the absence of
+    gemini_api_key must NOT cause a failure — the build_creative mock
+    controls the outcome instead.
     """
 
-    def test_update_generative_no_gemini_key_fails(self, integration_db):
-        """Update generative creative without GEMINI_API_KEY → action=failed."""
+    def test_update_generative_succeeds_without_gemini_key(self, integration_db):
+        """Update generative creative without GEMINI_API_KEY → succeeds (Change 3).
+
+        Before Change 3, missing gemini_api_key caused action=failed.
+        After Change 3, the key is not checked — ADCPMultiAgentClient is used.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             fmt = env.setup_generative_build()
 
-            # Create with gemini key
+            # Ensure gemini_api_key is absent (simulates pre-Change-3 failure condition)
+            env.mock["config"].return_value.gemini_api_key = None
+
+            # Create first
             env.call_impl(
                 creatives=[
                     _creative(
@@ -349,9 +359,10 @@ class TestGenerativeUpdateGeminiKeyMissing:
                 ]
             )
 
-            # Remove gemini key for update
-            env.mock["config"].return_value.gemini_api_key = None
+            # Reset mock to track update call
+            env.mock["registry"].return_value.build_creative.reset_mock()
 
+            # Update — must succeed even without gemini_api_key
             result = env.call_impl(
                 creatives=[
                     _creative(
@@ -363,8 +374,12 @@ class TestGenerativeUpdateGeminiKeyMissing:
             )
 
             creative_result = result.creatives[0]
-            assert creative_result.action == "failed"
-            assert any("GEMINI_API_KEY" in e for e in _error_messages(creative_result.errors))
+            assert creative_result.action == "updated", (
+                "Change 3: generative update must succeed without GEMINI_API_KEY — "
+                "ADCPMultiAgentClient is used instead of the Gemini SDK directly"
+            )
+            # build_creative must have been called via ADCPMultiAgentClient
+            assert env.mock["registry"].return_value.build_creative.called
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────
@@ -801,3 +816,131 @@ class TestCreateServerGeneratedId:
             assert generated_id is not None
             assert len(generated_id) > 0
             assert generated_id != ""
+
+
+class TestBrandPersistence:
+    """media_buy_brand is stored in creative data["brand"] (Change 5).
+
+    Verifies that brand information from the media buy request is propagated
+    through _sync_creatives_impl and persisted in the creative's data field
+    so adapters can read brand.domain for routing decisions.
+    """
+
+    def test_create_media_buy_brand_stored_in_data(self, integration_db):
+        """CREATE: media_buy_brand kwarg stored in data["brand"]."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            creative = _creative(
+                creative_id="c_brand_create",
+                format_id=fmt,
+                assets=build_assets(text_spec("message", content="Build me an ad")),
+            )
+
+            result = env.call_impl(
+                creatives=[creative],
+                media_buy_brand={"domain": "acme.com"},
+            )
+
+            assert result.creatives[0].action == "created"
+
+            with get_db_session() as session:
+                db = session.scalars(select(DBCreative).filter_by(creative_id="c_brand_create")).first()
+                assert db.data.get("brand") == {"domain": "acme.com"}
+
+    def test_brand_not_overwritten_on_update(self, integration_db):
+        """UPDATE: once brand is set, a second sync without media_buy_brand does not overwrite it.
+
+        The fix uses _build_creative_data() which only sets brand when media_buy_brand
+        is provided — subsequent syncs without media_buy_brand preserve the stored brand.
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            # First CREATE with brand
+            creative = _creative(
+                creative_id="c_brand_no_overwrite",
+                format_id=fmt,
+                assets=build_assets(text_spec("message", content="Initial")),
+            )
+            env.call_impl(creatives=[creative], media_buy_brand={"domain": "original.com"})
+
+            # Second sync (UPDATE) without media_buy_brand — should NOT overwrite
+            creative2 = _creative(
+                creative_id="c_brand_no_overwrite",
+                format_id=fmt,
+                assets=build_assets(text_spec("message", content="Updated")),
+            )
+            result = env.call_impl(creatives=[creative2])
+
+            assert result.creatives[0].action == "updated"
+
+            with get_db_session() as session:
+                db = session.scalars(select(DBCreative).filter_by(creative_id="c_brand_no_overwrite")).first()
+                # Original brand preserved — no media_buy_brand on update means no overwrite
+                assert db.data.get("brand") == {"domain": "original.com"}
+
+    def test_create_media_buy_brand_takes_priority_over_creative_brand(self, integration_db):
+        """CREATE: media_buy_brand kwarg takes priority over creative.brand.
+
+        When both media_buy_brand and creative.brand are provided,
+        media_buy_brand wins (it's the buyer-level brand from the media buy request).
+        """
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            creative = _creative(
+                creative_id="c_brand_priority",
+                format_id=fmt,
+                assets=build_assets(text_spec("message", content="Build me an ad")),
+            )
+            creative["brand"] = {"domain": "creative.com"}
+
+            result = env.call_impl(
+                creatives=[creative],
+                media_buy_brand={"domain": "mediabuy.com"},
+            )
+
+            assert result.creatives[0].action == "created"
+
+            with get_db_session() as session:
+                db = session.scalars(select(DBCreative).filter_by(creative_id="c_brand_priority")).first()
+                assert db.data.get("brand") == {"domain": "mediabuy.com"}
+
+    def test_update_media_buy_brand_propagated(self, integration_db):
+        """UPDATE: media_buy_brand kwarg propagated and stored in data["brand"]."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            fmt = env.setup_generative_build()
+
+            # CREATE first (no brand)
+            env.call_impl(
+                creatives=[
+                    _creative(
+                        creative_id="c_brand_mb_update",
+                        format_id=fmt,
+                        assets=build_assets(text_spec("message", content="Initial")),
+                    )
+                ]
+            )
+
+            # UPDATE with media_buy_brand
+            creative = _creative(
+                creative_id="c_brand_mb_update",
+                format_id=fmt,
+                assets=build_assets(text_spec("message", content="Updated")),
+            )
+
+            result = env.call_impl(
+                creatives=[creative],
+                media_buy_brand={"domain": "mediabuy.com"},
+            )
+
+            assert result.creatives[0].action == "updated"
+
+            with get_db_session() as session:
+                db = session.scalars(select(DBCreative).filter_by(creative_id="c_brand_mb_update")).first()
+                assert db.data.get("brand") == {"domain": "mediabuy.com"}

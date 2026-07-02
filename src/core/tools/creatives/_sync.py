@@ -34,6 +34,7 @@ def _sync_creatives_impl(
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
+    media_buy_brand: dict | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 
@@ -230,6 +231,7 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            media_buy_brand=media_buy_brand,
                         )
 
                         # Handle failed updates
@@ -290,6 +292,7 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            media_buy_brand=media_buy_brand,
                         )
 
                         # Handle failed creates

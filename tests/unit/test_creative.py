@@ -2253,28 +2253,44 @@ class TestGenerativeCreativeBuild:
             # The data field should have the user's URL, not the generative one
             assert create_kwargs["data"].get("url") == "https://user.example.com/my-ad.png"
 
-    def test_missing_gemini_key_fails_generative(self):
-        """Generative creative without GEMINI_API_KEY configured fails with clear error.
+    def test_generative_succeeds_without_gemini_key(self):
+        """Generative creative without GEMINI_API_KEY succeeds (Change 3).
 
-        GAP: BR-UC-006-ext-i -- Gemini key missing for generative.
-        Production code at _processing.py lines 520-525.
-        Covers: UC-006-EXT-I-01
+        Change 3 removed the gemini_api_key dependency from the generative path.
+        The build now uses ADCPMultiAgentClient, so the absence of gemini_api_key
+        must NOT cause a failure.
+
+        Covers: UC-006-EXT-I-01 (updated: key no longer required)
         """
+        from unittest.mock import AsyncMock
+
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session, gemini_key=None)
 
+        mock_registry = MagicMock()
+        mock_registry.build_creative = AsyncMock(
+            return_value={"status": "draft", "context_id": "ctx-1", "creative_output": {}}
+        )
+
         with (
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
-            patch("src.core.tools.creatives._processing.run_async_in_sync_context"),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context") as mock_run_async,
             patch("src.core.config.get_config", return_value=mock_config),
         ):
             mock_fmt.return_value = {
                 "agent_url": DEFAULT_AGENT_URL,
                 "format_id": "display_300x250_image",
                 "parameters": None,
+            }
+            mock_run_async.return_value = {
+                "status": "draft",
+                "context_id": "ctx-1",
+                "creative_output": {
+                    "output_format": {"url": "https://generated.example.com/creative.html"},
+                },
             }
 
             creative = _make_creative_asset(
@@ -2289,15 +2305,17 @@ class TestGenerativeCreativeBuild:
                 webhook_url=None,
                 context=None,
                 all_formats=[mock_format_obj],
-                registry=MagicMock(),
+                registry=mock_registry,
                 principal_id="p1",
             )
 
             action_val = result.action
             if hasattr(action_val, "value"):
                 action_val = action_val.value
-            assert action_val == "failed"
-            assert any("GEMINI_API_KEY" in e.message for e in (result.errors or []))
+            assert action_val == "created", (
+                "Change 3: generative creative must succeed without GEMINI_API_KEY — "
+                "ADCPMultiAgentClient is used instead of the Gemini SDK directly"
+            )
 
 
 # ============================================================================
