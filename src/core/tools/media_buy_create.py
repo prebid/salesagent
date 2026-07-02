@@ -2498,10 +2498,13 @@ async def _create_media_buy_impl(
             try:
                 logger.info("[INLINE_CREATIVE_DEBUG] Calling process_and_upload_package_creatives")
                 # Cast packages to local PackageRequest type (runtime compatible, mypy list invariance)
+                # req.brand is BrandReference | None here — string shorthand was coerced in
+                # _build_create_request() before CreateMediaBuyRequest was constructed.
                 updated_packages, uploaded_ids = process_and_upload_package_creatives(
                     packages=cast(list[PackageRequest], req.packages),
                     context=identity,
                     testing_ctx=testing_ctx,
+                    media_buy_brand=req.brand,
                 )
                 # Replace packages with updated versions (functional approach)
                 req.packages = cast(list[AdcpPackageRequest], updated_packages)  # type: ignore[assignment]

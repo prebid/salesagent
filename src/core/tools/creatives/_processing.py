@@ -1,10 +1,4 @@
-"""Creative create/update logic: DB persistence, agent validation, preview extraction.
-
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [attr-defined] on line ~769: CreativeAsset is a RootModel proxy; .creative_id
-  assignment exists at runtime but mypy cannot see through __setattr__. Fixable
-  when the SDK ships typed accessors or a shared unwrapper helper.
-"""
+"""Creative create/update logic: DB persistence, agent validation, preview extraction."""
 
 from __future__ import annotations
 
@@ -14,13 +8,14 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from adcp.types import CreativeAsset
+from adcp.types import BrandReference, CreativeAsset
 from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
 from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
+from src.core.validation import normalize_agent_url
 from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
@@ -29,6 +24,94 @@ if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _get_format_agent_url(format_obj: Any) -> str | None:
+    """Extract the agent_url from a format object, handling both shapes.
+
+    Handles two format shapes:
+    - Structured: ``format_obj.format_id`` is an object with ``.agent_url``
+      (the canonical AdCP FormatId shape from the SDK ``Format`` type).
+    - Legacy/mock: ``format_obj.agent_url`` is a top-level attribute
+      (used by some test mocks and older code paths).
+
+    Returns the normalized agent_url string (trailing slash stripped per
+    AdCP URL canonicalization), or ``None`` if it cannot be determined.
+    """
+    # Try structured shape first (SDK Format objects: format_id.agent_url)
+    fmt_format_id = getattr(format_obj, "format_id", None)
+    if fmt_format_id is not None and not isinstance(fmt_format_id, str):
+        agent_url = getattr(fmt_format_id, "agent_url", None)
+        if agent_url is not None:
+            return normalize_agent_url(str(agent_url))
+    # Fall back to legacy shape (top-level agent_url attribute)
+    agent_url = getattr(format_obj, "agent_url", None)
+    if agent_url is not None:
+        return normalize_agent_url(str(agent_url))
+    return None
+
+
+def _find_format(all_formats: list[Any], creative_format: Any) -> Any | None:
+    """Find a format by normalized composite (agent_url, id) key.
+
+    Normalizes agent_url on both sides per AdCP URL canonicalization rules
+    (RFC 3986 §6.2.2/§6.2.3) before comparing, so URLs differing only by
+    trailing slash, case, or default port compare equal.
+
+    Handles two format shapes:
+    - Structured: ``fmt.format_id`` is an object with ``.agent_url`` and ``.id``
+      (the canonical AdCP FormatId shape from the SDK).
+    - Legacy/mock: ``fmt.format_id`` is a plain string ID and ``fmt.agent_url``
+      is a top-level attribute (used by some test mocks and older code paths).
+    """
+    target_agent = normalize_agent_url(str(creative_format.agent_url))
+    target_id = creative_format.id
+    for fmt in all_formats:
+        fmt_format_id = fmt.format_id
+        if isinstance(fmt_format_id, str):
+            # Legacy shape: format_id is a bare string ID; agent_url is top-level
+            fmt_agent = getattr(fmt, "agent_url", None)
+            if fmt_agent is None:
+                continue
+            if normalize_agent_url(str(fmt_agent)) == target_agent and fmt_format_id == target_id:
+                return fmt
+        else:
+            # Structured shape: format_id has .agent_url and .id
+            fmt_agent_url = getattr(fmt_format_id, "agent_url", None)
+            fmt_id = getattr(fmt_format_id, "id", None)
+            if fmt_agent_url is None or fmt_id is None:
+                continue
+            if normalize_agent_url(str(fmt_agent_url)) == target_agent and fmt_id == target_id:
+                return fmt
+    return None
+
+
+def _build_generative_manifest(creative_format: Any, format_obj: Any, creative: CreativeAsset) -> dict[str, Any]:
+    """Build an AdCP-compliant creative_manifest for the generative path.
+
+    Returns a manifest with the required ``assets`` field and a structured
+    ``format_id`` object (never a bare string).  Used by both
+    ``_update_existing_creative`` and ``_create_new_creative`` so the
+    construction logic is not duplicated.
+
+    Raises:
+        AdCPConfigurationError: When the format object has no resolvable
+            ``agent_url``.  An empty agent_url would produce an invalid
+            manifest that the creative agent would reject — fail fast here
+            rather than silently emit a broken request.
+    """
+    agent_url = _get_format_agent_url(format_obj)
+    if not agent_url:
+        raise AdCPConfigurationError(
+            f"Cannot build creative manifest for format {creative_format.id!r}: "
+            f"format object has no resolvable agent_url. "
+            f"Ensure the format was fetched from a registered creative agent."
+        )
+    manifest: dict[str, Any] = {
+        "format_id": {"id": creative_format.id, "agent_url": agent_url},
+        "assets": _validate_creative_assets(creative.assets) if creative.assets else {},
+    }
+    return manifest
 
 
 def _failed_sync_result(creative_id: str, error_msg: str, *, recovery: str | None = None) -> SyncCreativeResult:
@@ -68,6 +151,7 @@ def _update_existing_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
+    media_buy_brand: BrandReference | None = None,
 ) -> tuple[SyncCreativeResult, bool]:
     """Update an existing creative with upsert semantics (AdCP 2.5).
 
@@ -177,7 +261,13 @@ def _update_existing_creative(
     # Store creative properties in data field
     # AdCP 2.5: Full upsert semantics (replace all data, not merge)
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url, context, media_buy_brand=media_buy_brand)
+
+    # Carry forward stored brand when no new brand is provided (Change 5 preservation).
+    # _build_creative_data only sets data["brand"] when media_buy_brand is not None.
+    # Without this, update_data() replaces the entire stored dict and erases the brand.
+    if media_buy_brand is None and existing_creative.data and existing_creative.data.get("brand"):
+        data["brand"] = existing_creative.data["brand"]
 
     # ALWAYS validate updates with creative agent
     if creative_format:
@@ -185,14 +275,11 @@ def _update_existing_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            # Find matching format using normalized composite key (Change 1)
+            format_obj = _find_format(all_formats, creative_format)
+            format_agent_url = _get_format_agent_url(format_obj) if format_obj else None
 
-            if format_obj and format_obj.agent_url:
+            if format_obj and format_agent_url:
                 # Check if format is generative (has output_format_ids)
                 is_generative = bool(getattr(format_obj, "output_format_ids", None))
 
@@ -200,21 +287,8 @@ def _update_existing_creative(
                     # Generative creative update - rebuild using AI
                     logger.info(
                         f"[sync_creatives] Detected generative format update: {creative_format}, "
-                        f"checking for Gemini API key"
+                        f"calling build_creative via ADCPMultiAgentClient"
                     )
-
-                    # Get Gemini API key from config
-                    from src.core.config import get_config
-
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
-
-                    if not gemini_api_key:
-                        error_msg = (
-                            f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        )
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -240,20 +314,21 @@ def _update_existing_creative(
                         logger.info(
                             f"[sync_creatives] Calling build_creative for update: "
                             f"{existing_creative.creative_id} format {creative_format} "
-                            f"from agent {format_obj.agent_url}, "
+                            f"from agent {format_agent_url}, "
                             f"message_length={len(message) if message else 0}, "
                             f"context_id={context_id}"
                         )
 
                         build_result = run_async_in_sync_context(
                             registry.build_creative(
-                                agent_url=format_obj.agent_url,
-                                format_id=creative_format,
+                                agent_url=format_agent_url,
+                                format_id=creative_format.id,
                                 message=message,
-                                gemini_api_key=gemini_api_key,
                                 promoted_offerings=promoted_offerings,
                                 context_id=context_id,
                                 finalize=getattr(creative, "approved", False),
+                                brand=media_buy_brand,
+                                creative_manifest=_build_generative_manifest(creative_format, format_obj, creative),
                             )
                         )
 
@@ -323,37 +398,25 @@ def _update_existing_creative(
                     preview_result = None
                 else:
                     # Static creative - use preview_creative
-                    # Build creative manifest from available data
-                    # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id
-                    creative_manifest: dict[str, Any] = {
-                        "creative_id": existing_creative.creative_id,
-                        "name": creative.name or existing_creative.name,
-                        "format_id": format_id_str,
-                    }
-
-                    # Add any provided asset data for validation
-                    # Validate assets are in dict format (AdCP v2.4+)
-                    if creative.assets:
-                        validated_assets = _validate_creative_assets(creative.assets)
-                        if validated_assets:
-                            creative_manifest["assets"] = validated_assets
+                    # Build AdCP-compliant creative manifest (Change 2)
+                    creative_manifest: dict[str, Any] = _build_generative_manifest(
+                        creative_format, format_obj, creative
+                    )
                     if data.get("url"):
                         creative_manifest["url"] = data.get("url")
 
                     # Call creative agent's preview_creative for validation + preview
-                    # Extract string ID from FormatId object if needed
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation (update): "
                         f"{existing_creative.creative_id} format {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
+                        f"from agent {format_agent_url}, has_assets={bool(creative.assets)}, "
                         f"has_url={bool(data.get('url'))}"
                     )
 
                     preview_result = run_async_in_sync_context(
                         registry.preview_creative(
-                            agent_url=format_obj.agent_url,
+                            agent_url=format_agent_url,
                             format_id=format_id_str,
                             creative_manifest=creative_manifest,
                         )
@@ -476,6 +539,7 @@ def _create_new_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
+    media_buy_brand: BrandReference | None = None,
 ) -> tuple[SyncCreativeResult, bool]:
     """Create a new creative and persist it to the database (AdCP 2.5).
 
@@ -494,7 +558,7 @@ def _create_new_creative(
 
     # Prepare data field with all creative properties
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url, context, media_buy_brand=media_buy_brand)
 
     # Store user-provided assets for preservation check
     user_provided_assets = creative.assets
@@ -506,33 +570,20 @@ def _create_new_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            # Find matching format using normalized composite key (Change 1)
+            format_obj = _find_format(all_formats, creative_format)
+            format_agent_url = _get_format_agent_url(format_obj) if format_obj else None
 
-            if format_obj and format_obj.agent_url:
+            if format_obj and format_agent_url:
                 # Check if format is generative (has output_format_ids)
                 is_generative = bool(getattr(format_obj, "output_format_ids", None))
 
                 if is_generative:
-                    # Generative creative - call build_creative
+                    # Generative creative - call build_creative via ADCPMultiAgentClient
                     logger.info(
-                        f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"
+                        f"[sync_creatives] Detected generative format: {creative_format}, "
+                        f"calling build_creative via ADCPMultiAgentClient"
                     )
-
-                    # Get Gemini API key from config
-                    from src.core.config import get_config
-
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
-
-                    if not gemini_api_key:
-                        error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -551,24 +602,24 @@ def _create_new_creative(
                                 promoted_offerings = asset
                                 break
 
-                    # Call build_creative
-                    # Extract string ID from FormatId object if needed
+                    # Call build_creative via ADCPMultiAgentClient (Change 3)
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling build_creative for generative format: "
-                        f"{format_id_str} from agent {format_obj.agent_url}, "
+                        f"{format_id_str} from agent {format_agent_url}, "
                         f"message_length={len(message) if message else 0}"
                     )
 
                     build_result = run_async_in_sync_context(
                         registry.build_creative(
-                            agent_url=format_obj.agent_url,
+                            agent_url=format_agent_url,
                             format_id=format_id_str,
                             message=message,
-                            gemini_api_key=gemini_api_key,
                             promoted_offerings=promoted_offerings,
                             context_id=getattr(creative, "context_id", None),
                             finalize=getattr(creative, "approved", False),
+                            brand=media_buy_brand,
+                            creative_manifest=_build_generative_manifest(creative_format, format_obj, creative),
                         )
                     )
 
@@ -617,36 +668,24 @@ def _create_new_creative(
                     preview_result = None
                 else:
                     # Static creative - use preview_creative
-                    # Build creative manifest from available data
-                    # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id
-                    creative_manifest: dict[str, Any] = {
-                        "creative_id": creative.creative_id or str(uuid.uuid4()),
-                        "name": creative.name,
-                        "format_id": format_id_str,
-                    }
-
-                    # Add any provided asset data for validation
-                    # Validate assets are in dict format (AdCP v2.4+)
-                    if creative.assets:
-                        validated_assets = _validate_creative_assets(creative.assets)
-                        if validated_assets:
-                            creative_manifest["assets"] = validated_assets
+                    # Build AdCP-compliant creative manifest (Change 2)
+                    creative_manifest: dict[str, Any] = _build_generative_manifest(
+                        creative_format, format_obj, creative
+                    )
                     if data.get("url"):
                         creative_manifest["url"] = data.get("url")
 
                     # Call creative agent's preview_creative for validation + preview
-                    # Extract string ID from FormatId object if needed
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation: {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
+                        f"from agent {format_agent_url}, has_assets={bool(creative.assets)}, "
                         f"has_url={bool(data.get('url'))}"
                     )
 
                     preview_result = run_async_in_sync_context(
                         registry.preview_creative(
-                            agent_url=format_obj.agent_url,
+                            agent_url=format_agent_url,
                             format_id=format_id_str,
                             creative_manifest=creative_manifest,
                         )
@@ -748,9 +787,8 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (i6k: model attribute assignment)
-    # SDK 5.7: CreativeAsset is now a RootModel; __getattr__ proxies to .root
     if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id  # type: ignore[attr-defined]
+        creative.creative_id = db_creative.creative_id
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":

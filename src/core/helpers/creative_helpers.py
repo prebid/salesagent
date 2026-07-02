@@ -8,9 +8,11 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
 """
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from adcp import FormatId as LibraryFormatId
+from adcp.types import BrandReference
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -22,6 +24,21 @@ if TYPE_CHECKING:
 from src.core.schemas import Creative
 
 logger = logging.getLogger(__name__)
+
+
+def _brand_str_to_ref(brand_str: str) -> BrandReference:
+    """Convert a plain brand string to a minimal valid AdCP BrandReference.
+
+    Strips URL scheme and path components so the result is a bare hostname,
+    which is what ``BrandReference.domain`` requires per AdCP 3.1.
+
+    Examples:
+        "https://example.com/path?q=1" → BrandReference(domain="example.com")
+        "example.com"                  → BrandReference(domain="example.com")
+    """
+    domain = re.sub(r"^https?://", "", brand_str, flags=re.IGNORECASE)
+    domain = domain.split("/")[0].split("?")[0].split("#")[0]
+    return BrandReference(domain=domain.lower().strip())
 
 
 class FormatParameters(TypedDict, total=False):
@@ -504,6 +521,7 @@ def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
     context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
+    media_buy_brand: "BrandReference | None" = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
@@ -520,6 +538,9 @@ def process_and_upload_package_creatives(
         packages: List of Package objects to process
         context: FastMCP context (for principal_id extraction)
         testing_ctx: Optional testing context for dry_run mode
+        media_buy_brand: Optional BrandReference from the media buy request.
+            Forwarded to ``_sync_creatives_impl`` so adapters can read
+            ``brand.domain`` from stored creative data.
 
     Returns:
         Tuple of (updated_packages, uploaded_ids_by_product):
@@ -555,8 +576,9 @@ def process_and_upload_package_creatives(
         logger.info(f"Processing {len(pkg.creatives)} creatives for package with product_id {product_id}")
 
         try:
-            # Step 1: Upload creatives to database via sync_creatives
-            # Phase 1a: Pass models directly (impl handles both models and dicts)
+            # Step 1: Upload creatives to database via sync_creatives.
+            # Pass BrandReference typed model directly — _sync_creatives_impl now
+            # accepts BrandReference | None and serializes once at the DB boundary.
             sync_response = _sync_creatives_impl(
                 creatives=pkg.creatives,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
@@ -565,6 +587,7 @@ def process_and_upload_package_creatives(
                 validation_mode="strict",
                 push_notification_config=None,
                 identity=context,  # ResolvedIdentity for principal_id extraction
+                media_buy_brand=media_buy_brand,
             )
 
             # Extract creative IDs from response
@@ -687,7 +710,7 @@ def extract_media_url_and_dimensions(
         - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
     from adcp.utils import get_individual_assets, has_assets
 
     url = None
@@ -698,11 +721,11 @@ def extract_media_url_and_dimensions(
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
             # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
-            if not isinstance(asset_spec, Assets):
+            if not isinstance(asset_spec, BaseIndividualAsset):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            asset_type = str(getattr(asset_spec, "asset_type", "")).lower()
             if asset_type in MEDIA_ASSET_TYPES:
-                asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
+                asset_id = asset_spec.asset_id
                 if asset_id in creative_data["assets"]:
                     asset_obj = creative_data["assets"][asset_id]
                     if isinstance(asset_obj, dict):
@@ -812,7 +835,7 @@ def extract_click_url(
         Click-through URL string (optionally with macros substituted), or None if not found.
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
     from adcp.utils import get_individual_assets, has_assets
 
     click_url = None
@@ -820,9 +843,9 @@ def extract_click_url(
     # Priority 1: Use format spec to find clickthrough URL (url_type == 'clickthrough')
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
+            if not isinstance(asset_spec, BaseIndividualAsset):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            asset_type = str(getattr(asset_spec, "asset_type", "")).lower()
             if asset_type == "url":
                 requirements = getattr(asset_spec, "requirements", None)
                 if requirements:
@@ -832,7 +855,7 @@ def extract_click_url(
                     elif hasattr(requirements, "url_type"):
                         req_url_type = requirements.url_type
                     if req_url_type == "clickthrough":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
+                        asset_id = asset_spec.asset_id
                         if asset_id in creative_data["assets"]:
                             asset_obj = creative_data["assets"][asset_id]
                             if isinstance(asset_obj, dict) and asset_obj.get("url"):
@@ -879,7 +902,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
         Impression tracker URL string or None if not found.
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
+    from adcp.types.generated_poc.core.format import BaseIndividualAsset
     from adcp.utils import get_individual_assets, has_assets
 
     tracker_url = None
@@ -888,9 +911,9 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
     # Match url assets where requirements.url_type == 'tracker_pixel'
     if creative_data.get("assets") and format_spec and has_assets(format_spec):
         for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
+            if not isinstance(asset_spec, BaseIndividualAsset):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            asset_type = str(getattr(asset_spec, "asset_type", "")).lower()
             if asset_type == "url":
                 # Check if this is a tracker_pixel by looking at requirements.url_type
                 requirements = getattr(asset_spec, "requirements", None)
@@ -902,7 +925,7 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
                         req_url_type = requirements.url_type
                     # Only match tracker_pixel type
                     if req_url_type == "tracker_pixel":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
+                        asset_id = asset_spec.asset_id
                         if asset_id in creative_data["assets"]:
                             asset_obj = creative_data["assets"][asset_id]
                             if isinstance(asset_obj, dict) and asset_obj.get("url"):

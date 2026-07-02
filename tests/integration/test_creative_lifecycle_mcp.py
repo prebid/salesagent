@@ -73,7 +73,17 @@ class TestCreativeLifecycleMCP:
 
     @pytest.fixture(autouse=True)
     def mock_format_registry(self):
-        """Mock creative agent format registry to avoid real API calls."""
+        """Mock creative agent format registry to avoid real API calls.
+
+        Patches both the low-level ``CreativeAgentRegistry.get_format`` method
+        (used by format validation helpers) and the module-level
+        ``get_creative_agent_registry`` factory (used by ``_sync_creatives_impl``
+        to call ``list_all_formats`` and ``preview_creative``).  Without the
+        second patch the sync orchestrator hits the real external creative agent
+        URL and fails with network errors (e.g. 429 Too Many Requests) in CI.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
         from tests.helpers.adcp_factories import create_test_format
 
         # Mock formats that tests use - create with factory
@@ -97,13 +107,38 @@ class TestCreativeLifecycleMCP:
                 description="15 second instream video",
             ),
         }
+        mock_formats_list = list(mock_formats.values())
 
-        with patch("src.core.creative_agent_registry.CreativeAgentRegistry.get_format") as mock_get:
-            # Mock get_format to return format from our dict
-            def get_format_side_effect(agent_url, format_id):
-                return mock_formats.get(format_id)
+        # Build a mock registry that satisfies _sync_creatives_impl's calls:
+        #   registry.list_all_formats(tenant_id=...) → list of Format objects
+        #   registry.preview_creative(...)            → None (no previews)
+        #   registry.build_creative(...)              → {} (unused for static formats)
+        #   registry.get_format(agent_url, format_id) → Format | None
+        mock_registry = MagicMock()
 
-            mock_get.side_effect = get_format_side_effect
+        async def _list_all_formats(tenant_id=None):
+            return mock_formats_list
+
+        async def _get_format(agent_url, format_id):
+            return mock_formats.get(format_id)
+
+        mock_registry.list_all_formats = _list_all_formats
+        mock_registry.get_format = _get_format
+        # preview_creative returns None → "no previews" branch; creatives that
+        # supply a url (has_media_url=True) continue successfully without previews.
+        mock_registry.preview_creative = AsyncMock(return_value=None)
+        mock_registry.build_creative = AsyncMock(return_value={})
+
+        with (
+            patch(
+                "src.core.creative_agent_registry.get_creative_agent_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
+                side_effect=lambda agent_url, format_id: mock_formats.get(format_id),
+            ) as mock_get,
+        ):
             yield mock_get
 
     @pytest.fixture(autouse=True)

@@ -7,7 +7,7 @@ scattering the same RootModel-unwrapping logic across multiple modules.
 import logging
 from typing import Any
 
-from adcp.types import CreativeAsset
+from adcp.types import BrandReference, CreativeAsset
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -144,18 +144,25 @@ def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
 
 
 def _build_creative_data(
-    creative: CreativeAsset, url: str | None, context: dict[str, Any] | BaseModel | None = None
+    creative: CreativeAsset,
+    url: str | None,
+    context: dict[str, Any] | BaseModel | None = None,
+    media_buy_brand: BrandReference | None = None,
 ) -> dict[str, Any]:
     """Build the data dict for a creative from a CreativeAsset model.
 
     Extracts standard fields (url, click_url, width, height, duration),
     optional fields (assets, snippet, snippet_type, template_variables),
-    and context if provided.
+    context if provided, and brand for adapter routing decisions.
 
     Args:
         creative: CreativeAsset model from the sync payload.
         url: Extracted URL (from _extract_url_from_assets).
         context: Optional application-level context per AdCP spec.
+        media_buy_brand: Optional typed BrandReference. Serialized once here
+            at the DB boundary with ``exclude_none=True`` so only populated
+            fields (e.g. ``{"domain": "acme.com"}``) are written to the
+            JSONType column, not the full model with all-None optional fields.
 
     Returns:
         Data dict for storing in the creative's data field.
@@ -188,4 +195,8 @@ def _build_creative_data(
             data["provenance"] = provenance.model_dump(mode="json")
         elif isinstance(provenance, dict):
             data["provenance"] = provenance
+    # Persist brand so adapters can read brand.domain from stored creative data.
+    # Serialize once here at the DB boundary — callers pass the typed model through.
+    if media_buy_brand is not None:
+        data["brand"] = media_buy_brand.model_dump(mode="json", exclude_none=True)
     return data

@@ -4,7 +4,7 @@ Tests the new format validation logic that was added to sync_creatives
 to ensure consistent validation across all creative operations.
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -57,6 +57,11 @@ class TestSyncCreativesFormatValidation:
         format_spec.format_id = "display_300x250_image"
         format_spec.agent_url = "https://creative.adcontextprotocol.org"
         format_spec.name = "Medium Rectangle - Image"
+        # Explicitly set to None so _find_format correctly identifies this as a
+        # static (non-generative) format. Without this, Mock() auto-creates a
+        # truthy Mock object for output_format_ids, causing the generative path
+        # to be taken and build_creative to be called unexpectedly.
+        format_spec.output_format_ids = None
         return format_spec
 
     def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
@@ -82,6 +87,11 @@ class TestSyncCreativesFormatValidation:
             mock_registry = Mock()
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
+            # preview_creative must be AsyncMock: _find_format now correctly finds
+            # the legacy-shaped format, so the static path calls preview_creative.
+            mock_registry.preview_creative = AsyncMock(
+                return_value={"previews": [{"renders": [{"preview_url": "https://example.com/preview.png"}]}]}
+            )
             mock_registry_getter.return_value = mock_registry
 
             # Execute
@@ -245,6 +255,11 @@ class TestSyncCreativesFormatValidation:
             mock_registry = Mock()
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
+            # preview_creative must be AsyncMock: _find_format now correctly finds
+            # the legacy-shaped format, so the static path calls preview_creative.
+            mock_registry.preview_creative = AsyncMock(
+                return_value={"previews": [{"renders": [{"preview_url": "https://example.com/preview.png"}]}]}
+            )
             mock_registry_getter.return_value = mock_registry
 
             # Execute
@@ -296,6 +311,11 @@ class TestSyncCreativesFormatValidation:
             mock_registry = Mock()
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
+            # preview_creative must be AsyncMock: now that _find_format correctly
+            # finds the legacy-shaped format, the static path calls preview_creative.
+            mock_registry.preview_creative = AsyncMock(
+                return_value={"previews": [{"renders": [{"preview_url": "https://example.com/preview.png"}]}]}
+            )
             mock_registry_getter.return_value = mock_registry
 
             # Execute

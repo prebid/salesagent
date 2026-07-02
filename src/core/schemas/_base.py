@@ -1607,6 +1607,23 @@ class CheckMediaBuyStatusResponse(SalesAgentBaseModel):
 
 
 # --- Additional Schema Classes ---
+
+
+class PackageImplementationConfig(SalesAgentBaseModel):
+    """Base model for adapter-specific per-package implementation config.
+
+    Adapters extend this with their own typed fields (e.g. GAMImplementationConfig,
+    BroadstreetImplementationConfig). The base class is intentionally open so that
+    adapter-specific subclasses can add fields without breaking the base contract.
+
+    This field is internal-only (exclude=True on MediaPackage) and never serialized
+    to the wire — it exists solely so adapters can carry typed config alongside a
+    MediaPackage without resorting to a loose dict.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
 class MediaPackage(SalesAgentBaseModel):
     package_id: str
     name: str
@@ -1620,6 +1637,9 @@ class MediaPackage(SalesAgentBaseModel):
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
+    implementation_config: PackageImplementationConfig | None = Field(
+        default=None, exclude=True
+    )  # Internal: adapter-specific per-package config. Not serialized to wire.
 
 
 class PackagePerformance(SalesAgentBaseModel):
