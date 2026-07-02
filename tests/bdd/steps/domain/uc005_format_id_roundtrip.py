@@ -122,8 +122,10 @@ def then_format_id_roundtrip_verbatim(ctx: dict) -> None:
     format_id_identity (creative_formats.py:279-280), so the mock registry's
     single seeded match for the captured pair is exactly formats[0] on every
     transport. Asserts the wire object-shape (agent_url + id present, never a
-    bare string) plus id verbatim — the falsifiable core; the agent_url value
-    can't diverge since the filter only returns pair-matches.
+    bare string) plus id and agent_url verbatim. The pair-filter matches on the
+    *canonical* agent_url, so a canonically-equal but raw-different agent_url
+    (trailing slash / fragment / userinfo) resolves through the filter yet must
+    still be checked verbatim on the wire.
     """
     captured = ctx["captured_format_id"]
     formats = _assert_formats_non_empty(ctx, "formats[] is empty — cannot verify roundtrip")
