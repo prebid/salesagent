@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0](https://github.com/prebid/salesagent/compare/v2.0.0...v2.1.0) (2026-07-02)
+
+
+### Features
+
+* 1407 list creatives concept ids ([#1493](https://github.com/prebid/salesagent/issues/1493)) ([b46d824](https://github.com/prebid/salesagent/commit/b46d8243759b1286fcca1bc12fa74896fd6e491b))
+
+
+### Bug Fixes
+
+* map ADCP exceptions to specific types in signals_agent_registry ([#1483](https://github.com/prebid/salesagent/issues/1483)) ([d441d4c](https://github.com/prebid/salesagent/commit/d441d4c3ba9c00f87c447659bd0071b462c857a9))
+
 ## [2.0.0](https://github.com/prebid/salesagent/compare/v1.7.0...v2.0.0) (2026-07-01)
 
 
