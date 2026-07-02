@@ -38,14 +38,13 @@ from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
 from adcp.types import ImageFormatAsset
 from pydantic import ValidationError
-from yarl import URL
 
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
-from src.core.schemas import Format, FormatId, url
+from src.core.schemas import Format, FormatId, canonical_agent_url, url
 
 
 def _known_asset_types() -> frozenset[str]:
@@ -296,10 +295,12 @@ class CreativeAgentRegistry:
     def _cache_key(agent_url: str) -> str:
         """Canonicalize agent URL for consistent cache keys (RFC 3986).
 
-        yarl handles: scheme/host lowercase, default port removal, percent-encoding.
-        We additionally strip trailing slash so `/` and empty path are equivalent.
+        Delegates to ``schemas.canonical_agent_url`` so the format cache key and the
+        format_id federation identity (``format_id_identity``) share one
+        canonicalization (DRY) — a reference and its cached catalog can never
+        disagree over trailing-slash/case/default-port noise.
         """
-        return str(URL(str(agent_url))).rstrip("/")
+        return canonical_agent_url(agent_url)
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
         """Build AdCP client from creative agent configs."""

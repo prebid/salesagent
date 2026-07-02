@@ -115,7 +115,6 @@ for the full list. Key testing guards:
 ## Markers
 
 - `@pytest.mark.requires_db` — needs PostgreSQL (integration, BDD)
-- `@pytest.mark.requires_server` — needs running MCP server (E2E)
 - **Entity markers** (auto-applied by filename): `delivery`, `creative`, `product`,
   `media_buy`, `tenant`, `auth`, `adapter`, `inventory`, `schema`, `admin`,
   `architecture`, `targeting`, `transport`, `workflow`, `policy`, `agent`, `infra`
