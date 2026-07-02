@@ -4009,115 +4009,76 @@ class TestDeliveryResponseSerialization:
 
 
 class TestGetMediaBuysStatusComputation:
-    """get_media_buys: _compute_status logic."""
+    """get_media_buys: _compute_status is PERSISTED-STATUS-AUTHORITATIVE (#1417 / 8plg).
 
-    def test_pending_start_before_start(self):
-        """GMB-ST01: before start_date -> pending_start.
+    Per the AdCP lifecycle requirement "persist status, never recompute from dates",
+    the read path never re-derives status from the flight window — the
+    media_buy_status_scheduler owns the pending_start -> active -> completed
+    transitions on the persisted column, so get_media_buys agrees with the
+    update-response status (which reads the same column via
+    normalize_persisted_media_buy_status).
+    """
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_start
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_pending_start_when_before_start
-        """
-        from adcp.types import MediaBuyStatus
+    @staticmethod
+    def _make_buy(*, status="active", start_offset_days, end_offset_days, start_time=None, is_paused=False):
+        from src.core.tools.media_buy_list import _MediaBuyData
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
-
-        buy = _MediaBuyData(
+        return _MediaBuyData(
             media_buy_id="mb_1",
             currency="USD",
             budget=Decimal("1000"),
-            start_date=date.today() + timedelta(days=10),
-            end_date=date.today() + timedelta(days=40),
-            start_time=None,
+            start_date=date.today() + timedelta(days=start_offset_days),
+            end_date=date.today() + timedelta(days=end_offset_days),
+            start_time=start_time,
             end_time=None,
             raw_request={},
             created_at=None,
             updated_at=None,
-            status="active",
-            is_paused=False,
+            status=status,
+            is_paused=is_paused,
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
+
+    def test_active_persisted_before_flight_reports_active(self):
+        """An 'active'-persisted buy whose flight has not started yet reports active
+        (persisted), NOT date-derived pending_start — the scheduler owns that transition."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_list import _compute_status
+
+        buy = self._make_buy(start_offset_days=10, end_offset_days=40)
+        assert _compute_status(buy) == MediaBuyStatus.active
 
     def test_active_when_in_flight(self):
-        """GMB-ST02: within flight dates -> active.
-
-        Spec: CONFIRMED -- media-buy-status.json: active
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_active_when_in_flight
-        """
+        """An 'active'-persisted buy within its flight window reports active."""
         from adcp.types import MediaBuyStatus
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
+        from src.core.tools.media_buy_list import _compute_status
 
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=5),
-            end_date=date.today() + timedelta(days=25),
-            start_time=None,
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-        )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.active
+        buy = self._make_buy(start_offset_days=-5, end_offset_days=25)
+        assert _compute_status(buy) == MediaBuyStatus.active
 
-    def test_completed_when_past_end(self):
-        """GMB-ST03: past end_date -> completed.
-
-        Spec: CONFIRMED -- media-buy-status.json: completed
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_completed_when_past_end
-        """
+    def test_active_persisted_past_end_reports_active_not_completed(self):
+        """An 'active'-persisted buy past its end date reports active (persisted), NOT
+        date-derived completed — the scheduler owns the active->completed transition.
+        This keeps get_media_buys in agreement with the update-response status."""
         from adcp.types import MediaBuyStatus
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
+        from src.core.tools.media_buy_list import _compute_status
 
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=40),
-            end_date=date.today() - timedelta(days=10),
-            start_time=None,
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-        )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
+        buy = self._make_buy(start_offset_days=-40, end_offset_days=-10)
+        assert _compute_status(buy) == MediaBuyStatus.active
 
-    def test_prefers_start_time_over_start_date(self):
-        """GMB-ST04: start_time takes precedence over start_date.
-
-        Spec: UNSPECIFIED (implementation-defined start_time vs start_date precedence)
-        Ported from test_get_media_buys.py::test_prefers_start_time_over_start_date
-        """
+    def test_start_time_no_longer_refines_read_status(self):
+        """Flight dates (start_time/start_date) do not drive the read status: an
+        'active'-persisted buy reports active regardless of a future start_time."""
         from adcp.types import MediaBuyStatus
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
+        from src.core.tools.media_buy_list import _compute_status
 
-        # start_date is in the past, but start_time is in the future
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=5),
-            end_date=date.today() + timedelta(days=25),
-            start_time=datetime.now(UTC) + timedelta(days=10),
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
+        buy = self._make_buy(
+            start_offset_days=-5, end_offset_days=25, start_time=datetime.now(UTC) + timedelta(days=10)
         )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
+        assert _compute_status(buy) == MediaBuyStatus.active
 
 
 class TestGetMediaBuysStatusFilter:
