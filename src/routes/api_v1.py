@@ -19,7 +19,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
 )
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
@@ -251,9 +251,31 @@ async def _raw_json_body(request: Request) -> dict[str, Any]:
 raw_json_body = Depends(_raw_json_body)
 
 
+def _schedule_tmp_sync(
+    background_tasks: BackgroundTasks,
+    identity: ResolvedIdentity,
+    response: Any,
+) -> None:
+    """Schedule a TMP package-sync task if the response carries a media_buy_id.
+
+    Extracted to eliminate the duplicated deferred-import + add_task block that
+    appeared verbatim in create_media_buy and update_media_buy.  BackgroundTasks
+    runs after the response is sent — _impl is never touched.
+    """
+    from src.services.tmp_provider_sync import sync_packages_for_media_buy
+
+    if response.media_buy_id and identity.tenant_id:
+        background_tasks.add_task(
+            sync_packages_for_media_buy,
+            identity.tenant_id,
+            response.media_buy_id,
+        )
+
+
 @router.post("/media-buys")
 async def create_media_buy(
     body: CreateMediaBuyBody,
+    background_tasks: BackgroundTasks,
     identity: ResolvedIdentity = require_auth,
     raw_wire_payload: dict[str, Any] = raw_json_body,
 ):
@@ -274,11 +296,18 @@ async def create_media_buy(
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )
+
+    _schedule_tmp_sync(background_tasks, identity, response)
     return response.model_dump(mode="json")
 
 
 @router.put("/media-buys/{media_buy_id}")
-async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def update_media_buy(
+    media_buy_id: str,
+    body: UpdateMediaBuyBody,
+    background_tasks: BackgroundTasks,
+    identity: ResolvedIdentity = require_auth,
+):
     """Update an existing media buy (auth required)."""
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
@@ -291,6 +320,8 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         end_time=body.end_time,
         identity=identity,
     )
+
+    _schedule_tmp_sync(background_tasks, identity, response)
     return response.model_dump(mode="json")
 
 

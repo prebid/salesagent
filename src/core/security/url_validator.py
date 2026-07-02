@@ -8,6 +8,18 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
+
+def sanitize_for_log(value: object) -> str:
+    """Return a log-safe string representation of *value*.
+
+    Strips newline and carriage-return characters so that a user-supplied
+    string cannot inject fake log lines (CWE-117 / CodeQL Log Injection).
+    The result is always a plain ``str`` — no repr quoting — so it reads
+    naturally in log output.
+    """
+    return str(value).replace("\r", " ").replace("\n", " ")
+
+
 # Blocked IP ranges (RFC 1918 private networks, loopback, link-local)
 BLOCKED_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),

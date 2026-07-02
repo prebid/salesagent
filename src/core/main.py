@@ -101,7 +101,27 @@ async def lifespan_context(app):
     except Exception as e:
         logger.error(f"Failed to start media buy status scheduler: {e}", exc_info=True)
 
+    # Startup: Initialize TMP health scheduler
+    from src.services.tmp_health_scheduler import start_tmp_health_scheduler
+
+    logger.info("Starting TMP health scheduler...")
+    try:
+        await start_tmp_health_scheduler()
+        logger.info("✅ TMP health scheduler started")
+    except Exception as e:
+        logger.error(f"Failed to start TMP health scheduler: {e}", exc_info=True)
+
     yield
+
+    # Shutdown: Stop TMP health scheduler
+    from src.services.tmp_health_scheduler import stop_tmp_health_scheduler
+
+    logger.info("Stopping TMP health scheduler...")
+    try:
+        await stop_tmp_health_scheduler()
+        logger.info("✅ TMP health scheduler stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop TMP health scheduler: {e}", exc_info=True)
 
     # Shutdown: Stop media buy status scheduler
     from src.services.media_buy_status_scheduler import stop_media_buy_status_scheduler
