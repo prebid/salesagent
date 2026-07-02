@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types import ContextObject, CreativeAction, CreativeAsset
+from adcp.types import BrandReference, ContextObject, CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
@@ -34,7 +34,7 @@ def _sync_creatives_impl(
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
-    media_buy_brand: dict | None = None,
+    media_buy_brand: BrandReference | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 

@@ -4,7 +4,7 @@ from typing import Annotated
 
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, CreativeAsset, ValidationMode
+from adcp.types import BrandReference, ContextObject, CreativeAsset, ValidationMode
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
@@ -85,7 +85,7 @@ def sync_creatives_raw(
     account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
-    media_buy_brand: dict | None = None,
+    media_buy_brand: BrandReference | None = None,
 ):
     """Sync creative assets to the centralized creative library (raw function for A2A server use).
 
