@@ -334,12 +334,24 @@ class TestMediaBuyBrandPropagation:
         mock_uow.products = mock_product_repo
         mock_uow.currency_limits = mock_currency_repo
 
+        mock_principal = MagicMock()
+        mock_principal.principal_id = "p_test"
+        mock_principal.name = "Test Principal"
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.create_context.return_value = MagicMock(context_id="ctx_test")
+        mock_ctx_manager.create_workflow_step.return_value = MagicMock(step_id="step_test")
+
         with (
             patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
             patch("src.core.tools.media_buy_create.get_slack_notifier"),
             patch("src.core.tools.media_buy_create.activity_feed"),
             patch("src.core.tools.media_buy_create.get_audit_logger"),
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.resolve_principal_or_raise", return_value=mock_principal),
+            patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
+            patch("src.core.tools.media_buy_create._lookup_cached_replay", return_value=None),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
             mock_upload.return_value = (req.packages, {})
@@ -347,6 +359,16 @@ class TestMediaBuyBrandPropagation:
             mock_adapter.manual_approval_required = True
             mock_adapter.manual_approval_operations = ["create_media_buy"]
             mock_adapter_fn.return_value = mock_adapter
+
+            # Set up session scalars to return a valid currency limit for the first query
+            # and None for the AdapterConfig query (no GAM config = no currency restriction).
+            mock_currency_limit = MagicMock()
+            mock_currency_limit.min_package_budget = None
+            mock_currency_limit.max_daily_package_spend = None
+            mock_currency_limit.currency_code = "USD"
+            mock_uow.session = MagicMock()
+            mock_uow.session.scalars.return_value.first.side_effect = [mock_currency_limit, None]
+            mock_uow.session.scalars.return_value.all.return_value = [product]
 
             try:
                 await _create_media_buy_impl(req=req, identity=identity)
@@ -395,12 +417,24 @@ class TestMediaBuyBrandPropagation:
         mock_uow.products = mock_product_repo
         mock_uow.currency_limits = mock_currency_repo
 
+        mock_principal = MagicMock()
+        mock_principal.principal_id = "p_test"
+        mock_principal.name = "Test Principal"
+
+        mock_ctx_manager = MagicMock()
+        mock_ctx_manager.create_context.return_value = MagicMock(context_id="ctx_test")
+        mock_ctx_manager.create_workflow_step.return_value = MagicMock(step_id="step_test")
+
         with (
             patch("src.core.tools.media_buy_create.process_and_upload_package_creatives") as mock_upload,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter_fn,
             patch("src.core.tools.media_buy_create.get_slack_notifier"),
             patch("src.core.tools.media_buy_create.activity_feed"),
             patch("src.core.tools.media_buy_create.get_audit_logger"),
+            patch("src.core.tools.media_buy_create.validate_setup_complete"),
+            patch("src.core.tools.media_buy_create.resolve_principal_or_raise", return_value=mock_principal),
+            patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
+            patch("src.core.tools.media_buy_create._lookup_cached_replay", return_value=None),
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
             mock_upload.return_value = (req.packages, {})
@@ -408,6 +442,16 @@ class TestMediaBuyBrandPropagation:
             mock_adapter.manual_approval_required = True
             mock_adapter.manual_approval_operations = ["create_media_buy"]
             mock_adapter_fn.return_value = mock_adapter
+
+            # Set up session scalars to return a valid currency limit for the first query
+            # and None for the AdapterConfig query (no GAM config = no currency restriction).
+            mock_currency_limit = MagicMock()
+            mock_currency_limit.min_package_budget = None
+            mock_currency_limit.max_daily_package_spend = None
+            mock_currency_limit.currency_code = "USD"
+            mock_uow.session = MagicMock()
+            mock_uow.session.scalars.return_value.first.side_effect = [mock_currency_limit, None]
+            mock_uow.session.scalars.return_value.all.return_value = [product]
 
             try:
                 await _create_media_buy_impl(req=req, identity=identity)

@@ -39,7 +39,11 @@ from adcp import ADCPMultiAgentClient, BuildCreativeRequest, ListCreativeFormats
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
-from adcp.types import FormatReferenceStructuredObject, ImageFormatAsset, VideoFormatAsset  # type: ignore[attr-defined]
+from adcp.types import (  # type: ignore[attr-defined]
+    FormatReferenceStructuredObject,
+    ImageFormatAsset,
+    VideoFormatAsset,
+)
 from pydantic import ValidationError
 
 from src.core.exceptions import (
