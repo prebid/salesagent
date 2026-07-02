@@ -133,6 +133,9 @@ def then_format_id_roundtrip_verbatim(ctx: dict) -> None:
     assert format_id["id"] == captured["id"], (
         f"formats[0].format_id.id mismatch: expected {captured['id']!r}, got {format_id['id']!r}"
     )
+    assert format_id["agent_url"] == captured["agent_url"], (
+        f"agent_url mismatch: {format_id['agent_url']!r} != {captured['agent_url']!r}"
+    )
 
 
 @then("an empty formats[] would indicate a stale catalog reference and is a compliance failure")
