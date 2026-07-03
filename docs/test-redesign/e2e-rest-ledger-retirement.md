@@ -2,13 +2,15 @@
 
 **Status:** Harness landed on this branch (#1430) — Wave 3 (#1418) reduced the
 ledger from 312 to 47 genuine-gap nodeids; post-Wave-3 graduations (REST 422
-wire-shape, idempotent tenant seeding, webhook tag declarations, and the
-attribution campaign-interval boundary retired at the main merge) brought it to
-**30**. Tracked publicly as **#1423**; the in-network Docker CI runner that
+wire-shape, idempotent tenant seeding, webhook tag declarations, the
+attribution campaign-interval boundary retired at the main merge, and the 12
+uc006 account billing-state entries graduated by PR #1417's account-resolution
+wiring) net of 3 uc002 creative-extension entries imported from #1417 brought
+it to **21**. Tracked publicly as **#1423**; the in-network Docker CI runner that
 recovered e2e_rest as the 5th BDD transport landed on main as **#1420**.
 (Internal epic `salesagent-x0nl`; the per-mechanism sub-task ids below roll up
 to #1423.)
-**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (30 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
+**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (21 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
 
 ## Wave 3 outcome (#1418) — read this first
 
@@ -31,7 +33,7 @@ server-seeded (6), get_products tenant-seed duplicate-key (6), uc004
 webhook/log observability F-bucket (4), explicit inline-xfail prod gaps (2), and
 one missing Then step definition.
 
-### Post-Wave-3 graduations (47 → 30, `salesagent-jdy1` + main merge)
+### Post-Wave-3 graduations (47 → 21, `salesagent-jdy1` + main/#1417 merges)
 
 Each validated by an in-network BDD run with 0 failures:
 
@@ -54,6 +56,19 @@ Each validated by an in-network BDD run with 0 failures:
   `-invalid]` nodeid no longer collects, and the renamed scenario passes
   in-network on main (absent from main's #1420 ledger). Removed from the ledger
   and `EXPECTED_LEDGER` together.
+- **#1417-merge graduation (12 uc006):** the account billing-state block
+  (ACCOUNT_PAYMENT_REQUIRED / SETUP_REQUIRED / SUSPENDED / NOT_FOUND /
+  AMBIGUOUS). PR #1417's account-resolution + canonical error-code wiring makes
+  the live server raise them; all 12 xpassed in-network (innet_040726_0013).
+- **#1417-merge import (+3 uc002):** creative extension scenarios newly wired
+  by #1417 fail in-network (server-side creative state not observable/seeded
+  over HTTP — confirmed innet_040726_0013); imported with the merge, same
+  seeding family as exec-n48i.
+- **Tenant-seed idempotency extended (0 ledger impact):** the newly wired
+  uc005 format_id-roundtrip and uc018 list-creatives scenarios hit the same
+  `tenants_pkey` shared-DB collision jdy1-M3 fixed for get_products; the
+  get-or-create pattern is now the shared `tests/factories/core.py::
+  get_or_create` helper used by all four seeding sites.
 
 **Correction to earlier claims in this doc** (kept below for design history, but
 superseded here): (1) the live e2e server does **not** call the real creative

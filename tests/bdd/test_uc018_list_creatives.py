@@ -69,6 +69,31 @@ scenarios("features/BR-UC-018-list-creatives.feature")
 # ── Given ────────────────────────────────────────────────────────────
 
 
+def _get_or_create_tenant_and_principal(env: Any) -> tuple[Any, Any]:
+    """Idempotently seed the env's tenant + principal (shared e2e_rest DB).
+
+    Rationale on ``get_or_create`` (jdy1-M3, #1418): a prior e2e_rest scenario's
+    rows survive in the live-server DB, so plain factory inserts UniqueViolate.
+    """
+    from src.core.database.models import Principal, Tenant
+    from tests.factories import PrincipalFactory, TenantFactory
+    from tests.factories.core import get_or_create
+
+    tenant = get_or_create(
+        env,
+        Tenant,
+        {"tenant_id": env._tenant_id},
+        lambda: TenantFactory(tenant_id=env._tenant_id),
+    )
+    principal = get_or_create(
+        env,
+        Principal,
+        {"tenant_id": env._tenant_id, "principal_id": env._principal_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=env._principal_id),
+    )
+    return tenant, principal
+
+
 @given(parsers.parse('the Buyer is authenticated as principal "{principal_id}"'))
 def given_buyer_authenticated_as_principal(ctx: dict, principal_id: str) -> None:
     """Authenticate the listing buyer as *principal_id* (Background).
@@ -94,11 +119,10 @@ def given_recently_synced_three_creatives(ctx: dict) -> None:
     Seeded via CreativeFactory rather than a live sync_creatives call — see the
     module docstring. Records the synced creative_ids for the Then steps.
     """
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories import CreativeFactory
 
     env = ctx["env"]
-    tenant = TenantFactory(tenant_id=env._tenant_id)
-    principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
+    tenant, principal = _get_or_create_tenant_and_principal(env)
     synced_ids: list[str] = []
     for fmt in _SYNCED_FORMATS:
         creative = CreativeFactory(
@@ -229,11 +253,10 @@ def given_creatives_grouped_under_concept(ctx: dict, concept_id: str) -> None:
     empty-but-present ``assets`` is mandatory — the repository drops rows whose
     ``data["assets"]`` IS NULL (legacy guard).
     """
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories import CreativeFactory
 
     env = ctx["env"]
-    tenant = TenantFactory(tenant_id=env._tenant_id)
-    principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
+    tenant, principal = _get_or_create_tenant_and_principal(env)
 
     in_concept_ids: list[str] = []
     for fmt in _CONCEPT_FORMATS:

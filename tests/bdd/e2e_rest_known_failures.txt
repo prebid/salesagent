@@ -42,23 +42,11 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_part
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
 
-# --- uc006 account billing-state resolution (12) ---
-# GENUINE GAP: ACCOUNT_PAYMENT_REQUIRED / ACCOUNT_SETUP_REQUIRED / ACCOUNT_SUSPENDED /
-# ACCOUNT_NOT_FOUND / ACCOUNT_AMBIGUOUS are not raised by the live server because the
-# billing/setup/suspension state for these synthetic accounts is never seeded into the
-# server-side DB. Needs server-seeded account billing fixtures (harness, exec-n48i).
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_payment_required-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_setup_required-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-explicit_not_found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_ambiguous-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_not_found-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + payment due-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + setup incomplete-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account_id present + not found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + multiple matches-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + no match-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
+# --- uc006 account billing-state resolution — GRADUATED (#1417 merge) ---
+# Was: ACCOUNT_PAYMENT_REQUIRED / ACCOUNT_SETUP_REQUIRED / ACCOUNT_SUSPENDED /
+# ACCOUNT_NOT_FOUND / ACCOUNT_AMBIGUOUS never raised by the live server (billing
+# state not server-seeded). PR #1417's account-resolution + canonical error-code
+# wiring makes all 12 pass in-network — xpass confirmed innet_040726_0013.
 
 # --- uc011 account sync DB read-back (6) ---
 # GENUINE GAP: delete_missing / dry_run / sandbox read-back assertions find 0 accounts
@@ -96,11 +84,11 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar
 
 # --- uc002 creative extension scenarios, newly wired by #1417 (3) ---
 # Imported from PR #1417's ledger at the media-buy-validation merge: its UC-002 wiring
-# activates these @extension scenarios on e2e_rest, and PR #1417 recorded them failing
-# in-network ("create succeeds, creative_assignments=None" — server-side creative state
-# not observable/seeded over HTTP). No mechanism on the merged tree is traced to make
-# them pass. RETIREMENT CONDITION: first post-merge in-network run — if they xpass,
-# graduate (remove here + EXPECTED_LEDGER); if they fail, keep and annotate the gap.
+# activates these @extension scenarios on e2e_rest ("create succeeds,
+# creative_assignments=None" — server-side creative state not observable/seeded over
+# HTTP). GENUINE GAP confirmed by the post-merge in-network run (innet_040726_0013:
+# all 3 xfail). Needs server-side creative seeding/observability (same family as
+# exec-n48i).
 tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]
 tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]
 tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]

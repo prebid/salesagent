@@ -1,7 +1,8 @@
 """Factory_boy factories for core tenant-related models.
 
 Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
-Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig)
+Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig),
+get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios)
 """
 
 from __future__ import annotations
@@ -22,6 +23,31 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+
+def get_or_create(env: Any, model: type, filters: dict[str, Any], create: Any):
+    """Idempotent factory seeding for shared-DB (e2e_rest) BDD scenarios.
+
+    Over e2e_rest all scenarios share one live-server database, so a prior
+    scenario's row (same PK) can survive into this one — the per-scenario
+    ``_reset_e2e_db`` and the env's factory session don't reliably target the
+    same connection — and a plain factory insert hits a UniqueViolation
+    (jdy1-M3, #1418). Look the row up on the env's factory session first and
+    reuse it. On in-process transports each test gets a rolled-back DB, the
+    lookup misses, and this behaves exactly like calling the factory.
+
+    ``create`` is a zero-arg callable running the factory, so lookup keys and
+    factory kwargs stay independent (e.g. Principal filters use ``tenant_id``
+    while ``PrincipalFactory`` takes the ``tenant`` object).
+    """
+    from sqlalchemy import select
+
+    session = getattr(env, "_session", None)
+    if session is not None:
+        existing = session.scalars(select(model).filter_by(**filters)).first()
+        if existing is not None:
+            return existing
+    return create()
 
 
 def tenant_subdomain(tenant_id: str) -> str:

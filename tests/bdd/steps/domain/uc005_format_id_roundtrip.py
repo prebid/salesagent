@@ -37,9 +37,11 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
     disabled), no dynamic templates (variants return []), and no product_ranking_prompt
     (AI ranking skipped).
     """
+    from src.core.database.models import Tenant
     from src.core.schemas import GetProductsRequest
     from src.core.tools.products import _get_products_impl
     from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+    from tests.factories.core import get_or_create
 
     env = ctx["env"]
 
@@ -49,7 +51,13 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
     # subsequent list_creative_formats call in the When step.
 
     # Create Tenant + Product in DB bound to the outer CreativeFormatsEnv session.
-    tenant = TenantFactory(tenant_id=env._tenant_id, ad_server="mock")
+    # Idempotent over the shared e2e_rest server DB (jdy1-M3, #1418): see get_or_create.
+    tenant = get_or_create(
+        env,
+        Tenant,
+        {"tenant_id": env._tenant_id},
+        lambda: TenantFactory(tenant_id=env._tenant_id, ad_server="mock"),
+    )
     product = ProductFactory(
         tenant=tenant,
         format_ids=[{"agent_url": _AGENT_URL, "id": _FORMAT_ID}],

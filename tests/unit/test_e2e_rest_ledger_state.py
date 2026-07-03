@@ -22,13 +22,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 33 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
+# The 21 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
 # graduated M3 6 get_products tenant-duplicate, M1 6 uc004 REST-422 wire-shape,
 # M4 4 uc004 webhook-observability entries [now tag-declared in conftest]; the
 # uc004 attribution campaign-interval boundary graduated at the main merge after
-# upstream re-pointed its expected cell at error "VALIDATION_ERROR"; 3 uc002
+# upstream re-pointed its expected cell at error "VALIDATION_ERROR"; 12 uc006
+# account billing-state entries graduated at the #1417 merge — its account
+# resolution wiring makes them pass, xpass confirmed innet_040726_0013; 3 uc002
 # creative extension entries imported at the #1417 merge — newly wired there,
-# recorded failing in-network by that branch, pending first post-merge run).
+# confirmed still failing in-network post-merge, innet_040726_0013).
 # Grouped by gap in the ledger file's section comments; flat here for exact-set
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
@@ -47,18 +49,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_payment_required-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_setup_required-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-explicit_not_found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_ambiguous-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_not_found-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + payment due-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + setup incomplete-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account_id present + not found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + multiple matches-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]',
-        'tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + no match-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]',
         "tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_false_preserves_absent_accounts_delete_missing__false_with_absent_accounts[e2e_rest]",
         "tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_omitted__default_preserves_accounts_delete_missing_omitted[e2e_rest]",
         "tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_scoped_to_authenticated_agent_only[e2e_rest]",
