@@ -2,6 +2,11 @@
 
 This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
+
+SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [valid-type] on lines ~98, ~236: SDK asset class unions (ImageFormatAsset |
+  VideoFormatAsset | ...) are dynamically resolved type factories; mypy cannot
+  validate the union. Permanent until upstream ships StrEnum.
 """
 
 import asyncio
@@ -11,6 +16,7 @@ import time
 from collections.abc import Sequence
 from typing import Annotated, TypeVar
 
+# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
 from adcp.types import (
     AssetContentType,
@@ -34,6 +40,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -58,7 +65,7 @@ def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse
+from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error
 
@@ -99,7 +106,7 @@ _ASSET_TYPE_TO_CLASS: dict[str, type] = {
 
 def _make_asset(
     asset_id: str, asset_type: str, required: bool
-) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:
+) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:  # type: ignore[valid-type]
     """Build the correct Assets variant for a given asset type string."""
     cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
     return cls(
@@ -126,9 +133,7 @@ def build_list_creative_formats_request(
     context: ContextObject | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
-    asset_types_strs = (
-        [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
-    )
+    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
     return ListCreativeFormatsRequest(
         format_ids=format_ids,
         output_format_ids=output_format_ids,
@@ -223,7 +228,7 @@ def _list_creative_formats_impl(
                         )
 
                         # Build assets list using the correct Assets variant per type
-                        assets_list: list[
+                        assets_list: list[  # type: ignore[valid-type]
                             ImageFormatAsset
                             | VideoFormatAsset
                             | AudioFormatAsset
@@ -262,11 +267,17 @@ def _list_creative_formats_impl(
 
     # Apply filters from request
     if req.format_ids:
-        # Filter to only the specified format IDs
-        # Extract the 'id' field from each FormatId object
-        format_ids_set = {fmt.id for fmt in req.format_ids}
-        # Compare format_id.id (handle both FormatId objects and strings)
-        formats = [f for f in formats if f.format_id.id in format_ids_set]
+        # v3.1 federation contract: a format_id is identified by the (agent_url, id)
+        # PAIR, not id alone (core/format-id.json requires [agent_url, id]; the
+        # list_formats storyboard step matches references with
+        # match_keys: [agent_url, id]). Matching on id alone would mis-resolve a
+        # third-party reference (foreign agent_url) to a local format that merely
+        # shares an id — fabricating a local entry for a format this seller does
+        # not host. A foreign-agent reference simply matches nothing here and drops
+        # out as an observation, never a fabricated entry (storyboard
+        # scope.equals=$agent_url, on_out_of_scope=warn).
+        requested_identities = {format_id_identity(fid) for fid in req.format_ids}
+        formats = [f for f in formats if format_id_identity(f.format_id) in requested_identities]
 
     # Helper functions to extract properties from Format structure per AdCP spec
     def is_format_responsive(f) -> bool:
@@ -332,7 +343,7 @@ def _list_creative_formats_impl(
         # Normalize requested asset types to string values for comparison.
         # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
         # Format assets now use plain string literals, so must compare using .value not str(enum).
-        requested_types = {at.value if hasattr(at, "value") else str(at) for at in req.asset_types}
+        requested_types = {enum_value(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
 
     # Filter by dimension constraints
@@ -360,14 +371,24 @@ def _list_creative_formats_impl(
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
 
-    # Filter by output_format_ids / input_format_ids (OR semantics each)
+    # Filter by output_format_ids / input_format_ids (OR semantics each).
+    # These $ref the same core/format-id.json schema as format_ids, so they carry
+    # the same (agent_url, id) federation identity — match on the pair via
+    # format_id_identity, never id alone, for the same reason as the format_ids
+    # filter above (id-only would mis-resolve a foreign reference to a local format
+    # sharing an id). The storyboard grades refs_resolve on the top-level format_id
+    # only, but the contract is symmetric across every FormatId reference.
     for req_ids, attr in (
         (req.output_format_ids, "output_format_ids"),
         (req.input_format_ids, "input_format_ids"),
     ):
         if req_ids:
-            requested = {fmt.id for fmt in req_ids}
-            formats = [f for f in formats if getattr(f, attr) and {fid.id for fid in getattr(f, attr)} & requested]
+            requested = {format_id_identity(fid) for fid in req_ids}
+            formats = [
+                f
+                for f in formats
+                if getattr(f, attr) and {format_id_identity(fid) for fid in getattr(f, attr)} & requested
+            ]
 
     # Sort formats by name for consistent ordering
     # (type field removed in adcp 3.12)

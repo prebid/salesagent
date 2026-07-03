@@ -441,7 +441,22 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 
 @when("the Buyer Agent sends the create_media_buy request")
 def when_send_create_media_buy(ctx: dict) -> None:
-    """Send the create_media_buy request and capture the result or error."""
+    """Send the create_media_buy request and capture the result or error.
+
+    Two scenario families share this step text:
+
+    - Account-resolution scenarios resolve an ``account_ref`` at the transport
+      boundary via ``resolve_account_or_error`` (returns the resolved account_id).
+    - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch a full
+      ``create_media_buy`` through the parametrized transport so the production
+      idempotency replay path runs end-to-end.
+    """
+    if ctx.get("idempotency_create"):
+        from tests.bdd.steps.generic._dispatch import dispatch_request
+
+        dispatch_request(ctx, **ctx["request_kwargs"])
+        return
+
     from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
 
     resolve_account_or_error(ctx)
@@ -525,7 +540,7 @@ def _assert_account_resolution_succeeds(ctx: dict) -> None:
     )
     # Compare against the expected account_id from the request's account_ref
     account_ref = ctx.get("account_ref")
-    if account_ref is not None and hasattr(account_ref, "root"):
+    if account_ref is not None:
         root = account_ref.root
         if hasattr(root, "account_id"):
             # Explicit account_id reference — resolved must match exactly
@@ -654,7 +669,7 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         assert len(resp) > 0, f"Expected non-empty account_id for '{domain}' validation pass, got empty string"
         # Verify the resolved account_id matches the Given step's account_ref
         account_ref = ctx.get("account_ref")
-        if account_ref is not None and hasattr(account_ref, "root"):
+        if account_ref is not None:
             root = account_ref.root
             if hasattr(root, "account_id"):
                 assert resp == root.account_id, (
@@ -1052,10 +1067,143 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 
 @given("the tenant is configured for auto-approval")
 def given_tenant_auto_approval(ctx: dict) -> None:
-    """Configure the tenant for auto-approval (no manual review required)."""
+    """Configure the tenant for auto-approval and verify the env reflects it.
+
+    Turns OFF ``human_review_required`` on the real tenant row AND in the
+    identity's tenant dict, and confirms the adapter mock is not gating on
+    manual approval — so the create returns ``status='completed'`` rather than
+    pending. The production approval gate (media_buy_create.py) is
+    ``tenant.human_review_required OR adapter.manual_approval_required`` AND
+    ``'create_media_buy' in adapter.manual_approval_operations``.
+
+    Only the wired idempotency scenarios (MediaBuyCreateEnv, with ctx["tenant"]
+    provisioned by conftest's _harness_env) reach this step; every other UC-002
+    scenario using this text is blanket-xfailed before any step runs.
+    """
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+
+    tenant.human_review_required = False
+    env._commit_factory_data()
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
+
+    adapter_mock = env.mock["adapter"].return_value
+    assert adapter_mock.manual_approval_required is False, (
+        "Step claims 'tenant is configured for auto-approval' but the adapter mock "
+        f"reports manual_approval_required={adapter_mock.manual_approval_required!r}"
+    )
+    assert "create_media_buy" not in (adapter_mock.manual_approval_operations or []), (
+        "Step claims auto-approval but the adapter mock gates create_media_buy on "
+        f"manual approval: {adapter_mock.manual_approval_operations!r}"
+    )
     ctx["tenant_auto_approval"] = True
-    ctx.setdefault("tenant_config", {})["human_review_required"] = False
-    ctx.setdefault("tenant_config", {})["auto_create_media_buys"] = True
+
+
+# ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──
+#
+# These steps build ctx["request_kwargs"] referencing the real product +
+# pricing option seeded into ctx by conftest's _harness_env (MediaBuyCreateEnv),
+# then dispatch a full create_media_buy through the parametrized transport.
+
+
+def _idempotency_pricing_option_id(pricing_option) -> str:
+    """Synthetic pricing_option_id string from a PricingOption ORM row.
+
+    Matches the production/`given_media_buy` convention
+    ``{pricing_model}_{currency_lower}_{fixed|auction}``.
+    """
+    fixed_str = "fixed" if pricing_option.is_fixed else "auction"
+    return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
+
+
+def _build_idempotency_request_kwargs(ctx: dict) -> dict:
+    """Assemble a valid create_media_buy request dict against the seeded product.
+
+    Stored on ctx["request_kwargs"]; the When step and the "already created"
+    Given step dispatch THIS exact dict (copied) so the canonical payload hash
+    matches between the original create and the replay.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    product = ctx["default_product"]
+    pricing_option = ctx["default_pricing_option"]
+    now = datetime.now(UTC)
+    ctx["request_kwargs"] = {
+        "brand": {"domain": "testbrand.com"},
+        # Explicit, stable po_number so the canonical payload is byte-identical
+        # between the original create and the replay across ALL transports. The
+        # A2A wrapper (adcp_a2a_server.py) injects a RANDOM po_number when the
+        # caller omits one (`A2A-<uuid>`), which would otherwise diverge the two
+        # A2A payloads and surface as IDEMPOTENCY_CONFLICT — a real buyer
+        # replaying an idempotent request resends their own po_number, so the
+        # request fixes it here rather than relying on the server default.
+        "po_number": "PO-IDEMPOTENCY-REPLAY-001",
+        "start_time": (now + timedelta(days=1)).isoformat(),
+        "end_time": (now + timedelta(days=30)).isoformat(),
+        "packages": [
+            {
+                "product_id": product.product_id,
+                "budget": 5000.0,
+                "pricing_option_id": _idempotency_pricing_option_id(pricing_option),
+            }
+        ],
+    }
+    return ctx["request_kwargs"]
+
+
+@given(parsers.parse('a valid create_media_buy request with idempotency_key "{key}"'))
+def given_valid_request_with_idempotency_key(ctx: dict, key: str) -> None:
+    """Build a valid create_media_buy request carrying a literal idempotency_key."""
+    kwargs = _build_idempotency_request_kwargs(ctx)
+    kwargs["idempotency_key"] = key
+    ctx["idempotency_create"] = True
+    ctx["idempotency_key"] = key
+
+
+@given("a create_media_buy request with the idempotency_key field omitted")
+def given_request_idempotency_key_omitted(ctx: dict) -> None:
+    """Build a create_media_buy request that carries NO idempotency_key on the wire.
+
+    Uses the harness OMIT sentinel: the request assembler keeps it, and
+    MediaBuyCreateEnv._ensure_idempotency_key pops it so the constructed
+    CreateMediaBuyRequest is missing the REQUIRED field — production rejects it
+    with a VALIDATION_ERROR naming idempotency_key. (Production's
+    format_validation_error returns a message string only, so the error carries
+    no structured ``suggestion`` field — the scenario is strict-xfailed on that
+    one Then step; see T-UC-002-v31-idempotency-missing in conftest _XFAIL_TAGS.)
+    """
+    from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
+
+    kwargs = _build_idempotency_request_kwargs(ctx)
+    kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
+    ctx["idempotency_create"] = True
+
+
+@given("a media buy was already created for the same seller with that idempotency_key")
+def given_media_buy_already_created_same_key(ctx: dict) -> None:
+    """Perform a REAL first create through the parametrized transport.
+
+    Dispatches the SAME request_kwargs (copied) so the canonical payload hash
+    matches the When-step replay. Records the original media_buy_id and the
+    adapter create_media_buy call count so the Then steps can assert the replay
+    returns the same id and does NOT re-invoke the adapter.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    env = ctx["env"]
+    adapter_mock = env.mock["adapter"].return_value
+
+    first_ctx: dict = {"env": env, "transport": ctx.get("transport"), "tenant": ctx.get("tenant")}
+    dispatch_request(first_ctx, **dict(ctx["request_kwargs"]))
+
+    assert "error" not in first_ctx, f"First create_media_buy (idempotency seed) failed: {first_ctx.get('error')!r}"
+    first_resp = first_ctx.get("response")
+    media_buy_id = _get_response_field(first_resp, "media_buy_id")
+    assert media_buy_id, f"First create produced no media_buy_id; response={first_resp!r}"
+
+    ctx["first_media_buy_id"] = media_buy_id
+    ctx["adapter_calls_after_first_create"] = adapter_mock.create_media_buy.call_count
 
 
 @given(parsers.parse("a valid create_media_buy request with:\n{datatable}"))
@@ -1235,19 +1383,93 @@ def then_response_not_equals_remembered(ctx: dict, field: str, alias: str) -> No
     )
 
 
-@then("no duplicate ad server booking should be created")
-def then_no_duplicate_booking(ctx: dict) -> None:
-    """Assert that no duplicate ad server booking was created on replay.
+@then(parsers.parse('the response should include the previously created "{field}"'))
+def then_response_includes_previously_created(ctx: dict, field: str) -> None:
+    """Assert the idempotency replay returned the ORIGINAL create's value.
 
-    Verifies the adapter was not called more than once (idempotency replay
-    should return the cached result without a second adapter call).
-    The adapter call count is tracked in ctx by the harness dispatch layer.
+    Asserts two things on the replay response:
+    1. ``response.<field>`` equals the value the FIRST create produced
+       (recorded by the "already created" Given step), proving the replay
+       served the original rather than minting a new media buy.
+    2. The replay marker is set (``CreateMediaBuyResult.replayed is True``) —
+       this is what production injects on a verbatim cache hit, surfaced on
+       every transport by the harness response reconstruction.
     """
-    adapter_call_count = ctx.get("adapter_create_call_count", 0)
-    assert adapter_call_count <= 1, (
-        f"Adapter create_media_buy called {adapter_call_count} times "
-        "— expected at most 1 (the original, not a duplicate)"
+    resp = ctx.get("response")
+    assert resp is not None, "No response in ctx — replay scenario produced nothing"
+    original = ctx.get("first_media_buy_id")
+    assert original is not None, (
+        "No first_media_buy_id recorded — the 'already created' Given step must run before this assertion"
     )
+    actual = _get_response_field(resp, field)
+    assert actual == original, (
+        f"Replay response {field}={actual!r} does not match the previously created {field}={original!r} — "
+        "the replay returned a different media buy instead of the cached original"
+    )
+    replayed = _get_response_field(resp, "replayed")
+    assert replayed is True, (
+        f"Expected the replay marker (replayed=True) on the cached-hit response, got replayed={replayed!r}. "
+        "Without it the buyer cannot tell the response was served from the idempotency cache."
+    )
+
+
+@then("no new ad platform order should have been created")
+def then_no_new_ad_platform_order(ctx: dict) -> None:
+    """Assert the idempotency replay did NOT re-invoke the ad server adapter.
+
+    The adapter mock's ``create_media_buy`` call count after the replay must
+    equal the count recorded right after the FIRST create — proving the replay
+    returned the cached response WITHOUT booking a second order.
+    """
+    env = ctx["env"]
+    adapter_mock = env.mock["adapter"].return_value
+    before_replay = ctx.get("adapter_calls_after_first_create")
+    assert before_replay is not None, (
+        "No adapter call count recorded after the first create — the 'already created' "
+        "Given step must run before this assertion"
+    )
+    after_replay = adapter_mock.create_media_buy.call_count
+    assert after_replay == before_replay, (
+        f"Adapter create_media_buy was called {after_replay} time(s) total, but only "
+        f"{before_replay} (the original) is allowed — the replay re-booked an ad platform order "
+        "instead of serving the cached response"
+    )
+
+
+@then(parsers.parse('the error should reference the missing "{field}" field'))
+def then_error_references_missing_field(ctx: dict, field: str) -> None:
+    """Assert the validation error names the missing required field.
+
+    The error message (or Pydantic field locations) must mention ``field`` so
+    the buyer knows which required field was omitted.
+    """
+    error = ctx.get("error")
+    assert error is not None, f"No error in ctx — expected a validation error naming the missing '{field}' field"
+
+    from pydantic import ValidationError
+
+    if isinstance(error, ValidationError):
+        locs = {str(loc) for detail in error.errors() for loc in detail.get("loc", ())}
+        assert field in locs, (
+            f"Pydantic ValidationError does not reference the missing '{field}' field (error locations: {sorted(locs)})"
+        )
+        return
+
+    message = _get_error_message_for_step(error)
+    assert field in message, f"Validation error does not reference the missing '{field}' field. Message: {message!r}"
+
+
+def _get_error_message_for_step(error: object) -> str:
+    """Best-effort human-readable text from an AdCPError / Error model / exception."""
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        parts = [error.message or ""]
+        if error.details:
+            parts.append(str(error.details))
+        return " ".join(parts)
+    message = getattr(error, "message", None)
+    return message if isinstance(message, str) and message else str(error)
 
 
 # ── Order naming steps (hand-authored, adcp 3.12 / PR #1217) ──

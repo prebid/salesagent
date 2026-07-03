@@ -150,10 +150,11 @@ class TestSchemaFieldValidation:
 
         # Check that created_at exists if it's being used for sorting
         if "created_at" not in model_fields:
-            # Search for usage of Product.created_at
+            # Search for usage of Product.created_at (skip .venv, node_modules, etc.)
             search_path = Path(".")
+            skip_dirs = {".venv", "node_modules", ".tox", ".git", "__pycache__", "htmlcov"}
             for py_file in search_path.rglob("*.py"):
-                if "__pycache__" in str(py_file):
+                if any(part in skip_dirs for part in py_file.parts):
                     continue
                 # Skip test files themselves
                 if "test_" in str(py_file.name):

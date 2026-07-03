@@ -13,12 +13,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 FEATURES_DIR = Path("tests/bdd/features")
 
 
 class TestGherkinFeaturesParse:
     """Every .feature file must be parseable by pytest-bdd."""
 
+    @pytest.mark.arch_guard
     def test_all_feature_files_parse(self) -> None:
         """Parse every feature file and collect errors."""
         from pytest_bdd.feature import get_feature

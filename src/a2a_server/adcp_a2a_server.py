@@ -4,6 +4,7 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import copy
 import json
 import logging
 import uuid
@@ -66,6 +67,7 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -104,26 +106,11 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from src.core.validation_helpers import first_validation_error_field
+from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
-
-
-def _coerce_account_reference(account: Any) -> Any:
-    """Coerce a raw dict account param to AccountReference at the A2A boundary.
-
-    A2A clients may send account as a plain dict. The MCP wrapper's TypeAdapter
-    handles this automatically, but the A2A raw path passes dicts through. This
-    wraps dicts in the SDK AccountReference Pydantic model so downstream code
-    gets a typed object.
-    """
-    if account is None or not isinstance(account, dict):
-        return account
-    from adcp.types import AccountReference as LibraryAccountReference
-
-    return LibraryAccountReference.model_validate(account)
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -1378,6 +1365,12 @@ class AdCPRequestHandler(RequestHandler):
         Raises:
             ValueError: For unknown skills or invalid parameters
         """
+        # The buyer's wire payload, captured BEFORE the pnc protocol-layer
+        # injection, deprecated-field normalization, and any handler mutations —
+        # the idempotency payload-hash input (AdCP defines equivalence over the
+        # request as sent). Deep copy: downstream steps mutate nested dicts.
+        raw_wire_payload = copy.deepcopy(parameters)
+
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
         if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
@@ -1442,7 +1435,10 @@ class AdCPRequestHandler(RequestHandler):
         try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            result = await handler(parameters, identity)
+            if skill_name == "create_media_buy":
+                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
+            else:
+                result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except A2AError:
@@ -1512,7 +1508,12 @@ class AdCPRequestHandler(RequestHandler):
             response_data.setdefault("success", True)
         return apply_version_compat("get_products", response_data, adcp_version)
 
-    async def _handle_create_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+    async def _handle_create_media_buy_skill(
+        self,
+        parameters: dict,
+        identity: ResolvedIdentity,
+        raw_wire_payload: dict | None = None,
+    ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
         IMPORTANT: This handler ONLY accepts AdCP spec-compliant format:
@@ -1527,16 +1528,18 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = self._make_tool_context(identity, "create_media_buy")
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import CreateMediaBuyRequest
 
         # Pre-process: A2A field name translations
         params = {**parameters}
         if "custom_targeting" in params:
             params.setdefault("targeting_overlay", params.pop("custom_targeting"))
-        # Set A2A defaults for optional fields
-        params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
+        # No server-minted defaults for buyer payload fields: a randomized
+        # po_number would change the request's canonical idempotency hash, so an
+        # identical A2A retry would reject as IDEMPOTENCY_CONFLICT instead of
+        # replaying — and the stored payload would diverge from the same request
+        # sent via MCP/REST (cross-transport parity). po_number stays None when
+        # the buyer omits it, exactly like the other transports.
         # buyer_ref removed in adcp 3.12
 
         # push_notification_config is an A2A *transport-layer* parameter
@@ -1567,10 +1570,8 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion=f"Required: {required_params}",
             )
 
-        try:
+        with adcp_validation_boundary():
             req = CreateMediaBuyRequest.model_validate(params)
-        except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1584,7 +1585,13 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config=push_notification_config,
             reporting_webhook=params.get("reporting_webhook"),
             context=params.get("context"),
+            account=params.get("account"),
+            idempotency_key=params.get("idempotency_key"),
             identity=identity,
+            # The DataPart params AS SENT (pre-normalization, pre-mutation) are
+            # the idempotency payload-hash input; the post-processed dict is the
+            # fallback only for direct handler callers.
+            raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
         )
 
         return response
@@ -1631,7 +1638,7 @@ class AdCPRequestHandler(RequestHandler):
             validation_mode=parameters.get("validation_mode", "strict"),
             push_notification_config=parameters.get("push_notification_config"),
             context=context,
-            account=_coerce_account_reference(parameters.get("account")),
+            account=to_account_reference(parameters.get("account")),
             identity=identity,
         )
 
@@ -1642,6 +1649,12 @@ class AdCPRequestHandler(RequestHandler):
         # Create ToolContext from A2A auth info and resolve identity
         tool_context = self._make_tool_context(identity, "list_creatives")
 
+        # Structured AdCP CreativeFilters (statuses, concept_ids, format_ids, …)
+        # arrive over the wire as a JSON dict; coerce to the typed model the core
+        # function expects so they are honoured rather than dropped. Invalid filters
+        # raise AdCPValidationError (VALIDATION_ERROR + suggestion) via the shared helper.
+        filters = coerce_creative_filters(parameters.get("filters"))
+
         # Call core function with optional parameters (fixing original validation bug)
         response = core_list_creatives_tool(
             media_buy_id=parameters.get("media_buy_id"),
@@ -1651,6 +1664,7 @@ class AdCPRequestHandler(RequestHandler):
             created_after=parameters.get("created_after"),
             created_before=parameters.get("created_before"),
             search=parameters.get("search"),
+            filters=filters,
             page=parameters.get("page", 1),
             limit=parameters.get("limit", 50),
             sort_by=parameters.get("sort_by", "created_date"),
@@ -1855,8 +1869,6 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import UpdateMediaBuyRequest
 
         # Pre-process: support legacy 'updates.packages' → 'packages'
@@ -1876,7 +1888,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')
-        try:
+        with adcp_validation_boundary():
             req = UpdateMediaBuyRequest(
                 media_buy_id=params.get("media_buy_id"),
                 paused=params.get("paused"),
@@ -1884,8 +1896,6 @@ class AdCPRequestHandler(RequestHandler):
                 end_time=params.get("end_time"),
                 context=params.get("context"),
             )
-        except ValidationError as e:
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields + raw nested structures and identity
         response = core_update_media_buy_tool(
@@ -1936,7 +1946,8 @@ class AdCPRequestHandler(RequestHandler):
         if "media_buy_ids" not in params and "media_buy_id" in params:
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
-        req = GetMediaBuyDeliveryRequest.model_validate(params)
+        with adcp_validation_boundary():
+            req = GetMediaBuyDeliveryRequest.model_validate(params)
 
         # Call core function with validated fields (all optional per AdCP spec).
         # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
@@ -1954,7 +1965,7 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
-            account=params.get("account"),
+            account=req.account,
             context=params.get("context"),
             identity=identity,
         )
@@ -1966,15 +1977,10 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from pydantic import ValidationError
-
         from src.core.schemas import UpdatePerformanceIndexRequest
 
-        try:
+        with adcp_validation_boundary():
             req = UpdatePerformanceIndexRequest.model_validate(parameters)
-        except ValidationError as e:
-            # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-            raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(
@@ -2012,7 +2018,7 @@ class AdCPRequestHandler(RequestHandler):
         # Convert to A2A response format with v2.x backward compatibility
         from src.core.version_compat import apply_version_compat
 
-        products = [product.model_dump(mode="json") for product in response.products]
+        products = [product.model_dump(mode="json") for product in (response.products or [])]
         response_data = {
             "products": products,
             "message": str(response),  # Use __str__ method for human-readable message

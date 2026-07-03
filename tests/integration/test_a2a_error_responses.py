@@ -10,6 +10,7 @@ through the A2A wrapper layer, including:
 """
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -164,6 +165,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -220,6 +222,7 @@ class TestA2AErrorPropagation:
         end = start - timedelta(days=1)  # end before start
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -241,6 +244,49 @@ class TestA2AErrorPropagation:
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "INVALID_REQUEST", recovery="correctable")
+
+    async def test_get_media_buy_delivery_malformed_account_wire_envelope(self, handler, test_tenant, test_principal):
+        """A malformed account on get_media_buy_delivery surfaces VALIDATION_ERROR on the A2A wire.
+
+        Companion to the handler-level unit test in test_a2a_parameter_mapping.py: this drives
+        the real on_message_send pipeline so the buyer-facing two-layer DataPart envelope — not
+        just the raised exception — is asserted. An empty account dict ({}) matches neither
+        account-ref oneOf variant, so GetMediaBuyDeliveryRequest validation fails at the boundary.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        message = self.create_message_with_skill("get_media_buy_delivery", {"account": {}})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        # message_substr is the load-bearing assertion: a bare pydantic ValidationError is a
+        # ValueError, which the dispatcher also normalizes to VALIDATION_ERROR/correctable — so
+        # only the handler's wrapped "Invalid parameters" message distinguishes the fix (typed
+        # AdCPValidationError) from the raw-leak it replaced. Keep it when editing this assert.
+        assert_envelope_shape(
+            artifact_data,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="Invalid parameters",
+        )
 
     async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
         """A negative package budget surfaces VALIDATION_ERROR on the A2A wire.
@@ -266,6 +312,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -314,6 +361,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -417,6 +465,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -923,7 +972,9 @@ class TestA2AErrorResponseStructure:
 
             assert "tenant scope mismatch" in str(exc_info.value)
             assert exc_info.value.error_code == "AUTH_REQUIRED"
-            # AdCPAuthorizationError class default, preserved through the wrap (matches the docstring).
+            # AdCPAuthorizationError class default (hardcoded _default_recovery, not read from
+            # STANDARD_ERROR_CODES), preserved through the wrap. Terminal is intentional: the AdCP
+            # 3.1 storyboards grade the error code, not the recovery class — see the docstring.
             assert exc_info.value.recovery == "terminal"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 

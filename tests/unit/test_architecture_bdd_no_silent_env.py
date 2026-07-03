@@ -20,6 +20,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # ── Pre-existing violations ──────────────────────────────────────────────
@@ -46,11 +50,9 @@ def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _has_ctx_get_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function calls ctx.get("env")."""
-    for node in ast.walk(func):
+    for node in iter_call_expressions(func, name="get"):
         if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
+            isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "ctx"
             and node.args
@@ -63,15 +65,8 @@ def _has_ctx_get_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _has_hasattr_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function calls hasattr(env, ...)."""
-    for node in ast.walk(func):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "hasattr"
-            and len(node.args) >= 1
-            and isinstance(node.args[0], ast.Name)
-            and node.args[0].id == "env"
-        ):
+    for node in iter_call_expressions(func, name="hasattr"):
+        if len(node.args) >= 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == "env":
             return True
     return False
 
@@ -107,6 +102,7 @@ class TestBddNoCtxGetEnv:
     Using ctx.get("env") masks setup failures by returning None.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_ctx_get_env(self):
         """No step function uses ctx.get("env") outside the allowlist."""
         violations = _scan_bdd_steps(_has_ctx_get_env, 'ctx.get("env")')
@@ -117,12 +113,14 @@ class TestBddNoCtxGetEnv:
             + '\n\nThe harness env is guaranteed by the autouse fixture. Use ctx["env"].'
         )
 
+    @pytest.mark.arch_guard
     def test_ctx_get_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
         current = set(_scan_bdd_steps(_has_ctx_get_env, 'ctx.get("env")'))
-        stale = _CTX_GET_ENV_ALLOWLIST - current
-        assert not stale, "Stale _CTX_GET_ENV_ALLOWLIST entries (fixed — remove):\n" + "\n".join(
-            f'  ("{p}", "{n}"),' for p, n in sorted(stale)
+        assert_violations_match_allowlist(
+            current & _CTX_GET_ENV_ALLOWLIST,
+            _CTX_GET_ENV_ALLOWLIST,
+            fix_hint="Remove fixed entries from _CTX_GET_ENV_ALLOWLIST.",
         )
 
 
@@ -133,6 +131,7 @@ class TestBddNoHasattrEnv:
     xfailed at collection time — not silently degraded at step execution.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_hasattr_env(self):
         """No step function uses hasattr(env, ...) outside the allowlist."""
         violations = _scan_bdd_steps(_has_hasattr_env, "hasattr(env, ...)")
@@ -143,10 +142,12 @@ class TestBddNoHasattrEnv:
             + "\n\nIf the env doesn't support a method, xfail the scenario. Don't silently skip."
         )
 
+    @pytest.mark.arch_guard
     def test_hasattr_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
         current = set(_scan_bdd_steps(_has_hasattr_env, "hasattr(env, ...)"))
-        stale = _HASATTR_ENV_ALLOWLIST - current
-        assert not stale, "Stale _HASATTR_ENV_ALLOWLIST entries (fixed — remove):\n" + "\n".join(
-            f'  ("{p}", "{n}"),' for p, n in sorted(stale)
+        assert_violations_match_allowlist(
+            current & _HASATTR_ENV_ALLOWLIST,
+            _HASATTR_ENV_ALLOWLIST,
+            fix_hint="Remove fixed entries from _HASATTR_ENV_ALLOWLIST.",
         )

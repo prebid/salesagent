@@ -12,6 +12,8 @@ import ast
 import pathlib
 import re
 
+import pytest
+
 # Files that should have zero ToolError raises in _impl functions
 SIMPLE_MODULE_FILES = [
     "src/core/main.py",
@@ -111,6 +113,7 @@ def _find_error_dict_returns(filepath: str) -> list[tuple[int, str]]:
 class TestNoToolErrorInSimpleModules:
     """Verify zero ToolError raises in the 12 simple module files."""
 
+    @pytest.mark.arch_guard
     def test_no_toolerror_in_simple_modules(self):
         """All 12 simple modules must raise AdCPError subclasses, not ToolError."""
         violations = []
@@ -128,6 +131,7 @@ class TestNoToolErrorInSimpleModules:
 class TestNoToolErrorInComplexModules:
     """Verify zero ToolError raises in the 4 complex module files."""
 
+    @pytest.mark.arch_guard
     def test_no_toolerror_in_complex_modules(self):
         """All 4 complex modules must raise AdCPError subclasses, not ToolError."""
         violations = []

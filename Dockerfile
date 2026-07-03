@@ -1,7 +1,26 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage build for smaller image
 # Cache bust: 2026-02-27
-FROM python:3.12-slim AS builder
+ARG PYTHON_VERSION=3.12
+ARG PYTHON_BASE_DIGEST=sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+# Consumed by BuildKit for reproducible layer timestamps (PR 6 release pipeline).
+ARG SOURCE_DATE_EPOCH=0
+# Canonical uv version: .uv-version (CI reads the file; guard keeps this ARG in sync).
+ARG UV_VERSION=0.11.15
+# Manifest-list digest for uv 0.11.15 (resolves per TARGETPLATFORM; do not pin a single-arch manifest).
+ARG UV_IMAGE_DIGEST=sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3
+
+FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DIGEST} AS uv
+
+# Build supercronic from source with a current Go toolchain. Upstream release
+# binaries lag the latest Go patch, so their embedded stdlib fails the release
+# Trivy gate on freshly-published Go CVEs; building here keeps it current.
+# Digest is the multi-arch manifest list for golang:1.26-trixie (resolves per TARGETPLATFORM).
+FROM golang:1.26-trixie@sha256:68b7145ec43d1820b9a56704554b53d1520aa2a15cb5233e374188a31b2a1bce AS supercronic
+ENV CGO_ENABLED=0
+RUN go install github.com/aptible/supercronic@v0.2.46
+
+FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST} AS builder
 
 # Disable man pages and docs to speed up apt operations
 RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
@@ -19,14 +38,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq-dev \
     git
 
-# Install uv (cacheable)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir uv
+COPY --from=uv /uv /uvx /bin/
 
 # Set up caching for uv
 ENV UV_CACHE_DIR=/cache/uv
 ENV UV_TOOL_DIR=/cache/uv-tools
 ENV UV_PYTHON_PREFERENCE=only-system
+# Outside /app so docker-compose `.:/app` bind mounts never shadow the venv
+# (anonymous /app/.venv volumes persist stale deps across image rebuilds — #1310).
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 
 # Copy project files
 WORKDIR /app
@@ -42,7 +62,7 @@ RUN --mount=type=cache,target=/cache/uv \
     uv sync --frozen --no-dev
 
 # Runtime stage
-FROM python:3.12-slim
+FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST}
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.title="AdCP Sales Agent"
@@ -69,12 +89,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     curl \
     nginx
 
-# Install supercronic for cron jobs (container-friendly cron)
-ARG TARGETARCH
-RUN SUPERCRONIC_ARCH=$(case "${TARGETARCH}" in "arm64") echo "linux-arm64" ;; *) echo "linux-amd64" ;; esac) && \
-    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.41/supercronic-${SUPERCRONIC_ARCH}" \
-    -o /usr/local/bin/supercronic && \
-    chmod +x /usr/local/bin/supercronic
+# Install supercronic for cron jobs (container-friendly cron), built from source above.
+COPY --from=supercronic /go/bin/supercronic /usr/local/bin/supercronic
+RUN chmod +x /usr/local/bin/supercronic
 
 WORKDIR /app
 
@@ -86,7 +103,7 @@ RUN echo "Cache bust: $CACHE_BUST"
 COPY . .
 
 # Copy pre-built virtual environment from builder stage (contains all compiled deps)
-COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /opt/venv /opt/venv
 
 # Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
 # Default: single-tenant (path-based routing, localhost upstreams)
@@ -96,12 +113,13 @@ COPY config/nginx/nginx-single-tenant.conf /etc/nginx/nginx-single-tenant.conf
 COPY config/nginx/nginx-multi-tenant.conf /etc/nginx/nginx-multi-tenant.conf
 COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 
-# Create nginx directories with proper permissions
-RUN mkdir -p /var/log/nginx /var/run && \
-    chown -R www-data:www-data /var/log/nginx /var/run
+# Non-root runtime user (D34 — issue #1234 PR 5)
+RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app && \
+    mkdir -p /var/log/nginx /var/run && \
+    chown -R app:app /app /opt/venv /var/log/nginx /var/run
 
-# Add .venv to PATH and set PYTHONPATH for module imports
-ENV PATH="/app/.venv/bin:$PATH"
+# Venv on PATH; PYTHONPATH points at bind-mounted source in dev compose
+ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH="/app"
 ENV PYTHONUNBUFFERED=1
 
@@ -117,5 +135,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
+USER app:app
+
 # Use venv Python directly as entrypoint (prepares for hardened images that lack bash)
-ENTRYPOINT ["/app/.venv/bin/python", "scripts/deploy/run_all_services.py"]
+ENTRYPOINT ["/opt/venv/bin/python", "scripts/deploy/run_all_services.py"]

@@ -23,12 +23,15 @@
 # Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
 # (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
-# --- uc004 invalid-input validation — accepted by live server (10) ---
+# --- uc004 invalid-input validation — accepted by live server (9) ---
 # GENUINE GAP: the live server accepts these inputs that the spec marks invalid
 # (start==end / start>end date ranges, owner-mismatch principal, out-of-enum sampling,
-# campaign-unit interval!=1, string "true" daily-breakdown, geo metro without system).
+# string "true" daily-breakdown, geo metro without system).
 # Production does not validate them — a real spec-production gap, tracked for src/ fix.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-unit=campaign with interval=2 (desc says must be 1)-{"post_click": {"interval": 2, "unit": "campaign"}}-invalid]
+# (campaign-unit interval!=1 GRADUATED at the main merge: upstream regenerated the
+# scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
+# the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
+# in-network on main — absent from main's ledger.)
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]

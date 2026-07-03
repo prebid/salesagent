@@ -18,6 +18,10 @@ import httpx
 import pytest
 import requests
 
+# Bind real os.getpid at import so a later patch("os.getpid") in-process cannot
+# leak a non-int into the pid-is-None default path.
+_GETPID = os.getpid
+
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 
@@ -30,6 +34,28 @@ def e2e_host() -> str:
     the compose network with no published ports (ADCP_TEST_HOST).
     """
     return os.getenv("ADCP_TEST_HOST", "localhost")
+
+
+def e2e_db_url(fallback_port: int) -> str:
+    """Server-side Postgres URL for direct-DB e2e helpers — the DB counterpart of
+    :func:`e2e_host`.
+
+    Single source for the host/port/dbname the e2e stack's database lives at, so
+    every direct-DB helper resolves it the same way. Preference order::
+
+        E2E_DATABASE_URL  — in-network DB by compose service name (postgres:5432/adcp)
+        DATABASE_URL      — host path: the e2e stack's localhost:<published>/adcp
+        localhost:<fallback_port>/adcp — last-resort fallback
+
+    Replaces the ad-hoc ``ADCP_TEST_DB_HOST``/``ADCP_TEST_DB_PORT`` split, which
+    ignored ``E2E_DATABASE_URL`` and so pointed the post-reset diagnostic at
+    localhost in-network instead of the compose service.
+    """
+    return (
+        os.getenv("E2E_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or f"postgresql://adcp_user:secure_password_change_me@localhost:{fallback_port}/adcp"
+    )
 
 
 def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> int:
@@ -50,16 +76,16 @@ def port_scan_start(start_port: int, end_port: int, pid: int | None = None) -> i
     this exact algorithm in their Python heredocs -- keep them in sync.
     """
     if pid is None:
-        pid = os.getpid()
+        pid = _GETPID()
     span = end_port - start_port
     if span <= 1:
         return start_port
-    # Test suites may temporarily monkeypatch process metadata. Keep allocator
-    # robust by normalizing PID-like values while preserving scan scatter.
-    try:
-        normalized_pid = int(pid)
-    except (TypeError, ValueError):
-        normalized_pid = id(pid)
+    # Test suites may temporarily monkeypatch process metadata; production callers
+    # must pass a real PID (os.getpid() is always int).
+    if not isinstance(pid, int):
+        msg = f"port_scan_start pid must be int, got {type(pid).__name__}"
+        raise TypeError(msg)
+    normalized_pid = pid
     # Spread the origin across the whole span. PID modulo span gives a
     # stable, well-distributed offset; distinct PIDs land on distinct
     # origins so parallel agents start scanning different sub-ranges.
@@ -95,11 +121,6 @@ def find_free_port(start_port: int = 10000, end_port: int = 60000) -> int:
             except OSError:
                 continue
     raise RuntimeError(f"No free ports found in range {start_port}-{end_port}")
-
-
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line("markers", "requires_gam: mark test as requiring real GAM credentials")
 
 
 def pytest_addoption(parser):
@@ -402,12 +423,16 @@ def docker_services_e2e(request):
     try:
         import psycopg2
 
+        # Resolve the same server-side DB as live_server (honors E2E_DATABASE_URL
+        # in-network; was hard-split on ADCP_TEST_DB_HOST/PORT which ignored it and
+        # hit localhost behind the compose network).
+        _db = urlparse(e2e_db_url(postgres_port))
         conn = psycopg2.connect(
-            host=os.getenv("ADCP_TEST_DB_HOST", "localhost"),
-            port=int(os.getenv("ADCP_TEST_DB_PORT", str(postgres_port))),
-            database="adcp",
-            user="adcp_user",
-            password="secure_password_change_me",
+            host=_db.hostname or "localhost",
+            port=_db.port or 5432,
+            database=(_db.path.lstrip("/") or "adcp"),
+            user=_db.username or "adcp_user",
+            password=_db.password or "secure_password_change_me",
         )
         cursor = conn.cursor()
 
@@ -479,18 +504,11 @@ def live_server(docker_services_e2e):
     ports = docker_services_e2e
 
     host = e2e_host()
-    # Resolve ONE effective DB URL and PARSE postgres_params from it, so the URL
-    # string (live_server["postgres"]) and the param dict can never diverge on
-    # host/port/dbname — the divergence that made direct-DB e2e helpers hit
-    # localhost:5435 in-network. Preference order:
-    #   E2E_DATABASE_URL  — in-network server DB by service name (postgres:5432/adcp)
-    #   DATABASE_URL      — host path: the e2e stack's localhost:<published>/adcp
-    #   localhost:<discovered port> — last-resort fallback
-    pg_url = (
-        os.getenv("E2E_DATABASE_URL")
-        or os.getenv("DATABASE_URL")
-        or f"postgresql://adcp_user:secure_password_change_me@localhost:{ports['postgres_port']}/adcp"
-    )
+    # Resolve ONE effective DB URL (via the shared e2e_db_url helper) and PARSE
+    # postgres_params from it, so the URL string (live_server["postgres"]) and the
+    # param dict can never diverge on host/port/dbname — the divergence that made
+    # direct-DB e2e helpers hit localhost:5435 in-network.
+    pg_url = e2e_db_url(ports["postgres_port"])
     parsed = urlparse(pg_url)
     return {
         "mcp": f"http://{host}:{ports['mcp_port']}",

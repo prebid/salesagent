@@ -32,7 +32,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._ast_helpers import iter_module_trees
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_module_trees
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "src" / "core" / "tools"
@@ -103,32 +105,22 @@ def _scan_module(tree: ast.Module, rel: str) -> list[tuple[str, str, int, str]]:
     return found
 
 
-def _find_unwired_calls() -> list[tuple[str, str, int, str]]:
-    out: list[tuple[str, str, int, str]] = []
+def _find_unwired_call_sites() -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
     for tree, rel_path in iter_module_trees([TOOLS_DIR]):
-        out.extend(_scan_module(tree, rel_path))
+        for rel, func, _, _ in _scan_module(tree, rel_path):
+            out.add((rel, func))
     return out
 
 
+@pytest.mark.arch_guard
 def test_auth_helper_calls_echo_context():
     """Every auth/ownership guard call in a context-bearing function passes context=."""
-    violations = [
-        f"  {rel}:{lineno} in {func}() — {helper}(...) missing context="
-        for rel, func, lineno, helper in _find_unwired_calls()
-        if (rel, func) not in KNOWN_VIOLATIONS
-    ]
-    assert not violations, (
-        f"Found {len(violations)} auth-helper call(s) that drop the request context.\n"
-        "The enclosing function has a `req` or `context: ContextObject` parameter, so the call must "
-        "pass `context=req.context` (or `context=context`) — the failure envelope echoes it for buyer "
-        "correlation:\n\n" + "\n".join(violations)
-    )
-
-
-def test_known_violations_not_stale():
-    """Every allowlisted (file, function) must still contain an unwired call."""
-    actual = {(rel, func) for rel, func, _, _ in _find_unwired_calls()}
-    stale = KNOWN_VIOLATIONS - actual
-    assert not stale, "Stale allowlist entries (now wired):\n" + "\n".join(
-        f"  {rel} :: {func}" for rel, func in sorted(stale)
+    assert_violations_match_allowlist(
+        _find_unwired_call_sites(),
+        KNOWN_VIOLATIONS,
+        fix_hint=(
+            "Pass `context=req.context` (or `context=context`) into auth helper calls "
+            "when the enclosing function has a request context available."
+        ),
     )

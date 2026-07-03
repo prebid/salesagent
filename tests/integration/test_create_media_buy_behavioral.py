@@ -26,7 +26,7 @@ OBLIGATION COVERAGE:
   UC-002-EXT-I-03, UC-002-EXT-J-02, UC-002-EXT-K-03
   UC-002-EXT-L-01, -02, -03, UC-002-EXT-M-01, -03
   UC-002-EXT-N-02, UC-002-EXT-O-01, UC-002-EXT-Q-01, -02
-  UC-002-MAIN-01, -03, -04, -05, -09, -10, -14, -15, -17, -20
+  UC-002-MAIN-01, -03, -04, -05, -09, -10, -14, -15, -17, -20, -22
   UC-002-POST-01, -03, UC-002-PRECOND-01, -02
   UC-002-UPG-01, -02, -04, -07, -09
 
@@ -38,6 +38,7 @@ Tests that exercise schema validation or pure helper functions (no DB pipeline)
 do not use the harness.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -111,11 +112,17 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 
     Defaults: one package with product_id, pricing_option_id, budget.
     Start 1 day ahead, end 8 days ahead.
+
+    idempotency_key is required by adcp 4.3 and drives real replay/conflict
+    behavior against the persistent integration DB (the harness runs the real
+    idempotency machinery), so a per-call-unique key is injected by default.
+    Callers may override it via the ``idempotency_key`` kwarg.
     """
     defaults = {
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
+        "idempotency_key": f"int-key-{uuid.uuid4().hex}",
         "packages": [
             {
                 "product_id": "prod_1",
@@ -709,6 +716,51 @@ class TestMainFlowObligations:
         assert isinstance(result.response, CreateMediaBuySuccess)
         assert result.response.media_buy_id is not None
 
+    def test_auto_approve_calls_link_workflow_to_object(self, integration_db):
+        """Auto-approve path persists ObjectWorkflowMapping before update_workflow_step.
+
+        Regression test for issue #1378: on the auto-approve path no ObjectWorkflowMapping
+        row was created before update_workflow_step() triggered _send_push_notifications,
+        causing the webhook to be silently dropped.
+
+        Covers: UC-002-MAIN-22
+        """
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        req = _make_request()
+
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            result = env.call_impl(req=req)
+
+            assert isinstance(result.response, CreateMediaBuySuccess)
+            ctx_mgr_mock = env.mock["context_mgr"].return_value
+            ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
+                step_id=ANY,
+                object_type="media_buy",
+                object_id=result.response.media_buy_id,
+                action="create",
+                tenant_id=ANY,
+            )
+            # link_workflow_to_object must be called BEFORE update_workflow_step("completed")
+            link_call_idx = next(
+                i for i, c in enumerate(ctx_mgr_mock.method_calls) if c[0] == "link_workflow_to_object"
+            )
+            complete_call_idx = next(
+                i
+                for i, c in enumerate(ctx_mgr_mock.method_calls)
+                if c[0] == "update_workflow_step" and c[2].get("status") == "completed"
+            )
+            assert link_call_idx < complete_call_idx, (
+                "link_workflow_to_object must be called before update_workflow_step(status='completed')"
+            )
+            # Production-state assertion: the ObjectWorkflowMapping row must actually
+            # be persisted in the DB (the harness runs the real link_workflow_to_object).
+            repo = WorkflowRepository(env._session, tenant_id=tenant.tenant_id)
+            mapping = repo.get_latest_mapping_for_object("media_buy", result.response.media_buy_id)
+            assert mapping is not None, "ObjectWorkflowMapping row was not persisted for the auto-approved media buy"
+
     @pytest.mark.asyncio
     async def test_authentication_extracts_principal_id(self):
         """Authentication resolves principal_id from identity.
@@ -1240,6 +1292,7 @@ class TestProposalBasedObligations:
             packages=[{"product_id": "p1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
             proposal_id="prop_abc",
             total_budget={"amount": 10000.0, "currency": "USD"},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
         assert req.proposal_id == "prop_abc"
         assert req.total_budget is not None
@@ -1321,6 +1374,33 @@ class TestCrossCuttingObligations:
             assert result.status == "submitted"
             env.mock["adapter"].return_value.create_media_buy.assert_not_called()
             assert result.response.media_buy_id is not None
+
+    def test_manual_approval_calls_link_workflow_to_object(self, integration_db):
+        """Manual-approval path calls link_workflow_to_object to create the ObjectWorkflowMapping row.
+
+        Regression test for issue #1378 (DRY follow-up): the manual-approval path must use
+        ctx_manager.link_workflow_to_object() rather than an inline ObjectWorkflowMapping insert,
+        giving both paths consistent error handling and a single code path.
+
+        Covers: UC-002-CC-ADAPTER-ATOMICITY-03
+        """
+        req = _make_request()
+
+        with _env(human_review_required=True) as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            result = env.call_impl(req=req)
+
+            assert result.response.media_buy_id is not None
+            ctx_mgr_mock = env.mock["context_mgr"].return_value
+            ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
+                step_id=ANY,
+                object_type="media_buy",
+                object_id=result.response.media_buy_id,
+                action="create",
+                tenant_id=ANY,
+            )
 
     @pytest.mark.asyncio
     async def test_creative_in_valid_state_assigned_successfully(self):

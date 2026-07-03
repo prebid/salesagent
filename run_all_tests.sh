@@ -32,9 +32,12 @@
 # collision, and NO published host ports anywhere.
 #
 # Usage:
-#   scripts/test-in-network.sh                          # all six suites
-#   scripts/test-in-network.sh unit,integration         # explicit suite list
-set -uo pipefail
+#   ./run_all_tests.sh                          # all six suites in-network (default)
+#   ./run_all_tests.sh ci                       # same, explicit
+#   ./run_all_tests.sh unit,integration         # explicit suite list
+#   ./run_all_tests.sh quick                    # no-Docker unit+integration (delegates to host runner)
+#   ./run_all_tests.sh ci tests/path -k name    # targeted run (delegates to host runner)
+set -euo pipefail
 
 COMPOSE_FILE="docker-compose.e2e.yml"
 # PID-suffixed project name -> isolated network per run. No host ports means
@@ -46,7 +49,34 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
 # gets a report. Compose interpolates this into the adcp-server service env.
 export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
-SUITES="${1:-unit,integration,bdd,admin,e2e,ui}"
+# Argument contract — back-compat with the historical MODE words so the
+# pre-existing callers (Makefile quality-full/test-full, docs) keep working:
+#   (no arg) | ci                 -> all six suites, in-network (the default)
+#   ci <pytest-target> [args...]  -> targeted run  (delegated to the host runner)
+#   quick                         -> no-Docker unit+integration (host runner)
+#   <comma,list>                  -> explicit tox suite list, in-network
+# The in-network path always builds the full compose stack, so it can't honor
+# the "quick == no Docker" or the targeted contracts — those delegate to the
+# verbatim host runner that already implements them (DRY, single source).
+ALL_SUITES="unit,integration,bdd,admin,e2e,ui"
+DELEGATE=0
+case "${1:-ci}" in
+    quick) DELEGATE=1 ;;
+    ci) if [ -n "${2:-}" ]; then DELEGATE=1; else SUITES="$ALL_SUITES"; fi ;;
+    *) SUITES="$1" ;;
+esac
+
+# Testability seam: resolve the argument contract and exit BEFORE any Docker
+# call so tests/unit/test_run_all_tests_contract.py can assert it without a stack.
+if [ -n "${RUN_ALL_TESTS_RESOLVE_ONLY:-}" ]; then
+    if [ "$DELEGATE" = 1 ]; then echo "RESOLVED delegate-host: $*"; else echo "RESOLVED suites=$SUITES"; fi
+    exit 0
+fi
+
+if [ "$DELEGATE" = 1 ]; then
+    exec "$(dirname "$0")/run_all_tests_host.sh" "$@"
+fi
+
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
@@ -96,8 +126,10 @@ dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test"
 # trip the xdist loadscope rescheduler. Same suites, same outcomes — just not
 # wall-clock parallel inside the one container.
 echo "Running suites in-network (serial): $SUITES"
-dc run --rm --use-aliases tests tox -e "$SUITES"
-RC=$?
+# Capture the suite exit code without aborting under `set -e` — reports must
+# still be extracted and the security audit must still run on a suite failure.
+RC=0
+dc run --rm --use-aliases tests tox -e "$SUITES" || RC=$?
 
 # tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
 # (kept off the bind mount so venvs don't live on the slow host tree). The host
@@ -107,8 +139,20 @@ echo "Extracting JSON reports from the tox_data volume..."
 docker run --rm \
     -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
     -v "$(pwd)/${RESULTS_DIR}:/out" \
-    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true'
+    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true' || true
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
+
+# Security audit (uv-secure) — runs on the HOST (scans uv.lock; no Docker). The
+# host runner runs this too; keep parity so the canonical local gate still scans
+# for known vulnerabilities. Single-sourced in scripts/security-audit.sh (also
+# called by .github/workflows/ci.yml, so CI and local can't drift).
+echo "Running security audit (uv-secure)..."
+if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+    echo "Security audit passed"
+else
+    echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+    [ "$RC" -eq 0 ] && RC=1
+fi
 
 exit $RC

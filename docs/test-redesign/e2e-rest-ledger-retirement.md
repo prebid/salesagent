@@ -1,7 +1,14 @@
 # e2e_rest ledger retirement — transport-aware harness setup
 
-**Status:** Wave 3 landed — ledger reduced from 312 to **47 genuine-gap nodeids**. Beads epic `salesagent-x0nl`.
-**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (47 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
+**Status:** Harness landed on this branch (#1430) — Wave 3 (#1418) reduced the
+ledger from 312 to 47 genuine-gap nodeids; post-Wave-3 graduations (REST 422
+wire-shape, idempotent tenant seeding, webhook tag declarations, and the
+attribution campaign-interval boundary retired at the main merge) brought it to
+**30**. Tracked publicly as **#1423**; the in-network Docker CI runner that
+recovered e2e_rest as the 5th BDD transport landed on main as **#1420**.
+(Internal epic `salesagent-x0nl`; the per-mechanism sub-task ids below roll up
+to #1423.)
+**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (30 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
 
 ## Wave 3 outcome (#1418) — read this first
 
@@ -13,16 +20,40 @@ in-network run (`wave2_bdd.json`) and reduced the ledger from 312 to 47:
 | Disposition | Count | Where it went |
 |-------------|------:|---------------|
 | **Graduated** (now passes in-network) | 163 | removed from ledger — these xpassed in the gate run |
-| **Stale** (renamed by #1370 merge, absent from the run) | 4 | removed from ledger |
+| **Stale** (renamed by #1370 merge, absent from the run) | 4 | removed from ledger — main independently removed the same 4 param-renamed nodeids (1 formats, 3 uc004) in #1420, taking its copy of the ledger 312 → 308 before this branch merged |
 | **Env-owned** (`E2EUnsupportedSetup` raised during harness realization) | 98 | removed from ledger — the env declaration owns them; the conftest report hook (`pytest_runtest_makereport`) surfaces them as xfail with a declared reason. These are uc005/uc006 scenarios whose Given requests synthetic format IDs (`fmt_3`, `fmt_918`, …) not in the 54-format reference catalog. |
 | **Genuine gaps** (kept, annotated by gap in the ledger) | 47 | real production / server-seed / harness-observability gaps — see the ledger's section comments. |
 
-The 47 remaining are NOT format-injection cases; they are real gaps: uc004
+The 47 remaining were NOT format-injection cases; they were real gaps: uc004
 invalid-input validation (16: some 422-wire-shape, some live-server-accepts),
 uc006 account billing-state not server-seeded (12), uc011 account read-back not
 server-seeded (6), get_products tenant-seed duplicate-key (6), uc004
 webhook/log observability F-bucket (4), explicit inline-xfail prod gaps (2), and
 one missing Then step definition.
+
+### Post-Wave-3 graduations (47 → 30, `salesagent-jdy1` + main merge)
+
+Each validated by an in-network BDD run with 0 failures:
+
+- **M1 — REST 422 wire shape (6 uc004):** `parse_rest_error`'s `STATUS_TO_ERROR`
+  map lacked 422, so a FastAPI request-validation envelope (`{"detail":[...]}`)
+  surfaced as a plain `Exception` instead of the `AdCPError` the Then step
+  expects. Mapped 422 → `AdCPValidationError`. Graduated.
+- **M3 — idempotent tenant seed (6 get_products):** `given_tenant` seeded
+  `TenantFactory(test_tenant)` non-idempotently into the shared server DB
+  (`tenants_pkey` UniqueViolation on the 2nd e2e_rest scenario). Made it
+  get-or-create. Graduated.
+- **M4 — webhook observability (4 uc004):** the webhook retry/sequence scenarios
+  assert on in-process surfaces (`env.mock['post']` call counts, CircuitBreaker
+  state) with no Docker-HTTP equivalent. Declared impl-only **by tag**
+  (`_UC004_E2E_WEBHOOK_INTERNAL_TAGS` in conftest) — env-owned xfail, off the
+  nodeid ledger.
+- **Main-merge graduation (1 uc004):** the attribution campaign-interval
+  boundary (`interval=2, unit=campaign`). Upstream regenerated the scenario's
+  expected cell `invalid` → `error "VALIDATION_ERROR" with suggestion`, the old
+  `-invalid]` nodeid no longer collects, and the renamed scenario passes
+  in-network on main (absent from main's #1420 ledger). Removed from the ledger
+  and `EXPECTED_LEDGER` together.
 
 **Correction to earlier claims in this doc** (kept below for design history, but
 superseded here): (1) the live e2e server does **not** call the real creative
@@ -103,7 +134,7 @@ The mock-setup methods simply never got the same dispatch-on-transport treatment
 
 | Concept | Real surface | e2e realization |
 |---------|-------------|-----------------|
-| creative formats | **a persisted checked-in fixture** captured from the creative agent | both the harness and the server's `ADCP_TESTING` path read formats from that one fixture (the e2e server does **not** call the live agent per request under `ADCP_TESTING`), so in-process and e2e serve identical formats by construction. The fixture is refreshed only when formats change (rare), via an explicit `make` target, not re-fetched per session. Formats the agent doesn't serve get registered in the agent's own registry. Never mint synthetic in-process formats. |
+| creative formats | **a persisted checked-in fixture** captured from the creative agent | both the harness and the server's `ADCP_TESTING` path read formats from that one fixture (the e2e server does **not** call the live agent per request under `ADCP_TESTING`), so in-process and e2e serve identical formats by construction. The fixture is refreshed only when formats change (rare — they barely move between runs), via an explicit `make` target, not re-fetched per session. Formats the agent doesn't serve get registered in the agent's own registry. Never mint synthetic in-process formats. |
 | products / properties / principals / tenant billing config | **server DB** | seed rows into the server DB (env session already binds to it; `set_billing_policy` already writes the tenant row) |
 | adapter delivery numbers | **Mock adapter reading a `DeliverySimulationConfig` row from the server DB** | write the simulation-config row; the live server's Mock adapter reads it. Requires recovering the stranded `DeliverySimulationConfig` mechanism. |
 
@@ -155,7 +186,12 @@ is guaranteed to exist on the live server too.
 > Was 293; grew to **312** after the `origin/main` merge (2026-06-11, #1370) whose
 > feature-file updates added/renamed 19 e2e_rest scenarios (uc004 +14, uc005 +4,
 > uc011 +1). Each was verified to **pass on all 4 in-process transports** and fail
-> only over real HTTP — same mock-visibility class, not a regression.
+> only over real HTTP — same mock-visibility class, not a regression. Expected
+> behavior: the ledger grows when main adds scenarios and shrinks as the harness
+> mechanisms land. On main, #1420 removed 4 stale param-renamed nodeids
+> (1 formats, 3 uc004) → 308 live there; on this branch the same 4 were dropped
+> as "Stale" in Wave 3's triage, which superseded the static table below (kept
+> at the 312 snapshot).
 
 | Mechanism (as triaged statically pre-Wave-3) | Test files | Count | % | Beads |
 |-----------|-----------|------:|--:|-------|
@@ -164,6 +200,9 @@ is guaranteed to exist on the live server too.
 | **Account / billing** — server DB seed (partly done) | `test_uc011_manage_accounts` (44) | **44** | 14% | `salesagent-gy01` (triage) |
 
 ## Execution order
+
+> Sub-task ids are internal beads tracked under #1423 (above); the public issue
+> is the resolvable anchor for outside readers.
 
 1. `salesagent-asfb` — recover `DeliverySimulationConfig` mock-adapter mechanism (server-side delivery seeding). Unblocks 113.
 2. `salesagent-8kpo` — formats: capture creative-agent set once/session, seed/reference. Unblocks 137 (the largest bucket).

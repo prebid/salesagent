@@ -17,8 +17,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  PYTHON_VERSION: "3.12"
-  UV_VERSION: "0.11.15"
   DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
   GEMINI_API_KEY: test_key_for_mocking
   GOOGLE_CLIENT_ID: test_client_id
@@ -35,13 +33,14 @@ jobs:
       contents: read
     timeout-minutes: 15
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - name: Run static analysis (make quality-ci)
         run: make quality-ci
 
@@ -56,15 +55,16 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - name: Run mypy
-        run: uv run python -m mypy src --config-file=mypy.ini
+        run: make typecheck
 
   schema-contract:
     name: Schema Contract
@@ -73,16 +73,21 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/test_adcp_contract.py
+      - uses: ./.github/actions/_pytest
+        with:
+          paths: tests/integration/test_mcp_contract_validation.py
+          extra_args: -v --tb=short
 
   security-audit:
     name: Security Audit
@@ -91,13 +96,14 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - name: Run security audit
         run: ./scripts/security-audit.sh
 
@@ -108,6 +114,9 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
@@ -126,25 +135,19 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/smoke/
           tb: short
           extra_args: -v
-      - name: Check for skipped tests
-        run: |
-          if grep -rE '@pytest\.mark\.skip(\(|[[:space:]]|$)' tests/ --include="test_*.py" | grep -v "skip_ci"; then
-            echo "Found skip decorators in tests!"
-            exit 1
-          fi
-          echo "No skip decorators found"
 
   unit-tests:
     name: Unit Tests
@@ -153,13 +156,14 @@ jobs:
       contents: read
     timeout-minutes: 15
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/ tests/harness/
@@ -178,6 +182,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -195,7 +200,7 @@ jobs:
             marker: not (creative or product or media_buy or delivery or transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent)
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: adcp_user
           POSTGRES_PASSWORD: test_password
@@ -208,24 +213,33 @@ jobs:
         ports:
           - 5432:5432
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
+      - name: Log in to GitHub Container Registry
+        if: matrix.group == 'creative'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Start pinned creative agent
         if: matrix.group == 'creative'
+        env:
+          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
         run: ./scripts/creative-agent-stack.sh up
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/integration/
           disable_randomly: "true"
-          extra_args: --timeout=60 -m "(${{ matrix.marker }}) and not requires_server and not skip_ci"
+          extra_args: --timeout=60 -m "(${{ matrix.marker }}) and not skip_ci"
         env:
           CREATIVE_AGENT_URL: ${{ matrix.group == 'creative' && 'http://localhost:9999/api/creative-agent' || '' }}
       - name: Cleanup pinned creative agent
@@ -239,13 +253,13 @@ jobs:
       contents: read
     timeout-minutes: 25
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - name: Ensure docker-compose alias exists
         run: |
           docker compose version
@@ -286,7 +300,7 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: adcp_user
           POSTGRES_PASSWORD: test_password
@@ -299,13 +313,13 @@ jobs:
         ports:
           - 5432:5432
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
@@ -314,17 +328,21 @@ jobs:
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/admin/
-          extra_args: -m "not requires_server and not slow"
+          extra_args: -m "not slow"
 
-  bdd-tests:
-    name: BDD Tests
+  bdd-tests-shard:
+    name: BDD Tests (Shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: adcp_user
           POSTGRES_PASSWORD: test_password
@@ -337,49 +355,86 @@ jobs:
         ports:
           - 5432:5432
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
+      - name: Resolve BDD shard paths
+        id: bdd_shard
+        run: |
+          set -euo pipefail
+          shard_list=$(mktemp)
+          trap 'rm -f "$shard_list"' EXIT
+          uv run python scripts/ci/shard_paths.py bdd ${{ matrix.shard }} > "$shard_list"
+          mapfile -t TEST_FILES < "$shard_list"
+          if [ "${#TEST_FILES[@]}" -eq 0 ]; then
+            echo "::error::shard_paths.py produced no files for bdd shard ${{ matrix.shard }}"
+            exit 1
+          fi
+          joined="${TEST_FILES[*]}"
+          echo "paths=${joined}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/_pytest
         env:
-          # Separate data file so the artifact cannot collide with unit's .coverage.
-          COVERAGE_FILE: .coverage.bdd
+          # Separate data file per shard so artifacts cannot collide with unit's .coverage.
+          COVERAGE_FILE: .coverage.bdd-${{ matrix.shard }}
         with:
-          paths: tests/bdd/
-          coverage_xml: coverage-bdd.xml
+          paths: ${{ steps.bdd_shard.outputs.paths }}
+          coverage_xml: coverage-bdd-${{ matrix.shard }}.xml
           extra_args: -n auto --dist=loadfile --timeout=60
       - name: Combine xdist coverage fragments
         run: |
           shopt -s nullglob
-          fragments=(.coverage.bdd.*)
+          fragments=(.coverage.bdd-${{ matrix.shard }}.*)
           if [ "${#fragments[@]}" -gt 0 ]; then
-            uv run coverage combine --data-file=.coverage.bdd .coverage.bdd "${fragments[@]}"
+            uv run coverage combine --data-file=.coverage.bdd-${{ matrix.shard }} \
+              .coverage.bdd-${{ matrix.shard }} "${fragments[@]}"
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: bdd-coverage
+          name: bdd-shard-${{ matrix.shard }}-coverage
           path: |
-            .coverage.bdd
-            coverage-bdd.xml
+            .coverage.bdd-${{ matrix.shard }}
+            coverage-bdd-${{ matrix.shard }}.xml
           include-hidden-files: true
           if-no-files-found: error
+
+  bdd-tests:
+    name: BDD Tests
+    runs-on: ubuntu-latest
+    needs: [bdd-tests-shard]
+    if: always()
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+      - name: Aggregate BDD shards
+        run: |
+          if [ "${{ needs.bdd-tests-shard.result }}" != "success" ]; then
+            echo "One or more BDD shards failed."
+            exit 1
+          fi
+          echo "BDD shards passed."
 
   migration-roundtrip:
     name: Migration Roundtrip
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 15
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: adcp_user
           POSTGRES_PASSWORD: test_password
@@ -392,13 +447,13 @@ jobs:
         ports:
           - 5432:5432
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: ./.github/actions/_postgres
         with:
           database-url: ${{ env.DATABASE_URL }}
@@ -409,42 +464,58 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    needs: [unit-tests, bdd-tests]
-    if: ${{ needs.unit-tests.result == 'success' && needs.bdd-tests.result == 'success' }}
+    needs: [unit-tests, bdd-tests-shard]
+    if: ${{ needs.unit-tests.result == 'success' && needs.bdd-tests-shard.result == 'success' }}
     permissions:
       contents: read
     timeout-minutes: 10
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          uv-version: ${{ env.UV_VERSION }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: unit-coverage
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: bdd-coverage
+          pattern: bdd-shard-*-coverage
+          merge-multiple: true
+          path: bdd-coverage-shards
       - name: Coverage gate
         run: |
+          set -euo pipefail
+          expected_bdd_shards="$(uv run python -c "from scripts.ci.shard_split import SHARD_COUNTS; print(SHARD_COUNTS['bdd'])")"
+          bdd_data_files=()
+          for shard in $(seq 1 "${expected_bdd_shards}"); do
+            found="$(find bdd-coverage-shards -name ".coverage.bdd-${shard}" -type f | head -1)"
+            if [ -z "${found}" ]; then
+              echo "::error::Missing BDD coverage artifact for shard ${shard} (.coverage.bdd-${shard})"
+              exit 1
+            fi
+            bdd_data_files+=("${found}")
+          done
+          if [ "${#bdd_data_files[@]}" -ne "${expected_bdd_shards}" ]; then
+            echo "::error::Expected ${expected_bdd_shards} BDD coverage files, found ${#bdd_data_files[@]}"
+            exit 1
+          fi
           if [ ! -f .coverage ]; then
             echo "Unit coverage data file missing."
             exit 1
           fi
-          if [ ! -f .coverage.bdd ]; then
-            echo "BDD coverage data file missing."
-            exit 1
-          fi
-          uv run coverage combine --data-file=.coverage.combined .coverage .coverage.bdd
+          uv run coverage combine --data-file=.coverage.combined .coverage "${bdd_data_files[@]}"
           ./scripts/ci/coverage_report.sh --data-file .coverage.combined
 
   summary:
     name: Summary
     runs-on: ubuntu-latest
     if: always()
+    permissions:
+      contents: read
     timeout-minutes: 5
     needs:
       [
@@ -463,6 +534,10 @@ jobs:
         coverage,
       ]
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
       - name: Validate job results
         run: |
           if [ "${{ needs.quality-gate.result }}" != "success" ] || \

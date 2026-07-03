@@ -109,12 +109,13 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-031 INV-2: sorted by type value then name
 
   @T-UC-005-inv-049-2-holds @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
-  Scenario: BR-RULE-049 INV-2 holds - Format IDs filter matches on id field
+  Scenario: BR-RULE-049 INV-2 holds - Format IDs filter matches on the (agent_url, id) pair
     Given the registry has format "leaderboard" with format_id id "fmt-001"
     And the registry has format "pre-roll" with format_id id "fmt-002"
     When the Buyer Agent requests formats with format_ids filter ["fmt-001"]
     Then only "leaderboard" should be returned
-    # BR-RULE-049 INV-2: format_ids matches on id field only
+    # BR-RULE-049 INV-2: format_ids matches on the (agent_url, id) federation pair
+    # (core/format-id.json requires [agent_url, id]; list_formats step match_keys [agent_url, id])
 
   @T-UC-005-inv-049-2-violated @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 violated - Non-matching format IDs silently excluded
@@ -122,7 +123,7 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with format_ids filter ["fmt-999", "fmt-001"]
     Then only "leaderboard" should be returned
     And no error should be raised for "fmt-999"
-    # BR-RULE-049 INV-2: non-matching IDs silently excluded
+    # BR-RULE-049 INV-2: references that match no (agent_url, id) pair are silently excluded
     # --- INV-3: asset_types OR semantics ---
 
   @T-UC-005-inv-049-3-holds @UC-005-MAIN-MCP-07 @invariant @BR-RULE-049
@@ -1101,3 +1102,6 @@ Feature: BR-UC-005 Discover Creative Formats
     # unique identifier within that agent). Sellers returning bare-string format IDs
     # break the v3.1 federation contract.
     # discover_formats: format_id object shape is the federation contract
+    # The strict "every entry / never a bare string" form is mandated by the schema
+    # (core/format-id.json: required [agent_url, id]); the storyboard grades field_present on formats[0].
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/core/format-id.json

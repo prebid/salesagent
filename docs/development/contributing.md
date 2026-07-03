@@ -440,26 +440,32 @@ Types:
 Install Git hooks for code quality:
 
 ```bash
-./setup_hooks.sh
+pre-commit install
 ```
 
-Critical hooks run on every commit:
-- **Black** (code formatting)
-- **Ruff** (linting)
-- **AdCP contract tests** (protocol compliance)
-- **MCP contract validation** (prevents client integration failures)
-- **Required fields audit** (catches over-strict validation)
-- **Schema-database alignment** (prevents AttributeError bugs)
+This repo requires **pre-commit ≥3.2.0** (for the `pre-push` stage). If `pre-commit install`
+errors with a version-too-old `FatalError`, run `uv tool install pre-commit` (preferred) or
+`pip install --upgrade pre-commit`.
 
-Additional quality gates:
-- Unit tests (optional - use `pre-commit run pytest-unit`)
-- Migration testing (manual - use `pre-commit run test-migrations`)
-- Smoke tests (manual - use `pre-commit run smoke-tests`)
+**Layered model (PR 4 of #1234):**
+
+| Layer | When | What |
+|-------|------|------|
+| Commit (~12 hooks, <2s warm) | Every commit | ruff format/check, hygiene, gitleaks, repo-invariants |
+| Pre-push (~11 hooks) | Every push | docs links, route conflicts, type-ignore ratchet, contract tests, mypy |
+| pytest `arch_guard` | `make quality` | AST structural guards in `tests/unit/test_architecture_*.py` |
+| CI (`make quality-ci` + jobs) | PR / push to main | Authoritative enforcement for duplication, GAM auth, roundtrip tests, full suites |
+
+Manual/on-demand: `pre-commit run smoke-tests --hook-stage manual`
+
+Running `make quality` or `make quality-ci` may update tracked ratchet baselines
+(`.duplication-baseline`, `.type-ignore-baseline`) when counts decrease. Commit those
+updates intentionally; CI runs are ephemeral and do not persist baseline writes.
 
 **Contract Validation Prevention:**
 The system automatically prevents validation errors like `'brief' is a required property` through:
-- Pre-commit hooks that test minimal parameter calls
-- Automated field requirement auditing
+- Pre-push hooks that test minimal parameter calls (`adcp-contract-tests`, `mcp-contract-validation`)
+- CI Schema Contract job
 - Clear error messages with specific fixes
 
 ## Code Style and Standards

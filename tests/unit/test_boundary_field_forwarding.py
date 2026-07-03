@@ -11,47 +11,93 @@ the request object passed to _impl. No silent field drops at the transport bound
 import ast
 from pathlib import Path
 
+from src.core.schemas import CreateMediaBuyRequest
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _extract_request_constructor_kwargs(file_path: Path, wrapper_name: str, request_class: str) -> set[str]:
-    """Extract keyword arguments passed to a request constructor within a wrapper function.
+def _find_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
 
-    Finds calls like `CreateMediaBuyRequest(buyer_ref=..., brand=..., ...)` inside
-    the named wrapper function and returns the set of keyword argument names.
+
+def _call_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
+def _dict_splat_keys(node: ast.expr) -> set[str]:
+    """String keys forwarded by a ``**`` splat of a dict literal.
+
+    Models the omit-when-absent idiom ``**({"k": v} if cond else {})`` (and a
+    plain ``**{"k": v}``) so a splat-forwarded field is not a guard blind spot.
+    A ``**kwargs`` of a runtime-built dict stays unmodellable and is ignored.
+    """
+    if isinstance(node, ast.Dict):
+        return {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    if isinstance(node, ast.IfExp):
+        return _dict_splat_keys(node.body) | _dict_splat_keys(node.orelse)
+    return set()
+
+
+def _constructor_kwargs_in(fn: ast.AST, request_class: str) -> set[str]:
+    kwargs: set[str] = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and _call_name(node) == request_class:
+            for kw in node.keywords:
+                if kw.arg is not None:
+                    kwargs.add(kw.arg)
+                else:
+                    # ``**`` splat — model the dict-literal / omit-when-absent form
+                    # so a splat-forwarded field is not invisible to the guard.
+                    kwargs |= _dict_splat_keys(kw.value)
+    return kwargs
+
+
+def _extract_request_constructor_kwargs(file_path: Path, wrapper_name: str, request_class: str) -> set[str]:
+    """Extract keyword arguments a wrapper threads into the request constructor.
+
+    Matches both forms a wrapper may take — the matcher must model every form
+    or the guard reports false drops:
+
+    1. Direct construction: ``CreateMediaBuyRequest(brand=..., ...)`` inside
+       the wrapper body.
+    2. Shared-builder indirection: the wrapper calls a module-local helper
+       (e.g. ``_build_create_media_buy_request(brand=..., ...)``) that itself
+       constructs the request class. The wrapper's kwargs to the helper count,
+       but ONLY intersected with what the helper actually forwards into the
+       constructor — a field dropped at either hop is reported missing.
     """
     source = file_path.read_text()
     tree = ast.parse(source, filename=str(file_path))
 
-    # Find the wrapper function
-    wrapper_node = None
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == wrapper_name:
-                wrapper_node = node
-                break
-
+    wrapper_node = _find_function(tree, wrapper_name)
     if wrapper_node is None:
         return set()
 
-    # Find request constructor calls within the wrapper
-    kwargs = set()
+    # Module-local helpers that construct the request class, with what they forward.
+    builder_forwards: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != wrapper_name:
+            forwarded = _constructor_kwargs_in(node, request_class)
+            if forwarded:
+                builder_forwards[node.name] = forwarded
+
+    kwargs = _constructor_kwargs_in(wrapper_node, request_class)
     for node in ast.walk(wrapper_node):
         if not isinstance(node, ast.Call):
             continue
-        called_name = None
-        if isinstance(node.func, ast.Name):
-            called_name = node.func.id
-        elif isinstance(node.func, ast.Attribute):
-            called_name = node.func.attr
-        if called_name != request_class:
-            continue
-        for kw in node.keywords:
-            if kw.arg is not None:
-                kwargs.add(kw.arg)
-
+        called = _call_name(node)
+        if called in builder_forwards:
+            passed = {kw.arg for kw in node.keywords if kw.arg is not None}
+            kwargs |= passed & builder_forwards[called]
     return kwargs
 
 
@@ -110,10 +156,29 @@ def _extract_call_kwargs(file_path: Path, caller_name: str, callee_name: str) ->
 
 CREATE_FILE = Path("src/core/tools/media_buy_create.py")
 
-# AdCP spec fields that MUST be forwarded from wrappers into CreateMediaBuyRequest
-# AdCP spec fields that MUST be forwarded from wrappers into CreateMediaBuyRequest
-# buyer_ref and buyer_campaign_ref removed in adcp 3.12
-CREATE_SPEC_FIELDS = {"brand", "packages", "start_time", "end_time", "po_number", "reporting_webhook", "context", "ext"}
+# The checked set is DERIVED from the model, not hand-listed, so a new
+# CreateMediaBuyRequest field cannot be silently dropped at the boundary: it is
+# required by the guard until it is wired through the wrappers OR explicitly
+# excluded below with a reason. idempotency_key is forwarded via the builder's
+# omit-when-absent ``**`` splat; account / brand / ... as named kwargs.
+_CREATE_NOT_FORWARDED = {
+    # Threaded to _impl separately (status notifications), never into the request object.
+    "push_notification_config",
+    # Optional AdCP negotiation/IO fields the MCP/A2A wrappers do not yet expose.
+    # Listed (not omitted) so they are tracked, not silently dropped — wire or
+    # confirm-drop each before buyers rely on them.
+    "adcp_major_version",
+    "adcp_version",
+    "advertiser_industry",
+    "agency_estimate_number",
+    "artifact_webhook",
+    "invoice_recipient",
+    "io_acceptance",
+    "plan_id",
+    "proposal_id",
+    "total_budget",
+}
+CREATE_SPEC_FIELDS = set(CreateMediaBuyRequest.model_fields) - _CREATE_NOT_FORWARDED
 
 
 class TestCreateMediaBuyFieldForwarding:
@@ -250,3 +315,62 @@ class TestUpdateMediaBuyFieldForwarding:
 
         missing = UPDATE_SPEC_FIELDS - assigned_keys
         assert not missing, f"_build_update_request doesn't include AdCP fields in request_params: {sorted(missing)}"
+
+
+class TestExtractorModelsBuilderIndirection:
+    """Self-tests for the two-hop matcher: a drop at EITHER hop is reported."""
+
+    @staticmethod
+    def _extract_from_source(tmp_path, source: str) -> set[str]:
+        f = tmp_path / "mod.py"
+        f.write_text(source)
+        return _extract_request_constructor_kwargs(f, "wrapper", "Req")
+
+    def test_field_dropped_at_wrapper_to_builder_hop_is_missing(self, tmp_path):
+        src = (
+            "def _build(*, a=None, b=None):\n"
+            "    return Req(a=a, b=b)\n"
+            "def wrapper(a, b):\n"
+            "    return _build(a=a)\n"  # b never passed to the builder
+        )
+        assert self._extract_from_source(tmp_path, src) == {"a"}
+
+    def test_field_dropped_inside_builder_is_missing(self, tmp_path):
+        src = (
+            "def _build(*, a=None, b=None):\n"
+            "    return Req(a=a)\n"  # builder swallows b
+            "def wrapper(a, b):\n"
+            "    return _build(a=a, b=b)\n"
+        )
+        assert self._extract_from_source(tmp_path, src) == {"a"}
+
+    def test_field_threaded_through_both_hops_counts(self, tmp_path):
+        src = (
+            "def _build(*, a=None, b=None):\n"
+            "    return Req(a=a, b=b)\n"
+            "def wrapper(a, b):\n"
+            "    return _build(a=a, b=b)\n"
+        )
+        assert self._extract_from_source(tmp_path, src) == {"a", "b"}
+
+    def test_dict_splat_field_is_seen(self, tmp_path):
+        # **({"b": b} if ...) forwarding must be visible to the matcher — this is
+        # the exact blind spot that let idempotency_key slip the guard.
+        src = (
+            "def _build(*, a=None, b=None):\n"
+            "    return Req(a=a, **({'b': b} if b is not None else {}))\n"
+            "def wrapper(a, b):\n"
+            "    return _build(a=a, b=b)\n"
+        )
+        assert self._extract_from_source(tmp_path, src) == {"a", "b"}
+
+    def test_field_passed_but_never_forwarded_is_missing(self, tmp_path):
+        # 'c' is passed by the wrapper but neither named nor splatted by the
+        # builder — the guard still reports it dropped (no splat false-negative).
+        src = (
+            "def _build(*, a=None, b=None, c=None):\n"
+            "    return Req(a=a, **({'b': b} if b is not None else {}))\n"
+            "def wrapper(a, b, c):\n"
+            "    return _build(a=a, b=b, c=c)\n"
+        )
+        assert self._extract_from_source(tmp_path, src) == {"a", "b"}

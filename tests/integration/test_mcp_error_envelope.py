@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -172,6 +173,7 @@ class TestMcpWireErrorEnvelope:
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     create_test_package_request_dict(
                         product_id=_PRODUCT_ID,
@@ -208,6 +210,7 @@ class TestMcpWireErrorEnvelope:
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     create_test_package_request_dict(
                         product_id=_PRODUCT_ID,
@@ -249,8 +252,9 @@ class TestMcpWireErrorEnvelope:
         assert is_error, "Missing identity must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
 
-        # AdCPAuthRequiredError -> AUTH_TOKEN_INVALID (spec STANDARD passthrough, not AUTH_REQUIRED).
-        # Recovery is terminal for AdCPAuthenticationError (per adcp 4.3 STANDARD_ERROR_CODES).
+        # AdCPAuthRequiredError -> AUTH_TOKEN_INVALID (AdCP 3.1 spec code, passed through unchanged).
+        # Recovery is terminal for AdCPAuthenticationError: a hardcoded class default,
+        # intentionally set because the 3.1 storyboards grade the error code, not the recovery class.
         assert_envelope_shape(envelope, "AUTH_TOKEN_INVALID", recovery="terminal")
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()

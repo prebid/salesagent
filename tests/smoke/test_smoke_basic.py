@@ -1,8 +1,16 @@
 """Basic smoke tests that don't require running servers."""
 
+import importlib.util
 from pathlib import Path
 
 import pytest
+
+_REPO_INVARIANTS_HOOK = Path(__file__).resolve().parents[2] / ".pre-commit-hooks" / "check_repo_invariants.py"
+_spec = importlib.util.spec_from_file_location("check_repo_invariants", _REPO_INVARIANTS_HOOK)
+assert _spec and _spec.loader
+_check_repo_invariants = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_check_repo_invariants)
+_is_forbidden_skip_line = _check_repo_invariants.is_forbidden_skip_line
 
 
 class TestCriticalImports:
@@ -159,36 +167,17 @@ class TestNoSkippedTests:
 
     @pytest.mark.smoke
     def test_no_skip_decorators(self):
-        """Test that no test files contain skip decorators."""
-        import subprocess
-
-        # Build the pattern in parts to avoid matching ourselves
-        skip_pattern = "@pytest" + ".mark" + ".skip"
-        test_dir = Path(__file__).parent.parent.parent
-        result = subprocess.run(
-            ["grep", "-r", skip_pattern, "tests/"],
-            cwd=str(test_dir),
-            capture_output=True,
-            text=True,
-        )
-
-        # Filter out legitimate uses
-        if result.returncode == 0:
-            lines = result.stdout.split("\n")
-            bad_lines = [
-                line
-                for line in lines
-                if line
-                and "pytest.skip(" not in line  # Allow runtime skips
-                and "skip_ci" not in line  # Allow CI-specific skips
-                and "skip_pattern" not in line  # Exclude this test file
-                and "test_no_skip" not in line  # Exclude this test
-                and "test_no_hardcoded_credentials" not in line  # Exclude disabled test
-                and "Overly aggressive pattern matching" not in line  # Exclude specific skip reason
-                and "__pycache__" not in line  # Exclude cache files
-                and "Binary file" not in line  # Exclude binary matches
-            ]
-            assert len(bad_lines) == 0, f"Found skip decorators:\n{chr(10).join(bad_lines[:5])}"
+        """Test that no test files contain forbidden bare skip decorators."""
+        tests_dir = Path(__file__).parent.parent
+        bad_lines: list[str] = []
+        for path in sorted(tests_dir.rglob("test_*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            rel = path.relative_to(tests_dir.parent)
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if _is_forbidden_skip_line(line):
+                    bad_lines.append(f"{rel}:{lineno}:{line.strip()}")
+        assert not bad_lines, f"Found forbidden skip decorators:\n{chr(10).join(bad_lines[:5])}"
 
 
 class TestCodeQuality:

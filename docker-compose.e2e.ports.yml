@@ -1,7 +1,7 @@
 # Host-port publishing overlay for docker-compose.e2e.yml.
 #
 # WHY THIS IS SEPARATE: the base docker-compose.e2e.yml publishes NO host ports
-# so the in-network test runner (scripts/test-in-network.sh) is immune to
+# so the in-network test runner (run_all_tests.sh) is immune to
 # cross-stack host-port collisions — it reaches Postgres/the proxy by service
 # name and many stacks can run concurrently.
 #

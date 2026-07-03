@@ -16,6 +16,10 @@ import importlib
 import inspect
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+
 TOOLS_DIR = Path("src/core/tools")
 
 # All _impl functions and their modules
@@ -120,10 +124,7 @@ def _find_impl_call_args_in_function(file_path: Path, wrapper_name: str, impl_na
 
     # Find _impl calls within the wrapper function body
     results = []
-    for node in ast.walk(wrapper_node):
-        if not isinstance(node, ast.Call):
-            continue
-
+    for node in iter_call_expressions(wrapper_node):
         func = node.func
         called_name = None
         if isinstance(func, ast.Name):
@@ -171,6 +172,7 @@ def _check_wrapper_completeness(
 class TestBoundaryCompleteness:
     """MCP and A2A wrappers must pass all _impl parameters at call sites."""
 
+    @pytest.mark.arch_guard
     def test_mcp_wrappers_pass_all_impl_params(self):
         """Each MCP wrapper must pass all non-identity _impl parameters."""
         violations = []
@@ -183,6 +185,7 @@ class TestBoundaryCompleteness:
 
         assert not violations, "MCP wrappers dropping _impl parameters:\n" + "\n".join(f"  - {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_a2a_wrappers_pass_all_impl_params(self):
         """Each A2A raw wrapper must pass all non-identity _impl parameters."""
         violations = []
@@ -195,6 +198,7 @@ class TestBoundaryCompleteness:
 
         assert not violations, "A2A wrappers dropping _impl parameters:\n" + "\n".join(f"  - {v}" for v in violations)
 
+    @pytest.mark.arch_guard
     def test_known_violations_are_still_violations(self):
         """Known violations in the allowlist must still be actual violations.
 
@@ -226,9 +230,8 @@ class TestBoundaryCompleteness:
                 if param not in kwargs and (param_idx < 0 or param_idx >= n_positional):
                     still_violated.add(violation_key)
 
-        fixed = KNOWN_VIOLATIONS - still_violated
-        if fixed:
-            msg = "These known violations have been FIXED — remove from KNOWN_VIOLATIONS:\n" + "\n".join(
-                f"  - {v}" for v in sorted(fixed)
-            )
-            raise AssertionError(msg)
+        assert_violations_match_allowlist(
+            still_violated,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
+        )

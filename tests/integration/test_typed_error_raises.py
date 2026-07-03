@@ -20,6 +20,7 @@ test_mcp_error_envelope.py cover the downstream serialization path.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -93,6 +94,7 @@ class TestTypedAdCPErrorRaises:
             ],
             start_time=future_start.isoformat(),
             end_time=future_end.isoformat(),
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
 
         with pytest.raises(AdCPBudgetTooLowError) as exc_info:

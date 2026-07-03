@@ -1,0 +1,17 @@
+name: Install uv
+description: >
+  Install the pinned uv CLI from .uv-version (setup-uv SHA pinned here only).
+  Does not install Python directly — downstream _setup-env runs `uv sync`, which
+  provisions the interpreter from .python-version.
+runs:
+  using: composite
+  steps:
+    - name: Read uv version
+      id: uv_version
+      shell: bash
+      run: echo "version=$(tr -d '[:space:]' < .uv-version)" >> "$GITHUB_OUTPUT"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v5.4.0
+      with:
+        version: ${{ steps.uv_version.outputs.version }}

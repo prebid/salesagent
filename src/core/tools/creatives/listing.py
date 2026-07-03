@@ -22,7 +22,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPValidationError
-from src.core.helpers import log_tool_activity
+from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
@@ -33,6 +33,24 @@ from src.core.tool_context import ToolContext
 from src.core.validation_helpers import format_validation_error
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_concept_value(value: Any) -> str | None:
+    """Coerce an untyped concept blob value to the spec's string type.
+
+    ``concept_id``/``concept_name`` are strings per the AdCP response schema but
+    live in the untyped JSON ``data`` blob, where an out-of-band producer may write
+    a non-string scalar (e.g. a numeric CM360 group id). Scalars are stringified.
+    A non-scalar (list/dict) is corrupt for a string field, so it is dropped with a
+    warning — surfaced in logs (No Quiet Failures) rather than projected as a Python
+    repr — instead of crashing the whole listing on one bad row.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):  # bool is an int subclass; str(True)="True" is acceptable
+        return str(value)
+    logger.warning("Dropping non-scalar concept value of type %s from creative listing", type(value).__name__)
+    return None
 
 
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
@@ -157,6 +175,11 @@ def _list_creatives_impl(
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
 
+    # v3.1 concept_ids filter has no flat equivalent — it arrives only via the
+    # structured filters object and must be threaded into the DB query (not merely
+    # reported in filters_applied), or it would be silently dropped.
+    effective_concept_ids = structured_filters.concept_ids if structured_filters else None
+
     # Build pagination
     offset = (page - 1) * effective_limit
     # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
@@ -211,6 +234,7 @@ def _list_creatives_impl(
             created_before=created_before_dt,
             search=search,
             media_buy_ids=effective_media_buy_ids or None,
+            concept_ids=effective_concept_ids,
             sort_by=sort_by,
             sort_order=valid_sort_order,
             offset=offset,
@@ -289,16 +313,33 @@ def _list_creatives_impl(
                 # Default to pending_review if invalid status
                 status_enum = CreativeStatus.pending_review
 
+            # v3.1 concept grouping. AdCP exposes concept_id/concept_name on the
+            # list_creatives RESPONSE (a creative's concept membership, sourced from
+            # the buyer's creative-management platform — Flashtalking/Celtra/CM360),
+            # but standardizes no concept INPUT on sync_creatives, so the field is
+            # populated out-of-band into the data blob. (A seller-side mapping of GAM
+            # creative groups -> these fields is a separate enrichment/fallback
+            # follow-up (#1506), not the authoritative buyer-side concept.) The blob is
+            # untyped and an external producer may write numeric group ids, so coerce
+            # to the spec's string type via _coerce_concept_value rather than letting a
+            # non-string value fail Creative validation and crash the whole listing.
+            concept_data = db_creative.data or {}
+
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
                 format_id=format_obj,
                 assets=assets_dict,
+                # FIXME(#1508): raw untyped blob into typed list[str] — a malformed
+                # tags value (bare string, or [1, 2]) crashes the whole listing, the
+                # same hazard _coerce_concept_value handles for concept fields.
                 tags=db_creative.data.get("tags") if db_creative.data else None,
                 # AdCP spec fields (listing Creative)
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,
+                concept_id=_coerce_concept_value(concept_data.get("concept_id")),
+                concept_name=_coerce_concept_value(concept_data.get("concept_name")),
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )
@@ -319,6 +360,8 @@ def _list_creatives_impl(
             filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
         if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
+        if req.filters.concept_ids:
+            filters_applied.append(f"concept_ids={','.join(req.filters.concept_ids)}")
         if req.filters.created_after:
             filters_applied.append(f"created_after={req.filters.created_after.isoformat()}")
         if req.filters.created_before:
@@ -437,16 +480,16 @@ async def list_creatives(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Pass typed Pydantic models directly (no model_dump conversion needed)
-    fields_list = [f.value if isinstance(f, FieldModel) else f for f in fields] if fields else None
+    fields_list = [enum_value(f) for f in fields] if fields else None
 
     # Structured sort and pagination are AdCP spec params; _impl is built around flat
     # equivalents (sort_by/sort_order, page/limit). Coerce structured forms to flat
     # at the boundary so spec-compliant payloads are honored instead of silently dropped.
     if sort is not None:
         if sort.field is not None:
-            sort_by = sort.field.value if hasattr(sort.field, "value") else str(sort.field)
+            sort_by = enum_value(sort.field)
         if sort.direction is not None:
-            sort_order = sort.direction.value if hasattr(sort.direction, "value") else str(sort.direction)
+            sort_order = enum_value(sort.direction)
     if pagination is not None and pagination.max_results is not None:
         limit = pagination.max_results
 

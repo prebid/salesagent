@@ -127,7 +127,14 @@ class A2ADispatcher:
                 error=exc,
                 wire_error_envelope=_wire_envelope_from_exception(exc),
             )
-        return TransportResult(payload=payload, envelope={"transport": "a2a"})
+        # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
+        # (declared on BaseTestEnv, reset per call_via — read directly so a
+        # missed capture surfaces as None against a known attribute, not getattr).
+        return TransportResult(
+            payload=payload,
+            envelope={"transport": "a2a"},
+            wire_response=env._last_wire_response,
+        )
 
 
 class RestDispatcher:
@@ -161,8 +168,10 @@ class RestDispatcher:
                     wire_error_envelope=body,
                 )
 
-            payload = env.parse_rest_response(response.json())
-            return TransportResult(payload=payload, envelope=envelope, raw_response=response)
+            body = response.json()
+            payload = env.parse_rest_response(body)
+            # Real REST wire: the HTTP JSON body dict.
+            return TransportResult(payload=payload, envelope=envelope, raw_response=response, wire_response=body)
         except Exception as exc:
             return TransportResult(error=exc)
 
@@ -180,9 +189,24 @@ class McpDispatcher:
         except Exception as exc:
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_envelope_from_mcp_error(exc),
+                # REAL wire only: the raw MCP ToolError JSON when present, else
+                # the envelope the harness reconstruction stashed on the AdCPError
+                # as ``_wire_error_envelope`` (same stash A2A uses). NEVER the
+                # synthesized fallback — a dead MCP wire path must yield None here
+                # (failing assert_envelope_shape), not an envelope regenerated
+                # from the lossy reconstructed exception.
+                wire_error_envelope=_envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None),
+                # What production WOULD emit for the same exception — see the
+                # ImplDispatcher caveat; never a substitute for the wire field.
+                synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
-        return TransportResult(payload=payload, envelope={"transport": "mcp"})
+        # Real MCP wire: the structured_content dict stashed by _run_mcp_client
+        # (declared on BaseTestEnv, reset per call_via — read directly).
+        return TransportResult(
+            payload=payload,
+            envelope={"transport": "mcp"},
+            wire_response=env._last_wire_response,
+        )
 
 
 class RestE2EDispatcher:
@@ -239,10 +263,13 @@ class RestE2EDispatcher:
 
         if response.status_code >= 400:
             try:
-                error = env.parse_rest_error(response.status_code, response.json())
+                body = response.json()
             except Exception:
                 # Non-JSON error (e.g. 500 with empty body) — wrap as AdCPError so
                 # Then steps detect the error type and xfail spec-production gaps.
+                # No wire_error_envelope: there is no structured body to expose, and
+                # the INTERNAL_ERROR/5xx shape lets the "invalid" Then-step tell a
+                # server crash apart from a real validation rejection (#1420).
                 from src.core.exceptions import AdCPError
 
                 body_text = response.text or "(empty body)"
@@ -251,7 +278,19 @@ class RestE2EDispatcher:
                     details={"status_code": response.status_code, "raw_body": body_text},
                 )
                 error.status_code = response.status_code
-            return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+                return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+            # Structured JSON error: mirror the in-process RestDispatcher and expose
+            # the raw two-layer body as wire_error_envelope so error Then-steps assert
+            # on the buyer-visible envelope (e.g. uc004 _assert_wire_rejection, or
+            # assert_envelope_shape) instead of a lossy reconstructed exception. (#1420)
+            error = env.parse_rest_error(response.status_code, body)
+            return TransportResult(
+                payload=None,
+                envelope=envelope,
+                error=error,
+                wire_error_envelope=body,
+                raw_response=response,
+            )
 
         try:
             payload = env.parse_rest_response(response.json())

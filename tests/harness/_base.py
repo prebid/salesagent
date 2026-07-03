@@ -60,6 +60,8 @@ def _adcp_error_from_code(
         AdCPCapabilityNotSupportedError,
         AdCPConflictError,
         AdCPError,
+        AdCPIdempotencyConflictError,
+        AdCPIdempotencyExpiredError,
         AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
         AdCPPackageNotFoundError,
@@ -98,6 +100,8 @@ def _adcp_error_from_code(
             AdCPPackageNotFoundError,
             AdCPBudgetTooLowError,
             AdCPCapabilityNotSupportedError,
+            AdCPIdempotencyConflictError,
+            AdCPIdempotencyExpiredError,
         )
     }
     # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED
@@ -351,6 +355,11 @@ class BaseTestEnv:
         self._session: Session | None = None
         self._identity_cache: dict[str, ResolvedIdentity] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
+        # Real serialized success-path wire, stashed by _run_a2a_handler /
+        # _run_mcp_client (the only paths that capture it) and read by the
+        # A2A/MCP dispatchers. None unless such a path ran — REST builds its
+        # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
+        self._last_wire_response: dict[str, Any] | None = None
 
     # -- Transport mode -----------------------------------------------------
 
@@ -454,6 +463,9 @@ class BaseTestEnv:
         kwargs.setdefault("identity", self.identity_for(transport))
 
         dispatcher = DISPATCHERS[transport]
+        # Reset success-path wire capture; _run_a2a_handler / _run_mcp_client
+        # set it fresh on success so A2A/MCP dispatchers can surface real wire.
+        self._last_wire_response = None
         return dispatcher.dispatch(self, **kwargs)
 
     # -- Per-transport hooks (override in subclass) -------------------------
@@ -554,14 +566,36 @@ class BaseTestEnv:
             parameters = dict(kwargs)
 
         handler = AdCPRequestHandler()
-        # Single mock point: identity resolution.
-        # _get_auth_token must return a non-None value when identity exists,
-        # otherwise the handler rejects the request before _resolve_a2a_identity
-        # is called. Use auth_token from identity, falling back to a sentinel.
-        handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
-        handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
-            (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
-        )
+
+        # Auth strategy mirrors _run_mcp_client. When the identity carries a real
+        # auth_token (integration mode), populate the AuthContext that the SDK
+        # call-context builder would have built from the wire and run the REAL
+        # _get_auth_token + _resolve_a2a_identity (header → token → DB lookup →
+        # ResolvedIdentity). Only the transport's state injection is supplied here
+        # (the in-process equivalent of MCP's get_http_headers seam) — the auth
+        # chain itself is real. When no real token exists (unit mode), inject the
+        # identity directly via the single mock point (unchanged behavior).
+        auth_token = a2a_identity.auth_token if a2a_identity else None
+
+        if auth_token:
+            from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+
+            headers = {
+                "x-adcp-auth": auth_token,
+                "x-adcp-tenant": a2a_identity.tenant_id or "",
+            }
+            server_context = ServerCallContext(
+                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
+            )
+        else:
+            # _get_auth_token must return a non-None value when identity exists,
+            # otherwise the handler rejects the request before _resolve_a2a_identity
+            # is called. Use auth_token from identity, falling back to a sentinel.
+            handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
+            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
+                (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
+            )
+            server_context = ServerCallContext()
 
         # Set tenant ContextVar so production code can read it
         if a2a_identity and a2a_identity.tenant:
@@ -573,7 +607,7 @@ class BaseTestEnv:
         params = SendMessageRequest(message=message)
 
         async def _call():
-            return await handler.on_message_send(params, ServerCallContext())
+            return await handler.on_message_send(params, server_context)
 
         try:
             task_result = asyncio.run(_call())
@@ -606,6 +640,10 @@ class BaseTestEnv:
         if not task_result.artifacts:
             raise ValueError(f"Task has no artifacts. Status: {task_result.status}")
         artifact_data = extract_data_from_artifact(task_result.artifacts[0])
+        # Surface the full, unstripped artifact DataPart as the real A2A wire for
+        # success-path assertions. Captured BEFORE stripping so siblings that need
+        # the top-level envelope fields (message/success) still see them.
+        self._last_wire_response = dict(artifact_data)
         # Strip protocol fields added by _serialize_for_a2a (message, success).
         # These are A2A-envelope fields, not part of the Pydantic response model,
         # and cause ValidationError under extra="forbid" in non-production mode.
@@ -690,6 +728,7 @@ class BaseTestEnv:
                         assert patched_th.called or patched_mw.called, (
                             f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         )
+                        self._last_wire_response = result.structured_content
                         return response_cls(**result.structured_content)
 
         else:
@@ -701,6 +740,7 @@ class BaseTestEnv:
                 ):
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
+                        self._last_wire_response = result.structured_content
                         return response_cls(**result.structured_content)
 
         try:
@@ -1156,3 +1196,20 @@ class IntegrationEnv(BaseTestEnv):
             self._rest_client = TestClient(app)
 
         return self._rest_client
+
+
+class BareIntegrationEnv(IntegrationEnv):
+    """Integration env with no external patches — for repository-level tests.
+
+    Repository tests exercise the data layer directly: they need the real
+    database session and factory binding ``IntegrationEnv`` provides, but none
+    of the adapter/notifier mocks. ``get_session()`` commits any pending
+    factory data and exposes the session for direct repository construction.
+    """
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
+
+    def get_session(self) -> Any:
+        """Commit pending factory data and expose the session."""
+        self._commit_factory_data()
+        return self._session

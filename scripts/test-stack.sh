@@ -9,7 +9,7 @@
 # After 'up', the script writes port assignments to .test-stack.env
 # which tox environments read via pass_env.
 
-set -eo pipefail
+set -euo pipefail
 
 cd "$( dirname "${BASH_SOURCE[0]}" )/.."
 [ -f .env ] && { set -a; source .env; set +a; }
@@ -80,7 +80,7 @@ reap_abandoned_stacks() {
 
 # Host stack: pytest runs on the host and reaches the stack over localhost, so
 # overlay the ports file (the base compose publishes no host ports — reserved for
-# the in-network runner, scripts/test-in-network.sh).
+# the in-network runner, run_all_tests.sh).
 dc() { docker-compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml -p "${COMPOSE_PROJECT_NAME:-adcp-test-$$}" "$@"; }
 
 cmd_up() {
@@ -140,6 +140,23 @@ cmd_up() {
     [ "$pg" = false ] || [ "$srv" = false ] && { echo -e "${RED}Timeout waiting for services${NC}"; dc logs; exit 1; }
 
     dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" 2>/dev/null || true
+
+    # Re-derive ports from the ACTUAL Docker bindings, not the pre-allocated
+    # values. The allocated POSTGRES_PORT/MCP_PORT can drift from what compose
+    # actually bound (collision-retry / reused container), which previously
+    # wrote a wrong port to .test-stack.env — every suite then connected to the
+    # wrong port and integration cascaded DB connection errors / "invalid
+    # response to SSL negotiation". Reading `docker compose port` makes the env
+    # file always match reality.
+    _real_pg=$(dc port postgres 5432 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
+    _real_srv=$(dc port proxy 8000 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
+    if [ -n "$_real_pg" ] && [ "$_real_pg" != "$POSTGRES_PORT" ]; then
+        echo -e "${BLUE}Corrected POSTGRES_PORT $POSTGRES_PORT -> $_real_pg (actual Docker binding)${NC}"
+        POSTGRES_PORT="$_real_pg"
+    fi
+    [ -n "$_real_srv" ] && MCP_PORT="$_real_srv"
+    export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT
+    export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@127.0.0.1:${POSTGRES_PORT}/adcp_test"
 
     # Write env file for tox to source
     cat > "$ENV_FILE" <<EOF

@@ -26,6 +26,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import iter_call_expressions
+
 # Per-file caps for inline ``ResolvedIdentity(...)`` constructions in
 # ``tests/`` (excluding ``test_a2a*.py`` files — those are zero-tolerance
 # under ``test_architecture_a2a_test_uses_factory``). Caps frozen at the
@@ -119,13 +123,12 @@ def _count_inline_resolved_identity(filepath: Path) -> list[int]:
     except (OSError, SyntaxError):
         return []
     lines: list[int] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-                lines.append(node.lineno)
-            elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-                lines.append(node.lineno)
+    for node in iter_call_expressions(tree):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
+            lines.append(node.lineno)
+        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
+            lines.append(node.lineno)
     return lines
 
 
@@ -147,6 +150,7 @@ from tests.unit._per_file_cap_guard import (
 )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_inline_sites_within_caps() -> None:
     """Sister guard to ``test_architecture_a2a_test_uses_factory`` — the A2A guard
     enforces zero on A2A test files; this guard caps non-A2A test files at
@@ -163,6 +167,7 @@ def test_resolved_identity_inline_sites_within_caps() -> None:
     )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_capped_files_still_exist() -> None:
     """Stale-cap detection — every capped file path must still exist on disk."""
     assert_capped_files_still_exist(
@@ -172,6 +177,7 @@ def test_resolved_identity_capped_files_still_exist() -> None:
     )
 
 
+@pytest.mark.arch_guard
 def test_resolved_identity_caps_only_shrink() -> None:
     """If a file has fewer inline sites than its cap, lower the cap to match."""
     assert_caps_only_shrink(

@@ -7,12 +7,14 @@ and caused errors.
 Focus: Test parameter-to-schema mapping, not business logic.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers import assert_envelope_shape
 
 
@@ -45,6 +47,15 @@ class TestMCPToolRoundtripMinimal:
         content = result.structured_content if hasattr(result, "structured_content") else result
         assert "products" in content
 
+    async def test_get_products_content_is_summary_not_json(self, mcp_client):
+        """MCP text content is a human-readable summary, not a JSON dump of structured_content."""
+        import json
+
+        result = await mcp_client.call_tool("get_products", {"brand": {"domain": "testbrand.com"}})
+        text = result.content[0].text
+        assert text != json.dumps(result.structured_content)
+        assert not text.strip().startswith("{")
+
     async def test_create_media_buy_minimal(self, mcp_client):
         """Test create_media_buy with minimal required parameters."""
         # Get a product first
@@ -63,6 +74,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
@@ -100,6 +112,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
@@ -185,14 +198,7 @@ class TestMCPToolRoundtripMinimal:
                             "width": 300,
                             "height": 250,
                         },
-                        "assets": {
-                            "image": {
-                                "url": "https://example.com/preview.jpg",
-                                "width": 300,
-                                "height": 250,
-                            },
-                            "click_url": {"url": "https://example.com"},
-                        },
+                        "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
                     }
                 ]
             },
@@ -243,6 +249,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,

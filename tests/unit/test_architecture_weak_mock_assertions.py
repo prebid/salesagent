@@ -28,6 +28,10 @@ beads: #1370 (split assertion guard), #1370 (bare assertion guard)
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = (ROOT / "tests",)
 
@@ -75,8 +79,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_performance_index_behavioral.py", "test_empty_performance_data_succeeds"),
     ("tests/unit/test_performance_index_behavioral.py", "test_product_to_package_mapping"),
     ("tests/unit/test_pr1071_review_fixes.py", "test_audit_log_records_has_brand_not_has_brand_manifest"),
-    ("tests/unit/test_push_notification_forwarding.py", "test_a2a_wrapper_forwards_push_notification_config"),
-    ("tests/unit/test_push_notification_forwarding.py", "test_mcp_wrapper_forwards_push_notification_config"),
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
@@ -119,19 +121,17 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
         has_bare_called_once = False
         has_call_args = False
 
-        for child in ast.walk(node):
-            # Bare assert_called()/assert_called_once() — exactly zero arguments
-            if isinstance(child, ast.Call):
-                func = child.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr in {"assert_called", "assert_called_once"}
-                    and len(child.args) == 0
-                    and len(child.keywords) == 0
-                ):
-                    has_bare_called_once = True
+        for child in iter_call_expressions(node):
+            func = child.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in {"assert_called", "assert_called_once"}
+                and len(child.args) == 0
+                and len(child.keywords) == 0
+            ):
+                has_bare_called_once = True
 
-            # .call_args attribute access (any object)
+        for child in ast.walk(node):
             if isinstance(child, ast.Attribute) and child.attr == "call_args":
                 has_call_args = True
 
@@ -139,6 +139,28 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
             violations.append((file_path, node.name, node.lineno))
 
     return violations
+
+
+def _collect_split_assertion_violations() -> set[tuple[str, str]]:
+    found: set[tuple[str, str]] = set()
+    for scan_dir in SCAN_DIRS:
+        for test_file in sorted(scan_dir.rglob("*.py")):
+            rel = str(test_file.relative_to(ROOT))
+            for f, fn, _line in _find_split_assertions(rel):
+                found.add((f, fn))
+    return found
+
+
+def _collect_bare_assertion_violations() -> set[tuple[str, str]]:
+    found: set[tuple[str, str]] = set()
+    for scan_dir in SCAN_DIRS:
+        for test_file in sorted(scan_dir.rglob("*.py")):
+            if "test_architecture_" in test_file.name:
+                continue
+            rel = str(test_file.relative_to(ROOT))
+            for f, fn, _line in _find_bare_assertions(rel):
+                found.add((f, fn))
+    return found
 
 
 class TestNoWeakMockAssertions:
@@ -158,52 +180,17 @@ class TestNoWeakMockAssertions:
         mock_impl.assert_called_once_with(x, identity=identity)
     """
 
-    def test_no_new_split_assertions(self):
-        """No new test functions use assert_called_once() + call_args together."""
-        all_violations = []
-        for scan_dir in SCAN_DIRS:
-            for test_file in sorted(scan_dir.rglob("*.py")):
-                rel = str(test_file.relative_to(ROOT))
-                all_violations.extend(_find_split_assertions(rel))
-
-        new_violations = [(f, fn, line) for f, fn, line in all_violations if (f, fn) not in WEAK_ASSERTION_ALLOWLIST]
-
-        if new_violations:
-            msg_lines = [
-                "New tests use assert_called_once() + call_args (use assert_called_once_with() instead):",
-                "",
-            ]
-            for f, fn, line in new_violations:
-                msg_lines.append(f"  {f}:{line} in {fn}()")
-            msg_lines.append("")
-            msg_lines.append(
+    @pytest.mark.arch_guard
+    def test_split_assertion_allowlist_matches_violations(self):
+        """Split-assertion violations must exactly match WEAK_ASSERTION_ALLOWLIST."""
+        assert_violations_match_allowlist(
+            _collect_split_assertion_violations(),
+            WEAK_ASSERTION_ALLOWLIST,
+            fix_hint=(
                 "Fix: Replace assert_called_once() + call_args inspection with "
                 "assert_called_once_with(expected_arg, keyword=expected_value)."
-            )
-            raise AssertionError("\n".join(msg_lines))
-
-    def test_allowlist_entries_still_exist(self):
-        """Every allowlisted violation must still exist (stale entry detection).
-
-        When you upgrade a test to assert_called_once_with(), remove it from
-        WEAK_ASSERTION_ALLOWLIST — this test enforces that.
-        """
-        all_violations: set[tuple[str, str]] = set()
-        for scan_dir in SCAN_DIRS:
-            for test_file in sorted(scan_dir.rglob("*.py")):
-                rel = str(test_file.relative_to(ROOT))
-                for f, fn, _line in _find_split_assertions(rel):
-                    all_violations.add((f, fn))
-
-        stale = WEAK_ASSERTION_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (test was fixed — remove from WEAK_ASSERTION_ALLOWLIST):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"    ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -273,19 +260,17 @@ def _find_bare_assertions(file_path: str) -> list[tuple[str, str, int]]:
         has_bare_called_once = False
         has_call_args = False
 
-        for child in ast.walk(node):
-            # Bare assert_called()/assert_called_once() — exactly zero arguments
-            if isinstance(child, ast.Call):
-                func = child.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr in {"assert_called", "assert_called_once"}
-                    and len(child.args) == 0
-                    and len(child.keywords) == 0
-                ):
-                    has_bare_called_once = True
+        for child in iter_call_expressions(node):
+            func = child.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in {"assert_called", "assert_called_once"}
+                and len(child.args) == 0
+                and len(child.keywords) == 0
+            ):
+                has_bare_called_once = True
 
-            # .call_args attribute access (any object)
+        for child in ast.walk(node):
             if isinstance(child, ast.Attribute) and child.attr == "call_args":
                 has_call_args = True
 
@@ -310,54 +295,15 @@ class TestNoBareAssertCalledOnce:
         mock_repo.update_status.assert_called_once_with("step_123", status="completed")
     """
 
-    def test_no_new_bare_assertions(self):
-        """No new test functions use bare assert_called_once() without arg verification."""
-        all_violations = []
-        for scan_dir in SCAN_DIRS:
-            for test_file in sorted(scan_dir.rglob("*.py")):
-                if "test_architecture_" in test_file.name:
-                    continue
-                rel = str(test_file.relative_to(ROOT))
-                all_violations.extend(_find_bare_assertions(rel))
-
-        new_violations = [(f, fn, line) for f, fn, line in all_violations if (f, fn) not in BARE_ASSERTION_ALLOWLIST]
-
-        if new_violations:
-            msg_lines = [
-                "New tests use bare assert_called_once() without argument verification:",
-                "",
-            ]
-            for f, fn, line in new_violations:
-                msg_lines.append(f"  {f}:{line} in {fn}()")
-            msg_lines.append("")
-            msg_lines.append(
+    @pytest.mark.arch_guard
+    def test_bare_assertion_allowlist_matches_violations(self):
+        """Bare assert_called_once violations must exactly match BARE_ASSERTION_ALLOWLIST."""
+        assert_violations_match_allowlist(
+            _collect_bare_assertion_violations(),
+            BARE_ASSERTION_ALLOWLIST,
+            fix_hint=(
                 "Fix: Replace assert_called_once() with "
                 "assert_called_once_with(expected_arg, keyword=expected_value). "
                 "Use unittest.mock.ANY for arguments you don't care about."
-            )
-            raise AssertionError("\n".join(msg_lines))
-
-    def test_allowlist_entries_still_exist(self):
-        """Every allowlisted violation must still exist (stale entry detection).
-
-        When you upgrade a test to assert_called_once_with(), remove it from
-        BARE_ASSERTION_ALLOWLIST — this test enforces that.
-        """
-        all_violations: set[tuple[str, str]] = set()
-        for scan_dir in SCAN_DIRS:
-            for test_file in sorted(scan_dir.rglob("*.py")):
-                if "test_architecture_" in test_file.name:
-                    continue
-                rel = str(test_file.relative_to(ROOT))
-                for f, fn, _line in _find_bare_assertions(rel):
-                    all_violations.add((f, fn))
-
-        stale = BARE_ASSERTION_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (test was fixed — remove from BARE_ASSERTION_ALLOWLIST):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"    ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+            ),
+        )

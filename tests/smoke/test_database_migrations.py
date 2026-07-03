@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._migration_helpers import get_migration_heads
+from scripts.ci.migration_helpers import get_migration_heads
 
 
 class TestMigrationVersioning:

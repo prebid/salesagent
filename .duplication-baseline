@@ -1,5 +1,5 @@
 {
-  "_comment": "tests bumped 98->99 for the in-network-runner PR (#1420). This is NOT new duplication from that PR: its changed files appear in ZERO R0801 groups. pylint R0801 counts emergent CLUSTERS, so merely adding test files reshuffles clustering and recounts a PRE-EXISTING, byte-identical e2e webhook duplicate pair (test_a2a_webhook_payload_types + test_delivery_webhooks_e2e) as its own group. Root cause is pre-existing e2e-test debt (missing shared e2e fixtures: webhook-capture server, authed MCP client, psycopg2 DB mutations) surfaced by #1372's count-based gate + tight baseline. The 98 baseline only held on #1372 because that PR added no test files to perturb clustering. Tracked + to be fixed in its own PR: prebid/salesagent#1423.",
   "src": 36,
-  "tests": 99
+  "tests": 89,
+  "scripts": 0
 }

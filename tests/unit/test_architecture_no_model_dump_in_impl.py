@@ -18,6 +18,10 @@ beads: salesagent-hr8n
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+
 TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 
 BANNED_METHODS = {"model_dump", "model_dump_internal"}
@@ -52,9 +56,7 @@ def _find_model_dump_in_impl() -> list[tuple[str, int, str, str]]:
             if not node.name.endswith("_impl"):
                 continue
 
-            for child in ast.walk(node):
-                if not isinstance(child, ast.Call):
-                    continue
+            for child in iter_call_expressions(node):
                 func = child.func
                 if isinstance(func, ast.Attribute) and func.attr in BANNED_METHODS:
                     rel_path = str(py_file.relative_to(TOOLS_DIR))
@@ -70,6 +72,7 @@ def _find_model_dump_in_impl() -> list[tuple[str, int, str, str]]:
 class TestNoModelDumpInImpl:
     """_impl functions must not call .model_dump() or .model_dump_internal()."""
 
+    @pytest.mark.arch_guard
     def test_no_new_model_dump_violations(self):
         """No NEW .model_dump() calls in _impl functions beyond the known allowlist."""
         all_violations = _find_model_dump_in_impl()
@@ -84,6 +87,7 @@ class TestNoModelDumpInImpl:
             f"Serialization belongs in the transport wrapper, not business logic.\n" + "\n".join(new_violations)
         )
 
+    @pytest.mark.arch_guard
     def test_known_violations_not_stale(self):
         """Every entry in KNOWN_VIOLATIONS must still exist in the source.
 
@@ -92,14 +96,13 @@ class TestNoModelDumpInImpl:
         """
         all_violations = _find_model_dump_in_impl()
         actual_sites = {(v[0], v[1]) for v in all_violations}
-
-        stale = KNOWN_VIOLATIONS - actual_sites
-        assert not stale, (
-            f"Found {len(stale)} stale entries in KNOWN_VIOLATIONS allowlist.\n"
-            f"These violations have been fixed — remove them from the allowlist:\n"
-            + "\n".join(f"  {path}:{line}" for path, line in sorted(stale))
+        assert_violations_match_allowlist(
+            actual_sites,
+            KNOWN_VIOLATIONS,
+            fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
         )
 
+    @pytest.mark.arch_guard
     def test_violation_count_documented(self):
         """Track the total violation count — should only decrease over time."""
         all_violations = _find_model_dump_in_impl()

@@ -422,7 +422,12 @@ class TestBuildCreateSuccess:
         assert result.packages[0].package_id == "custom-p1"
 
     def test_buyer_ref_no_longer_on_success_response(self):
-        """buyer_ref is no longer on CreateMediaBuySuccess (removed in adcp 3.12)."""
+        """buyer_ref should not be set on CreateMediaBuySuccess response.
+
+        Note: SDK 5.7 codegen incorrectly declares buyer_ref on the response
+        schema (it belongs on the request, not the response per AdCP 3.1).
+        We verify our code doesn't populate it, even though the SDK accepts it.
+        """
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
             request=_make_create_request(),
@@ -430,7 +435,8 @@ class TestBuildCreateSuccess:
             packages=[_make_media_package()],
         )
 
-        assert not hasattr(result, "buyer_ref") or "buyer_ref" not in result.model_fields
+        # Our code should not set buyer_ref on the response
+        assert result.buyer_ref is None
 
     def test_result_is_create_media_buy_success_type(self):
         """Return type is CreateMediaBuySuccess."""

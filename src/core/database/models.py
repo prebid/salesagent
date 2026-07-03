@@ -32,6 +32,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.database.json_type import JSONType
+from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
 
 logger = logging.getLogger(__name__)
@@ -179,8 +180,6 @@ class Tenant(Base, JSONValidatorMixin):
         try:
             return decrypt_api_key(self._gemini_api_key)
         except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
             raise AdCPConfigurationError(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}") from exc
 
     @gemini_api_key.setter
@@ -646,8 +645,6 @@ class TenantAuthConfig(Base):
         try:
             return decrypt_api_key(self.oidc_client_secret_encrypted)
         except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
             raise AdCPConfigurationError(f"Failed to decrypt OIDC client secret for tenant {self.tenant_id}") from exc
 
     @oidc_client_secret.setter
@@ -927,6 +924,16 @@ class MediaBuy(Base):
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Canonical hash of the request as hashed by the idempotency probe (see
+    # src.core.idempotency_canonical). raw_request is NOT canonicalizable —
+    # it carries injected package_ids and alias-dependent field names — so the
+    # degraded idempotency fallback conflict-checks against this stored hash.
+    # NULL on rows that predate the column (legacy: no conflict signal).
+    payload_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="RFC 8785 JCS SHA-256 of the create request (excluded fields stripped); degraded-path IDEMPOTENCY_CONFLICT signal",
+    )
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -967,14 +974,116 @@ class MediaBuy(Base):
         Index("idx_media_buys_status", "status"),
         Index("idx_media_buys_strategy", "strategy_id"),
         Index("idx_media_buys_account", "account_id"),
+        # Dup-booking backstop, scoped per the spec's idempotency tuple
+        # (agent + account + key) EXACTLY — no extra dimensions in uniqueness.
+        # NULLS NOT DISTINCT so a NULL account (no sub-account) still enforces
+        # uniqueness on the rest of the tuple; partial so keyless legacy rows
+        # stay out of the index.
         Index(
             "idx_media_buys_idempotency_key",
             "tenant_id",
             "principal_id",
+            "account_id",
             "idempotency_key",
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
+            postgresql_nulls_not_distinct=True,
         ),
+    )
+
+
+class IdempotencyAttempt(Base):
+    """Cached verbatim SUCCESS response keyed by (tenant, principal, account, idempotency_key).
+
+    The unique scope is the spec's idempotency tuple — (authenticated agent,
+    account, key) — EXACTLY. ``tool_name`` is recorded for observability but
+    deliberately NOT part of uniqueness or lookups: per the spec, the same key
+    reused across two different mutating tools with different payloads is an
+    ``IDEMPOTENCY_CONFLICT``, never two independent caches. (General principle:
+    spec-defined scope tuples are implemented as written; extra dimensions may
+    exist as columns but never in uniqueness/lookup semantics.)
+
+    AdCP 3.0.1 idempotency: retrying a mutating tool call with the same
+    idempotency_key must return the ORIGINAL success response byte-for-byte
+    (marked `replayed: true`), and errors are NEVER cached — a retry after an
+    error re-executes. This table is the verbatim success cache: it stores the
+    original response envelope plus the RFC 8785 canonical hash of the request
+    payload, so a replay returns the stored envelope unchanged and a same-key /
+    different-payload retry is rejected with `IDEMPOTENCY_CONFLICT`.
+
+    `MediaBuy.idempotency_key` (the partial unique index on `media_buys`) remains
+    the dup-booking backstop — it guarantees a single ad-server booking even
+    under a concurrent same-key race; this table holds the verbatim response to
+    replay once the winner has committed.
+
+    `expires_at` enforces an explicit TTL — expired rows are treated as absent at
+    the read path. When the original buy still exists, a post-expiry retry hits
+    the `MediaBuy.idempotency_key` backstop and rejects fail-closed
+    (`IDEMPOTENCY_EXPIRED`); a within-TTL retry whose cache row is missing or
+    unusable rejects transient — verbatim replay is byte-for-byte or nothing,
+    never a fabricated body. The default TTL is announced via
+    `get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds` (86400 = 24h).
+    """
+
+    __tablename__ = "idempotency_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(String(50), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
+    )
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    account_id: Mapped[str | None] = mapped_column(
+        # String(100) matches accounts.account_id (and every other account_id
+        # column) — the same logical value joins on the degraded-path lookup.
+        String(100),
+        nullable=True,
+        comment="Resolved account scope (AdCP idempotency scope is agent+account+key); NULL when the buy targets no sub-account",
+    )
+    tool_name: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        comment="Tool that produced the cached success (observability only — NOT part of the unique scope)",
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="RFC 8785 JCS SHA-256 of the request payload (excluded fields stripped); enables IDEMPOTENCY_CONFLICT detection",
+    )
+    # Bare JSONType (no model=) is deliberate: the envelope must replay
+    # byte-for-byte, and typed coercion on read could rewrite it. The
+    # {"status", "response"} shape is written by
+    # IdempotencyAttemptRepository.record_success and read by
+    # _replay_cached_success — do not migrate to a typed model in a
+    # "legacy JSONType" sweep without confirming coercion preserves
+    # verbatim fidelity.
+    response_envelope: Mapped[dict] = mapped_column(
+        JSONType,
+        nullable=False,
+        comment="Verbatim original success response envelope; returned unchanged on replay (marked replayed=true)",
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # Relationships
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        Index(
+            "idx_idempotency_attempts_lookup",
+            "tenant_id",
+            "principal_id",
+            "account_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
+        Index("idx_idempotency_attempts_expires_at", "expires_at"),
     )
 
 
@@ -1200,8 +1309,6 @@ class AdapterConfig(Base):
         try:
             return decrypt_api_key(self._gam_service_account_json)
         except ValueError as exc:
-            from src.core.exceptions import AdCPConfigurationError
-
             raise AdCPConfigurationError(
                 f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}"
             ) from exc

@@ -87,11 +87,9 @@ class TestSyncCreativesErrorPaths:
         # sync_creatives_raw returned a response: it must report the failure
         # explicitly via a per-creative ``action == failed`` entry, not silently
         # accept the malformed creative as a success.
-        from src.core.schemas import CreativeAction
-
         assert response is not None, "sync_creatives_raw must not return None for invalid input"
-        failed = [c for c in response.creatives if c.action == CreativeAction.failed]
-        succeeded = [c for c in response.creatives if c.action in (CreativeAction.created, CreativeAction.updated)]
+        failed = [c for c in response.creatives if c.action == "failed"]
+        succeeded = [c for c in response.creatives if c.action in ("created", "updated")]
         assert len(failed) >= 1, (
             f"Invalid creative should land in creatives[] with action=failed, "
             f"got {[c.action for c in response.creatives]}"

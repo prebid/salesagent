@@ -18,11 +18,13 @@ from adcp.types import (
 from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
-from adcp.types import ReportingFrequency as LibraryReportingFrequency
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
-    ByGeoItem as LibraryByGeoItem,
+    ByDeviceTypeItem as LibraryByDeviceTypeItem,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+    ByGeoItem as LibraryByGeoItem,
+)
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
@@ -77,37 +79,9 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # account, reporting_dimensions, attribution_window: now provided by adcp 3.10 library
-    # with proper types (AccountReference, ReportingDimensions, AttributionWindow).
-
-    # --- Salesagent extensions (NOT in adcp spec/library) ---
-    include_package_daily_breakdown: bool | None = Field(
-        None,
-        description="Include daily_breakdown arrays within each package (salesagent extension, not in adcp spec)",
-    )
-
-    # --- AdCP spec fields the adcp Python library lags on (gh-#1299) ---
-    # Defined in /schemas/latest/media-buy/get-media-buy-delivery-request.json but
-    # not yet in the adcp library's GetMediaBuyDeliveryRequest. Declared here so
-    # spec-compliant clients are accepted (Pattern #1: extend library type).
-    time_granularity: LibraryReportingFrequency | None = Field(
-        None,
-        description=(
-            "Per-window slice granularity for the pull, using the same vocabulary "
-            "as reporting_webhook.reporting_frequency. When set, the seller returns "
-            "per-window delivery slices over the date range. Capability-scoped: the "
-            "value MUST be one of the seller's declared "
-            "reporting_capabilities.windowed_pull_granularities."
-        ),
-    )
-    include_window_breakdown: bool = Field(
-        default=False,
-        description=(
-            "When true, the response includes media_buy_deliveries[].windows[] — "
-            "per-window delivery slices over the date range at the requested "
-            "time_granularity. Ignored when time_granularity is omitted."
-        ),
-    )
+    # account, reporting_dimensions, attribution_window, time_granularity,
+    # include_window_breakdown, include_package_daily_breakdown: all now provided
+    # by adcp SDK 5.7 (spec 3.1.0-beta.3). No local redeclarations needed.
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +130,27 @@ class GeoBreakdown(LibraryByGeoItem):
 
     Library provides geo_level, system, geo_code, geo_name plus the full
     DeliveryMetrics surface. For metro/postal_area levels the ``system``
-    field carries the classification system the seller used (BR-RULE-091
-    INV-5, e.g. 'nielsen_dma', 'us_zip').
+    field carries the classification system the seller used
+    (e.g. 'nielsen_dma', 'us_zip').  See ``get_media_buy_delivery.mdx``
+    §Geo Breakdown.
     """
 
     pass  # All fields inherited from library ByGeoItem
+
+
+class DeviceTypeBreakdown(LibraryByDeviceTypeItem):
+    """Device-type delivery breakdown entry (extends library ByDeviceTypeItem).
+
+    Library provides device_type enum (desktop, mobile, tablet, ctv, dooh,
+    unknown) plus the full DeliveryMetrics surface (impressions, spend, clicks,
+    ctr, views, completed_views, ...).
+
+    Returned when reporting_dimensions includes 'device_type'.  The sibling
+    flag ``by_device_type_truncated`` MUST accompany this array whenever it
+    is present (``get-media-buy-delivery-response.json``).
+    """
+
+    pass  # All fields inherited from library ByDeviceTypeItem
 
 
 class PackageDelivery(SalesAgentBaseModel):
@@ -195,10 +185,33 @@ class PackageDelivery(SalesAgentBaseModel):
         None,
         description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
     )
+    by_placement_truncated: bool | None = Field(
+        None,
+        description="True when by_placement was truncated by the requested limit; false when complete. "
+        "MUST be present whenever by_placement is present "
+        "(get-media-buy-delivery-response.json §by_placement_truncated; get_media_buy_delivery.mdx §Truncation).",
+    )
     by_geo: list[GeoBreakdown] | None = Field(
         None,
         description="Geographic delivery breakdown (populated when reporting_dimensions includes 'geo'). "
         "For metro/postal_area levels each entry declares the classification 'system' used.",
+    )
+    by_geo_truncated: bool | None = Field(
+        None,
+        description="True when by_geo was truncated by the requested limit; false when complete. "
+        "MUST be present whenever by_geo is present "
+        "(get-media-buy-delivery-response.json §by_geo_truncated; get_media_buy_delivery.mdx §Truncation).",
+    )
+    by_device_type: list[DeviceTypeBreakdown] | None = Field(
+        None,
+        description="Device-type delivery breakdown (populated when reporting_dimensions includes 'device_type'). "
+        "Entries cover device_type enum values: desktop, mobile, tablet, ctv, dooh, unknown.",
+    )
+    by_device_type_truncated: bool | None = Field(
+        None,
+        description="True when by_device_type was truncated by the requested limit; false when complete. "
+        "MUST be present whenever by_device_type is present "
+        "(get-media-buy-delivery-response.json §by_device_type_truncated; get_media_buy_delivery.mdx §Truncation).",
     )
 
 
@@ -379,6 +392,8 @@ class AdapterPackageDelivery(SalesAgentBaseModel):
     impressions: int
     spend: float
     by_placement: list[dict[str, Any]] | None = None
+    by_geo: list[dict[str, Any]] | None = None
+    by_device_type: list[dict[str, Any]] | None = None
 
 
 class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):

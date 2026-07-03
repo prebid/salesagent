@@ -7,13 +7,20 @@ to ensure our A2A server properly handles the evolving AdCP spec.
 """
 
 import logging
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
 from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatus
+from adcp.types import AccountReference as LibraryAccountReference
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, create_a2a_text_message
+from tests.factories.creative_asset import build_assets, image_spec
+from tests.utils.a2a_helpers import (
+    assert_delivery_forwarded_account,
+    create_a2a_message_with_skill,
+    create_a2a_text_message,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -360,6 +367,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],  # Use product_id per AdCP spec
@@ -427,6 +435,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                 "packages": [
                     {
                         "product_id": sample_products[0],
@@ -871,14 +880,7 @@ class TestA2ASkillInvocation:
                         "creative_id": "creative_test_1",
                         "name": "Test Creative",
                         "format_id": "display_300x250",
-                        "assets": {
-                            "asset_1": {
-                                "asset_type": "image",
-                                "url": "https://example.com/creative.jpg",
-                                "width": 300,
-                                "height": 250,
-                            }
-                        },
+                        "assets": build_assets(image_spec("asset_1", url="https://example.com/creative.jpg")),
                     }
                 ]
             }
@@ -996,6 +998,43 @@ class TestA2ASkillInvocation:
             assert result.metadata["invocation_type"] == "explicit_skill"
             assert "get_media_buy_delivery" in result.metadata["skills_requested"]
             assert result.artifacts is not None
+
+    @pytest.mark.asyncio
+    async def test_get_media_buy_delivery_skill_forwards_typed_account(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
+        """A valid account survives the real on_message_send dispatch as a typed AccountReference.
+
+        The handler-level unit tests (test_a2a_parameter_mapping.py) prove the skill method
+        forwards req.account, and the malformed-account wire test (test_a2a_error_responses.py)
+        proves the error path. This is the missing happy-path half: it drives the full
+        DataPart-extraction → param-passing pipeline through on_message_send and asserts the
+        buyer's account reaches the core tool validated, not as the raw dict that crashed
+        resolve_account (account_ref.root on a dict).
+        """
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+            patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery,
+        ):
+            mock_delivery.return_value = {"media_buys": []}
+
+            from tests.a2a_helpers import make_a2a_context
+
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
+
+            skill_params = {"media_buy_ids": ["mb_test_123"], "account": {"account_id": "acct-1"}}
+            message = create_a2a_message_with_skill("get_media_buy_delivery", skill_params)
+            params = SendMessageRequest(message=message)
+
+            result = await handler.on_message_send(params, context=ctx)
+
+            assert isinstance(result, Task)
+            assert result.artifacts is not None
+
+            expected = LibraryAccountReference.model_validate({"account_id": "acct-1"})
+            assert_delivery_forwarded_account(mock_delivery, expected)
 
     @pytest.mark.asyncio
     async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):

@@ -10,7 +10,6 @@ This test validates that our A2A server sends the correct payload type based on 
 """
 
 import json
-import os
 import socket
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -24,6 +23,7 @@ import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.e2e._webhook_capture import run_webhook_capture_server
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
 
 
@@ -181,35 +181,8 @@ class WebhookPayloadCapture(BaseHTTPRequestHandler):
 @pytest.fixture
 def webhook_capture_server():
     """Start a local HTTP server to capture webhook payloads."""
-    # Clear any previous captures
-    WebhookPayloadCapture.received_payloads.clear()
-
-    # Find an available port
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("0.0.0.0", 0))
-    port = s.getsockname()[1]
-    s.close()
-
-    # Start server on all interfaces so it's reachable from Docker container
-    server = HTTPServer(("0.0.0.0", port), WebhookPayloadCapture)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    # Host path: 'localhost' is rewritten to host.docker.internal by the server.
-    # In-network the receiver lives in the runner container; the server reaches it
-    # by the runner's network alias (ADCP_WEBHOOK_HOST=tests), left un-rewritten.
-    webhook_host = os.getenv("ADCP_WEBHOOK_HOST", "localhost")
-    webhook_url = f"http://{webhook_host}:{port}/webhook"
-
-    yield {
-        "url": webhook_url,
-        "server": server,
-        "received": WebhookPayloadCapture.received_payloads,
-    }
-
-    server.shutdown()
-    server.server_close()
-    WebhookPayloadCapture.received_payloads.clear()
+    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_payloads) as info:
+        yield info
 
 
 class TestA2AWebhookPayloadTypes:

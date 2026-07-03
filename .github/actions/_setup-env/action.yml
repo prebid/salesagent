@@ -1,30 +1,9 @@
 name: Setup Python and uv environment
 description: Install Python dependencies via uv with cache.
-inputs:
-  python-version:
-    description: Python version to use.
-    required: false
-    default: "3.12"
-  uv-version:
-    description: uv version to install.
-    required: false
-    default: "0.11.15"
-  dependency-group:
-    description: Dependency group passed to uv sync.
-    required: false
-    default: "dev"
 runs:
   using: composite
   steps:
-    - name: Set up Python
-      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-      with:
-        python-version: ${{ inputs.python-version }}
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
-      with:
-        version: ${{ inputs.uv-version }}
+    - uses: ./.github/actions/_install-uv
 
     - name: Cache uv dependencies
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -32,8 +11,8 @@ runs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-v4-py${{ inputs.python-version }}-${{ hashFiles('uv.lock') }}
+        key: ${{ runner.os }}-uv-v5-py${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
 
     - name: Install dependencies
       shell: bash
-      run: uv sync --group "${{ inputs.dependency-group }}"
+      run: uv sync --group dev

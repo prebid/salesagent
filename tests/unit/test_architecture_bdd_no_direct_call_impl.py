@@ -19,6 +19,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Functions that legitimately bypass transport dispatch.
@@ -46,14 +50,11 @@ def _is_when_or_given_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) ->
 
 def _has_direct_impl_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function body calls .call_impl() or any _impl() function directly."""
-    for node in ast.walk(func):
-        if isinstance(node, ast.Call):
-            # Check for env.call_impl(...)
-            if isinstance(node.func, ast.Attribute) and node.func.attr == "call_impl":
-                return True
-            # Check for _xxx_impl(...)
-            if isinstance(node.func, ast.Name) and node.func.id.endswith("_impl"):
-                return True
+    for node in iter_call_expressions(func):
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "call_impl":
+            return True
+        if isinstance(node.func, ast.Name) and node.func.id.endswith("_impl"):
+            return True
     return False
 
 
@@ -74,7 +75,7 @@ def _scan_bdd_steps() -> list[str]:
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("__"):
             continue
-        source = py_file.read_text()
+        source = py_file.read_text(encoding="utf-8")
         source_lines = source.splitlines()
         tree = ast.parse(source, filename=str(py_file))
         relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent)
@@ -101,6 +102,7 @@ def _scan_bdd_steps() -> list[str]:
 class TestBddNoDirectCallImpl:
     """Structural guard: When/Given steps must use dispatch_request(), not call_impl()."""
 
+    @pytest.mark.arch_guard
     def test_no_direct_call_impl_in_steps(self):
         """Every @when/@given step must dispatch through dispatch_request().
 
@@ -114,13 +116,14 @@ class TestBddNoDirectCallImpl:
             f"(use dispatch_request or add TRANSPORT-BYPASS comment):\n" + "\n".join(f"  {v}" for v in violations)
         )
 
+    @pytest.mark.arch_guard
     def test_allowlist_no_stale_entries(self):
         """Verify every allowlisted function still exists and still bypasses."""
         for file_stem, func_name in _ALLOWLIST:
             # Find the file
             matches = list(_BDD_STEPS_DIR.rglob(f"{file_stem}.py"))
             assert matches, f"Allowlisted file '{file_stem}.py' not found"
-            source = matches[0].read_text()
+            source = matches[0].read_text(encoding="utf-8")
             tree = ast.parse(source)
             found = False
             for node in ast.walk(tree):

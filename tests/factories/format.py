@@ -78,20 +78,30 @@ def _find_inner_asset_class(asset_type: str):
 
     Inner assets within a repeatable_group use different classes than
     top-level assets. We find them dynamically to survive SDK regeneration.
+
+    The ``assets`` field annotation is nested:
+        list[Annotated[Union[Annotated[AssetX, Tag], ...], Discriminator]]
+    so we unwrap the list element (Annotated), then the discriminated Union,
+    then each member (Annotated) down to the concrete asset model.
     """
+    from typing import Annotated, get_args, get_origin
+
+    def _unwrap_annotated(tp):
+        return get_args(tp)[0] if get_origin(tp) is Annotated else tp
 
     _RepeatableGroupCls = _find_repeatable_group_class()
-    # Get the union type from the 'assets' field annotation
-    import typing
-
     assets_field = _RepeatableGroupCls.model_fields["assets"]
-    union_args = typing.get_args(typing.get_args(assets_field.annotation)[0])
-    for cls in union_args:
-        if hasattr(cls, "model_fields") and "asset_type" in cls.model_fields:
-            if cls.model_fields["asset_type"].default == asset_type:
-                return cls
-    # Fallback: use first class
-    return union_args[0] if union_args else None
+    # list[...] -> element type (Annotated[Union[...], Discriminator])
+    element = _unwrap_annotated(get_args(assets_field.annotation)[0])
+    # Union[Annotated[AssetX, Tag], ...] -> concrete member classes
+    members = [_unwrap_annotated(m) for m in get_args(element)]
+    members = [m for m in members if hasattr(m, "model_fields")]
+    for cls in members:
+        field = cls.model_fields.get("asset_type")
+        if field is not None and field.default == asset_type:
+            return cls
+    # Fallback: first concrete member
+    return members[0] if members else None
 
 
 def make_asset_group(

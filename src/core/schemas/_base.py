@@ -1,3 +1,9 @@
+# SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+# - [misc] on lines ~339, ~415: UpdateMediaBuySuccess/Error class defs.
+#   Pydantic metaclass interaction in SDK hierarchy; permanent.
+# - [assignment] on lines ~1449, ~1450, ~1637, ~1638: account/idempotency_key
+#   overrides (required -> optional). Architectural; permanent.
+
 import warnings
 from datetime import date, datetime
 
@@ -5,6 +11,8 @@ from datetime import date, datetime
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+
+from src.core.enum_helpers import enum_value
 
 if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
@@ -134,6 +142,52 @@ def url(value: str) -> AnyUrl:
     return AnyUrl(value)  # Pydantic handles string -> AnyUrl conversion
 
 
+def canonical_agent_url(agent_url: object) -> str:
+    """Canonicalize an agent_url for identity comparison (spec MUST canonicalization).
+
+    Delegates to the SDK's ``adcp.signing.canonicalize_target_uri`` so federation
+    identity uses the *same* canonical form the spec mandates for target URIs —
+    lowercased scheme/host, dropped default ports, normalized percent-encoding, and
+    stripped userinfo + fragment (a hand-rolled normalizer such as yarl keeps those,
+    diverging from the spec). The SDK preserves a trailing slash, so we additionally
+    strip it to keep ``https://x.org`` and ``https://x.org/`` equal. This is the
+    single canonical form used both to compare two FormatId references for federation
+    identity (see ``format_id_identity``) and to key the creative-agent format cache
+    (``CreativeAgentRegistry._cache_key``).
+
+    Args:
+        agent_url: A URL string or ``AnyUrl`` (FormatId.agent_url, CreativeAgent.agent_url).
+
+    Returns:
+        The canonicalized URL string with any trailing slash removed.
+    """
+    from adcp.signing import canonicalize_target_uri
+
+    return canonicalize_target_uri(str(agent_url)).rstrip("/")
+
+
+def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:
+    """Return the federation identity of a FormatId: the ``(canonical agent_url, id)`` pair.
+
+    AdCP v3.1 makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
+    ``id`` (``core/format-id.json`` requires ``[agent_url, id]``; the ``list_formats``
+    storyboard step matches product/format references with ``match_keys: [agent_url,
+    id]``, ``scope.equals: $agent_url``, ``on_out_of_scope: warn``). Comparing on
+    ``id`` alone would mis-resolve a
+    third-party reference (foreign ``agent_url``) to a local format that merely
+    shares an ``id`` — fabricating a local entry for a format the seller does not
+    host. Works on both the library ``FormatId`` and our subclass (duck-typed on
+    ``agent_url``/``id``).
+
+    Args:
+        format_id: Any FormatId-like object exposing ``agent_url`` and ``id``.
+
+    Returns:
+        ``(canonical_agent_url, id)`` — the comparison key for federation identity.
+    """
+    return (canonical_agent_url(format_id.agent_url), format_id.id)
+
+
 class NestedModelSerializerMixin:
     """Mixin that ensures nested Pydantic models use their custom model_dump().
 
@@ -209,6 +263,21 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     the pattern used by ``GetProductsResponse``, ``ListCreativeFormatsResponse``,
     ``SyncAccountsResponse``.
     """
+
+    # SDK 5.7 removed these from parent — declare locally
+    account: Any | None = None
+    sandbox: bool | None = None
+    # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
+    # it (adapters/base.py _build_create_success). Declare it for parity/typing so
+    # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
+    creative_deadline: datetime | None = None
+    # SDK 5.7 also dropped valid_actions and context from the parent, but production
+    # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
+    # and survives a parent extra-mode change, not riding inherited extra='allow'.
+    # valid_actions_for_status() yields strings that are all valid MediaBuyValidAction
+    # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
+    valid_actions: list[MediaBuyValidAction] | None = None
+    context: ContextObject | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -293,10 +362,19 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     status: str
     response: CreateMediaBuySuccess | CreateMediaBuyError
 
+    # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
+    # envelope / top of the structured result). Set True ONLY when this response
+    # is a verbatim replay of a previously cached success. Injected at response
+    # time, never stored in the cached body; omitted when False so fresh
+    # responses are byte-identical to before. Only valid on a successful result.
+    replayed: bool = False
+
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
         result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
+        if self.replayed:
+            result["replayed"] = True
         return result
 
     def __iter__(self):
@@ -332,7 +410,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
+class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     """Successful update_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking.
@@ -351,7 +429,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
     # while still being AdCP-compliant (those fields are excluded via exclude=True)
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
-    affected_packages: list[AffectedPackage] | None = None  # type: ignore[assignment]
+    affected_packages: list[AffectedPackage] | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -408,7 +486,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):
             return f"Media buy {self.media_buy_id} updated successfully."
 
 
-class UpdateMediaBuyError(AdCPUpdateMediaBuyError):
+class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
     """Failed update_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp UpdateMediaBuyError type.
@@ -993,7 +1071,7 @@ class Targeting(TargetingOverlay):
             form_factors: set[str] = set()
             for platform in dp:
                 # Handle both enum values and raw strings
-                p = platform.value if hasattr(platform, "value") else str(platform)
+                p = enum_value(platform)
                 form_factors.update(_PLATFORM_TO_FORM_FACTORS.get(p, []))
             if form_factors:
                 values["device_type_any_of"] = sorted(form_factors)
@@ -1440,15 +1518,16 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     # adcp 4.3 makes account and idempotency_key required.  Our impl resolves
     # identity at the transport layer (ResolvedIdentity), not from the request
-    # payload, so account is optional here.  idempotency_key is generated at
-    # the transport boundary when not supplied by the caller.
+    # payload, so account stays optional here.  idempotency_key inherits the
+    # library's REQUIRED field (MinLen 16 + pattern) — a missing key rejects at
+    # the boundary as VALIDATION_ERROR (the AdCP 3.0.1 conformance storyboard
+    # accepts it; the spec prose prefers INVALID_REQUEST).
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
-    packages: list[PackageRequest] | None = None  # type: ignore[assignment]
+    packages: list[PackageRequest] | None = None
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):
@@ -1627,9 +1706,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes account and idempotency_key required.  Override as optional
-    # — identity is resolved at the transport boundary, and idempotency_key is
-    # generated at the boundary when not supplied by the caller.
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional:
+    # identity is resolved at the transport boundary, and update_media_buy's
+    # required-key enforcement is a deliberate fast-follow — create_media_buy
+    # enforces it today; the update BDD contract still encodes optional keys.
+    # Removable when the update BDD contract requires keys (the update_media_buy
+    # required-key fast-follow), at which point the idempotency_key override goes
+    # away and the library's required field applies.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
     idempotency_key: str | None = None  # type: ignore[assignment]
 
@@ -1637,7 +1720,7 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
-    packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
+    packages: list[AdCPPackageUpdate] | None = None
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.

@@ -24,10 +24,7 @@ from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
 )
 from adcp.types.generated_poc.account.sync_accounts_request import (
-    Account as SyncAccountInput,
-)
-from adcp.types.generated_poc.account.sync_accounts_response import (
-    Account as SyncResponseAccount,
+    Accounts as SyncAccountInput,  # SDK 5.7: Account → Accounts
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -38,6 +35,7 @@ from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -45,6 +43,7 @@ from src.core.schemas.account import (
     ListAccountsResponse,
     SyncAccountsRequest,
     SyncAccountsResponse,
+    SyncResponseAccount,
 )
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
@@ -143,7 +142,7 @@ def _list_accounts_impl(
         # Apply status filter if requested
         status_filter = getattr(req, "status", None)
         if status_filter is not None:
-            status_str = status_filter.value if hasattr(status_filter, "value") else str(status_filter)
+            status_str = enum_value(status_filter)
             db_accounts = [a for a in db_accounts if a.status == status_str]
 
         # Apply sandbox filter if requested
@@ -250,9 +249,7 @@ def _generate_account_name(brand_domain: str, operator: str, brand_id: str | Non
 
 def _enum_to_str(val: Any) -> str | None:
     """Extract string value from an enum or return as-is. Returns None for None."""
-    if val is None:
-        return None
-    return val.value if hasattr(val, "value") else str(val)
+    return enum_value(val)
 
 
 def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
@@ -351,7 +348,7 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
     """
     from datetime import datetime, timedelta
 
-    from adcp.types.generated_poc.account.sync_accounts_response import Setup  # TODO: no stable alias in adcp.types
+    from adcp.types import Setup  # SDK 5.7: moved from sync_accounts_response to adcp.types
 
     if mode == "credit_review":
         return Setup(
@@ -423,8 +420,24 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     """Extract natural key components from a sync request account entry.
 
     Returns (brand_domain, brand_id, operator, sandbox).
+
+    Raises:
+        AdCPValidationError: if the entry omits ``brand``. SDK 5.7's
+            ``SyncAccountsRequest.accounts`` is ``list[Accounts | Accounts3]``;
+            the ``Accounts3`` (account-reference / settings-update) arm makes
+            ``brand`` optional, so a brandless entry parses with ``brand=None``.
+            The pinned 3.1 spec (sync-accounts-request.json) marks each entry
+            ``required: ["brand", "operator", "billing"]``, so a brandless
+            entry must be a clean buyer-correctable 400 — not an unguarded
+            ``None.domain`` AttributeError (which fell through to a 500).
     """
     brand = entry.brand
+    if brand is None:
+        raise AdCPValidationError(
+            "Each account entry must include 'brand', 'operator', and 'billing'; "
+            "the account-reference (settings-update) form is not supported by this seller.",
+            recovery="correctable",
+        )
     brand_domain = brand.domain
     brand_id = None
     if hasattr(brand, "brand_id") and brand.brand_id is not None:

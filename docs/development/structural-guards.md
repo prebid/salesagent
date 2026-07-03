@@ -28,9 +28,10 @@ correct. The guards make these structural invariants machine-checkable.
 fails CI immediately. When an existing violation is fixed, the stale-allowlist
 test forces you to remove the entry.
 
-**FIXME comments link to beads tasks.** Every allowlisted violation has a
-corresponding `# FIXME(salesagent-xxxx)` comment at the source location,
-linking to a tracked issue.
+**FIXME comments link to a GitHub issue/PR.** Every allowlisted violation has a
+corresponding `# FIXME(#<gh-issue>)` comment at the source location, linking to
+a tracked GitHub issue/PR. Use the GitHub number, never a local beads id — beads
+ids don't resolve for outside contributors reading the code.
 
 **AST scanning, not runtime execution.** Guards parse Python source with the
 `ast` module. They don't import or execute business logic, so they run fast
@@ -484,6 +485,32 @@ uv run alembic merge -m "Merge migration heads" heads
 The smoke test in `tests/smoke/test_database_migrations.py` also checks this,
 providing coverage in the CI smoke-tests job before unit tests run.
 
+### PR 4 Hook-Relocation Guards (issue #1234)
+
+These guards replaced grep-based pre-commit hooks. Run via `pytest -m arch_guard`
+or as part of `make quality`.
+
+| Test File | Replaces Hook | What It Enforces |
+|-----------|---------------|------------------|
+| `test_architecture_no_tenant_config.py` | `no-tenant-config` | No `tenant.config` / `tenant["config"]` in `src/` |
+| `test_architecture_jsontype_columns.py` | `enforce-jsontype` | JSON columns use `JSONType`, not plain `JSON` |
+| `test_architecture_no_defensive_rootmodel.py` | `check-rootmodel-access` | No `hasattr(x, "root")` without `# noqa: rootmodel` |
+| `test_architecture_import_usage.py` | `check-import-usage` | Tree-wide import usage check for `src/` |
+| `test_architecture_query_type_safety.py` | `enforce-sqlalchemy-2-0` (partial) | `test_no_legacy_session_query`, `test_models_use_mapped_not_column` |
+| `test_architecture_pre_commit_hook_count.py` | — | Commit-stage hook count ≤12 (D27) |
+| `test_architecture_pre_commit_no_additional_deps.py` | — | No `additional_dependencies` in pre-commit config (PR 2) |
+| `test_architecture_ci_bdd_shard_manifest.py` | — | BDD CI shards partition suite; matrix matches `SHARD_COUNTS` |
+| `test_architecture_repo_invariants.py` | `repo-invariants` (partial) | Self-tests for `.fn()` detection in consolidated hook |
+
+Shared AST helpers live in `tests/unit/_architecture_helpers.py`. Guards use the
+`@pytest.mark.arch_guard` marker (distinct from the entity-marker `architecture`).
+
+Each PR 4 guard includes a **known-bad self-test** (inline snippet or tmp fixture)
+so a narrowed detector fails CI instead of passing green silently.
+
+CI-only hook enforcement moved to `make quality-ci`: duplication, GAM auth support,
+response attribute access, roundtrip tests. See `.pre-commit-coverage-map.yml`.
+
 ## Adding a New Guard
 
 1. Create `tests/unit/test_architecture_{name}.py`
@@ -491,7 +518,7 @@ providing coverage in the CI smoke-tests job before unit tests run.
 3. Include an allowlist for pre-existing violations
 4. Include a stale-allowlist test that fails when a violation is fixed but the
    entry remains
-5. Add FIXME comments at each violation site: `# FIXME(salesagent-xxxx): description`
+5. Add FIXME comments at each violation site: `# FIXME(#<gh-issue>): description` (GitHub issue/PR number, never a beads id)
 6. Document the guard in this file
 
 ## Running Guards

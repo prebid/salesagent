@@ -26,21 +26,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+# FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
-from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
+from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
 from pydantic import ValidationError
-from yarl import URL
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
 from src.core.format_cache import load_reference_formats
-from src.core.schemas import Format, FormatId
+from src.core.schemas import Format, FormatId, canonical_agent_url
 
 
 def _known_asset_types() -> frozenset[str]:
@@ -249,10 +248,12 @@ class CreativeAgentRegistry:
     def _cache_key(agent_url: str) -> str:
         """Canonicalize agent URL for consistent cache keys (RFC 3986).
 
-        yarl handles: scheme/host lowercase, default port removal, percent-encoding.
-        We additionally strip trailing slash so `/` and empty path are equivalent.
+        Delegates to ``schemas.canonical_agent_url`` so the format cache key and the
+        format_id federation identity (``format_id_identity``) share one
+        canonicalization (DRY) — a reference and its cached catalog can never
+        disagree over trailing-slash/case/default-port noise.
         """
-        return str(URL(str(agent_url))).rstrip("/")
+        return canonical_agent_url(agent_url)
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
         """Build AdCP client from creative agent configs."""
@@ -442,18 +443,10 @@ class CreativeAgentRegistry:
                     recovery="terminal",
                 )
 
-        except ADCPAuthenticationError as e:
-            logger.error(f"Authentication failed for creative agent {agent.name}: {e.message}")
-            raise AdCPAuthenticationError(f"Authentication failed: {e.message}") from e
-        except ADCPTimeoutError as e:
-            logger.error(f"Request to creative agent {agent.name} timed out: {e.message}")
-            raise AdCPServiceUnavailableError(f"Request timed out: {e.message}") from e
-        except ADCPConnectionError as e:
-            logger.error(f"Failed to connect to creative agent {agent.name}: {e.message}")
-            raise AdCPServiceUnavailableError(f"Connection failed: {e.message}") from e
         except ADCPError as e:
-            logger.error(f"AdCP error with creative agent {agent.name}: {e.message}")
-            raise AdCPAdapterError(str(e.message)) from e
+            from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
+
+            raise_mapped_adcp_error(e, agent_label=f"creative agent {agent.name}", logger=logger)
 
     async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
         """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.

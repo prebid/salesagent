@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from adcp import ADCPMultiAgentClient
-from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
+from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import GetSignalsRequest
@@ -181,12 +181,12 @@ class SignalsAgentRegistry:
                     )
                 signals = result.data.signals
                 total_duration = time.time() - start_time
-                logger.info(f"[TIMING] Got {len(signals)} signals synchronously in {total_duration:.2f}s total")
+                logger.info(f"[TIMING] Got {len(signals or [])} signals synchronously in {total_duration:.2f}s total")
                 # Convert Signal objects to dicts for internal use
                 # AdCP library returns Signal objects, but our internal code expects dicts
                 # Handle both Signal objects (from adcp library) and dicts (from some test/error scenarios)
                 result_signals = []
-                for signal in signals:
+                for signal in signals or []:
                     if isinstance(signal, dict):
                         # Already a dict, use as-is
                         result_signals.append(signal)
@@ -216,21 +216,10 @@ class SignalsAgentRegistry:
                     recovery="terminal",
                 )
 
-        except ADCPAuthenticationError as e:
-            logger.error(f"Authentication failed for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"Authentication failed: {e.message}") from e
-
-        except ADCPTimeoutError as e:
-            logger.error(f"Request timed out for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"Request timed out: {e.message}") from e
-
-        except ADCPConnectionError as e:
-            logger.error(f"Connection failed for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"Connection failed: {e.message}") from e
-
         except ADCPError as e:
-            logger.error(f"AdCP error for {agent.name}: {e.message}")
-            raise AdCPAdapterError(f"AdCP error: {e.message}") from e
+            from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
+
+            raise_mapped_adcp_error(e, agent_label=agent.name, logger=logger)
 
     async def get_signals(
         self,

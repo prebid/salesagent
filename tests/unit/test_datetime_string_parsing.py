@@ -24,6 +24,7 @@ class TestDateTimeStringParsing:
             start_time="2025-02-15T00:00:00Z",  # String, not datetime object!
             end_time="2025-02-28T23:59:59Z",
             # budget moved to package level per AdCP v2.2.0
+            idempotency_key="unit-test-key-utc-z-format",
         )
 
         # Per AdCP spec, start_time can be string or datetime
@@ -46,6 +47,7 @@ class TestDateTimeStringParsing:
             start_time="2025-02-15T00:00:00+00:00",
             end_time="2025-02-28T23:59:59+00:00",
             # budget moved to package level per AdCP v2.2.0
+            idempotency_key="unit-test-key-offset-format",
         )
 
         # Per AdCP spec, start_time can be string or datetime
@@ -64,6 +66,7 @@ class TestDateTimeStringParsing:
             start_time="2025-02-15T00:00:00-08:00",
             end_time="2025-02-28T23:59:59-08:00",
             # budget moved to package level per AdCP v2.2.0
+            idempotency_key="unit-test-key-pst-timezone",
         )
 
         # Per AdCP spec, start_time can be string or datetime
@@ -101,6 +104,7 @@ class TestDateTimeStringParsing:
                 start_time="2025-02-15T00:00:00",  # No timezone!
                 end_time="2025-02-28T23:59:59",
                 # budget moved to package level per AdCP v2.2.0
+                idempotency_key="unit-test-key-naive-rejected",
             )
 
     def test_invalid_datetime_format_rejected(self):
@@ -116,6 +120,7 @@ class TestDateTimeStringParsing:
                 start_time="02/15/2025",  # Wrong format!
                 end_time="02/28/2025",
                 # budget moved to package level per AdCP v2.2.0
+                idempotency_key="unit-test-key-invalid-format",
             )
 
     def test_create_media_buy_roundtrip_serialization(self):
@@ -128,6 +133,7 @@ class TestDateTimeStringParsing:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             # budget moved to package level per AdCP v2.2.0
+            idempotency_key="unit-test-key-roundtrip-serial",
         )
 
         # Serialize back to dict
@@ -153,6 +159,7 @@ class TestDateTimeParsingEdgeCases:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             # budget moved to package level per AdCP v2.2.0
+            idempotency_key="unit-test-key-tzinfo-access",
         )
 
         # Per AdCP spec, start_time can be string or datetime
@@ -172,16 +179,14 @@ class TestDateTimeParsingEdgeCases:
             packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}],
             start_time=datetime(2025, 2, 15, 0, 0, 0, tzinfo=UTC),
             end_time=datetime(2025, 2, 28, 23, 59, 59, tzinfo=UTC),
+            idempotency_key="unit-test-key-datetime-objects",
         )
 
         # Should have timezone-aware datetimes (library wraps in StartTiming)
         assert req.start_time is not None
         assert req.end_time is not None
-        # Handle library StartTiming wrapper type
-        if hasattr(req.start_time, "root"):
-            assert req.start_time.root.tzinfo is not None
-        else:
-            assert req.start_time.tzinfo is not None
+        # start_time is the library StartTiming RootModel wrapping the datetime
+        assert req.start_time.root.tzinfo is not None
         assert req.end_time.tzinfo is not None
 
 

@@ -74,6 +74,7 @@ from src.core.schemas import (
     SyncCreativesResponse,
 )
 from tests.factories import PrincipalFactory
+from tests.factories.creative_asset import asset_spec, build_assets, image_spec, text_spec, video_spec
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -105,7 +106,7 @@ def _make_creative(**overrides) -> Creative:
         "variants": [],
         "name": "Test Banner",
         "format_id": _format_id(),
-        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+        "assets": build_assets(image_spec("banner", url="https://example.com/banner.png")),
         "principal_id": "principal_1",
         "status": "pending_review",
         "created_date": datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
@@ -120,7 +121,7 @@ def _make_creative_asset(**overrides) -> CreativeAsset:
         "creative_id": "c_test_1",
         "name": "Test Banner",
         "format_id": _adcp_format_id(),
-        "assets": {"banner": {"url": "https://example.com/banner.png"}},
+        "assets": build_assets(image_spec("banner", url="https://example.com/banner.png")),
     }
     defaults.update(overrides)
     return CreativeAsset(**defaults)
@@ -276,7 +277,7 @@ class TestSyncCreativeResultSchema:
         assert "status" not in data
         assert "review_feedback" not in data
         assert data["creative_id"] == "c_1"
-        assert data["action"] == CreativeAction.created or data["action"] == "created"
+        assert data["action"] == "created"
 
     def test_empty_lists_excluded(self):
         """Empty changes/errors/warnings lists should be omitted.
@@ -925,7 +926,7 @@ class TestCreativeValidation:
                 creative_id="c_test_1",
                 name="No Format",
                 format_id=None,
-                assets={"banner": {"url": "https://example.com/banner.png"}},
+                assets=build_assets(image_spec("banner", url="https://example.com/banner.png")),
             )
 
     def test_adapter_format_skips_external_validation(self):
@@ -1089,7 +1090,7 @@ class TestBuildCreativeData:
         """
         from src.core.tools.creatives._assets import _build_creative_data
 
-        creative = _make_creative_asset(assets={"main": {"url": "https://example.com/main.png"}})
+        creative = _make_creative_asset(assets=build_assets(image_spec("main", url="https://example.com/main.png")))
         data = _build_creative_data(creative, None)
         assert "assets" in data
         assert "main" in data["assets"]
@@ -1175,7 +1176,7 @@ class TestApprovalWorkflow:
             )
 
             assert needs_approval is True
-            assert result.action == CreativeAction.created
+            assert result.action == "created"
 
     def test_default_approval_mode_is_require_human(self):
         """Tenant with no approval_mode setting defaults to require-human.
@@ -1835,7 +1836,7 @@ class TestGenerativeCreativeBuild:
                 "creative_output": {"assets": {}, "output_format": {"url": "https://ai.example.com/output.png"}},
             }
 
-            creative = _make_creative_asset(assets={"message": {"content": "Create a banner ad"}})
+            creative = _make_creative_asset(assets=build_assets(text_spec("message", content="Create a banner ad")))
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -1888,11 +1889,11 @@ class TestGenerativeCreativeBuild:
             }
 
             creative = _make_creative_asset(
-                assets={
-                    "message": {"content": "Create a banner ad for shoes"},
-                    "brief": {"content": "Shoes ad brief"},
-                    "prompt": {"content": "Shoes prompt"},
-                }
+                assets=build_assets(
+                    text_spec("message", content="Create a banner ad for shoes"),
+                    text_spec("brief", content="Shoes ad brief"),
+                    text_spec("prompt", content="Shoes prompt"),
+                )
             )
             result, _ = _create_new_creative(
                 creative=creative,
@@ -1946,7 +1947,7 @@ class TestGenerativeCreativeBuild:
             }
 
             # Only 'brief' role, no 'message'
-            creative = _make_creative_asset(assets={"brief": {"content": "Shoes ad brief"}})
+            creative = _make_creative_asset(assets=build_assets(text_spec("brief", content="Shoes ad brief")))
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -1996,7 +1997,9 @@ class TestGenerativeCreativeBuild:
             }
 
             # Only 'prompt' role -- no message or brief
-            creative = _make_creative_asset(assets={"prompt": {"content": "Design a banner for running shoes"}})
+            creative = _make_creative_asset(
+                assets=build_assets(text_spec("prompt", content="Design a banner for running shoes"))
+            )
             result, _ = _create_new_creative(
                 creative=creative,
                 creative_repo=mock_session,
@@ -2047,7 +2050,7 @@ class TestGenerativeCreativeBuild:
 
             # No message/brief/prompt in assets; provide inputs instead
             creative = _make_creative_asset(
-                assets={"image": {"url": "https://example.com/img.png"}},
+                assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             )
             # Set inputs with context_description
             creative.inputs = [{"context_description": "Create a display ad for running shoes"}]
@@ -2103,7 +2106,7 @@ class TestGenerativeCreativeBuild:
             # No message/brief/prompt in assets, no inputs -- falls back to name
             creative = _make_creative_asset(
                 name="Running Shoes Banner",
-                assets={"image": {"url": "https://example.com/img.png"}},
+                assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             )
 
             result, _ = _create_new_creative(
@@ -2164,7 +2167,7 @@ class TestGenerativeCreativeBuild:
 
             # Update with no message/brief/prompt in assets -- should preserve existing data
             creative = _make_creative_asset(
-                assets={"image": {"url": "https://example.com/img.png"}},
+                assets=build_assets(image_spec("image", url="https://example.com/img.png")),
             )
 
             result, _ = _update_existing_creative(
@@ -2222,7 +2225,7 @@ class TestGenerativeCreativeBuild:
             }
 
             # User provides their own assets -- these should take priority
-            user_assets = {"banner": {"url": "https://user.example.com/my-ad.png"}}
+            user_assets = build_assets(image_spec("banner", url="https://user.example.com/my-ad.png"))
             creative = _make_creative_asset(
                 assets=user_assets,
             )
@@ -2275,7 +2278,7 @@ class TestGenerativeCreativeBuild:
             }
 
             creative = _make_creative_asset(
-                assets={"message": {"content": "Create a banner"}},
+                assets=build_assets(text_spec("message", content="Create a banner")),
             )
             result, _ = _create_new_creative(
                 creative=creative,
@@ -2988,31 +2991,37 @@ class TestCreativeAssetTypes:
     https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
     """
 
-    def test_all_11_asset_types_accepted(self):
-        """Each asset type should be accepted without validation error."""
-        asset_types = [
-            "image",
-            "video",
-            "audio",
-            "text",
-            "markdown",
-            "html",
-            "css",
-            "javascript",
-            "vast",
-            "daast",
-            "promoted_offerings",
+    def test_all_asset_types_accepted(self):
+        """Each asset type should be accepted without validation error.
+
+        adcp SDK 5.7: assets values are discriminated-union lists. Each type
+        has its own required fields (image needs url/width/height, text needs
+        content, vast/daast need delivery_type + content, etc.).
+        """
+        # One AssetSpec per asset type, each emitting the SDK list shape
+        # (multiple=True) so the discriminated-union list path is exercised.
+        asset_type_specs = [
+            image_spec("image", url="https://example.com/img.png", multiple=True),
+            video_spec("video", url="https://example.com/vid.mp4", width=1920, height=1080, multiple=True),
+            asset_spec("audio", "audio", multiple=True, url="https://example.com/audio.mp3"),
+            text_spec("text", content="test text content", multiple=True),
+            asset_spec("markdown", "markdown", multiple=True, content="# test markdown"),
+            asset_spec("html", "html", multiple=True, content="<div>test html</div>"),
+            asset_spec("css", "css", multiple=True, content="body { color: red; }"),
+            asset_spec("javascript", "javascript", multiple=True, content="console.log('test')"),
+            asset_spec("vast", "vast", multiple=True, delivery_type="inline", content="<VAST>test</VAST>"),
+            asset_spec("daast", "daast", multiple=True, delivery_type="inline", content="<DAAST>test</DAAST>"),
+            asset_spec("catalog", "catalog", multiple=True, type="product"),
         ]
-        for asset_type in asset_types:
-            # CreativeAsset accepts arbitrary string-keyed assets dict
+        for spec in asset_type_specs:
             creative = CreativeAsset(
-                creative_id=f"c_{asset_type}",
-                name=f"Test {asset_type}",
+                creative_id=f"c_{spec.role}",
+                name=f"Test {spec.role}",
                 format_id=_adcp_format_id(),
-                assets={asset_type: {"content": f"test {asset_type} content"}},
+                assets=build_assets(spec),
             )
             assert creative.assets is not None
-            assert asset_type in creative.assets
+            assert spec.role in creative.assets
 
 
 # ============================================================================
@@ -4183,7 +4192,7 @@ class TestExtensionGaps:
                     {
                         "creative_id": "c_no_name",
                         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        "assets": {"banner": {"url": "https://example.com/b.png"}},
+                        "assets": build_assets(image_spec("banner", url="https://example.com/b.png")),
                     }
                 ],
                 identity=identity,
@@ -4686,14 +4695,18 @@ class TestAsyncLifecycle:
             SyncCreativesSubmitted,
         )
 
-        # Schema accepts context and ext fields
-        response = SyncCreativesSubmitted(context=None, ext=None)
-        assert "context" in SyncCreativesSubmitted.model_fields
-        assert "ext" in SyncCreativesSubmitted.model_fields
+        # SDK 5.7: task_id is now required on submitted response
+        response = SyncCreativesSubmitted(task_id="task_1")
+        assert response.task_id == "task_1"
 
-        # Can be constructed with no args (all optional)
-        empty = SyncCreativesSubmitted()
-        assert empty.context is None
+        # context and ext remain available on the 5.7 schema (both optional)
+        model_fields = SyncCreativesSubmitted.model_fields
+        assert "context" in model_fields
+        assert "ext" in model_fields
+
+        # Can be constructed with just task_id (other fields optional)
+        empty = SyncCreativesSubmitted(task_id="task_2")
+        assert empty.task_id == "task_2"
 
     def test_async_working_response(self):
         """Async working response includes progress percentage and counts."""

@@ -18,6 +18,10 @@ import ast
 from pathlib import Path
 from typing import Literal
 
+import pytest
+
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Allowlist for empty Given/When steps. Must only shrink — never add entries.
@@ -83,11 +87,8 @@ def _body_has_assert_or_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
 
 def _contains_placeholder_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if the function delegates to a known placeholder helper like _pending()."""
-    for node in ast.walk(func):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Name) and node.func.id == "_pending":
-            return True
+    for _node in iter_call_expressions(func, name="_pending"):
+        return True
     return False
 
 
@@ -118,6 +119,7 @@ def _iter_step_functions(
 class TestBddNoPassSteps:
     """Structural guard: BDD steps must have meaningful bodies."""
 
+    @pytest.mark.arch_guard
     def test_no_empty_then_steps(self):
         """Every @then step must contain an assert, function call, or raise."""
         violations = []
@@ -133,6 +135,7 @@ class TestBddNoPassSteps:
             f"  {v}" for v in violations
         )
 
+    @pytest.mark.arch_guard
     def test_no_placeholder_given_when_steps(self):
         """Given/When steps must not delegate to placeholder helpers like _pending()."""
         violations = []
@@ -146,6 +149,7 @@ class TestBddNoPassSteps:
             + "\n\nFix: implement the step with real setup/action logic."
         )
 
+    @pytest.mark.arch_guard
     def test_no_empty_given_when_steps(self):
         """Every @given/@when step must have a non-empty body.
 
@@ -163,6 +167,7 @@ class TestBddNoPassSteps:
             + "\n\nFix: implement the step, or add to _EMPTY_GIVEN_WHEN_ALLOWLIST with FIXME."
         )
 
+    @pytest.mark.arch_guard
     def test_empty_given_when_allowlist_not_stale(self):
         """Allowlisted empty Given/When steps must still be empty.
 

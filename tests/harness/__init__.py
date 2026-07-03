@@ -42,7 +42,11 @@ Usage (unit — backward compat)::
 
 from tests.harness._identity import make_identity
 from tests.harness._mock_uow import make_mock_uow
-from tests.harness.assertions import assert_envelope, assert_error_result, assert_payload_field
+from tests.harness.assertions import (
+    assert_envelope,
+    assert_error_result,
+    assert_payload_field,
+)
 
 # Creative envs (multi-transport)
 from tests.harness.creative_formats import CreativeFormatsEnv
@@ -54,7 +58,8 @@ from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 from tests.harness.delivery_poll import DeliveryPollEnv
 from tests.harness.delivery_webhook import WebhookEnv
 
-# Media buy update env
+# Media buy envs
+from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
 
 # Product env
@@ -78,7 +83,8 @@ __all__ = [
     "CircuitBreakerEnv",
     "DeliveryPollEnv",
     "WebhookEnv",
-    # Media buy update env
+    # Media buy envs
+    "MediaBuyCreateEnv",
     "MediaBuyUpdateEnv",
     # Product env
     "ProductEnv",

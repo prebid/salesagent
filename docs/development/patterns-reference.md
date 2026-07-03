@@ -90,7 +90,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 - **New code that introduces a violation fails CI immediately** — no exceptions
 - **Allowlists track pre-existing debt and only shrink** — never add new entries
-- **Every allowlisted violation has a `# FIXME(salesagent-xxxx)`** comment linking to a tracked issue
+- **Every allowlisted violation has a `# FIXME(#<gh-issue>)`** comment linking to a tracked GitHub issue/PR (never a beads id)
 - **Removing a FIXME without fixing the underlying issue is not acceptable** — the FIXME is a contract
 
 Guards use `(file_path, function_name)` tuples in their allowlists, not line numbers. This makes them resilient to line shifts from unrelated changes.

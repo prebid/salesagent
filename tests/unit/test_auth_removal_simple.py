@@ -142,7 +142,7 @@ class TestAuthRemovalChanges:
         # Verify we have a fixed rate pricing option (for authenticated users)
         # adcp 2.14.0+ uses RootModel wrapper - rate is on .root
         pricing_option = product.pricing_options[0]
-        assert hasattr(pricing_option, "root")
+        assert hasattr(pricing_option, "root")  # noqa: rootmodel
         assert hasattr(pricing_option.root, "rate")
         assert pricing_option.root.rate == 2.50
 

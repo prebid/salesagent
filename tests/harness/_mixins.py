@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.adapters.mock_ad_server import simulate_breakdowns
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -138,11 +139,14 @@ class DeliveryPollMixin:
             total_spend = float(sum(p.get("spend", 0.0) for p in packages))
             totals = DeliveryTotals(impressions=total_impressions, spend=total_spend)
         else:
+            simulated_geo, simulated_device_type = simulate_breakdowns(float(impressions), float(spend))
             by_package = [
                 AdapterPackageDelivery(
                     package_id=package_id,
                     impressions=impressions,
                     spend=spend,
+                    by_geo=simulated_geo,
+                    by_device_type=simulated_device_type,
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)

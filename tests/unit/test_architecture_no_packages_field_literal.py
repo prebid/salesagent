@@ -28,7 +28,11 @@ import ast
 from pathlib import Path
 from typing import TypeGuard
 
-from tests.unit._ast_helpers import iter_module_trees, walk_with_enclosing_function
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    iter_module_trees,
+    walk_with_enclosing_function,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src"]
@@ -73,7 +77,8 @@ def test_no_packages_field_literal():
 def test_known_violations_not_stale():
     """Every allowlisted (file, function) must still hold a packages[] literal."""
     actual = {(rel, func) for rel, func, _ in _find_packages_field_literals()}
-    stale = KNOWN_VIOLATIONS - actual
-    assert not stale, "Stale allowlist entries (no longer hold a packages[] literal):\n" + "\n".join(
-        f"  {rel} :: {func}" for rel, func in sorted(stale)
+    assert_violations_match_allowlist(
+        actual,
+        KNOWN_VIOLATIONS,
+        fix_hint="Remove fixed entries from KNOWN_VIOLATIONS.",
     )

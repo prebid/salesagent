@@ -8,18 +8,32 @@ import asyncio
 import concurrent.futures
 import json
 import logging
-from enum import Enum
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from pydantic import ValidationError
+
+from src.core.exceptions import AdCPValidationError
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_enum_value(value: str | Enum) -> str:
-    """Return the string value of an enum member, or the string itself."""
-    if isinstance(value, Enum):
-        return str(value.value)
-    return str(value)
+@contextmanager
+def adcp_validation_boundary() -> Iterator[None]:
+    """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
+
+    A2A skill handlers validate buyer parameters at the transport boundary. A raw
+    ``ValidationError`` leaking from ``model_validate`` (or a typed-model constructor)
+    would surface as an untyped error — and the outer dispatcher only builds the
+    two-layer error envelope for ``AdCPError`` subclasses, so the buyer would lose
+    the real code/recovery. Wrapping the construction in this boundary gives every
+    handler the same ``Invalid parameters: ...`` message plus a structured ``field``
+    path, instead of a hand-copied try/except per handler.
+    """
+    try:
+        yield
+    except ValidationError as e:
+        raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
 
 
 def run_async_in_sync_context(coroutine):

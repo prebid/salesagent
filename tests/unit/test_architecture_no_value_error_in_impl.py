@@ -17,6 +17,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 # Per-file caps for ``raise ValueError(...)`` sites. Two categories of entries:
 #
 #   1. **Migration targets** — boundary-facing raises that should become typed
@@ -49,8 +51,8 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
 }
 
-from tests.unit._ast_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
-from tests.unit._ast_helpers import rel as _rel
+from tests.unit._architecture_helpers import REPO_ROOT, SCAN_DIRS, safe_parse
+from tests.unit._architecture_helpers import rel as _rel
 
 
 def _count_value_error_raises(filepath: Path) -> list[int]:
@@ -72,6 +74,7 @@ def _count_value_error_raises(filepath: Path) -> list[int]:
 class TestNoValueErrorInImpl:
     """``raise ValueError(...)`` sites must stay within their per-file cap."""
 
+    @pytest.mark.arch_guard
     def test_value_error_sites_within_caps(self):
         from tests.unit._per_file_cap_guard import assert_per_file_caps
 
@@ -84,12 +87,14 @@ class TestNoValueErrorInImpl:
             rel=_rel,
         )
 
+    @pytest.mark.arch_guard
     def test_capped_files_still_exist(self):
         """Stale-cap detection."""
         from tests.unit._per_file_cap_guard import assert_capped_files_still_exist
 
         assert_capped_files_still_exist(VALUE_ERROR_PER_FILE_CAP, "VALUE_ERROR_PER_FILE_CAP", repo_root=REPO_ROOT)
 
+    @pytest.mark.arch_guard
     def test_caps_only_shrink(self):
         """If a file has fewer sites than its cap, lower the cap to match."""
         from tests.unit._per_file_cap_guard import assert_caps_only_shrink

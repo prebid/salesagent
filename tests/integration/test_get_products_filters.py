@@ -153,7 +153,7 @@ class TestGetProductsFilterBehavior:
         assert len(product.pricing_options) > 0
 
         pricing = product.pricing_options[0]
-        pricing_inner = pricing.root if hasattr(pricing, "root") else pricing
+        pricing_inner = pricing.root if hasattr(pricing, "root") else pricing  # noqa: rootmodel
         assert hasattr(pricing_inner, "pricing_model")
         assert hasattr(pricing_inner, "pricing_option_id")
         assert hasattr(pricing_inner, "currency")

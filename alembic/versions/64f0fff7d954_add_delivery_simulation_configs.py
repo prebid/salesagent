@@ -6,7 +6,7 @@ from get_media_buy_delivery, so the live server can return deterministic
 delivery numbers for e2e scenarios instead of an in-memory MagicMock.
 
 Revision ID: 64f0fff7d954
-Revises: 597485e1799a
+Revises: a164b85bab9e
 Create Date: 2026-06-11 00:00:00.000000
 
 """
@@ -20,7 +20,7 @@ from src.core.database.json_type import JSONType
 
 # revision identifiers, used by Alembic.
 revision: str = "64f0fff7d954"
-down_revision: str | Sequence[str] | None = "597485e1799a"
+down_revision: str | Sequence[str] | None = "a164b85bab9e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

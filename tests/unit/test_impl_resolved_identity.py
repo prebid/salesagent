@@ -33,78 +33,91 @@ class TestImplSignaturesAcceptResolvedIdentity:
             return sig.parameters["identity"]
         return None
 
+    @pytest.mark.arch_guard
     def test_capabilities_impl_accepts_resolved_identity(self):
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         param = self._get_identity_param(_get_adcp_capabilities_impl)
         assert param is not None, "_get_adcp_capabilities_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_creative_formats_impl_accepts_resolved_identity(self):
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
         param = self._get_identity_param(_list_creative_formats_impl)
         assert param is not None, "_list_creative_formats_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_properties_impl_accepts_resolved_identity(self):
         from src.core.tools.properties import _list_authorized_properties_impl
 
         param = self._get_identity_param(_list_authorized_properties_impl)
         assert param is not None, "_list_authorized_properties_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_products_impl_accepts_resolved_identity(self):
         from src.core.tools.products import _get_products_impl
 
         param = self._get_identity_param(_get_products_impl)
         assert param is not None, "_get_products_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_media_buy_create_impl_accepts_resolved_identity(self):
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         param = self._get_identity_param(_create_media_buy_impl)
         assert param is not None, "_create_media_buy_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_media_buy_update_impl_accepts_resolved_identity(self):
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         param = self._get_identity_param(_update_media_buy_impl)
         assert param is not None, "_update_media_buy_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_media_buy_delivery_impl_accepts_resolved_identity(self):
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
         param = self._get_identity_param(_get_media_buy_delivery_impl)
         assert param is not None, "_get_media_buy_delivery_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_media_buy_list_impl_accepts_resolved_identity(self):
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         param = self._get_identity_param(_get_media_buys_impl)
         assert param is not None, "_get_media_buys_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_performance_impl_accepts_resolved_identity(self):
         from src.core.tools.performance import _update_performance_index_impl
 
         param = self._get_identity_param(_update_performance_index_impl)
         assert param is not None, "_update_performance_index_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_sync_creatives_impl_accepts_resolved_identity(self):
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         param = self._get_identity_param(_sync_creatives_impl)
         assert param is not None, "_sync_creatives_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_list_creatives_impl_accepts_resolved_identity(self):
         from src.core.tools.creatives.listing import _list_creatives_impl
 
         param = self._get_identity_param(_list_creatives_impl)
         assert param is not None, "_list_creatives_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_signals_get_impl_accepts_resolved_identity(self):
         from src.core.tools.signals import _get_signals_impl
 
         param = self._get_identity_param(_get_signals_impl)
         assert param is not None, "_get_signals_impl must have 'identity' parameter"
 
+    @pytest.mark.arch_guard
     def test_signals_activate_impl_accepts_resolved_identity(self):
         from src.core.tools.signals import _activate_signal_impl
 
@@ -140,6 +153,7 @@ class TestNoTransportImportsInImpl:
     ]
 
     @pytest.mark.parametrize("module_path,func_name", IMPL_FUNCTIONS)
+    @pytest.mark.arch_guard
     def test_impl_file_has_no_get_principal_from_context_in_impl(self, module_path, func_name):
         """_impl functions should accept ResolvedIdentity, not Context/ToolContext."""
         import importlib
@@ -173,6 +187,7 @@ class TestNoTransportImportsInImpl:
 class TestResolvedIdentityPassthrough:
     """Verify _impl functions can extract fields from ResolvedIdentity."""
 
+    @pytest.mark.arch_guard
     def test_resolved_identity_provides_principal_id(self):
         """ResolvedIdentity.principal_id is accessible for _impl use."""
         identity = ResolvedIdentity(
@@ -185,6 +200,7 @@ class TestResolvedIdentityPassthrough:
         assert identity.tenant_id == "test_tenant"
         assert identity.tenant["tenant_id"] == "test_tenant"
 
+    @pytest.mark.arch_guard
     def test_none_identity_for_discovery(self):
         """_impl functions should handle None identity for discovery endpoints."""
         identity = ResolvedIdentity(

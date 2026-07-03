@@ -14,6 +14,10 @@ import ast
 import glob
 from pathlib import Path
 
+import pytest
+
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
@@ -417,8 +421,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_get_products_filters.py
     # tests/integration/test_get_products_filters.py — migrated to factories
     # tests/integration/test_get_products_format_id_filter.py — migrated to factories
-    # tests/integration/test_mcp_endpoints_comprehensive.py
-    ("tests/integration/test_mcp_endpoints_comprehensive.py", "setup_test_data"),
+    # tests/integration/test_mcp_endpoints_comprehensive.py — requires_server suite removed (#1233 D11)
     # tests/integration/test_mcp_tool_roundtrip_validation.py
     ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
     # tests/integration/test_mcp_tools_audit.py
@@ -450,8 +453,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_session_json_validation.py", "test_model_json_validation"),
     ("tests/integration/test_session_json_validation.py", "test_principal_platform_mappings"),
     ("tests/integration/test_session_json_validation.py", "test_workflow_step_comments"),
-    # tests/integration/test_tool_result_format.py
-    ("tests/integration/test_tool_result_format.py", "setup_test_data"),
+    # tests/integration/test_tool_result_format.py — deleted (#1233 D11)
     # tests/integration/test_creative_formats_aggregation.py
     ("tests/integration/test_creative_formats_aggregation.py", "test_broadstreet_formats_merged_with_agent_formats"),
     ("tests/integration/test_creative_formats_aggregation.py", "test_broadstreet_formats_are_non_standard"),
@@ -519,17 +521,16 @@ def _find_impl_functions_with_db_session(file_path: str) -> list[tuple[str, str,
             continue
 
         # Check all calls inside this function for get_db_session
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                func = child.func
-                # Match: get_db_session()
-                if isinstance(func, ast.Name) and func.id == "get_db_session":
-                    violations.append((file_path, node.name, child.lineno))
-                    break  # One violation per function is enough
-                # Match: database_session.get_db_session()
-                if isinstance(func, ast.Attribute) and func.attr == "get_db_session":
-                    violations.append((file_path, node.name, child.lineno))
-                    break
+        for child in iter_call_expressions(node):
+            func = child.func
+            # Match: get_db_session()
+            if isinstance(func, ast.Name) and func.id == "get_db_session":
+                violations.append((file_path, node.name, child.lineno))
+                break  # One violation per function is enough
+            # Match: database_session.get_db_session()
+            if isinstance(func, ast.Attribute) and func.attr == "get_db_session":
+                violations.append((file_path, node.name, child.lineno))
+                break
 
     return violations
 
@@ -550,20 +551,19 @@ def _find_session_add_in_tests(file_path: str) -> list[tuple[str, str, int]]:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
 
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                func = child.func
-                # Match: session.add(...) or *.add(...)
-                if isinstance(func, ast.Attribute) and func.attr == "add":
-                    # Check it's likely a session (common var names)
-                    if isinstance(func.value, ast.Name) and func.value.id in (
-                        "session",
-                        "db_session",
-                        "mock_session",
-                        "s",
-                    ):
-                        violations.append((file_path, node.name, child.lineno))
-                        break  # One violation per function is enough
+        for child in iter_call_expressions(node):
+            func = child.func
+            # Match: session.add(...) or *.add(...)
+            if isinstance(func, ast.Attribute) and func.attr == "add":
+                # Check it's likely a session (common var names)
+                if isinstance(func.value, ast.Name) and func.value.id in (
+                    "session",
+                    "db_session",
+                    "mock_session",
+                    "s",
+                ):
+                    violations.append((file_path, node.name, child.lineno))
+                    break  # One violation per function is enough
 
     return violations
 
@@ -575,6 +575,7 @@ class TestImplNoDirectDbSession:
     repositories and call typed methods, not raw session operations.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_get_db_session_in_impl(self):
         """No _impl function calls get_db_session() outside the allowlist."""
         all_violations = []
@@ -596,6 +597,7 @@ class TestImplNoDirectDbSession:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()
@@ -603,15 +605,11 @@ class TestImplNoDirectDbSession:
             for f, fn, _line in _find_impl_functions_with_db_session(file_path):
                 all_violations.add((f, fn))
 
-        stale = IMPL_SESSION_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            IMPL_SESSION_ALLOWLIST,
+            fix_hint="Remove fixed entries from IMPL_SESSION_ALLOWLIST.",
+        )
 
 
 class TestIntegrationTestsNoInlineSessionAdd:
@@ -621,6 +619,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
     not scattered across test bodies as raw ORM model construction.
     """
 
+    @pytest.mark.arch_guard
     def test_no_new_session_add_in_tests(self):
         """No test function calls session.add() outside the allowlist."""
         all_violations = []
@@ -645,6 +644,7 @@ class TestIntegrationTestsNoInlineSessionAdd:
             )
             raise AssertionError("\n".join(msg_lines))
 
+    @pytest.mark.arch_guard
     def test_allowlist_entries_still_exist(self):
         """Every allowlisted violation must still exist (stale entry detection)."""
         all_violations = set()
@@ -652,12 +652,8 @@ class TestIntegrationTestsNoInlineSessionAdd:
             for f, fn, _line in _find_session_add_in_tests(file_path):
                 all_violations.add((f, fn))
 
-        stale = INTEGRATION_SESSION_ADD_ALLOWLIST - all_violations
-        if stale:
-            msg_lines = [
-                "Stale allowlist entries (violation was fixed — remove from allowlist):",
-                "",
-            ]
-            for f, fn in sorted(stale):
-                msg_lines.append(f"  ({f!r}, {fn!r}),")
-            raise AssertionError("\n".join(msg_lines))
+        assert_violations_match_allowlist(
+            all_violations,
+            INTEGRATION_SESSION_ADD_ALLOWLIST,
+            fix_hint="Remove fixed entries from INTEGRATION_SESSION_ADD_ALLOWLIST.",
+        )
