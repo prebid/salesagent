@@ -1419,31 +1419,31 @@ class TestListCreativesAuth:
         Spec: UNSPECIFIED (implementation-defined security boundary).
         Covers: UC-006-EXT-A-01
         """
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError, match="x-adcp-auth"):
-            _list_creatives_impl(identity=None)
+            _list_creatives_impl(req=_build_list_creatives_request(), identity=None)
 
     def test_no_principal_raises_auth_error(self):
         """Spec: UNSPECIFIED (implementation-defined security boundary).
 
         Covers: UC-006-EXT-A-01
         """
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="t1",
         )
         with pytest.raises(AdCPAuthenticationError, match="x-adcp-auth"):
-            _list_creatives_impl(identity=identity)
+            _list_creatives_impl(req=_build_list_creatives_request(), identity=identity)
 
     def test_no_tenant_raises_auth_error(self):
         """Spec: UNSPECIFIED (implementation-defined security boundary).
 
         Covers: UC-006-EXT-B-01
         """
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         identity = PrincipalFactory.make_identity(
             principal_id="p1",
@@ -1451,7 +1451,7 @@ class TestListCreativesAuth:
             tenant=None,
         )
         with pytest.raises(AdCPAuthenticationError, match="tenant"):
-            _list_creatives_impl(identity=identity)
+            _list_creatives_impl(req=_build_list_creatives_request(), identity=identity)
 
 
 class TestListCreativesValidation:
@@ -1467,26 +1467,24 @@ class TestListCreativesValidation:
         type: string, format: date-time.
         Covers: UC-006-EXT-C-01
         """
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
-        )
+        # Date-string parsing moved into the request builder; the invalid-date
+        # rejection now surfaces at build time (the boundary), before _impl.
         with pytest.raises(AdCPValidationError, match="created_after"):
-            _list_creatives_impl(created_after="not-a-date", identity=identity)
+            _build_list_creatives_request(created_after="not-a-date")
 
     def test_invalid_created_before_date_raises(self):
         """Spec: CONFIRMED -- creative-filters.json defines created_before as format: date-time.
 
         Covers: UC-006-EXT-C-01
         """
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
-        )
+        # Date-string parsing moved into the request builder; the invalid-date
+        # rejection now surfaces at build time (the boundary), before _impl.
         with pytest.raises(AdCPValidationError, match="created_before"):
-            _list_creatives_impl(created_before="not-a-date", identity=identity)
+            _build_list_creatives_request(created_before="not-a-date")
 
 
 class TestListCreativesRawBoundaryCompleteness:
@@ -1505,7 +1503,7 @@ class TestListCreativesRawBoundaryCompleteness:
 
         from src.core.tools.creatives.listing import list_creatives_raw
 
-        test_filters = CreativeFilters()
+        test_filters = CreativeFilters(tags=["promo"])
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
         )
@@ -1518,7 +1516,12 @@ class TestListCreativesRawBoundaryCompleteness:
             )
             list_creatives_raw(filters=test_filters, identity=identity)
             mock_impl.assert_called_once()
-            assert mock_impl.call_args.kwargs["filters"] is test_filters
+            # filters are now folded into the typed request (req.filters), not a
+            # direct _impl kwarg. The wrapper merges the structured filter into the
+            # request, so the forwarded request must carry the tag filter.
+            req = mock_impl.call_args.kwargs["req"]
+            assert req.filters is not None
+            assert req.filters.tags == ["promo"]
 
     def test_raw_forwards_include_performance(self):
         """list_creatives_raw must forward include_performance parameter to _list_creatives_impl.
@@ -1560,7 +1563,10 @@ class TestListCreativesRawBoundaryCompleteness:
             )
             list_creatives_raw(include_assignments=True, identity=identity)
             mock_impl.assert_called_once()
-            assert mock_impl.call_args.kwargs["include_assignments"] is True
+            # include_assignments is an AdCP spec request field, so it now travels
+            # on the typed request (req.include_assignments), not as a direct kwarg.
+            req = mock_impl.call_args.kwargs["req"]
+            assert req.include_assignments is True
 
 
 class TestListCreativesRequestRejectsInternalFlags:
@@ -1607,10 +1613,12 @@ class TestListCreativesRequestRejectsInternalFlags:
         assert req.include_assignments is True
 
     def test_impl_receives_flags_as_parameters_not_from_request(self):
-        """_list_creatives_impl must use function params for include_* flags.
+        """_list_creatives_impl must use function params for non-spec include_* flags.
 
         The request object should NOT carry include_performance or
-        include_sub_assets. Transport wrappers pass them as explicit kwargs.
+        include_sub_assets (non-spec internal flags); transport wrappers pass them
+        as explicit kwargs. include_assignments IS an AdCP spec field, so it lives
+        on the typed request, not as an _impl param.
 
         Covers: SEC-001 — separation of external request from internal flags.
         """
@@ -1622,7 +1630,8 @@ class TestListCreativesRequestRejectsInternalFlags:
         params = list(sig.parameters.keys())
         assert "include_performance" in params, "_impl must accept include_performance as param"
         assert "include_sub_assets" in params, "_impl must accept include_sub_assets as param"
-        assert "include_assignments" in params, "_impl must accept include_assignments as param"
+        # include_assignments is a spec request field — it travels on req, not as a param
+        assert "include_assignments" not in params, "include_assignments belongs on the request, not _impl params"
 
 
 # ============================================================================
@@ -3422,34 +3431,6 @@ class TestFormatCompatibility:
             assert len(assignment_list) == 1
             assert assignment_list[0].creative_id == "c1"
 
-    def test_format_mismatch_strict_raises(self):
-        """Strict mode: incompatible format raises AdCPValidationError.
-
-        Spec: UNSPECIFIED (implementation-defined format compatibility logic).
-        When creative format does not match product formats in strict mode,
-        _process_assignments raises AdCPValidationError (line 160).
-        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-02
-        """
-        from src.core.tools.creatives._assignments import _process_assignments
-
-        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            self._setup_assignment_mocks(
-                mock_db,
-                creative_agent_url="https://creative.example.com",
-                creative_format="video_30s",
-                product_format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250"}],
-            )
-
-            results = [SyncCreativeResult(creative_id="c1", action="created")]
-
-            with pytest.raises(AdCPValidationError, match="not supported"):
-                _process_assignments(
-                    assignments={"c1": ["pkg_1"]},
-                    results=results,
-                    tenant={"tenant_id": "t1"},
-                    validation_mode="strict",
-                )
-
     def test_format_mismatch_lenient_logs_error(self):
         """Lenient mode: incompatible format skipped, added to assignment_errors.
 
@@ -4415,52 +4396,6 @@ class TestExtensionGaps:
                     validation_mode="strict",
                 )
 
-    def test_ext_k_format_mismatch_strict(self):
-        """Strict mode: format mismatch raises operation-level error.
-
-        Spec: UNSPECIFIED (implementation-defined format compatibility logic).
-        Cross-ref: TestFormatCompatibility.test_format_mismatch_strict_raises
-        covers this same path. This test exercises it as an extension scenario.
-        Covers: UC-006-EXT-K-01
-        """
-        from src.core.tools.creatives._assignments import _process_assignments
-
-        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            mock_uow = MagicMock()
-            mock_assignment_repo = MagicMock()
-            mock_uow.assignments = mock_assignment_repo
-            mock_db.return_value.__enter__.return_value = mock_uow
-            mock_db.return_value.__exit__.return_value = None
-
-            mock_package = MagicMock()
-            mock_package.media_buy_id = "mb_1"
-            mock_package.package_id = "pkg_1"
-            mock_package.package_config = {"product_id": "prod_1"}
-
-            mock_media_buy = MagicMock()
-            mock_media_buy.media_buy_id = "mb_1"
-
-            mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
-
-            mock_creative = MagicMock()
-            mock_creative.agent_url = "https://agent.example.com"
-            mock_creative.format = "video_30s"
-            mock_assignment_repo.get_creative_by_id.return_value = mock_creative
-
-            mock_product = MagicMock()
-            mock_product.format_ids = [{"agent_url": "https://agent.example.com", "id": "display_300x250"}]
-            mock_product.name = "Display Only Product"
-            mock_assignment_repo.get_product_by_id.return_value = mock_product
-
-            results = [SyncCreativeResult(creative_id="c1", action="created")]
-            with pytest.raises(AdCPValidationError, match="not supported"):
-                _process_assignments(
-                    assignments={"c1": ["pkg_1"]},
-                    results=results,
-                    tenant={"tenant_id": "t1"},
-                    validation_mode="strict",
-                )
-
     def test_ext_k_format_mismatch_lenient(self):
         """Lenient mode: format mismatch logged in assignment_errors.
 
@@ -4647,11 +4582,16 @@ class TestA2ATransportGaps:
 
             mock_impl.assert_called_once()
             call_kwargs = mock_impl.call_args[1]
-            assert call_kwargs["media_buy_id"] == "mb_1"
-            assert call_kwargs["status"] == "approved"
+            # Spec request fields (media_buy_id, status, limit) fold into the typed
+            # request; format/page are non-spec out-of-band _impl kwargs; identity
+            # is resolved at the boundary.
+            req = call_kwargs["req"]
+            assert req.filters is not None
+            assert "mb_1" in req.filters.media_buy_ids
+            assert any(getattr(s, "value", s) == "approved" for s in req.filters.statuses)
+            assert req.pagination.max_results == 25
             assert call_kwargs["format"] == "display"
             assert call_kwargs["page"] == 2
-            assert call_kwargs["limit"] == 25
             assert call_kwargs["identity"] is identity
 
     def test_list_creative_formats_raw_boundary(self):

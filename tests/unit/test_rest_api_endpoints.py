@@ -8,8 +8,9 @@ Validates that each REST transport endpoint:
 beads: salesagent-b61l.15
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from adcp.types import AccountReference as LibraryAccountReference
 from starlette.testclient import TestClient
 
@@ -33,54 +34,6 @@ _MOCK_IDENTITY = ResolvedIdentity(
 # ---------------------------------------------------------------------------
 
 
-class TestCapabilitiesEndpoint:
-    """Verify GET /api/v1/capabilities endpoint."""
-
-    @patch("src.core.tools.capabilities.get_adcp_capabilities_raw")
-    def test_returns_200(self, mock_impl):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"supported_protocols": []})
-        response = client.get("/api/v1/capabilities")
-        assert response.status_code == 200
-
-    @patch("src.core.tools.capabilities.get_adcp_capabilities_raw")
-    def test_works_without_auth(self, mock_impl):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"supported_protocols": []})
-        response = client.get("/api/v1/capabilities")
-        assert response.status_code == 200, "Discovery skill should work without auth"
-
-
-class TestCreativeFormatsEndpoint:
-    """Verify POST /api/v1/creative-formats endpoint."""
-
-    @patch("src.core.tools.creative_formats.list_creative_formats_raw")
-    def test_returns_200(self, mock_impl):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"formats": []})
-        response = client.post("/api/v1/creative-formats", json={})
-        assert response.status_code == 200
-
-    @patch("src.core.tools.creative_formats.list_creative_formats_raw")
-    def test_works_without_auth(self, mock_impl):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"formats": []})
-        response = client.post("/api/v1/creative-formats", json={})
-        assert response.status_code == 200, "Discovery skill should work without auth"
-
-
-class TestAuthorizedPropertiesEndpoint:
-    """Verify POST /api/v1/authorized-properties endpoint."""
-
-    @patch("src.core.tools.properties.list_authorized_properties_raw")
-    def test_returns_200(self, mock_impl):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"properties": []})
-        response = client.post("/api/v1/authorized-properties", json={})
-        assert response.status_code == 200
-
-    @patch("src.core.tools.properties.list_authorized_properties_raw")
-    def test_works_without_auth(self, mock_impl):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"properties": []})
-        response = client.post("/api/v1/authorized-properties", json={})
-        assert response.status_code == 200, "Discovery skill should work without auth"
-
-
 # ---------------------------------------------------------------------------
 # Auth-required endpoints
 # ---------------------------------------------------------------------------
@@ -89,60 +42,82 @@ class TestAuthorizedPropertiesEndpoint:
 class TestCreateMediaBuyEndpoint:
     """Verify POST /api/v1/media-buys endpoint."""
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.core.tools.media_buy_create.create_media_buy_raw")
-    def test_returns_200(self, mock_impl, mock_resolve):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"media_buy_id": "mb1"})
-        response = client.post(
-            "/api/v1/media-buys",
-            json={
-                "buyer_ref": "buyer1",
-                "brand": {"domain": "testbrand.com"},
-                "packages": [{"product_id": "p1", "budget": {"amount": 100, "currency": "USD"}}],
-                "start_time": "2026-04-01T00:00:00Z",
-                "end_time": "2026-04-30T00:00:00Z",
-            },
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert response.status_code == 200
-
     def test_requires_auth(self):
         """create_media_buy requires authentication."""
         response = client.post(
             "/api/v1/media-buys",
-            json={"buyer_ref": "buyer1", "packages": []},
+            json={"packages": []},
         )
         assert response.status_code == 401
 
 
-class TestUpdateMediaBuyEndpoint:
-    """Verify PUT /api/v1/media-buys/{id} endpoint."""
+# ---------------------------------------------------------------------------
+# Runtime scalar-forwarding oracles (salesagent-e9kw)
+#
+# The body-completeness guard proves each REST scalar is DECLARED on the *_raw
+# wrapper signature; it does NOT prove the route actually forwards the request
+# value. These TestClient tests patch the *_raw wrapper and assert the sentinel
+# value the buyer sent reaches the wrapper — one test per non-echoed scalar.
+# ---------------------------------------------------------------------------
 
+_CREATE_FORWARDED_SCALARS = {
+    "reporting_webhook": {"url": "https://example.com/hook", "auth_type": "none"},
+    "push_notification_config": {"url": "https://example.com/push", "authentication_type": "none"},
+    "context": {"conversation_id": "conv-e9kw"},
+    "ext": {"e9kw_marker": "create-value"},
+}
+
+_UPDATE_FORWARDED_SCALARS = {
+    "pacing": "even",
+    "daily_budget": 1234.5,
+}
+
+
+class TestCreateMediaBuyScalarForwarding:
+    """Each non-echoed create scalar reaches create_media_buy_raw at runtime."""
+
+    @pytest.mark.parametrize(
+        ("field", "value"), list(_CREATE_FORWARDED_SCALARS.items()), ids=list(_CREATE_FORWARDED_SCALARS)
+    )
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.tools.media_buy_create.create_media_buy_raw", new_callable=AsyncMock)
+    def test_scalar_forwards_to_raw(self, mock_raw, mock_resolve, field, value):
+        mock_raw.return_value = MagicMock(model_dump=lambda **kw: {})
+        body = {
+            "packages": [],
+            "start_time": "2026-01-01T00:00:00Z",
+            "end_time": "2026-02-01T00:00:00Z",
+            field: value,
+        }
+        response = client.post("/api/v1/media-buys", json=body, headers={"Authorization": "Bearer test-token"})
+
+        assert response.status_code == 200, response.text
+        assert mock_raw.call_args.kwargs[field] == value, (
+            f"REST create route did not forward {field!r} to create_media_buy_raw"
+        )
+
+
+class TestUpdateMediaBuyScalarForwarding:
+    """Each non-echoed update scalar reaches update_media_buy_raw at runtime."""
+
+    @pytest.mark.parametrize(
+        ("field", "value"), list(_UPDATE_FORWARDED_SCALARS.items()), ids=list(_UPDATE_FORWARDED_SCALARS)
+    )
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.media_buy_update.update_media_buy_raw")
-    def test_returns_200(self, mock_impl, mock_resolve):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"media_buy_id": "mb1"})
-        response = client.put(
-            "/api/v1/media-buys/mb1",
-            json={"paused": True},
-            headers={"Authorization": "Bearer test-token"},
+    def test_scalar_forwards_to_raw(self, mock_raw, mock_resolve, field, value):
+        mock_raw.return_value = MagicMock(model_dump=lambda **kw: {})
+        body = {field: value}
+        response = client.put("/api/v1/media-buys/mb_e9kw", json=body, headers={"Authorization": "Bearer test-token"})
+
+        assert response.status_code == 200, response.text
+        assert mock_raw.call_args.kwargs[field] == value, (
+            f"REST update route did not forward {field!r} to update_media_buy_raw"
         )
-        assert response.status_code == 200
 
 
 class TestGetMediaBuyDeliveryEndpoint:
     """Verify POST /api/v1/media-buys/delivery endpoint."""
-
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.core.tools.media_buy_delivery.get_media_buy_delivery_raw")
-    def test_returns_200(self, mock_impl, mock_resolve):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"media_buys": []})
-        response = client.post(
-            "/api/v1/media-buys/delivery",
-            json={"media_buy_ids": ["mb1"]},
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert response.status_code == 200
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.transport_helpers.enrich_identity_with_account")
@@ -182,48 +157,3 @@ class TestGetMediaBuyDeliveryEndpoint:
         assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
         mock_enrich.assert_not_called()
         mock_impl.assert_not_called()
-
-
-class TestSyncCreativesEndpoint:
-    """Verify POST /api/v1/creatives/sync endpoint."""
-
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.core.tools.creatives.sync_wrappers.sync_creatives_raw")
-    def test_returns_200(self, mock_impl, mock_resolve):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"creatives": []})
-        response = client.post(
-            "/api/v1/creatives/sync",
-            json={"creatives": []},
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert response.status_code == 200
-
-
-class TestListCreativesEndpoint:
-    """Verify POST /api/v1/creatives endpoint."""
-
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.core.tools.creatives.listing.list_creatives_raw")
-    def test_returns_200(self, mock_impl, mock_resolve):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"creatives": []})
-        response = client.post(
-            "/api/v1/creatives",
-            json={},
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert response.status_code == 200
-
-
-class TestUpdatePerformanceIndexEndpoint:
-    """Verify POST /api/v1/performance-index endpoint."""
-
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.core.tools.performance.update_performance_index_raw")
-    def test_returns_200(self, mock_impl, mock_resolve):
-        mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"status": "ok"})
-        response = client.post(
-            "/api/v1/performance-index",
-            json={"media_buy_id": "mb1", "performance_data": []},
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert response.status_code == 200

@@ -14,6 +14,64 @@ from pytest_bdd import parsers, then
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
+def _wire_code(ctx: dict) -> str | None:
+    """Return the authoritative wire error code when a wire envelope was captured.
+
+    ``dispatch_request`` stores the normalized ``TransportResult`` on
+    ``ctx['result']`` and exposes the real two-layer envelope on
+    ``wire_error_envelope`` (REST/A2A/MCP). The wire code is the buyer-facing
+    contract; prefer it over the lossy reconstructed ``ctx['error']`` (which
+    collapses distinct wire codes onto one exception class — e.g. yields
+    ``RuntimeError`` for an unmapped code). Returns ``None`` on IMPL / no-wire
+    scenarios so callers fall back to the reconstructed exception (salesagent-ztl6.6).
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if not envelope:
+        return None
+    return (envelope.get("adcp_error") or {}).get("code")
+
+
+def _wire_suggestion(ctx: dict) -> str | None:
+    """Return the buyer-facing ``suggestion`` from the captured wire envelope.
+
+    Mirrors ``_wire_code``: when the scenario dispatched through a wire transport
+    (REST/A2A/MCP), the ``suggestion`` is the buyer-facing contract and must be
+    read from the real envelope, not the lossy reconstructed ``ctx['error']``.
+    AdCP carries the suggestion either directly on the error object or nested
+    under ``details.suggestion`` (account/auth errors use the latter), in either
+    the ``errors[0]`` or the envelope-level ``adcp_error`` layer — the same
+    canonical lookup as ``TransportResult.assert_wire_error``. Returns ``None``
+    on IMPL / no-wire scenarios so callers fall back to the reconstructed
+    exception (salesagent-ztl6.6).
+    """
+    from tests.harness.transport import extract_wire_suggestion
+
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    return extract_wire_suggestion(envelope)
+
+
+def _wire_error_object(ctx: dict) -> dict | None:
+    """Return the buyer-facing error object from the captured wire envelope.
+
+    Mirrors ``_wire_code`` / ``_wire_suggestion``: when the scenario dispatched
+    through a wire transport (REST/A2A/MCP), field-presence checks must read the
+    real envelope's error object, not the lossy reconstructed ``ctx['error']``.
+    Prefers the ``errors[0]`` layer (per-error fields like ``field``) and falls
+    back to the envelope-level ``adcp_error``. Returns ``None`` on IMPL / no-wire
+    scenarios so callers fall back to the reconstructed exception (salesagent-ztl6.8).
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if not envelope:
+        return None
+    errors = envelope.get("errors") or []
+    if errors and errors[0]:
+        return errors[0]
+    return envelope.get("adcp_error") or {}
+
+
 def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
@@ -51,8 +109,8 @@ def _get_error_message(error: object) -> str:
     return str(error)
 
 
-def _get_error_dict(error: Exception) -> dict:
-    """Convert exception to dict for field-presence checks."""
+def _get_error_dict(error: object) -> dict:
+    """Convert exception or Error model to dict for field-presence checks."""
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
@@ -62,6 +120,20 @@ def _get_error_dict(error: Exception) -> dict:
         d["code"] = d.get("error_code", "")
         if error.details and "suggestion" in error.details:
             d["suggestion"] = error.details["suggestion"]
+        return d
+    # adcp.types.Error model (from partial success response.errors) — has code,
+    # message, suggestion, recovery, field as direct attributes.
+    if hasattr(error, "code") and not isinstance(error, Exception):
+        d: dict = {"code": error.code, "message": getattr(error, "message", "")}
+        suggestion = getattr(error, "suggestion", None)
+        if suggestion:
+            d["suggestion"] = suggestion
+        recovery = getattr(error, "recovery", None)
+        if recovery is not None:
+            d["recovery"] = recovery.value if hasattr(recovery, "value") else str(recovery)
+        field = getattr(error, "field", None)
+        if field:
+            d["field"] = field
         return d
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
@@ -195,10 +267,17 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
 
 @then(parsers.parse('the error code should be "{code}"'))
 def then_error_code(ctx: dict, code: str) -> None:
-    """Assert the error code matches."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    actual = _get_error_code(error)
+    """Assert the error code matches — wire-first, reconstructed fallback.
+
+    When the scenario dispatched through a wire transport, assert on the real
+    wire envelope's code (the buyer-facing contract); otherwise fall back to the
+    reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.6).
+    """
+    actual = _wire_code(ctx)
+    if actual is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        actual = _get_error_code(error)
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
@@ -216,12 +295,19 @@ def then_error_message_contains(ctx: dict, text: str) -> None:
 
 @then(parsers.parse('the suggestion should contain "{text}"'))
 def then_suggestion_contains(ctx: dict, text: str) -> None:
-    """Assert error suggestion contains the given text (case-insensitive)."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    d = _get_error_dict(error)
-    suggestion = (d.get("suggestion") or "").lower()
-    assert text.lower() in suggestion, f"Expected '{text}' in suggestion: {d.get('suggestion')}"
+    """Assert error suggestion contains the given text — wire-first, reconstructed fallback.
+
+    When the scenario dispatched through a wire transport, assert on the real
+    wire envelope's suggestion (the buyer-facing contract); otherwise fall back
+    to the reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.6).
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        suggestion = _get_error_dict(error).get("suggestion")
+    suggestion_lower = (suggestion or "").lower()
+    assert text.lower() in suggestion_lower, f"Expected '{text}' in suggestion: {suggestion}"
 
 
 # ── Error message content (specific) ───────────────────────────────────
@@ -338,7 +424,16 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 @then('the error should include a "suggestion" field')
 @then('the error should include "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion field."""
+    """Assert error includes a non-empty suggestion — wire-first, reconstructed fallback.
+
+    On a wire transport the suggestion is read from the real envelope (the
+    buyer-facing contract); IMPL/no-wire scenarios fall back to the reconstructed
+    ``ctx['error']`` (ztl6.6).
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is not None:
+        assert suggestion, "Expected non-empty suggestion in wire envelope"
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)
@@ -354,26 +449,29 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     the suggestion contains actionable language (use/try/check/provide/etc.)
     that tells the caller how to correct the problem.
     """
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
+    # Wire-first: on a wire transport the suggestion is the buyer-facing contract.
+    # Read it from the real envelope; fall back to the reconstructed ctx['error']
+    # for IMPL/no-wire scenarios (ztl6.8).
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
 
-    # Pydantic ValidationErrors carry the fix guidance inline in each field
-    # error's ``msg`` (e.g. "Input should be 'operator', 'agent' or 'advertiser'")
-    # rather than a separate ``suggestion`` field. That inline message IS the
-    # actionable guidance, so accept it without the verb check below.
-    from pydantic import ValidationError
+        # Pydantic ValidationErrors carry the fix guidance inline in each field
+        # error's ``msg`` (e.g. "Input should be 'operator', 'agent' or 'advertiser'")
+        # rather than a separate ``suggestion`` field. That inline message IS the
+        # actionable guidance, so accept it without the verb check below.
+        from pydantic import ValidationError
 
-    if isinstance(error, ValidationError):
-        details = error.errors()
-        assert details, "ValidationError has no field-level details to guide a fix"
-        for detail in details:
-            msg = detail.get("msg", "")
-            assert isinstance(msg, str) and msg.strip(), f"ValidationError detail lacks fix guidance: {detail}"
-        return
+        if isinstance(error, ValidationError):
+            details = error.errors()
+            assert details, "ValidationError has no field-level details to guide a fix"
+            for detail in details:
+                msg = detail.get("msg", "")
+                assert isinstance(msg, str) and msg.strip(), f"ValidationError detail lacks fix guidance: {detail}"
+            return
 
-    d = _get_error_dict(error)
-    assert "suggestion" in d, f"Expected 'suggestion' in error: {d}"
-    suggestion = d["suggestion"]
+        suggestion = _get_error_dict(error).get("suggestion")
     assert suggestion, "Expected non-empty suggestion"
     # A fix suggestion must contain actionable guidance — a verb telling the
     # caller what to DO, not just describing the problem.
@@ -405,17 +503,23 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
 @then("the suggestion should advise providing authentication credentials")
 def then_suggestion_auth(ctx: dict) -> None:
-    """Assert suggestion mentions authentication credentials."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
-    assert "credential" in suggestion or "auth" in suggestion, f"Expected auth suggestion: {d.get('suggestion')}"
+    """Assert suggestion mentions authentication credentials — wire-first, reconstructed fallback (ztl6.8)."""
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion_lower = suggestion.lower()
+    assert "credential" in suggestion_lower or "auth" in suggestion_lower, f"Expected auth suggestion: {suggestion}"
 
 
 @then("the suggestion should provide valid parameter values")
 def then_suggestion_valid_values(ctx: dict) -> None:
-    """Assert suggestion provides valid parameter values — must reference both validity AND values."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = d.get("suggestion", "")
+    """Assert suggestion provides valid parameter values — wire-first, reconstructed fallback (ztl6.8).
+
+    Must reference both validity AND values.
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
     # Must mention validity concept
@@ -430,15 +534,17 @@ def then_suggestion_valid_values(ctx: dict) -> None:
 
 @then("the suggestion should advise using valid DisclosurePosition enum values")
 def then_suggestion_disclosure_enum(ctx: dict) -> None:
-    """Assert suggestion mentions both DisclosurePosition AND valid values."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    """Assert suggestion mentions both DisclosurePosition AND valid values — wire-first (ztl6.8)."""
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     # Gherkin requires both concepts: "DisclosurePosition" AND "valid enum values"
     assert (
         "disclosureposition" in suggestion or "disclosure_position" in suggestion or "disclosure position" in suggestion
-    ), f"Expected 'DisclosurePosition' in suggestion: {d.get('suggestion')}"
+    ), f"Expected 'DisclosurePosition' in suggestion: {raw}"
     assert "valid" in suggestion or "allowed" in suggestion or "enum" in suggestion, (
-        f"Expected valid/allowed/enum values language in suggestion: {d.get('suggestion')}"
+        f"Expected valid/allowed/enum values language in suggestion: {raw}"
     )
 
 
@@ -448,27 +554,35 @@ def then_suggestion_positions_or_omit(ctx: dict) -> None:
 
     Gherkin describes two alternatives — the suggestion should mention at least
     one alternative completely (position + provide/add, or omit/remove).
+    Wire-first, reconstructed fallback (ztl6.8).
     """
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     has_provide_position = "position" in suggestion and any(
         w in suggestion for w in ("provide", "add", "include", "at least")
     )
     has_omit = "omit" in suggestion or "remove" in suggestion
     assert has_provide_position or has_omit, (
-        f"Expected suggestion to advise providing positions or omitting filter: {d.get('suggestion')}"
+        f"Expected suggestion to advise providing positions or omitting filter: {raw}"
     )
 
 
 @then("the suggestion should advise removing duplicate positions")
 def then_suggestion_remove_dupes(ctx: dict) -> None:
-    """Assert suggestion advises removing duplicates — both concepts required."""
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    """Assert suggestion advises removing duplicates — wire-first, reconstructed fallback (ztl6.8).
+
+    Both concepts required.
+    """
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     # Gherkin says "removing duplicate" — both concepts must appear
-    assert "duplicate" in suggestion, f"Expected 'duplicate' in suggestion: {d.get('suggestion')}"
+    assert "duplicate" in suggestion, f"Expected 'duplicate' in suggestion: {raw}"
     assert any(w in suggestion for w in ("remove", "deduplicate", "dedup", "eliminate")), (
-        f"Expected removal action in suggestion: {d.get('suggestion')}"
+        f"Expected removal action in suggestion: {raw}"
     )
 
 
@@ -477,25 +591,27 @@ def then_suggestion_format_id_or_omit(ctx: dict) -> None:
     """Assert suggestion advises providing FormatId OR omitting the filter.
 
     Same pattern as positions_or_omit — one complete alternative required.
+    Wire-first, reconstructed fallback (ztl6.8).
     """
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
     has_provide_format = ("formatid" in suggestion or "format_id" in suggestion or "format id" in suggestion) and any(
         w in suggestion for w in ("provide", "add", "include", "at least")
     )
     has_omit = "omit" in suggestion or "remove" in suggestion
-    assert has_provide_format or has_omit, (
-        f"Expected suggestion to advise providing FormatId or omitting filter: {d.get('suggestion')}"
-    )
+    assert has_provide_format or has_omit, f"Expected suggestion to advise providing FormatId or omitting filter: {raw}"
 
 
 @then("the suggestion should advise including agent_url (URI) and id fields")
 def then_suggestion_agent_url_id(ctx: dict) -> None:
-    """Assert suggestion advises including both agent_url AND id fields."""
+    """Assert suggestion advises including both agent_url AND id fields — wire-first (ztl6.8)."""
     import re
 
-    d = _get_error_dict(ctx.get("error"))
-    suggestion = d.get("suggestion", "")
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
     assert "agent_url" in suggestion_lower or "uri" in suggestion_lower, (
@@ -533,10 +649,18 @@ def then_no_error_for_value(ctx: dict, value: str) -> None:
 
 @then("the response should indicate a validation error")
 def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error."""
-    error = ctx.get("error")
-    assert error is not None, "Expected a validation error"
-    assert _get_error_code(error) == "VALIDATION_ERROR", f"Expected VALIDATION_ERROR, got {_get_error_code(error)}"
+    """Assert response indicates a validation error — wire-first, reconstructed fallback.
+
+    When the scenario dispatched through a wire transport, assert on the real
+    wire envelope's code (the buyer-facing contract); otherwise fall back to the
+    reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.8).
+    """
+    actual = _wire_code(ctx)
+    if actual is None:
+        error = ctx.get("error")
+        assert error is not None, "Expected a validation error"
+        actual = _get_error_code(error)
+    assert actual == "VALIDATION_ERROR", f"Expected VALIDATION_ERROR, got {actual}"
 
 
 @then("the error should be a real validation error, not simulated")
@@ -555,3 +679,355 @@ def then_real_validation_error(ctx: dict) -> None:
         f"Expected a real pydantic.ValidationError, got {type(error).__name__}: {error}"
     )
     assert error.errors(), "Expected ValidationError with field-level error details"
+
+
+# ── Generic field presence / value ──────────────────────────────────
+
+
+@then(parsers.parse('the error should include "{field}" field'))
+def then_error_includes_field(ctx: dict, field: str) -> None:
+    """Assert the error includes a named field with a non-empty value — wire-first.
+
+    When the scenario dispatched through a wire transport, read the field from
+    the real wire envelope's error object (the buyer-facing contract); otherwise
+    fall back to the reconstructed ``ctx['error']`` for IMPL/no-wire scenarios.
+    Works with AdCPError (checks .details, direct attributes, and the top-level
+    to_dict() representation) and adcp.types.Error models (ztl6.8).
+    """
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        wire_details = wire.get("details") or {}
+        has_field = (field in wire and wire[field]) or (field in wire_details and wire_details[field])
+        assert has_field, (
+            f"Expected wire error to include non-empty '{field}' field. "
+            f"Wire error keys: {list(wire.keys())}, details keys: {list(wire_details.keys())}"
+        )
+        return
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
+    # Also check details sub-dict and direct attributes
+    details = getattr(error, "details", None) or {}
+    has_field = (
+        (field in d and d[field])
+        or (field in details and details[field])
+        or (hasattr(error, field) and getattr(error, field))
+    )
+    assert has_field, (
+        f"Expected error to include non-empty '{field}' field. "
+        f"Error dict keys: {list(d.keys())}, details keys: {list(details.keys())}"
+    )
+
+
+@then(parsers.parse('the error should include "{field}" field with value "{value}"'))
+def then_error_field_with_value(ctx: dict, field: str, value: str) -> None:
+    """Assert the error includes a named field matching the expected value.
+
+    Checks the error dict, details sub-dict, and direct attributes.
+    Compares as strings for cross-type compatibility.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    actual = _resolve_error_field(error, field)
+    assert actual is not None, (
+        f"Expected error to include '{field}' field but it was not found. Available: {_available_error_fields(error)}"
+    )
+    # Compare as strings for cross-type compatibility (enum .value, int, etc.)
+    actual_str = actual.value if hasattr(actual, "value") else str(actual)
+    assert actual_str == value, f"Expected {field}='{value}', got '{actual_str}'"
+
+
+# ── Error details assertions ────────────────────────────────────────
+
+
+@then(parsers.parse("the error details should include {key} {value}"))
+def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None:
+    """Assert error.details contains a key with the given value (numeric/unquoted).
+
+    Handles numeric coercion: if the expected value looks like a number,
+    compare numerically. Otherwise compare as strings.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    _assert_detail_value_matches(key, actual, value)
+
+
+@then(parsers.parse('the error details should include {key} "{value}"'))
+def then_error_details_include_quoted(ctx: dict, key: str, value: str) -> None:
+    """Assert error.details contains a key with the given string value."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
+
+
+@then(parsers.parse('the error "details" object should include "{key}" with value {value:d}'))
+def then_error_details_object_numeric(ctx: dict, key: str, value: int) -> None:
+    """Assert error.details contains a key with an integer value.
+
+    Feature-file pattern: 'the error "details" object should include "minimum_budget" with value 500'
+    Delegates to the same _get_error_details / _assert_detail_value_matches helpers
+    as the unquoted-key variant above.
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    _assert_detail_value_matches(key, actual, str(value))
+
+
+@then(parsers.parse('the error "details" object should include "{key}" with value "{value}"'))
+def then_error_details_object_string(ctx: dict, key: str, value: str) -> None:
+    """Assert error.details contains a key with a string value.
+
+    Feature-file pattern: 'the error "details" object should include "currency" with value "USD"'
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
+    actual = details[key]
+    assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
+
+
+@then(parsers.parse('the "{field}" value should match ISO 4217 alphabetic format'))
+def then_field_matches_iso4217(ctx: dict, field: str) -> None:
+    """Assert the given field value in error details matches ISO 4217 format.
+
+    ISO 4217 alphabetic codes are exactly 3 uppercase ASCII letters (e.g., USD, EUR, GBP).
+    """
+    import re
+
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    details = _get_error_details(error)
+    actual = details.get(field)
+    assert actual is not None, f"Field '{field}' not found in error details. Available keys: {list(details.keys())}"
+    assert isinstance(actual, str), f"Expected '{field}' to be a string, got {type(actual).__name__}: {actual!r}"
+    assert re.fullmatch(r"[A-Z]{3}", actual), (
+        f"Expected '{field}' value '{actual}' to match ISO 4217 alphabetic format "
+        "(exactly 3 uppercase ASCII letters, e.g., USD)"
+    )
+
+
+# ── Terminal failure ────────────────────────────────────────────────
+
+
+@then("the response should indicate a terminal failure")
+def then_terminal_failure(ctx: dict) -> None:
+    """Assert the operation failed with a terminal (non-recoverable) error.
+
+    Verifies both that an error occurred and that its recovery hint is
+    'terminal' -- meaning the buyer cannot retry with corrected input.
+    """
+    error = ctx.get("error")
+    assert error is not None, (
+        "Expected a terminal failure but no error was recorded. "
+        f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
+    )
+    _assert_meaningful_error(error)
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
+    elif hasattr(error, "recovery"):
+        recovery = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
+        assert recovery == "terminal", f"Expected terminal recovery, got '{recovery}'"
+    # If the error type doesn't carry recovery info, the error itself is
+    # sufficient -- non-AdCP exceptions are terminal by nature.
+
+
+# ── No records created (DB state assertions) ────────────────────────
+
+
+@then("no database records should be created")
+def then_no_db_records_created(ctx: dict) -> None:
+    """Assert that no new database records were created by the operation.
+
+    For create operations: verifies no media buy was persisted.
+    Uses the media_buy_id from the response (if any) or checks that no
+    new records exist beyond what was set up by Given steps.
+    """
+    _assert_no_new_media_buy(ctx)
+
+
+@then("no new media buy should have been created")
+def then_no_new_media_buy(ctx: dict) -> None:
+    """Assert no new media buy record was persisted in the database."""
+    _assert_no_new_media_buy(ctx)
+
+
+_ADAPTER_CREATE_METHODS = ("create_order", "create_line_item", "create_media_buy")
+
+
+@then("no new ad platform order should have been created")
+def then_no_new_ad_platform_order(ctx: dict) -> None:
+    """Assert the action under test booked NO new ad platform order.
+
+    "No NEW order" means: the adapter created no order beyond what already
+    existed before the action under test. The expected create-count is read
+    from an explicit baseline rather than sniffing the environment:
+
+      baseline = ctx.get("adapter_calls_after_first_create")
+
+    Two scenario families share this step text, distinguished only by whether
+    that baseline is present:
+
+    * Baseline ABSENT (default 0) -- fresh-failure scenarios (validation /
+      account-not-found). The request fails before reaching the adapter, so
+      EVERY adapter create method must show zero calls. We scan all the create
+      methods (``create_order``, ``create_line_item``, ``create_media_buy``) on
+      both the adapter mock and its ``return_value`` (the adapter instance),
+      because the request never got far enough to call any of them.
+
+    * Baseline PRESENT -- idempotency-replay scenarios. The "already created"
+      Given step performed a REAL first create (which DID call the adapter) and
+      recorded ``adapter_calls_after_first_create`` = the
+      ``create_media_buy`` call_count immediately after that first create. The
+      replay must serve the cached response WITHOUT a second booking, so the
+      post-action ``create_media_buy`` call_count must not exceed the baseline.
+
+    The baseline default of 0 is the correct expected count for the fresh case
+    (nothing booked yet), so the same arithmetic check -- "current count <=
+    baseline" -- serves both families without an env-sniffing branch.
+    """
+    env = ctx["env"]
+    baseline = ctx.get("adapter_calls_after_first_create")
+
+    if baseline is None:
+        # Fresh-failure family: the adapter was never reached. Any call to ANY
+        # create method on the adapter mock or its instance is a real booking.
+        adapter_mock = env.mock.get("adapter")
+        assert adapter_mock is not None, "No adapter mock in the harness env — cannot verify booking state"
+        scan_targets = [adapter_mock]
+        adapter_instance = getattr(adapter_mock, "return_value", None)
+        if adapter_instance is not None:
+            scan_targets.append(adapter_instance)
+        for target, label in zip(scan_targets, ("adapter", "adapter()"), strict=False):
+            for method_name in _ADAPTER_CREATE_METHODS:
+                method = getattr(target, method_name, None)
+                call_count = getattr(method, "call_count", 0) if method is not None else 0
+                assert call_count == 0, (
+                    f"Expected no new ad platform order but {label}.{method_name} was called "
+                    f"{call_count} time(s) — the request booked an order despite failing/short-circuiting"
+                )
+        return
+
+    # Idempotency-replay family: the first create already booked one order
+    # (baseline). The replay must not book another.
+    adapter_instance = env.mock["adapter"].return_value
+    after = adapter_instance.create_media_buy.call_count
+    assert after <= baseline, (
+        f"Adapter create_media_buy was called {after} time(s) total, but only "
+        f"{baseline} (the original) is allowed — the replay re-booked an ad platform order "
+        "instead of serving the cached response"
+    )
+
+
+# ── Helpers for new steps ───────────────────────────────────────────
+
+
+def _resolve_error_field(error: object, field: str) -> object | None:
+    """Resolve a named field from an error, checking multiple sources."""
+    # 1. Direct attribute on the error
+    if hasattr(error, field):
+        val = getattr(error, field)
+        if val is not None:
+            return val
+    # 2. The error dict (to_dict() representation)
+    d = _get_error_dict(error)
+    if field in d and d[field] is not None:
+        return d[field]
+    # 3. The details sub-dict
+    details = getattr(error, "details", None) or {}
+    if field in details and details[field] is not None:
+        return details[field]
+    return None
+
+
+def _available_error_fields(error: object) -> list[str]:
+    """List available field names from all error sources for diagnostics."""
+    fields: set[str] = set()
+    d = _get_error_dict(error)
+    fields.update(d.keys())
+    details = getattr(error, "details", None) or {}
+    fields.update(details.keys())
+    for attr in ("error_code", "message", "recovery", "suggestion", "field"):
+        if hasattr(error, attr):
+            fields.add(attr)
+    return sorted(fields)
+
+
+def _get_error_details(error: object) -> dict:
+    """Extract the details dict from an error object."""
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        return error.details or {}
+    # adcp.types.Error model
+    if hasattr(error, "details") and not isinstance(error, Exception):
+        return error.details or {}
+    # Fallback: try the error dict
+    d = _get_error_dict(error)
+    return d.get("details", {})
+
+
+def _assert_detail_value_matches(key: str, actual: object, expected_str: str) -> None:
+    """Assert a detail value matches, with numeric coercion."""
+    # Try numeric comparison first
+    try:
+        expected_num = float(expected_str)
+        actual_num = float(actual)  # type: ignore[arg-type]
+        if expected_num == int(expected_num):
+            # Integer comparison (e.g., "500" should match 500 and 500.0)
+            assert actual_num == expected_num, f"Expected details['{key}'] = {expected_str}, got {actual}"
+        else:
+            assert abs(actual_num - expected_num) < 1e-9, f"Expected details['{key}'] = {expected_str}, got {actual}"
+        return
+    except (ValueError, TypeError):
+        pass
+    # Fall back to string comparison
+    assert str(actual) == expected_str, f"Expected details['{key}'] = '{expected_str}', got '{actual}'"
+
+
+def _assert_no_new_media_buy(ctx: dict) -> None:
+    """Shared implementation: verify no new media buy was created.
+
+    Two strategies:
+    1. If a response exists with a media_buy_id, verify that ID does not
+       exist in the database.
+    2. If the harness tracks pre-operation media buy count, verify count
+       is unchanged.
+    3. Fallback: verify the operation errored (no response = no creation).
+    """
+    env = ctx["env"]
+    resp = ctx.get("response")
+
+    # Strategy 1: if we got a response with media_buy_id, it should not be in DB
+    if resp is not None:
+        mb_id = getattr(resp, "media_buy_id", None)
+        if mb_id is not None:
+            mb = env.get_media_buy(mb_id) if hasattr(env, "get_media_buy") else None
+            assert mb is None, f"Expected no media buy to be created but found {mb_id} in database"
+            return
+
+    # Strategy 2: operation should have errored (no response = nothing created)
+    error = ctx.get("error")
+    if error is not None:
+        # Error means the operation failed before creating anything
+        return
+
+    # Strategy 3: check that response doesn't indicate creation
+    if resp is not None and not hasattr(resp, "media_buy_id"):
+        return
+
+    raise AssertionError(
+        "Cannot verify no media buy was created: no error recorded and "
+        f"response has media_buy_id. ctx keys: {list(ctx.keys())}"
+    )

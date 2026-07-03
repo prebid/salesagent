@@ -22,14 +22,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 30 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
+# The 33 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
 # graduated M3 6 get_products tenant-duplicate, M1 6 uc004 REST-422 wire-shape,
 # M4 4 uc004 webhook-observability entries [now tag-declared in conftest]; the
 # uc004 attribution campaign-interval boundary graduated at the main merge after
-# upstream re-pointed its expected cell at error "VALIDATION_ERROR"). Grouped by
-# gap in the ledger file's section comments; flat here for exact-set comparison.
+# upstream re-pointed its expected cell at error "VALIDATION_ERROR"; 3 uc002
+# creative extension entries imported at the #1417 merge — newly wired there,
+# recorded failing in-network by that branch, pending first post-merge run).
+# Grouped by gap in the ledger file's section comments; flat here for exact-set
+# comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
+        "tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]",
+        "tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]",
+        "tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]",

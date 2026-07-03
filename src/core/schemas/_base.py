@@ -4,13 +4,15 @@
 # - [assignment] on lines ~1449, ~1450, ~1637, ~1638: account/idempotency_key
 #   overrides (required -> optional). Architectural; permanent.
 
+import re
 import warnings
 from datetime import date, datetime
+from decimal import Decimal
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
 from src.core.enum_helpers import enum_value
 
@@ -58,7 +60,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 )  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.exceptions import AdCPNotFoundError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
 LibraryPackage: TypeAlias = AdCPPackage
@@ -247,6 +249,38 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
+def _mirror_media_buy_status(model: Any) -> Any:
+    """Backfill the deprecated body-level ``status`` from the domain ``media_buy_status``.
+
+    AdCP 3.1 create-/update-media-buy-response adds ``media_buy_status`` as the
+    PREFERRED domain-status field on the RESPONSE BODY (a ``MediaBuyStatus`` value)
+    and DEPRECATES the body-level ``status`` (removed in 3.2). This validator only
+    backfills whichever of the two BODY fields is set onto the other, so the
+    deprecated body ``status`` still carries the domain value during the deprecation
+    window. Both body fields are typed ``MediaBuyStatus | None`` on the adcp 5.7
+    library base (``CreateMediaBuySuccessResponse`` / ``UpdateMediaBuySuccessResponse``).
+
+    This does NOT govern the WIRE top-level ``status``. On the flattened envelope,
+    ``TaskResultEnvelope._serialize`` OVERWRITES the top-level ``status`` with the
+    PROTOCOL ``TaskStatus`` (``submitted`` / ``completed``), so on the wire the
+    top-level ``status`` and ``media_buy_status`` are DIFFERENT namespaces and are
+    NOT identical. This is the target GA model graded by the 3.1.0-rc.12 storyboard
+    ``pending_creatives_to_start.yaml`` (status=field_value 'completed'), which
+    diverges from the pinned SDK's beta.3 storyboard (status=field_value_or_absent,
+    MUST-equal media_buy_status; #4908). See docs/adcp-spec-version.md
+    "Behavior target vs SDK pin".
+
+    Shared by ``CreateMediaBuySuccess`` and ``UpdateMediaBuySuccess`` (DRY).
+    """
+    status = getattr(model, "status", None)
+    media_buy_status = getattr(model, "media_buy_status", None)
+    if media_buy_status is None and status is not None:
+        model.media_buy_status = status
+    elif status is None and media_buy_status is not None:
+        model.status = media_buy_status
+    return model
+
+
 class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     """Successful create_media_buy response extending adcp v1.2.1 type.
 
@@ -271,6 +305,10 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # it (adapters/base.py _build_create_success). Declare it for parity/typing so
     # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
     creative_deadline: datetime | None = None
+    # SDK 5.7 wrongly declares buyer_ref on the parent (removed from AdCP 3.1
+    # create-media-buy-response; pinned 04f59d2d5). Override to keep it off the
+    # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
+    buyer_ref: str | None = Field(default=None, exclude=True)
     # SDK 5.7 also dropped valid_actions and context from the parent, but production
     # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
     # and survives a parent extra-mode change, not riding inherited extra='allow'.
@@ -288,6 +326,20 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
         "field is persisted but won't yet affect targeting). Absent on a fully-honored buy.",
     )
+
+    @model_validator(mode="after")
+    def _dual_emit_media_buy_status(self):
+        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+
+        Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
+        ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
+        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        top-level protocol value never lands on this body field (the envelope owns it), so no
+        enum widening is needed here — the SDK type is not authoritative for the wire status.
+        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "Behavior target vs SDK pin".
+        """
+        return _mirror_media_buy_status(self)
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -349,7 +401,24 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
-class CreateMediaBuyResult(SalesAgentBaseModel):
+class TaskResultEnvelope(SalesAgentBaseModel):
+    """DRY base for protocol-status-wrapping result types.
+
+    Serializes to {"status": <TaskStatus>, ...response_fields} by flattening
+    the domain response at the root and overwriting 'status' with the
+    protocol TaskStatus. Subclasses declare the typed 'response' field.
+    """
+
+    status: str
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        result = self.response.model_dump(mode=info.mode, context=info.context)
+        result["status"] = self.status
+        return result
+
+
+class CreateMediaBuyResult(TaskResultEnvelope):
     """Wrapper combining create_media_buy domain response with protocol status.
 
     Serializes to {"status": "...", ...response_fields}, allowing callers to
@@ -359,7 +428,6 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     with existing callers and tests.
     """
 
-    status: str
     response: CreateMediaBuySuccess | CreateMediaBuyError
 
     # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
@@ -431,6 +499,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
 
+    # SDK 5.7 wrongly declares buyer_ref on the parent (removed from AdCP 3.1
+    # update-media-buy-response; pinned 04f59d2d5). Override to keep it off the
+    # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
+    buyer_ref: str | None = Field(default=None, exclude=True)
+
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
 
@@ -440,6 +513,20 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
         description="Non-fatal advisories for the buyer (e.g. UNSUPPORTED_FEATURE when a "
         "field is persisted but won't yet affect targeting). Absent when fully honored.",
     )
+
+    @model_validator(mode="after")
+    def _dual_emit_media_buy_status(self):
+        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+
+        Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
+        ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
+        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        top-level protocol value never lands on this body field (the envelope owns it), so no
+        enum widening is needed here — the SDK type is not authoritative for the wire status.
+        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "Behavior target vs SDK pin".
+        """
+        return _mirror_media_buy_status(self)
 
     @model_serializer(mode="wrap")
     def _serialize_model(self, serializer, info):
@@ -503,6 +590,19 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
 
 # Union type for update_media_buy operation
 UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError
+
+
+class UpdateMediaBuyResult(TaskResultEnvelope):
+    """Wrapper combining update_media_buy domain response with protocol status.
+
+    Serializes to {"status": "...", ...response_fields}, mirroring
+    CreateMediaBuyResult so wire transports surface ProtocolEnvelope.status.
+    """
+
+    response: UpdateMediaBuySuccess | UpdateMediaBuyError
+
+    def __str__(self) -> str:
+        return str(self.response)
 
 
 class TaskStatus(StrEnum):
@@ -1530,6 +1630,16 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     packages: list[PackageRequest] | None = None
 
     @model_validator(mode="after")
+    def _check_idempotency_key(self):
+        """Reject a malformed idempotency_key with VALIDATION_ERROR (AdCP 16-255).
+
+        Parity with UpdateMediaBuyRequest: create now emits the same tailored
+        suggestion on a malformed key (salesagent-f7u4).
+        """
+        validate_idempotency_key_shape(self.idempotency_key)
+        return self
+
+    @model_validator(mode="after")
     def validate_timezone_aware(self):
         """Validate that datetime fields are timezone-aware.
 
@@ -1559,19 +1669,18 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
         """Extract date from end_time for display purposes."""
         return self.end_time.date() if self.end_time else None
 
-    def get_total_budget(self) -> float:
+    def get_total_budget(self) -> Decimal:
         """Calculate total budget by summing all package budgets.
 
         Per AdCP spec, budget is specified at the package level, not the media buy level.
-        This method calculates the total by summing all package budgets.
+        Returns Decimal — budget is money, float is wrong for money.
         """
+        total = Decimal(0)
         if self.packages:
-            total = 0.0
             for package in self.packages:
                 if package.budget:
-                    total += float(package.budget)
-            return total
-        return 0.0
+                    total += Decimal(str(package.budget))
+        return total
 
     def get_product_ids(self) -> list[str]:
         """Extract unique product IDs from packages per AdCP spec.
@@ -1689,6 +1798,89 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     # are coerced to typed CollectionListReference at the boundary, not dicts.
     targeting_overlay: Targeting | None = None
 
+    # Fields that are immutable once a package is created (BR-RULE-198). They are
+    # not valid update fields, so the AdCP package-update schema rejects them via a
+    # root `not` constraint. We surface that as INVALID_REQUEST (a known, named
+    # business-rule rejection) rather than letting them fall through to the generic
+    # extra="forbid" VALIDATION_ERROR — and, because this runs before extra-mode
+    # handling, it also closes the production (extra="ignore") silent-drop gap.
+    _IMMUTABLE_PACKAGE_FIELDS: ClassVar[frozenset[str]] = frozenset({"product_id", "format_ids", "pricing_option_id"})
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_package_update_shape(cls, data: Any) -> Any:
+        """Enforce the package-update request shape with INVALID_REQUEST.
+
+        Two structural ("which package, and is this field allowed?") rules,
+        both graded INVALID_REQUEST by the spec rather than the generic
+        VALIDATION_ERROR:
+        - package_id identifies the package being updated; it is required
+          (BR-UC-003 ext-h). Raising here (mode="before") surfaces a helpful
+          INVALID_REQUEST + suggestion instead of Pydantic's bare
+          "Field required" VALIDATION_ERROR.
+        - immutable fields (BR-RULE-198) cannot be changed post-create; the
+          AdCP package-update schema rejects them via a root ``not`` constraint.
+          Running before extra-mode handling means dev (extra="forbid") and
+          prod (extra="ignore") both reject them as INVALID_REQUEST rather than
+          a generic VALIDATION_ERROR / silent drop.
+        """
+        if isinstance(data, dict):
+            from src.core.validation_helpers import package_field_path
+
+            if not data.get("package_id"):
+                raise AdCPInvalidRequestError(
+                    "package_id is required to identify the package being updated.",
+                    field=package_field_path("package_id"),
+                    suggestion="Include the package_id of the package you want to update.",
+                )
+            present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
+            if present:
+                fields = ", ".join(present)
+                raise AdCPInvalidRequestError(
+                    f"Package field(s) {fields} are immutable after a media buy is created and cannot be updated.",
+                    field=package_field_path(present[0]),
+                    suggestion="Remove the immutable field(s) from the package update, or create a new media buy to change product, formats, or pricing.",
+                )
+        return data
+
+
+# AdCP idempotency_key constraint (create- and update-media-buy-request.json):
+# minLength 16, maxLength 255, pattern ^[A-Za-z0-9_.:-]{16,255}$.
+_IDEMPOTENCY_KEY_MIN = 16
+_IDEMPOTENCY_KEY_MAX = 255
+_IDEMPOTENCY_KEY_CHARSET = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+
+def validate_idempotency_key_shape(key: str | None) -> None:
+    """Enforce the AdCP idempotency_key length/charset constraint.
+
+    Shared by create and update so both reject a malformed key identically. A
+    length or character-set violation is a value/format error → VALIDATION_ERROR
+    (per the idempotency storyboard and the value/range taxonomy), carrying a
+    buyer-facing suggestion. ``None`` is allowed here — required-ness is enforced
+    separately (and is deliberately relaxed on update).
+    """
+    if key is None:
+        return
+    if len(key) < _IDEMPOTENCY_KEY_MIN:
+        raise AdCPValidationError(
+            f"idempotency_key is too short ({len(key)} characters).",
+            field="idempotency_key",
+            suggestion=f"Use an idempotency_key of at least {_IDEMPOTENCY_KEY_MIN} characters.",
+        )
+    if len(key) > _IDEMPOTENCY_KEY_MAX:
+        raise AdCPValidationError(
+            f"idempotency_key is too long ({len(key)} characters).",
+            field="idempotency_key",
+            suggestion=f"Use an idempotency_key of at most {_IDEMPOTENCY_KEY_MAX} characters.",
+        )
+    if not _IDEMPOTENCY_KEY_CHARSET.match(key):
+        raise AdCPValidationError(
+            "idempotency_key contains characters outside [A-Za-z0-9_.:-].",
+            field="idempotency_key",
+            suggestion="Use only letters, digits, and the characters _ . : -",
+        )
+
 
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """Update media buy request extending library type.
@@ -1714,6 +1906,11 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # required-key fast-follow), at which point the idempotency_key override goes
     # away and the library's required field applies.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    # Optional on update (identity resolves at the boundary). When a key IS
+    # provided it must satisfy the AdCP idempotency_key constraint
+    # (minLength 16, maxLength 255, ^[A-Za-z0-9_.:-]{16,255}$); enforced by
+    # ``_check_idempotency_key`` below so a violation surfaces a buyer-facing
+    # VALIDATION_ERROR + suggestion (a bare Field constraint cannot carry one).
     idempotency_key: str | None = None  # type: ignore[assignment]
 
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
@@ -1758,6 +1955,12 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
                 values["end_time"] = datetime.fromisoformat(end_time)
 
         return values
+
+    @model_validator(mode="after")
+    def _check_idempotency_key(self):
+        """Reject a malformed idempotency_key with VALIDATION_ERROR (AdCP 16-255)."""
+        validate_idempotency_key_shape(self.idempotency_key)
+        return self
 
     @model_validator(mode="after")
     def validate_timezone_aware(self):

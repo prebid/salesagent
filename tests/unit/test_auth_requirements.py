@@ -81,11 +81,11 @@ class TestAuthenticationRequirements:
 
     def test_list_creatives_requires_authentication(self):
         """list_creatives must reject requests without authentication."""
-        from src.core.tools.creatives import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         # Call without identity (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _list_creatives_impl(identity=None)
+            _list_creatives_impl(req=_build_list_creatives_request(), identity=None)
 
         error_msg = str(exc_info.value)
         assert "x-adcp-auth" in error_msg
@@ -184,15 +184,15 @@ class TestAuthenticationRequirements:
 
     def test_update_performance_index_requires_authentication(self):
         """update_performance_index must reject requests without authentication."""
-        from src.core.tools.performance import _update_performance_index_impl
+        from src.core.tools.performance import _build_update_performance_index_request, _update_performance_index_impl
 
         # Call without identity (no auth) — _impl raises ValueError or AdCPAuthenticationError (transport-agnostic)
+        req = _build_update_performance_index_request(
+            media_buy_id="test_buy",
+            performance_data=[{"product_id": "prod1", "performance_index": 0.8}],
+        )
         with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError, ValueError)) as exc_info:
-            _update_performance_index_impl(
-                media_buy_id="test_buy",
-                performance_data=[{"product_id": "prod1", "performance_index": 0.8}],
-                identity=None,
-            )
+            _update_performance_index_impl(req=req, identity=None)
 
         error_msg = str(exc_info.value)
         assert (
@@ -209,13 +209,12 @@ class TestAuthenticationRequirements:
         """activate_signal must reject requests without authentication."""
         import asyncio
 
-        from src.core.tools.signals import _activate_signal_impl
+        from src.core.tools.signals import _activate_signal_impl, _build_activate_signal_request
 
         # Call without identity (no auth) — require_identity rejects before proceeding.
+        req = _build_activate_signal_request(signal_agent_segment_id="test_signal", media_buy_id="test_buy")
         with pytest.raises((AdCPAuthenticationError, AdCPValidationError, RuntimeError)) as exc_info:
-            asyncio.run(
-                _activate_signal_impl(signal_agent_segment_id="test_signal", media_buy_id="test_buy", identity=None)
-            )
+            asyncio.run(_activate_signal_impl(req=req, identity=None))
 
         error_msg = str(exc_info.value).lower()
         assert (

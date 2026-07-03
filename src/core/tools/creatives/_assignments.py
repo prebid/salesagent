@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPPackageNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPPackageNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,12 @@ def _process_assignments(
                 coerced.setdefault(entry["creative_id"], []).append(entry["package_id"])
         assignments = coerced if coerced else None
 
+    # Creatives whose sync failed were never persisted; we must not attempt to
+    # assign them (the creative_assignments FK would crash the request). Their
+    # failure is already recorded in ``results`` (action="failed"); the caller
+    # surfaces it. Collect those ids so the assignment loop skips them quietly.
+    failed_creative_ids = {r.creative_id for r in results if getattr(r, "action", None) == "failed"}
+
     if assignments and isinstance(assignments, dict):
         with CreativeUoW(tenant["tenant_id"]) as uow:
             assert uow.assignments is not None
@@ -56,23 +62,42 @@ def _process_assignments(
                 if creative_id not in assignment_errors_by_creative:
                     assignment_errors_by_creative[creative_id] = {}
 
-                # An assignment row carries a FK to creatives(creative_id, tenant_id,
-                # principal_id). A creative that failed validation this sync was never
-                # persisted, and a creative_id absent from the library never existed —
-                # inserting its assignment would raise a raw FK violation that escapes
-                # as a 500 (#1418). Skip such creatives and report the skipped packages
+                # A creative whose sync failed THIS request must not be assigned: if it
+                # was never persisted the creative_assignments FK would crash the whole
+                # request with a raw IntegrityError (#1418), and even a previously
+                # persisted (stale) version must not be silently assigned when the
+                # requested sync failed. The failure is already recorded on the
+                # per-creative result (action="failed") and the caller (e.g.
+                # update_media_buy) raises the buyer-facing, retryable AdCPAdapterError
+                # for it — skip quietly in every validation mode instead of masking it
+                # with a validation error (#1417).
+                if creative_id in failed_creative_ids:
+                    for package_id in package_ids:
+                        error_msg = (
+                            f"Creative {creative_id} was not synced; skipping assignment to package {package_id}"
+                        )
+                        assignment_errors_by_creative[creative_id][package_id] = error_msg
+                        logger.warning(error_msg)
+                    continue
+
+                # A creative_id absent from the creative library never existed —
+                # inserting its assignment would also violate the creatives FK (#1418).
+                # Resolve the creative once up front and report the skipped packages
                 # via assignment_errors (same convention as package-not-found below).
                 creative_row = assignment_repo.get_creative_by_id(creative_id)
                 if creative_row is None:
-                    error_msg = (
-                        f"Creative not found: {creative_id} (was not persisted — "
-                        f"check the per-creative result for the failure reason)"
-                    )
+                    error_msg = f"Creative not found: {creative_id}"
                     for package_id in package_ids:
                         assignment_errors_by_creative[creative_id][package_id] = error_msg
                     if validation_mode == "strict":
-                        raise AdCPValidationError(error_msg)
-                    logger.warning(f"Skipping assignments for non-persisted creative {creative_id}: {error_msg}")
+                        raise AdCPValidationError(
+                            error_msg,
+                            suggestion=(
+                                "Sync the creative via sync_creatives (or include it in this "
+                                "request's creatives array) before assigning it to a package."
+                            ),
+                        )
+                    logger.warning(f"Skipping assignments for unknown creative {creative_id}: {error_msg}")
                     continue
 
                 for package_id in package_ids:
@@ -166,7 +191,18 @@ def _process_assignments(
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
                                 if validation_mode == "strict":
-                                    raise AdCPValidationError(error_msg)
+                                    # Converge with the update path (media_buy_update.py:233):
+                                    # creative-format-incompatible-with-product is CREATIVE_REJECTED,
+                                    # the canonical code for a rejected creative (salesagent-8j5r).
+                                    raise AdCPCreativeRejectedError(
+                                        error_msg,
+                                        suggestion=(
+                                            "Assign a creative whose format matches one of the product's "
+                                            f"supported formats ({supported_formats_display}), or call "
+                                            "list_creative_formats to discover supported formats."
+                                        ),
+                                        details={"supported_formats": supported_formats_display},
+                                    )
                                 else:
                                     logger.warning(f"Creative format mismatch during assignment, skipping: {error_msg}")
                                     continue

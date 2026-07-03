@@ -41,13 +41,9 @@ _STEPDEF_PREFIX = "pytestbdd_stepdef_"
 # collisions, register it, and REMOVE it from this set.
 # FIXME(salesagent-mdhh): wire each module + harness, then delete its entry.
 _ALLOWED_UNREGISTERED: set[str] = {
-    "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc002_task_query",
-    "tests.bdd.steps.domain.uc003_ext_error_scenarios",
-    "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc019_query_media_buys",
     "tests.bdd.steps.domain.uc026_package_media_buy",
-    "tests.bdd.steps.generic.given_media_buy",
     "tests.bdd.steps.generic.then_media_buy",
 }
 

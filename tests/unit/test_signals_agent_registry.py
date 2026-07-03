@@ -178,7 +178,7 @@ class TestSignalsAgentRegistry:
         )
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should re-raise as a terminal 401 AdCPAuthenticationError carrying the SDK detail
+        # Should re-raise as an AdCPAuthenticationError carrying the SDK detail
         with pytest.raises(AdCPAuthenticationError, match=r"Authentication failed: invalid bearer token") as exc_info:
             await registry._get_signals_from_agent(
                 mock_client,
@@ -186,8 +186,10 @@ class TestSignalsAgentRegistry:
                 brief="test query",
                 tenant_id="test-tenant",
             )
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
-        assert exc_info.value.recovery == "terminal"
+        # AUTH_TOKEN_INVALID is not in the canonical AdCP error-code enum; this branch
+        # reconciles auth failures to the canonical AUTH_REQUIRED (recovery correctable, #1417).
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_get_signals_from_agent_handles_timeout_error(self):

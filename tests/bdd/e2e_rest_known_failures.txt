@@ -94,3 +94,14 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # Needs a step def asserting roas / cost_per_acquisition in aggregated_totals (BDD wiring).
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]
 
+# --- uc002 creative extension scenarios, newly wired by #1417 (3) ---
+# Imported from PR #1417's ledger at the media-buy-validation merge: its UC-002 wiring
+# activates these @extension scenarios on e2e_rest, and PR #1417 recorded them failing
+# in-network ("create succeeds, creative_assignments=None" — server-side creative state
+# not observable/seeded over HTTP). No mechanism on the merged tree is traced to make
+# them pass. RETIREMENT CONDITION: first post-merge in-network run — if they xpass,
+# graduate (remove here + EXPECTED_LEDGER); if they fail, keep and annotate the gap.
+tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]
+tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]
+tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]
+

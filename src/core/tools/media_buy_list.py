@@ -181,7 +181,7 @@ def _get_media_buys_impl(
     # targeting_overlay=None which is indistinguishable from "no targeting".
     hydration_errors: list[Error] = []
     for buy in target_media_buys:
-        status = _compute_status(buy, today)
+        status = _compute_status(buy)
 
         # Build packages
         packages = packages_by_media_buy.get(buy.media_buy_id, [])
@@ -409,7 +409,7 @@ def _fetch_target_media_buys(
             is_paused=buy.is_paused,
         )
         for buy in buys
-        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
+        if filter_statuses is None or _compute_status(buy) in filter_statuses
     ]
 
 
@@ -464,40 +464,48 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
     "draft": MediaBuyStatus.pending_start,
     "pending": MediaBuyStatus.pending_start,
     "pending_approval": MediaBuyStatus.pending_start,
+    # "scheduled" is set by admin approval pre-flight (operations.py / workflows.py);
+    # like the other pre-serving states it maps to pending_start (salesagent-3ec1).
+    "scheduled": MediaBuyStatus.pending_start,
     "pending_creatives": MediaBuyStatus.pending_creatives,
     "pending_start": MediaBuyStatus.pending_start,
 }
 
 
-def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
-    """Resolve a media buy's AdCP status from its persisted status column.
+def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
+    """Map a persisted ``MediaBuy.status`` string to its canonical AdCP ``MediaBuyStatus``.
 
-    The persisted ``MediaBuy.status`` is the source of truth. Only when the
-    buy is in a generic serving state ("active"/"approved") do we refine
-    against the flight window — a serving buy whose flight has not started
-    yet is "pending_start", one past its end date is "completed", and one
-    flagged ``is_paused`` is "paused". Terminal/explicit lifecycle states
-    (paused, completed, rejected, canceled) come straight from the column
-    and cannot be re-derived from flight dates (salesagent-36d).
+    Single source of truth for DB-status → AdCP-status coercion (``_PERSISTED_STATUS_TO_ADCP``),
+    so the create/update dual-emit of ``media_buy_status`` cannot inject a non-enum DB
+    value (e.g. legacy ``pending_approval``) into the typed response field. Returns
+    ``None`` for an empty/unknown status so callers omit the field rather than emit a
+    non-spec value.
     """
-    persisted = (buy.status or "").lower()
-    mapped = _PERSISTED_STATUS_TO_ADCP.get(persisted, MediaBuyStatus.active)
+    if not status:
+        return None
+    return _PERSISTED_STATUS_TO_ADCP.get(status.lower())
 
-    if mapped != MediaBuyStatus.active:
-        return mapped
 
-    # Generic serving state — refine against the flight window.
-    if getattr(buy, "is_paused", False):
+def _compute_status(buy: MediaBuy | _MediaBuyData) -> MediaBuyStatus:
+    """Resolve a media buy's AdCP status from its PERSISTED status column.
+
+    Persisted-status-authoritative, per the AdCP lifecycle requirement "persist
+    status, never recompute from dates" (dist/docs media-buys: status "MUST be
+    stored as an explicit field and mutated only by protocol events ... date
+    comparison sets the INITIAL status at create_media_buy time; after that, the
+    state machine owns the field"). The ``media_buy_status_scheduler`` owns the
+    date-driven transitions (pending_start -> active -> completed) on the status
+    column, so read paths never recompute from the flight window. This keeps
+    ``get_media_buys`` in agreement with the update-response status pair, which
+    reads the same column via ``normalize_persisted_media_buy_status`` (#1417).
+
+    A serving buy flagged ``is_paused`` reports ``paused`` — a command-driven
+    flag, not a date. Terminal/explicit states come straight from the column.
+    """
+    mapped = normalize_persisted_media_buy_status(buy.status) or MediaBuyStatus.active
+    if mapped == MediaBuyStatus.active and getattr(buy, "is_paused", False):
         return MediaBuyStatus.paused
-
-    start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
-    end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
-
-    if today < start:
-        return MediaBuyStatus.pending_start
-    if today > end:
-        return MediaBuyStatus.completed
-    return MediaBuyStatus.active
+    return mapped
 
 
 def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:

@@ -56,6 +56,9 @@ ROOTS = [
     "/schemas/account/list-accounts-response.json",
     "/schemas/signals/get-signals-response.json",
     "/schemas/signals/activate-signal-response.json",
+    # Standalone enum vendored for the BDD error-code guard (verify_feature_error_codes.py).
+    # Not in any request/response $ref closure, so it must be listed explicitly to stay pinned.
+    "/schemas/enums/error-code.json",
 ]
 
 

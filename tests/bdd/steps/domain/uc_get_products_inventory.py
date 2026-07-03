@@ -16,6 +16,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
@@ -27,24 +28,17 @@ from tests.factories import (
 
 
 def _call_get_products(ctx: dict, **kwargs: Any) -> None:
-    """Dispatch get_products through ctx['transport'] via call_via."""
-    transport = ctx.get("transport")
-    env = ctx["env"]
+    """Dispatch get_products through ctx['transport'] via the shared wire dispatcher.
+
+    Delegates to the universal ``dispatch_request`` helper (salesagent-dlh8): it
+    routes through ``env.call_via`` for the parametrized transport, stores the
+    normalized ``ctx['result']`` plus ``ctx['response']`` / ``ctx['error']`` /
+    ``ctx['wire_error_envelope']``, and fails loudly if no transport is set
+    (the IMPL ``call_impl`` fallback was removed — a missing transport is a
+    wiring bug, not an IMPL bypass).
+    """
     kwargs.setdefault("brief", "inventory profile test")
-    if transport is not None:
-        try:
-            result = env.call_via(transport, **kwargs)
-            if result.is_error:
-                ctx["error"] = result.error
-            else:
-                ctx["response"] = result.payload
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        try:
-            ctx["response"] = env.call_impl(**kwargs)
-        except Exception as exc:
-            ctx["error"] = exc
+    dispatch_request(ctx, **kwargs)
 
 
 def _get_first_prop(ctx: dict) -> Any:

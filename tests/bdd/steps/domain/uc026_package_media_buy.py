@@ -487,12 +487,6 @@ def given_request_missing_field(ctx: dict, missing_field: str) -> None:
 # --- Simple single-field request construction ---
 
 
-@given(parsers.parse('a valid create_media_buy request with a package containing buyer_ref "{buyer_ref}"'))
-def given_request_with_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
-
-
 @given(parsers.parse('a valid create_media_buy request with a package containing pricing_option_id "{option_id}"'))
 def given_request_with_pricing_option(ctx: dict, option_id: str) -> None:
     """Build create request with specific pricing_option_id."""
@@ -686,12 +680,6 @@ def given_pricing_option_max_bid(ctx: dict, product_id: str, option: str, max_bi
 # --- Dedup / cross-buy Given steps ---
 
 
-@given(parsers.parse('a valid create_media_buy request resubmits buyer_ref "{buyer_ref}" in the same media buy'))
-def given_resubmit_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
-
-
 @given("the Buyer is creating a media buy with no existing packages")
 def given_no_existing_packages(ctx: dict) -> None:
     """Assert fresh state — no prior media buys exist for this buyer.
@@ -708,45 +696,11 @@ def given_no_existing_packages(ctx: dict) -> None:
     ctx["no_existing_packages"] = True
 
 
-@given(
-    parsers.parse('the Buyer owns a media buy with a package having buyer_ref "{buyer_ref}" and package_id "{pkg_id}"')
-)
-def given_buyer_owns_mb_with_ref_and_id(ctx: dict, buyer_ref: str, pkg_id: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
-
-
-@given(parsers.parse('the Buyer owns a media buy with a package having buyer_ref "{buyer_ref}"'))
-def given_buyer_owns_mb_with_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
-
-
-@given(parsers.parse('the Buyer owns media buy "{mb_id}" with a package having buyer_ref "{buyer_ref}"'))
-def given_buyer_owns_named_mb(ctx: dict, mb_id: str, buyer_ref: str) -> None:
-    """Create a media buy with a package for cross-buy tests.
-
-    mb_id is a logical label from the feature file; the actual media_buy_id is
-    assigned by the seller. We store the actual ID under the label for cross-buy tests.
-    """
-    _create_media_buy_for_update(ctx)
-    actual_mb_id = ctx.get("existing_media_buy_id")
-    assert actual_mb_id is not None, f"Failed to create media buy '{mb_id}' — no existing_media_buy_id in ctx"
-    ctx["named_media_buy_id"] = mb_id
-    ctx.setdefault("named_media_buy_ids", {})[mb_id] = actual_mb_id
-
-
 @given(parsers.parse('the Buyer is creating a new media buy "{mb_id}"'))
 def given_creating_new_mb(ctx: dict, mb_id: str) -> None:
     """Set up state for creating a new (different) media buy."""
     ctx["new_media_buy_name"] = mb_id
     ctx.pop("request_kwargs", None)
-
-
-@given(parsers.parse('the create_media_buy request for "{mb_id}" includes a package with buyer_ref "{buyer_ref}"'))
-def given_cross_buy_request(ctx: dict, mb_id: str, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
 
 
 # --- Update-flow Given steps ---
@@ -767,12 +721,6 @@ def given_buyer_owns_pkg_with_budget(ctx: dict, pkg_id: str, amount: int) -> Non
             assert float(actual_budget) == float(amount), (
                 f"Package created with budget {actual_budget}, expected {amount}"
             )
-
-
-@given(parsers.parse('the Buyer owns a media buy with a package identified by buyer_ref "{buyer_ref}"'))
-def given_buyer_owns_pkg_by_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
 
 
 @given(parsers.parse('the Buyer owns a media buy with an active package "{pkg_id}" (paused=false)'))
@@ -971,9 +919,9 @@ def given_update_with_package_table(ctx: dict, datatable: list[list[str]]) -> No
     ctx["update_kwargs"] = update_kwargs
 
 
-@given("the package update contains neither package_id nor buyer_ref")
+@given("the package update contains no package_id")
 def given_update_no_identifier(ctx: dict) -> None:
-    """Ensure the package update has no package_id (buyer_ref removed in adcp 3.12)."""
+    """Ensure the package update has no package_id (missing package identifier)."""
     update_kwargs = ctx.get("update_kwargs", {})
     packages = update_kwargs.get("packages", [])
     assert packages, "No packages in update_kwargs — cannot strip identifiers from empty update"
@@ -1075,18 +1023,6 @@ def given_partition_bid_price(ctx: dict, partition: str) -> None:
     else:
         raise ValueError(f"Unknown bid_price partition: {partition}")
     kwargs["packages"] = [pkg]
-
-
-@given(parsers.re(r"a create_media_buy request with buyer_ref per (?!boundary )(?P<partition>.+)"))
-def given_partition_buyer_ref(ctx: dict, partition: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
-
-
-@given(parsers.parse("a create_media_buy request with buyer_ref per boundary {boundary_point}"))
-def given_boundary_buyer_ref(ctx: dict, boundary_point: str) -> None:
-    """No-op: buyer_ref removed in adcp 3.12."""
-    pass  # buyer_ref removed in adcp 3.12
 
 
 @given(parsers.re(r"a create_media_buy request with format_ids per (?!boundary )(?P<partition>.+)"))
@@ -1680,48 +1616,6 @@ def then_package_has_id(ctx: dict) -> None:
     assert isinstance(pkg_id, str) and pkg_id.strip(), (
         f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
     )
-
-
-@then(parsers.parse('the package should contain buyer_ref "{buyer_ref}"'))
-def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
-    """Assert the response package echoes the submitted buyer_ref value.
-
-    buyer_ref was removed from the adcp Package schema in 3.12. This step
-    asserts everything production DOES provide (structural correctness,
-    product/pricing fields) and xfails only the buyer_ref comparison.
-    """
-
-    _assert_no_error(ctx)
-    pkgs = _assert_has_packages(ctx)
-    pkg = pkgs[0]
-
-    # Structural correctness: package_id is seller-assigned, non-empty
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id is not None, "Package missing package_id"
-    assert isinstance(pkg_id, str) and pkg_id.strip(), (
-        f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
-    )
-
-    # Verify product_id echoed from request
-    product_id = _pkg_field(pkg, "product_id")
-    assert product_id is not None, "Package missing product_id"
-    product = ctx.get("default_product")
-    if product is not None:
-        assert product_id == product.product_id, (
-            f"Expected product_id '{product.product_id}' echoed in package, got '{product_id}'"
-        )
-
-    # Verify pricing_option_id present (package is complete)
-    po_id = _pkg_field(pkg, "pricing_option_id")
-    assert po_id is not None, "Package missing pricing_option_id — incomplete package state"
-    assert isinstance(po_id, str) and po_id.strip(), f"Expected non-empty pricing_option_id, got {po_id!r}"
-
-    # buyer_ref was removed from adcp Package response schema in 3.12.
-    # The request still uses buyer_ref for package identification, but the
-    # response no longer echoes it. The package is identified by package_id.
-    # Assert that a valid package was returned (package_id present) — the
-    # buyer_ref→package_id resolution is the behavioral claim.
-    assert pkg_id, f"buyer_ref '{buyer_ref}' should resolve to a package with a seller-assigned package_id"
 
 
 @then(parsers.parse("the package should contain budget {budget:d}"))

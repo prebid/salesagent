@@ -69,13 +69,18 @@ _DISPATCH_METHODS = {
 # ── Allowlist (ratcheting — may only shrink) ─────────────────────────────
 
 _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
-    # Legacy dispatch-in-Then steps — original scenarios are xfailed.
-    # Auth and budget enforcement replaced by BR-UC-002-nfr-enforcement.feature.
-    # Rate limiting, payload size, SLA test unimplemented features (dead code).
-    "bdd/steps/domain/uc002_nfr.py:124 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:183 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:226 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:387 then_budget_validated_against_min_order",
+    # Legacy dispatch-in-Then steps — original scenarios are xfailed (the UC-002
+    # harness is not wired for non-extension @nfr scenarios, so these Then steps
+    # never run under the current binding). Auth and budget enforcement are
+    # replaced by BR-UC-002-nfr-enforcement.feature. The second-request dispatch
+    # was migrated from env.call_impl to the shared wire dispatcher
+    # (dispatch_request) so that, when these scenarios are wired, they exercise
+    # the parametrized transport on the wire (salesagent-osrl). Rate limiting and
+    # payload size remain spec-production gaps (FIXME salesagent-9vgz.92).
+    "bdd/steps/domain/uc002_nfr.py:126 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:190 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:237 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:413 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()

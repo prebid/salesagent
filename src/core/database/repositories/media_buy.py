@@ -78,7 +78,11 @@ class MediaBuyRepository:
         if media_buy is None:
             from src.core.exceptions import AdCPMediaBuyNotFoundError
 
-            raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found", context=context)
+            raise AdCPMediaBuyNotFoundError(
+                f"Media buy '{media_buy_id}' not found",
+                suggestion="Verify the media_buy_id is correct and belongs to your account.",
+                context=context,
+            )
         return media_buy
 
     def find_by_idempotency_key(
@@ -199,7 +203,9 @@ class MediaBuyRepository:
             from src.core.exceptions import AdCPPackageNotFoundError
 
             raise AdCPPackageNotFoundError(
-                f"Package '{package_id}' not found for media buy '{media_buy_id}'", context=context
+                f"Package '{package_id}' not found for media buy '{media_buy_id}'",
+                suggestion="Verify the package_id exists in this media buy; list the media buy's packages to find valid ids.",
+                context=context,
             )
         return package
 

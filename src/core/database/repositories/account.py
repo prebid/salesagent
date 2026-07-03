@@ -82,24 +82,46 @@ class AccountRepository:
         brand_id: str | None = None,
         sandbox: bool | None = None,
         limit: int = 2,
+        principal_id: str | None = None,
     ) -> list[Account]:
         """List accounts matching a natural key (up to limit, for ambiguity detection).
 
         Single query replaces the previous count_by_natural_key + get_by_natural_key
         two-round-trip pattern. Check len(result) for ambiguity.
+
+        When ``principal_id`` is given, the result is scoped to accounts that agent
+        can access (AgentAccountAccess join) so ambiguity detection never observes —
+        nor later discloses the count of — accounts outside the agent's access
+        (salesagent-ym1c).
         """
         stmt = select(Account).where(
             Account.tenant_id == self._tenant_id,
             Account.operator == operator,
             Account.brand["domain"].as_string() == brand_domain,
         )
+        stmt = self._scope_natural_key(stmt, brand_id, sandbox, principal_id)
+        return list(self._session.scalars(stmt.limit(limit)).all())
+
+    def _scope_natural_key(self, stmt, brand_id, sandbox, principal_id):
+        """Apply the shared natural-key filters (brand_id, sandbox, agent access).
+
+        Centralizes the brand_id/sandbox/access predicates so list_by_natural_key
+        and count_by_natural_key cannot drift — the count drifting from the
+        detection scope is exactly the salesagent-ym1c info leak.
+        """
         if brand_id is not None:
             stmt = stmt.where(Account.brand["brand_id"].as_string() == brand_id)
         if sandbox is not None:
             stmt = stmt.where(Account.sandbox == sandbox)
         else:
             stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
-        return list(self._session.scalars(stmt.limit(limit)).all())
+        if principal_id is not None:
+            stmt = stmt.join(
+                AgentAccountAccess,
+                (Account.tenant_id == AgentAccountAccess.tenant_id)
+                & (Account.account_id == AgentAccountAccess.account_id),
+            ).where(AgentAccountAccess.principal_id == principal_id)
+        return stmt
 
     def count_by_natural_key(
         self,
@@ -107,10 +129,19 @@ class AccountRepository:
         brand_domain: str,
         brand_id: str | None = None,
         sandbox: bool | None = None,
+        principal_id: str | None = None,
     ) -> int:
-        """Count accounts matching a natural key (for ambiguity detection).
+        """Count accounts matching a natural key.
 
-        Deprecated: prefer list_by_natural_key(limit=2) to avoid double query.
+        For ambiguity *detection* prefer list_by_natural_key(limit=2) (single query).
+        This exact count is for ambiguity *disclosure* on the error path only — once
+        detection has confirmed >1 match, callers use it to tell the buyer how many
+        accounts collide (see account_helpers._resolve_by_natural_key).
+
+        ``principal_id`` MUST mirror the value passed to list_by_natural_key so the
+        disclosed count is scoped to the agent's accessible accounts — disclosing a
+        tenant-wide count to an agent who can access fewer is an info leak
+        (salesagent-ym1c).
         """
         from sqlalchemy import func
 
@@ -123,12 +154,7 @@ class AccountRepository:
                 Account.brand["domain"].as_string() == brand_domain,
             )
         )
-        if brand_id is not None:
-            stmt = stmt.where(Account.brand["brand_id"].as_string() == brand_id)
-        if sandbox is not None:
-            stmt = stmt.where(Account.sandbox == sandbox)
-        else:
-            stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
+        stmt = self._scope_natural_key(stmt, brand_id, sandbox, principal_id)
         return self._session.scalar(stmt) or 0
 
     # ------------------------------------------------------------------

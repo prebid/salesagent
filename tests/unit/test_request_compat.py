@@ -30,7 +30,7 @@ class TestBrandManifestTranslation:
         """A dict with 'url' key is converted to BrandReference with domain."""
         result = normalize_request_params(
             "create_media_buy",
-            {"brand_manifest": {"url": "https://nike.com/brand"}, "buyer_ref": "ref1"},
+            {"brand_manifest": {"url": "https://nike.com/brand"}},
         )
         assert result.params["brand"] == {"domain": "nike.com"}
         assert "brand_manifest" not in result.params
@@ -62,15 +62,18 @@ class TestBrandManifestTranslation:
 
 
 class TestCampaignRefTranslation:
-    """campaign_ref → buyer_campaign_ref (create_media_buy only)."""
+    """campaign_ref → ext.buyer_campaign_ref (create_media_buy only)."""
 
     def test_campaign_ref_renamed(self):
         result = normalize_request_params(
             "create_media_buy",
-            {"campaign_ref": "camp-123", "buyer_ref": "ref1"},
+            {"campaign_ref": "camp-123"},
         )
-        assert result.params["buyer_campaign_ref"] == "camp-123"
+        # AdCP 3.12 removed top-level buyer_campaign_ref; the migration path
+        # is the ext extension object, not a top-level field.
+        assert result.params["ext"]["buyer_campaign_ref"] == "camp-123"
         assert "campaign_ref" not in result.params
+        assert "buyer_campaign_ref" not in result.params
 
     def test_campaign_ref_not_renamed_for_other_tools(self):
         """campaign_ref is deleted but not translated for non-create_media_buy tools."""
@@ -111,7 +114,6 @@ class TestOptimizationGoalTranslation:
         result = normalize_request_params(
             "create_media_buy",
             {
-                "buyer_ref": "ref1",
                 "packages": [
                     {"product_id": "p1", "optimization_goal": "ctr"},
                 ],
@@ -134,7 +136,6 @@ class TestCatalogTranslation:
         result = normalize_request_params(
             "create_media_buy",
             {
-                "buyer_ref": "ref1",
                 "packages": [
                     {"product_id": "p1", "catalog": {"id": "cat-1"}},
                 ],
@@ -220,17 +221,17 @@ class TestPrecedence:
         assert result.params["brand"] == {"domain": "new.com"}
         assert "brand_manifest" not in result.params
 
-    def test_buyer_campaign_ref_takes_precedence_over_campaign_ref(self):
+    def test_existing_ext_buyer_campaign_ref_takes_precedence_over_campaign_ref(self):
         result = normalize_request_params(
             "create_media_buy",
             {
-                "buyer_campaign_ref": "new-ref",
+                "ext": {"buyer_campaign_ref": "new-ref"},
                 "campaign_ref": "old-ref",
-                "buyer_ref": "ref1",
             },
         )
-        assert result.params["buyer_campaign_ref"] == "new-ref"
+        assert result.params["ext"]["buyer_campaign_ref"] == "new-ref"
         assert "campaign_ref" not in result.params
+        assert "buyer_campaign_ref" not in result.params
 
     def test_account_takes_precedence_over_account_id(self):
         result = normalize_request_params(
@@ -260,14 +261,14 @@ class TestMultipleTranslations:
                 "brand_manifest": "https://acme.com/brand",
                 "campaign_ref": "camp-1",
                 "account_id": "acc-1",
-                "buyer_ref": "ref1",
             },
         )
         assert result.params["brand"] == {"domain": "acme.com"}
-        assert result.params["buyer_campaign_ref"] == "camp-1"
+        assert result.params["ext"]["buyer_campaign_ref"] == "camp-1"
         assert result.params["account"] == {"account_id": "acc-1"}
         assert "brand_manifest" not in result.params
         assert "campaign_ref" not in result.params
+        assert "buyer_campaign_ref" not in result.params
         assert "account_id" not in result.params
         assert len(result.translations_applied) == 3
 

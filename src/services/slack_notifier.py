@@ -6,6 +6,7 @@ Sends notifications for new tasks and approvals via Slack webhooks.
 import logging
 import os
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
 
@@ -486,7 +487,7 @@ class SlackNotifier:
         for field in highlight_fields:
             if field in details:
                 value = details[field]
-                if "budget" in field and isinstance(value, (int, float)):
+                if "budget" in field and isinstance(value, (int, float, Decimal)):
                     value = f"${value:,.2f}"
                 elif "date" in field:
                     value = str(value)
@@ -515,7 +516,7 @@ class SlackNotifier:
         for field in important_fields:
             if field in details:
                 value = details[field]
-                if "budget" in field and isinstance(value, (int, float)):
+                if "budget" in field and isinstance(value, (int, float, Decimal)):
                     value = f"${value:,.2f}"
                 field_name = field.replace("_", " ").title()
                 formatted_parts.append(f"• {field_name}: `{value}`")

@@ -15,6 +15,8 @@ import uuid
 
 from pytest_bdd import given, then
 
+from tests.bdd.steps.generic._dispatch import dispatch_request
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
 # ═══════════════════════════════════════════════════════════════════════
@@ -124,11 +126,18 @@ def then_error_minimum_spend(ctx: dict) -> None:
 def then_auth_before_business_logic(ctx: dict) -> None:
     """Assert authentication is the first gate before any business logic.
 
-    Sends a SECOND request with invalid credentials (no principal_id) and
-    verifies: (1) AdCPAuthenticationError is raised, and (2) no adapter
-    calls were made — proving auth blocks before business logic side effects.
+    Sends a SECOND request with invalid credentials (no principal_id) THROUGH
+    THE WIRE (the parametrized transport) and verifies: (1) the wire envelope
+    carries the AUTH_REQUIRED error code, and (2) no adapter calls were made —
+    proving auth blocks before business logic side effects.
+
+    Per the Error Verification Policy (tests/CLAUDE.md), this asserts on the
+    wire envelope, not a reconstructed exception. The auth error code is
+    AUTH_REQUIRED on the wire (a recent reversal flipped AUTH_TOKEN_INVALID ->
+    AUTH_REQUIRED); the "Principal ID not found" message still holds.
     """
     from src.core.exceptions import AdCPAuthenticationError
+    from src.core.schemas import CreateMediaBuyRequest
     from tests.factories.principal import PrincipalFactory
 
     env = ctx["env"]
@@ -156,22 +165,20 @@ def then_auth_before_business_logic(ctx: dict) -> None:
     mock_adapter.create_media_buy.reset_mock()
 
     # Build a valid request so we test auth, not Pydantic parsing
-    from src.core.schemas import CreateMediaBuyRequest
-
     request_kwargs = ctx.get("request_kwargs", {})
     req = CreateMediaBuyRequest(**request_kwargs)
 
-    # Call impl with invalid identity — expect auth error
-    auth_error = None
-    try:
-        env.call_impl(req=req, identity=invalid_identity)
-    except AdCPAuthenticationError as exc:
-        auth_error = exc
+    # Dispatch through the wire with the invalid identity — the parametrized
+    # transport (a2a/mcp/rest) actually exercises the auth gate on the wire.
+    auth_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}
+    dispatch_request(auth_ctx, req=req, identity=invalid_identity)
 
-    assert auth_error is not None, (
-        "Expected AdCPAuthenticationError with no principal_id, but the request succeeded — auth is not the first gate"
-    )
-    assert "Principal ID not found" in str(auth_error), f"Expected 'Principal ID not found' error, got: {auth_error}"
+    result = auth_ctx.get("result")
+    assert result is not None, "dispatch_request did not produce a TransportResult for the invalid-identity request"
+    # recovery omitted -> defaults to the pinned AUTH_REQUIRED enum (correctable). Do not
+    # pass an explicit recovery= that shadows the pinned enum (salesagent-xc2j: superseded
+    # the earlier terminal override; the pinned enum is the single source of truth).
+    result.assert_wire_error("AUTH_REQUIRED", message_substr="Principal ID not found")
 
     # Verify no business logic side effects occurred
     assert not mock_adapter.create_media_buy.called, (
@@ -191,32 +198,36 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
     """
     from copy import deepcopy
 
-    from src.core.exceptions import AdCPRateLimitError
     from src.core.schemas import CreateMediaBuyRequest
 
     # The original request already succeeded (from the When step).
-    env = ctx["env"]
     resp = ctx.get("response")
     assert resp is not None, "Expected a successful response from the original request"
 
-    # Make a rapid follow-up call to trigger rate limiting. The follow-up needs a
-    # FRESH idempotency_key — reusing the original's would replay the cached
-    # success instead of exercising a second real request.
-    rate_limit_hit = False
+    # Make a rapid follow-up call THROUGH THE WIRE to trigger rate limiting.
+    # The follow-up needs a FRESH idempotency_key — reusing the original's
+    # would replay the cached success instead of exercising a second real
+    # request. Dispatching through the parametrized transport means a
+    # rate-limit gate (when implemented) would surface as a RATE_LIMITED wire
+    # envelope on a2a/mcp/rest.
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
     request_kwargs["idempotency_key"] = f"bdd-key-{uuid.uuid4().hex}"
     req = CreateMediaBuyRequest(**request_kwargs)
-    try:
-        env.call_impl(req=req)
-    except AdCPRateLimitError:
-        rate_limit_hit = True
-    except Exception:
-        # Other errors (duplicate key, etc.) are not rate limiting
-        pass
+
+    rate_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}
+    dispatch_request(rate_ctx, req=req)
+
+    # Gap preserved: production never emits RATE_LIMITED, so the follow-up
+    # succeeds (or fails for an unrelated reason) and no RATE_LIMITED wire
+    # envelope is produced. This assertion fails — proving the gap — exactly
+    # as the call_impl version did.
+    result = rate_ctx.get("result")
+    envelope = result.wire_error_envelope if result is not None else None
+    rate_limit_hit = bool(envelope) and envelope.get("errors", [{}])[0].get("code") == "RATE_LIMITED"
 
     assert rate_limit_hit, (
         "SPEC-PRODUCTION GAP: Rate limiting not implemented. "
-        "Sent a rapid follow-up request — not rejected with AdCPRateLimitError. "
+        "Sent a rapid follow-up request through the wire — not rejected with a RATE_LIMITED envelope. "
         "AdCPRateLimitError class exists but is never raised. "
         "FIXME(salesagent-9vgz.92)"
     )
@@ -231,27 +242,42 @@ def then_payload_size_limits(ctx: dict) -> None:
     that checks content-length or rejects oversized request bodies.
 
     FIXME(salesagent-9vgz.92): Implement payload size validation middleware.
+
+    Note: PAYLOAD_TOO_LARGE is not a canonical AdCP error code in the pinned
+    enum, so assert_wire_error() cannot be used here — the assertion inspects
+    the raw wire envelope (and any dispatch error) for a payload-size rejection.
     """
     import uuid
     from copy import deepcopy
 
     from src.core.schemas import CreateMediaBuyRequest
 
-    env = ctx["env"]
-
     # Build a request with an oversized field to trigger payload validation.
-    # A 1 MB order_name string simulates an oversized body.
+    # A 1 MB order_name string simulates an oversized body. Dispatching through
+    # the parametrized transport means a content-length / payload-size gate
+    # (when implemented) would surface as a wire rejection on a2a/mcp/rest.
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
     request_kwargs["order_name"] = f"oversize-{uuid.uuid4().hex[:8]}-{'X' * (1024 * 1024)}"
+    req = CreateMediaBuyRequest(**request_kwargs)
 
+    payload_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}
+    dispatch_request(payload_ctx, req=req)
+
+    # Gap preserved: no ASGI middleware checks content-length, so the oversized
+    # body is accepted and no payload-size rejection appears on the wire (nor in
+    # any dispatch error). Inspect both the wire envelope and a transport error.
     payload_rejected = False
-    try:
-        req = CreateMediaBuyRequest(**request_kwargs)
-        env.call_impl(req=req)
-    except Exception as exc:
-        error_str = str(exc).lower()
-        error_code = getattr(exc, "error_code", "")
-        # Accept any payload-size-related rejection
+    result = payload_ctx.get("result")
+    envelope = result.wire_error_envelope if result is not None else None
+    if envelope:
+        code = envelope.get("errors", [{}])[0].get("code", "")
+        msg = (envelope.get("errors", [{}])[0].get("message") or "").lower()
+        if code == "PAYLOAD_TOO_LARGE" or "payload" in msg or "too large" in msg or "content-length" in msg:
+            payload_rejected = True
+    dispatch_error = payload_ctx.get("error")
+    if dispatch_error is not None:
+        error_str = str(dispatch_error).lower()
+        error_code = getattr(dispatch_error, "error_code", "")
         if (
             "payload" in error_str
             or "too large" in error_str
@@ -262,7 +288,7 @@ def then_payload_size_limits(ctx: dict) -> None:
 
     assert payload_rejected, (
         "SPEC-PRODUCTION GAP: Payload size validation not implemented. "
-        "Sent a request with a 1 MB order_name — not rejected for payload size. "
+        "Sent a request with a 1 MB order_name through the wire — not rejected for payload size. "
         "No ASGI middleware checks content-length for oversized bodies. "
         "FIXME(salesagent-9vgz.92)"
     )
@@ -394,17 +420,18 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
 
     This step:
     1. Verifies the original request succeeded (budget was adequate).
-    2. Makes a SECOND call with budget below min_package_budget.
-    3. Asserts the rejection contains "minimum spend" — proving the
-       enforcement mechanism actually fires.
+    2. Makes a SECOND call with budget below min_package_budget THROUGH THE WIRE.
+    3. Asserts the wire rejection contains "minimum spend" (or code
+       BUDGET_EXCEEDED) — proving the enforcement mechanism actually fires.
 
-    Transport-aware: dispatches the low-budget request through the harness
-    (call_via for E2E, call_impl for in-process).
+    Dispatches the low-budget request through the parametrized transport
+    (a2a/mcp/rest), so budget enforcement is verified on the wire — not on a
+    reconstructed exception (tests/CLAUDE.md Error Verification Policy).
     """
     from copy import deepcopy
     from decimal import Decimal
 
-    from tests.bdd.steps._outcome_helpers import is_e2e
+    from src.core.schemas import CreateMediaBuyRequest
 
     min_budget = ctx.get("min_package_budget")
     assert min_budget is not None, (
@@ -418,13 +445,8 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
         f"Expected the original request to succeed (budget >= min_package_budget), but got error: {error}"
     )
 
-    # Step 2: Make a second call with budget below minimum to test enforcement
-    from src.core.schemas import CreateMediaBuyRequest
-
-    env = ctx["env"]
+    # Step 2: Build a second request with budget below minimum to test enforcement
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
-
-    # Set each package budget to 1 cent below the minimum
     below_min = float(Decimal(str(min_budget)) - Decimal("0.01"))
     if "packages" in request_kwargs:
         for pkg in request_kwargs["packages"]:
@@ -432,38 +454,99 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
 
     low_budget_req = CreateMediaBuyRequest(**request_kwargs)
 
-    # Dispatch transport-aware: E2E goes through HTTP, in-process uses call_impl
-    low_budget_error = None
-    if is_e2e(ctx):
-        # Use a temporary ctx to capture the second request's outcome
-        tmp_ctx = {"env": env, "transport": ctx["transport"]}
-        if "e2e_config" in ctx:
-            tmp_ctx["e2e_config"] = ctx["e2e_config"]
-        from tests.bdd.steps.generic._dispatch import dispatch_request
+    # Dispatch the second request through the wire (transport-independent).
+    low_budget_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}
+    dispatch_request(low_budget_ctx, req=low_budget_req)
 
-        dispatch_request(tmp_ctx, req=low_budget_req)
-        low_budget_error = tmp_ctx.get("error")
-        # Also check if the response wraps an error
-        tmp_resp = tmp_ctx.get("response")
-        if tmp_resp is not None and hasattr(tmp_resp, "response") and hasattr(tmp_resp.response, "errors"):
-            if tmp_resp.response.errors:
-                low_budget_error = tmp_resp.response.errors[0]
-    else:
-        try:
-            result = env.call_impl(req=low_budget_req)
-            # Check if the result wraps an error response
-            if hasattr(result, "response") and hasattr(result.response, "errors") and result.response.errors:
-                low_budget_error = result.response.errors[0]
-        except Exception as exc:
-            low_budget_error = exc
-
-    # Step 3: Assert the specific minimum spend rejection
-    assert low_budget_error is not None, (
-        f"Expected rejection for budget {below_min} below min_package_budget {min_budget}, but the request succeeded"
+    # Step 3: Assert the specific minimum spend rejection on the wire envelope.
+    result = low_budget_ctx.get("result")
+    assert result is not None, "dispatch_request did not produce a TransportResult for the low-budget request"
+    envelope = result.wire_error_envelope
+    assert envelope is not None, (
+        f"Expected a wire rejection for budget {below_min} below min_package_budget {min_budget}, "
+        f"but no wire_error_envelope was captured (is_error={result.is_error}, payload={result.payload!r})"
     )
-    error_str = str(low_budget_error)
-    error_code = getattr(low_budget_error, "code", "")
-    assert "minimum spend" in error_str.lower() or error_code == "BUDGET_EXCEEDED", (
-        f"Expected minimum spend rejection (message containing 'minimum spend' "
-        f"or code 'BUDGET_EXCEEDED'), got: code={error_code!r}, message={error_str!r}"
+    first_error = envelope.get("errors", [{}])[0]
+    error_code = first_error.get("code", "")
+    error_msg = (first_error.get("message") or "").lower()
+    assert "minimum spend" in error_msg or error_code == "BUDGET_EXCEEDED", (
+        f"Expected minimum spend rejection (wire message containing 'minimum spend' "
+        f"or code 'BUDGET_EXCEEDED'), got: code={error_code!r}, message={first_error.get('message')!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# nfr-highvalue: >$10k high-value Seller alert (salesagent-wvry)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the Seller observes high-value audit alerts")
+def given_observe_high_value_alerts(ctx: dict) -> None:
+    """Make the >$10k high-value audit alert observable at the Seller boundary.
+
+    The high-value alert fires inside the REAL AuditLogger (notify_audit_log),
+    which the create harness no-ops by default. This swaps in the real audit
+    logger so the budget gate actually runs, and spies its external Slack
+    boundary (the same Slack-boundary idiom as 'a Slack notification should be
+    sent to the Seller', which asserts notify_media_buy_event). The spy is
+    registered on the env's patcher list so it is torn down on env __exit__.
+
+    In-process only: e2e_rest dispatches create in the Docker process, out of
+    this spy's reach — the Then step branches on is_e2e.
+    """
+    from tests.bdd.steps._outcome_helpers import is_e2e
+
+    if is_e2e(ctx):
+        return
+
+    from unittest import mock
+
+    from src.core.audit_logger import get_audit_logger
+
+    env = ctx["env"]
+    # Real audit logger -> the high-value notification gate executes for real.
+    env.mock["audit"].side_effect = get_audit_logger
+    # Spy the audit logger's external Slack boundary; tie teardown to env lifecycle.
+    patcher = mock.patch("src.services.slack_notifier.get_slack_notifier")
+    notifier_factory = patcher.start()
+    env._patchers.append(patcher)
+    notifier = mock.MagicMock()
+    notifier_factory.return_value = notifier
+    env.mock["audit_slack"] = notifier_factory
+    ctx["high_value_alert_notifier"] = notifier
+
+
+@then("a high-value alert should be sent to the Seller")
+def then_high_value_alert_sent(ctx: dict) -> None:
+    """Assert the >$10k pending-approval high-value alert fired to the Seller.
+
+    Filtering by the create_media_buy_pending_approval operation isolates the
+    high-value budget gate from audit_logger's sensitive_ops allowlist (the
+    auto-approve op create_media_buy would notify regardless) and confirms the
+    create took the pending path.
+    """
+    import pytest
+
+    from tests.bdd.steps._outcome_helpers import is_e2e
+
+    if is_e2e(ctx):
+        # The high-value alert is a seller-internal side-effect observed via the
+        # in-process Slack spy. On e2e_rest the create runs in the Docker app
+        # (out of the spy's reach) and MediaBuyCreateEnv cannot query its
+        # audit_logs, so this behavior is not observable through the e2e wire.
+        pytest.skip("high-value Slack alert is observed in-process; not observable on e2e_rest")
+
+    notifier = ctx.get("high_value_alert_notifier")
+    assert notifier is not None, (
+        "high-value alert observation not armed — the "
+        "'the Seller observes high-value audit alerts' Given must run before this Then"
+    )
+    high_value_calls = [
+        call
+        for call in notifier.notify_audit_log.call_args_list
+        if call.kwargs.get("operation") == "create_media_buy_pending_approval"
+    ]
+    assert len(high_value_calls) == 1, (
+        "the >$10k pending-approval high-value Seller alert did not fire "
+        f"(notify_audit_log calls: {notifier.notify_audit_log.call_args_list})"
     )

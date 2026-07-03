@@ -47,3 +47,18 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error should indicate minimum spend requirement
+
+  # salesagent-wvry: get_total_budget() returns Decimal; the pending-approval
+  # audit feed (operation create_media_buy_pending_approval, NOT in audit_logger
+  # sensitive_ops) drove the >$10k high-value Seller alert SOLELY off the budget
+  # gate. With a raw Decimal that gate's isinstance(.,(int,float)) was False, so
+  # the alert silently never fired. The auto-approve op create_media_buy is a
+  # sensitive_op (alerts regardless) so the bug is specific to the pending path.
+  @T-UC-002-nfr-highvalue @nfr @nfr-highvalue
+  Scenario: High-value pending media buy (>$10k) alerts the Seller
+    Given the tenant requires manual approval
+    And a valid create_media_buy request with total budget 15000
+    And the account exists and is active
+    And the Seller observes high-value audit alerts
+    When the Buyer Agent sends the create_media_buy request
+    Then a high-value alert should be sent to the Seller

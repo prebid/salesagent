@@ -109,8 +109,6 @@ class TestKevelAdapterPackages:
         expected_ids = {pkg.package_id for pkg in sample_packages}
         assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
-        # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
-
     def test_kevel_live_mode_returns_packages_with_flight_ids(self, mock_principal, sample_request, sample_packages):
         """Kevel adapter in live mode must return packages with platform_line_item_id."""
         # Arrange
@@ -205,8 +203,6 @@ class TestTritonAdapterPackages:
         returned_ids = {pkg.package_id for pkg in response.packages}
         expected_ids = {pkg.package_id for pkg in sample_packages}
         assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-
-        # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
 
     def test_triton_live_mode_returns_packages_with_flight_ids(self, mock_principal, sample_request, sample_packages):
         """Triton adapter in live mode must return packages with platform_line_item_id."""
@@ -341,5 +337,3 @@ class TestXandrAdapterPackages:
             returned_ids = {pkg.package_id for pkg in response.packages}
             expected_ids = {pkg.package_id for pkg in sample_packages}
             assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
-
-            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
