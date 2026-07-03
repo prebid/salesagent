@@ -38,8 +38,15 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
     _call_via(ctx, transport, req=req)
 
 
-def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsRequest | None = None) -> None:
-    """Call env.call_via for transport-specific dispatch."""
+def _call_via(
+    ctx: dict, transport: str | Transport, req: ListCreativeFormatsRequest | None = None, **extra: Any
+) -> None:
+    """Call env.call_via for transport-specific dispatch.
+
+    ``extra`` forwards additional flat tool kwargs (e.g. a structured ``filters``
+    dict for list_creatives) straight through to ``env.call_via``; existing
+    callers pass none and are unaffected.
+    """
     if isinstance(transport, Transport):
         t = transport
     else:
@@ -55,6 +62,7 @@ def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsReq
             kwargs.update(req.model_dump(exclude_none=True))
         else:
             kwargs["req"] = req
+    kwargs.update(extra)
 
     try:
         result = env.call_via(t, **kwargs)

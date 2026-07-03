@@ -22,7 +22,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
 from fastapi import APIRouter, Depends, Request
 
 from src.core.auth_context import require_auth, resolve_auth
-from src.core.schema_helpers import to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.schemas import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
@@ -138,6 +138,9 @@ class ListCreativesBody(SalesAgentBaseModel):
     created_after: str | None = None
     created_before: str | None = None
     search: str | None = None
+    # Structured AdCP CreativeFilters object (statuses, concept_ids, format_ids, …);
+    # coerced at the route via coerce_creative_filters so REST honours the same
+    # structured filters as MCP/A2A (concept_ids threaded into the DB query, #1493).
     filters: dict[str, Any] | None = None
     fields: list[str] | None = None
     include_performance: bool = False
@@ -385,6 +388,10 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
 @router.post("/creatives")
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
+    # Coerce the raw wire filters dict into a typed CreativeFilters here (#1493): the
+    # merged list_creatives_raw expects a typed object (it calls .model_dump()), and
+    # this is where an empty concept_ids etc. surfaces the VALIDATION_ERROR envelope.
+    filters = coerce_creative_filters(body.filters)
     response = creatives_listing_module.list_creatives_raw(
         media_buy_id=body.media_buy_id,
         media_buy_ids=body.media_buy_ids,
@@ -394,7 +401,7 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
         created_after=body.created_after,
         created_before=body.created_before,
         search=body.search,
-        filters=body.filters,  # type: ignore[arg-type]  # raw dict; coerced into CreativeFilters
+        filters=filters,
         fields=body.fields,
         include_performance=body.include_performance,
         include_assignments=body.include_assignments,

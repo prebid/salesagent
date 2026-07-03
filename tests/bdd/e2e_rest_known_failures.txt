@@ -151,7 +151,7 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requ
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]
 
-# --- uc005_discover_creative_formats (115) ---
+# --- uc005_discover_creative_formats (116) ---
 tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-brief (new asset type for generative formats)-valid]
 tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-catalog (new asset type for catalog-based formats)-valid]
 tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-multiple types OR semantics-valid]
@@ -205,6 +205,7 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_fil
 tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-no_matching_formats-valid]
 tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-omitted-valid]
 tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-single_position-valid]
+tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]
 tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_boundary__boundary_point[e2e_rest-all IDs match-valid]
 tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_boundary__boundary_point[e2e_rest-no IDs match (empty result)-valid]
 tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]

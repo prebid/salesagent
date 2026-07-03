@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 
 
@@ -174,18 +174,129 @@ class TestSignalsAgentRegistry:
         from adcp.exceptions import ADCPAuthenticationError
 
         mock_agent_client.get_signals = AsyncMock(
-            side_effect=ADCPAuthenticationError("Authentication failed", agent_id="test", agent_uri="https://test.com")
+            side_effect=ADCPAuthenticationError("invalid bearer token", agent_id="test", agent_uri="https://test.com")
         )
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Call method - should raise AdCPAdapterError
-        with pytest.raises(AdCPAdapterError, match="Authentication failed"):
+        # Should re-raise as an AdCPAuthenticationError carrying the SDK detail
+        with pytest.raises(AdCPAuthenticationError, match=r"Authentication failed: invalid bearer token") as exc_info:
             await registry._get_signals_from_agent(
                 mock_client,
                 test_agent,
                 brief="test query",
                 tenant_id="test-tenant",
             )
+        # AUTH_TOKEN_INVALID is not in the canonical AdCP error-code enum; this branch
+        # reconciles auth failures to the canonical AUTH_REQUIRED (recovery correctable, #1417).
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
+
+    @pytest.mark.asyncio
+    async def test_get_signals_from_agent_handles_timeout_error(self):
+        """Test _get_signals_from_agent maps ADCPTimeoutError to AdCPServiceUnavailableError."""
+        registry = SignalsAgentRegistry()
+
+        test_agent = SignalsAgent(
+            agent_url="https://test-agent.example.com/mcp",
+            name="Test Agent",
+            enabled=True,
+            timeout=30,
+        )
+
+        mock_client = Mock()
+        mock_agent_client = Mock()
+
+        from adcp.exceptions import ADCPTimeoutError
+
+        mock_agent_client.get_signals = AsyncMock(
+            side_effect=ADCPTimeoutError("deadline exceeded after 30s", agent_id="test", agent_uri="https://test.com")
+        )
+        mock_client.agent = Mock(return_value=mock_agent_client)
+
+        # Timeouts are transient 503s: the downstream may recover, so buyers should retry
+        with pytest.raises(
+            AdCPServiceUnavailableError, match=r"Request timed out: deadline exceeded after 30s"
+        ) as exc_info:
+            await registry._get_signals_from_agent(
+                mock_client,
+                test_agent,
+                brief="test query",
+                tenant_id="test-tenant",
+            )
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.recovery == "transient"
+
+    @pytest.mark.asyncio
+    async def test_get_signals_from_agent_handles_connection_error(self):
+        """Test _get_signals_from_agent maps ADCPConnectionError to AdCPServiceUnavailableError."""
+        registry = SignalsAgentRegistry()
+
+        test_agent = SignalsAgent(
+            agent_url="https://test-agent.example.com/mcp",
+            name="Test Agent",
+            enabled=True,
+            timeout=30,
+        )
+
+        mock_client = Mock()
+        mock_agent_client = Mock()
+
+        from adcp.exceptions import ADCPConnectionError
+
+        mock_agent_client.get_signals = AsyncMock(
+            side_effect=ADCPConnectionError("ECONNREFUSED 10.0.0.1:443", agent_id="test", agent_uri="https://test.com")
+        )
+        mock_client.agent = Mock(return_value=mock_agent_client)
+
+        # Connection failures are transient 503s, matching the timeout classification
+        with pytest.raises(
+            AdCPServiceUnavailableError, match=r"Connection failed: ECONNREFUSED 10\.0\.0\.1:443"
+        ) as exc_info:
+            await registry._get_signals_from_agent(
+                mock_client,
+                test_agent,
+                brief="test query",
+                tenant_id="test-tenant",
+            )
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.recovery == "transient"
+
+    @pytest.mark.asyncio
+    async def test_get_signals_from_agent_handles_generic_adcp_error(self):
+        """Test _get_signals_from_agent maps a generic ADCPError to AdCPAdapterError.
+
+        The catch-all arm forwards the raw SDK message (no ``AdCP error:`` prefix),
+        so this pins both the SERVICE_UNAVAILABLE/transient classification and the
+        message shape.
+        """
+        registry = SignalsAgentRegistry()
+
+        test_agent = SignalsAgent(
+            agent_url="https://test-agent.example.com/mcp",
+            name="Test Agent",
+            enabled=True,
+            timeout=30,
+        )
+
+        mock_client = Mock()
+        mock_agent_client = Mock()
+
+        from adcp.exceptions import ADCPError
+
+        mock_agent_client.get_signals = AsyncMock(side_effect=ADCPError("unexpected protocol failure"))
+        mock_client.agent = Mock(return_value=mock_agent_client)
+
+        with pytest.raises(AdCPAdapterError, match=r"unexpected protocol failure") as exc_info:
+            await registry._get_signals_from_agent(
+                mock_client,
+                test_agent,
+                brief="test query",
+                tenant_id="test-tenant",
+            )
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        assert exc_info.value.recovery == "transient"
+        # Catch-all forwards the bare SDK message, not the legacy "AdCP error: ..." prefix
+        assert "AdCP error:" not in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_test_connection_success(self):
