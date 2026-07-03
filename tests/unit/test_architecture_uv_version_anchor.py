@@ -70,7 +70,10 @@ jobs:
           python-version-file: .python-version
 """
 
-_BAD_UV_VERSION_WORKFLOW = 'env:\n  UV_VERSION: "0.6.0"\n'
+_BAD_UV_VERSION_WORKFLOW = """\
+env:
+  UV_VERSION: "0.6.0"
+"""
 
 
 def _github_yaml_repo(tmp_path: Path, rel: str, content: str) -> Path:
