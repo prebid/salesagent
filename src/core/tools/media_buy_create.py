@@ -161,8 +161,7 @@ from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.property_intersection import PropertyIntersection, property_list_drop_advisory
 from src.services.targeting_capabilities import (
-    collect_overlay_targeting_violations,
-    raise_if_overlay_targeting_violations,
+    raise_for_overlay_targeting,
     raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
@@ -2686,9 +2685,7 @@ async def _create_media_buy_impl(
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
-            for pkg in req.packages:
-                if pkg.targeting_overlay is not None:
-                    raise_if_overlay_targeting_violations(collect_overlay_targeting_violations(pkg.targeting_overlay))
+            raise_for_overlay_targeting(req.packages)
 
     except (AdCPError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation

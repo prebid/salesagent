@@ -470,6 +470,7 @@ class AdCPRequestHandler(RequestHandler):
                 SyncAccountsResponse,
                 SyncCreativesResponse,
                 UpdateMediaBuyError,
+                UpdateMediaBuySubmitted,
                 UpdateMediaBuySuccess,
             )
 
@@ -486,11 +487,14 @@ class AdCPRequestHandler(RequestHandler):
                     return CreateMediaBuySuccess(**data)
                 return CreateMediaBuyError(**data)
             elif skill_name == "update_media_buy":
-                # Success responses have media_buy_id; the error variant doesn't.
+                # Discriminate on shape, mirroring create: the submitted variant
+                # carries task-status "submitted" and no media_buy_id; success
+                # carries media_buy_id; everything else is the error variant.
+                if data.get("status") == "submitted":
+                    return UpdateMediaBuySubmitted(**data)
                 if "media_buy_id" in data:
                     return UpdateMediaBuySuccess(**data)
-                else:
-                    return UpdateMediaBuyError(**data)
+                return UpdateMediaBuyError(**data)
 
             # Non-union response types - use the concrete class directly
             response_map: dict[str, type] = {

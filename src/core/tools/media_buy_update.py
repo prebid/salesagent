@@ -90,8 +90,7 @@ from src.core.tools.financial_validation import (
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.targeting_capabilities import (
-    collect_overlay_targeting_violations,
-    raise_if_overlay_targeting_violations,
+    raise_for_overlay_targeting,
     raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
@@ -307,12 +306,7 @@ def _update_media_buy_impl(
                 # Run the same per-package targeting validators the create path runs, so a buyer
                 # can't bypass unknown-field rejection, managed-only dimension checks, or
                 # same-value geo inclusion/exclusion overlap by sending changes through update.
-                overlay_violations: list[str] = []
-                for pkg_update in req.packages:
-                    if pkg_update.targeting_overlay is None:
-                        continue
-                    overlay_violations.extend(collect_overlay_targeting_violations(pkg_update.targeting_overlay))
-                raise_if_overlay_targeting_violations(overlay_violations)
+                raise_for_overlay_targeting(req.packages)
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:
