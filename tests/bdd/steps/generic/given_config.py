@@ -67,8 +67,15 @@ def given_registry_format_typed(ctx: dict, name: str, fmt_type: str, asset_type:
 
 @given(parsers.parse('the registry has format "{name}" with format_id id "{fmt_id}"'))
 def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
-    """Register a format with a known format_id."""
-    fid = FormatIdFactory.build(agent_url="https://creatives.adcontextprotocol.org", id=fmt_id)
+    """Register a format with a known format_id.
+
+    Uses the FormatIdFactory default agent_url (the seller's own creative agent,
+    matching the format_ids request step). v3.1 matches format_ids on the
+    (agent_url, id) pair, so the seeded format and the requested reference MUST
+    agree on agent_url — a prior "creatives" (plural) typo here diverged from the
+    "creative" the request uses and was masked only by the old id-only filter.
+    """
+    fid = FormatIdFactory.build(id=fmt_id)
     fmt = FormatFactory.build(name=name, format_id=fid)
     _add_format(ctx, fmt)
     _sync_registry(ctx)

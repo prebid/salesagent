@@ -424,8 +424,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_get_products_filters.py
     # tests/integration/test_get_products_filters.py — migrated to factories
     # tests/integration/test_get_products_format_id_filter.py — migrated to factories
-    # tests/integration/test_mcp_endpoints_comprehensive.py
-    ("tests/integration/test_mcp_endpoints_comprehensive.py", "setup_test_data"),
+    # tests/integration/test_mcp_endpoints_comprehensive.py — requires_server suite removed (#1233 D11)
     # tests/integration/test_mcp_tool_roundtrip_validation.py
     ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
     # tests/integration/test_mcp_tools_audit.py
@@ -457,8 +456,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_session_json_validation.py", "test_model_json_validation"),
     ("tests/integration/test_session_json_validation.py", "test_principal_platform_mappings"),
     ("tests/integration/test_session_json_validation.py", "test_workflow_step_comments"),
-    # tests/integration/test_tool_result_format.py
-    ("tests/integration/test_tool_result_format.py", "setup_test_data"),
+    # tests/integration/test_tool_result_format.py — deleted (#1233 D11)
     # tests/integration/test_creative_formats_aggregation.py
     ("tests/integration/test_creative_formats_aggregation.py", "test_broadstreet_formats_merged_with_agent_formats"),
     ("tests/integration/test_creative_formats_aggregation.py", "test_broadstreet_formats_are_non_standard"),

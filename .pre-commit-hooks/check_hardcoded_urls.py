@@ -68,8 +68,12 @@ def main(filenames: list[str]) -> int:
     Check all provided files for hardcoded URLs.
 
     Returns:
-        0 if no violations, 1 if violations found
+        0 if no violations, 1 if violations found or no files provided
     """
+    if not filenames:
+        print("check_hardcoded_urls: no files provided", file=sys.stderr)
+        return 1
+
     all_violations = []
 
     for filename in filenames:
