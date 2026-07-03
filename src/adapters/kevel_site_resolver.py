@@ -30,8 +30,6 @@ index.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 from dataclasses import dataclass, field
@@ -43,7 +41,7 @@ from adcp.types import Identifier, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError, adcp_error_for_httpx_exc
 from src.core.property_list_resolver import loggable_list_id, resolve_property_list_typed_sync
-from src.core.ttl_cache import ThreadSafeTTLCache
+from src.core.ttl_cache import ThreadSafeTTLCache, cache_partition_token
 from src.services.identifier_matching import (
     buyer_identifier_matches_host,
     host_from_url_or_host,
@@ -123,15 +121,9 @@ class KevelSiteResolver:
         self.base_url = base_url.rstrip("/")
         self.cache_ttl_seconds = cache_ttl_seconds
         self.timeout_seconds = timeout_seconds
-        # Cache-partition token derived from the credential as an HMAC KEY
-        # over a constant purpose label (HKDF-extract shape): a keyed PRF
-        # whose output reveals nothing about the key, unlike hashing the
-        # credential as data. The plaintext api_key thus never persists in
-        # the process-global cache, while two credentials on the same
-        # network id still partition into separate indexes.
-        self._cache_partition = hmac.new(
-            self.api_key.encode(), b"kevel-site-cache-partition", hashlib.sha256
-        ).hexdigest()[:16]
+        # Cache-partition token derived from the credential (see cache_partition_token):
+        # two credentials on the same network id partition into separate indexes.
+        self._cache_partition = cache_partition_token(self.api_key, b"kevel-site-cache-partition")
 
     @classmethod
     def classify_identifier_types(cls, identifiers: list[Identifier]) -> set[str]:

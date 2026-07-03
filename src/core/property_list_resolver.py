@@ -14,8 +14,6 @@ Both share a single module-level cache so a typed lookup populates the cache
 for the other mode's subsequent lookups.
 """
 
-import hashlib
-import hmac
 import json
 import logging
 from collections.abc import Iterable, Iterator
@@ -32,7 +30,7 @@ from src.core.security.url_validator import (
     ssrf_pinned_async_transport,
     ssrf_pinned_transport,
 )
-from src.core.ttl_cache import ThreadSafeTTLCache
+from src.core.ttl_cache import ThreadSafeTTLCache, cache_partition_token
 
 logger = logging.getLogger(__name__)
 
@@ -81,18 +79,14 @@ _CACHE_PARTITION_LABEL = b"property-list-cache-partition"
 
 
 def _auth_partition(auth_token: str | None) -> str:
-    """Non-reversible cache partition for a buyer credential.
+    """Non-reversible cache partition for a buyer credential (see ``cache_partition_token``).
 
-    The bearer token is used as the HMAC KEY over a constant purpose label (a
-    keyed PRF, HKDF-extract shape) so the plaintext token never persists as a
-    process-global cache key, while two principals with different tokens for the
-    same ``(agent_url, list_id)`` partition into separate cache entries. Without
-    this the second principal reads the first's access-gated identifiers from the
-    shared cache before the list service can reject its token. Mirrors
-    ``KevelSiteResolver._cache_partition``. A missing token maps to a stable
-    sentinel so unauthenticated lists still share a single partition.
+    Two principals with different tokens for the same ``(agent_url, list_id)``
+    partition into separate cache entries — without this the second principal
+    reads the first's access-gated identifiers from the shared cache before the
+    list service can reject its token.
     """
-    return hmac.new((auth_token or "").encode(), _CACHE_PARTITION_LABEL, hashlib.sha256).hexdigest()[:16]
+    return cache_partition_token(auth_token, _CACHE_PARTITION_LABEL)
 
 
 def property_list_cache_key(ref: PropertyListReference) -> tuple[str, str, str]:
