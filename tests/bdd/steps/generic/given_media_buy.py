@@ -106,6 +106,33 @@ def _sync_adapter_approval_to_db(ctx: dict, *, manual_approval_required: bool) -
     set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=manual_approval_required)
 
 
+def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
+    """Force the auto-approval create path for the scenario's tenant.
+
+    Sets human_review_required=False on the ORM row, the identity cache, and
+    the env tenant overrides. With ``sync_adapter`` also mirrors
+    manual_approval_required=False into the adapter DB config so live-server
+    (e2e) transports take the same auto path as in-process: the in-process
+    harness zeroes manual_approval_operations, but the live tenant defaults to
+    human_review_required=True and the real adapter requires approval for
+    create_media_buy, which would divert e2e onto the PENDING-approval path
+    with different validation semantics (salesagent-mchp).
+
+    No-op when the scenario has no tenant yet.
+    """
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        return
+    env = ctx["env"]
+    tenant.human_review_required = False
+    env._commit_factory_data()
+    # Also update identity's tenant dict (pre-built, not re-read from DB)
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
+    if sync_adapter:
+        _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+
+
 def _sync_adapter_error_to_db(
     ctx: dict,
     *,
@@ -143,18 +170,10 @@ def _sync_adapter_error_to_db(
 @given("tenant human_review_required is false")
 def given_tenant_auto_approval(ctx: dict) -> None:
     """Configure tenant for auto-approval (human_review_required=False)."""
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
+    assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for auto-approval' but no tenant exists to configure"
     )
-    tenant.human_review_required = False
-    env = ctx["env"]
-    env._commit_factory_data()
-    # Also update identity's tenant dict (pre-built, not re-read from DB)
-    env._identity_cache.clear()
-    env._tenant_overrides["human_review_required"] = False
-    # Also write to DB so Docker-hosted adapter reads the correct config
-    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+    _seed_auto_approval(ctx)
 
 
 @given("the tenant is configured for manual approval")
@@ -2173,8 +2192,13 @@ def given_package_references_missing_creative(ctx: dict, creative_id: str) -> No
     "Creative IDs not found" check (media_buy_create.py) raises
     AdCPCreativeRejectedError → CREATIVE_REJECTED on the wire, with the missing
     id and a sync_creatives suggestion.
+
+    Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
+    auto path; the live-server default (human_review_required=True) would take
+    the PENDING path, which silently skips missing creatives.
     """
     _add_creative_ids_to_package(ctx, [creative_id])
+    _seed_auto_approval(ctx)
 
 
 @given("But a creative's format_id does not match any of the product's supported format_ids")
@@ -2185,9 +2209,14 @@ def given_creative_format_mismatch(ctx: dict) -> None:
     The default product accepts ``display_300x250``; this creative carries
     ``video_640x480``. The pre-adapter creative validation in the create path
     rejects the format mismatch with CREATIVE_REJECTED on the wire.
+
+    Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
+    auto path; the live-server default (human_review_required=True) would take
+    the PENDING path, which emits VALIDATION_ERROR for the same condition.
     """
     creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_640x480")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
+    _seed_auto_approval(ctx)
 
 
 @given("a valid create_media_buy request with inline creatives")
@@ -2256,14 +2285,7 @@ def given_request_inline_creatives_valid(ctx: dict) -> None:
     _ensure_request_defaults(ctx)
     creative = _create_approved_creative(ctx, "cr-upload-ok")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
-    tenant = ctx.get("tenant")
-    if tenant is not None:
-        env = ctx["env"]
-        tenant.human_review_required = False
-        env._commit_factory_data()
-        env._identity_cache.clear()
-        env._tenant_overrides["human_review_required"] = False
-        _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+    _seed_auto_approval(ctx)
 
 
 @given("But the ad server rejects the creative upload")
@@ -2794,12 +2816,7 @@ def given_adapter_error(ctx: dict) -> None:
         recovery="retryable",
     )
     # Ensure tenant is auto-approval so production code doesn't short-circuit
-    tenant = ctx.get("tenant")
-    if tenant is not None:
-        tenant.human_review_required = False
-        env._commit_factory_data()
-        env._identity_cache.clear()
-        env._tenant_overrides["human_review_required"] = False
+    _seed_auto_approval(ctx, sync_adapter=False)
     # Strip creative_ids so E2E doesn't fail on creative format validation
     # (the Docker creative agent doesn't know test formats like display_300x250).
     # This scenario tests adapter failure, not creative assignment.
