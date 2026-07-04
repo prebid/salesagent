@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Generator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -2981,6 +2982,36 @@ def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     return "poll"
 
 
+@contextmanager
+def _production_db_pointed_at(url: str) -> Generator[None, None, None]:
+    """Point production's cached DB engine at ``url`` for the scenario duration.
+
+    The e2e counterpart of ``integration_db``'s engine repoint: over e2e_rest
+    the env's factories write to the live server DB (``e2e_config.postgres_url``),
+    but the runner's ``DATABASE_URL`` targets the in-process test base (in-network:
+    ``.../adcp_test``), so any in-process production call inside an e2e scenario
+    (e.g. a TRANSPORT-BYPASS Given calling an ``_impl``) would read a different
+    database than the one being seeded. Repoint DATABASE_URL + reset the cached
+    engine on entry, restore both on exit (mirrors tests/conftest_db.py).
+    """
+    import src.core.context_manager as _context_manager_module
+    from src.core.database.database_session import reset_engine
+
+    original_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    reset_engine()
+    _context_manager_module._context_manager_instance = None
+    try:
+        yield
+    finally:
+        if original_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original_url
+        reset_engine()
+        _context_manager_module._context_manager_instance = None
+
+
 @pytest.fixture(autouse=True)
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
@@ -3120,20 +3151,22 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-005":
-        # In-process transports need the per-test database. Over e2e_rest, SKIP
-        # integration_db: it repoints production's cached engine (DATABASE_URL)
-        # at an empty per-test DB, while the env's factories write to the live
-        # server DB (e2e_config.postgres_url) — so any in-process production
-        # call inside an e2e scenario (e.g. the format_id-roundtrip
-        # TRANSPORT-BYPASS Given calling _get_products_impl) reads the wrong
-        # database and sees none of the seeded rows. Without the fixture the
-        # runner's DATABASE_URL (set to E2E_DATABASE_URL in-network) already
-        # targets the server DB, so in-process reads and factory writes agree.
-        if ctx.get("e2e_config") is None:
+        # In-process transports need the per-test database. Over e2e_rest,
+        # integration_db would repoint production's cached engine at an empty
+        # per-test DB while the env's factories write to the live server DB —
+        # so in-process production calls inside an e2e scenario (e.g. the
+        # format_id-roundtrip TRANSPORT-BYPASS Given calling
+        # _get_products_impl) would read the wrong database. Point production
+        # at the server DB instead for the scenario duration.
+        e2e_config = ctx.get("e2e_config")
+        if e2e_config is None:
             request.getfixturevalue("integration_db")
+            db_scope: AbstractContextManager[None] = nullcontext()
+        else:
+            db_scope = _production_db_pointed_at(e2e_config.postgres_url)
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
+        with db_scope, CreativeFormatsEnv(e2e_config=e2e_config) as env:
             # Seed a tenant ONLY in e2e mode: the live server authenticates the token
             # against the DB tenant, and UC-005 baseline scenarios carry no account/tenant
             # Given step to seed it (unlike UC-006/UC-011). In-process the registry is mocked
