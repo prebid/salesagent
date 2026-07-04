@@ -3120,7 +3120,17 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-005":
-        request.getfixturevalue("integration_db")
+        # In-process transports need the per-test database. Over e2e_rest, SKIP
+        # integration_db: it repoints production's cached engine (DATABASE_URL)
+        # at an empty per-test DB, while the env's factories write to the live
+        # server DB (e2e_config.postgres_url) — so any in-process production
+        # call inside an e2e scenario (e.g. the format_id-roundtrip
+        # TRANSPORT-BYPASS Given calling _get_products_impl) reads the wrong
+        # database and sees none of the seeded rows. Without the fixture the
+        # runner's DATABASE_URL (set to E2E_DATABASE_URL in-network) already
+        # targets the server DB, so in-process reads and factory writes agree.
+        if ctx.get("e2e_config") is None:
+            request.getfixturevalue("integration_db")
         from tests.harness.creative_formats import CreativeFormatsEnv
 
         with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
