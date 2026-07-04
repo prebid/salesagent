@@ -1148,6 +1148,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "the adcp MediaBuyDelivery.status enum includes it (production gap)",
                 True,
             ),
+            # BR-RULE-220 INV-2: the pinned-spec AggregatedTotals declares roas /
+            # cost_per_acquisition / conversion_value, but production sums only
+            # impressions/spend/clicks (media_buy_delivery.py aggregation loop) and
+            # DeliveryTotals has no conversion_value. Steps exist and assert the
+            # spec contract; production implementation is a separate feature ticket.
+            "T-UC-004-aggregated-roas-and-cpa": (
+                "production does not compute roas / cost_per_acquisition / conversion_value "
+                "in delivery aggregated_totals (production gap)",
+                True,
+            ),
             # T-UC-004-attr-supported: resolved — steps now assert attribution_window model and echo
             # T-UC-004-attr-unsupported: resolved — xfail now in step function for specific production gap
             # T-UC-004-attr-echo: resolved — vvx9 + ral2 fixed enum→str handling

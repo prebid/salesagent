@@ -77,10 +77,11 @@ tests/bdd/test_uc011_manage_accounts.py::test_sandbox_account_provisioned_via_sy
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
 
-# --- uc004 missing Then step definition (1) ---
-# GENUINE GAP: Then "the aggregated_totals should include roas..." has no step definition.
-# Needs a step def asserting roas / cost_per_acquisition in aggregated_totals (BDD wiring).
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]
+# --- uc004 roas/cpa aggregated_totals — RETIRED from the ledger (#1430 item 4) ---
+# The three Then steps are now defined (uc004_delivery.py) and the scenario is a
+# tag-declared production gap on ALL transports: T-UC-004-aggregated-roas-and-cpa in
+# conftest _UC004_XFAIL_ADDITIONAL (production computes neither roas nor
+# cost_per_acquisition nor conversion_value; src/ feature work).
 
 # --- uc002 creative extension scenarios, newly wired by #1417 (3) ---
 # Imported from PR #1417's ledger at the media-buy-validation merge: its UC-002 wiring

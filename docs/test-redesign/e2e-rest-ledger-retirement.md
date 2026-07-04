@@ -6,11 +6,13 @@ wire-shape, idempotent tenant seeding, webhook tag declarations, the
 attribution campaign-interval boundary retired at the main merge, and the 12
 uc006 account billing-state entries graduated by PR #1417's account-resolution
 wiring) net of 3 uc002 creative-extension entries imported from #1417 brought
-it to **21**. Tracked publicly as **#1423**; the in-network Docker CI runner that
-recovered e2e_rest as the 5th BDD transport landed on main as **#1420**.
+it to **21**; the #1430 item-4 roas/cpa retirement (Then steps written,
+tag-declared production gap) brought it to **20**. Tracked publicly as
+**#1423**; the in-network Docker CI runner that recovered e2e_rest as the 5th
+BDD transport landed on main as **#1420**.
 (Internal epic `salesagent-x0nl`; the per-mechanism sub-task ids below roll up
 to #1423.)
-**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (21 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
+**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (20 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
 
 ## Wave 3 outcome (#1418) — read this first
 
@@ -64,6 +66,13 @@ Each validated by an in-network BDD run with 0 failures:
   by #1417 fail in-network (server-side creative state not observable/seeded
   over HTTP — confirmed innet_040726_0013); imported with the merge, same
   seeding family as exec-n48i.
+- **#1430 item 4 — roas/cpa Then steps (1 uc004, 21 → 20):** the "missing Then
+  step definition" entry. The three steps (roas, cost_per_acquisition,
+  media_buy_count) are now defined in `uc004_delivery.py`; production computes
+  none of roas / cost_per_acquisition / conversion_value, so the scenario is a
+  **tag-declared strict xfail on ALL transports**
+  (`T-UC-004-aggregated-roas-and-cpa` in conftest `_UC004_XFAIL_ADDITIONAL`) —
+  off the e2e nodeid ledger; the production feature is ticketed separately.
 - **Tenant-seed idempotency extended (0 ledger impact):** the newly wired
   uc005 format_id-roundtrip and uc018 list-creatives scenarios hit the same
   `tenants_pkey` shared-DB collision jdy1-M3 fixed for get_products; the

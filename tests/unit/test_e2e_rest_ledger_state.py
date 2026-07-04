@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 21 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
+# The 20 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
 # graduated M3 6 get_products tenant-duplicate, M1 6 uc004 REST-422 wire-shape,
 # M4 4 uc004 webhook-observability entries [now tag-declared in conftest]; the
 # uc004 attribution campaign-interval boundary graduated at the main merge after
@@ -30,7 +30,9 @@ from pathlib import Path
 # account billing-state entries graduated at the #1417 merge — its account
 # resolution wiring makes them pass, xpass confirmed innet_040726_0013; 3 uc002
 # creative extension entries imported at the #1417 merge — newly wired there,
-# confirmed still failing in-network post-merge, innet_040726_0013).
+# confirmed still failing in-network post-merge, innet_040726_0013; the uc004
+# roas/cpa entry retired at #1430 item 4 — its Then steps now exist and the
+# scenario is tag-declared T-UC-004-aggregated-roas-and-cpa on ALL transports).
 # Grouped by gap in the ledger file's section comments; flat here for exact-set
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
@@ -38,7 +40,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]",
         "tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]",
         "tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]",

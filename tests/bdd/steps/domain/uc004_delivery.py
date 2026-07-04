@@ -1299,6 +1299,73 @@ def then_has_aggregated_totals(ctx: dict) -> None:
     )
 
 
+@then('the aggregated_totals should include "roas" as total conversion_value over total spend')
+def then_aggregated_roas(ctx: dict) -> None:
+    """Assert aggregated_totals.roas == sum(conversion_value) / sum(spend).
+
+    BR-RULE-220 INV-2: roas is a top-level aggregated_totals scalar.
+    Fails today: production computes neither roas nor per-delivery
+    conversion_value (declared gap T-UC-004-aggregated-roas-and-cpa).
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    agg = resp.aggregated_totals
+    roas = getattr(agg, "roas", None)
+    assert roas is not None, "aggregated_totals.roas is missing — production does not compute roas"
+    deliveries = resp.media_buy_deliveries
+    conversion_values = [getattr(d.totals, "conversion_value", None) for d in deliveries]
+    assert all(v is not None for v in conversion_values), (
+        f"per-delivery totals.conversion_value missing (needed to verify roas): {conversion_values}"
+    )
+    total_conversion_value = sum(conversion_values)
+    total_spend = sum(d.totals.spend for d in deliveries)
+    assert total_spend > 0, f"Cannot verify roas with zero total spend (deliveries: {len(deliveries)})"
+    expected = total_conversion_value / total_spend
+    assert roas == pytest.approx(expected), (
+        f"aggregated_totals.roas ({roas}) != total conversion_value / total spend ({expected})"
+    )
+
+
+@then('the aggregated_totals should include "cost_per_acquisition" as total spend over total conversions')
+def then_aggregated_cost_per_acquisition(ctx: dict) -> None:
+    """Assert aggregated_totals.cost_per_acquisition == sum(spend) / sum(conversions).
+
+    BR-RULE-220 INV-2: cost_per_acquisition is a top-level aggregated_totals
+    scalar. Fails today: production does not compute it (declared gap
+    T-UC-004-aggregated-roas-and-cpa).
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    agg = resp.aggregated_totals
+    cpa = getattr(agg, "cost_per_acquisition", None)
+    assert cpa is not None, (
+        "aggregated_totals.cost_per_acquisition is missing — production does not compute cost_per_acquisition"
+    )
+    deliveries = resp.media_buy_deliveries
+    conversions = [getattr(d.totals, "conversions", None) for d in deliveries]
+    assert all(c is not None for c in conversions), (
+        f"per-delivery totals.conversions missing (needed to verify cost_per_acquisition): {conversions}"
+    )
+    total_conversions = sum(conversions)
+    assert total_conversions > 0, "Cannot verify cost_per_acquisition with zero total conversions"
+    total_spend = sum(d.totals.spend for d in deliveries)
+    expected = total_spend / total_conversions
+    assert cpa == pytest.approx(expected), (
+        f"aggregated_totals.cost_per_acquisition ({cpa}) != total spend / total conversions ({expected})"
+    )
+
+
+@then(parsers.parse('the aggregated_totals should include "media_buy_count" equal to {count:d}'))
+def then_aggregated_media_buy_count(ctx: dict, count: int) -> None:
+    """Assert aggregated_totals.media_buy_count matches the scenario's buy count."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    agg = resp.aggregated_totals
+    assert agg.media_buy_count == count, (
+        f"aggregated_totals.media_buy_count ({agg.media_buy_count}) != expected ({count})"
+    )
+
+
 @then("the aggregated impressions should equal the sum of individual impressions")
 def then_aggregated_impressions(ctx: dict) -> None:
     """Assert aggregated impressions equal sum of individual values."""
