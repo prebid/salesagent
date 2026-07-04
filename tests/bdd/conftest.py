@@ -3012,6 +3012,23 @@ def _production_db_pointed_at(url: str) -> Generator[None, None, None]:
         _context_manager_module._context_manager_instance = None
 
 
+def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> AbstractContextManager[None]:
+    """Select the production-DB scope for an e2e-capable harness branch.
+
+    In-process transports need the per-test database (``integration_db``).
+    Over e2e_rest, ``integration_db`` would repoint production's cached engine
+    at an empty per-test DB while the env's factories write to the live server
+    DB — so any in-process production call inside an e2e scenario (raw
+    ``get_db_session()`` read-backs in Then steps, TRANSPORT-BYPASS Givens
+    calling an ``_impl``) would read the wrong database. Point production at
+    the server DB instead for the scenario duration.
+    """
+    if e2e_config is None:
+        request.getfixturevalue("integration_db")
+        return nullcontext()
+    return _production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
+
+
 @pytest.fixture(autouse=True)
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
@@ -3023,12 +3040,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - Unknown UC → no harness (yields immediately)
     """
     uc = _detect_uc(request)
+    e2e_config = ctx.get("e2e_config")
 
     # E2E shares one live DB across all scenarios; flush it to a clean baseline so
     # this scenario's harness setup starts fresh (no cross-scenario tenant_id
     # collisions). No-op for the in-process transports (they use per-test DBs).
-    if ctx.get("e2e_config") is not None:
-        _reset_e2e_db(ctx["e2e_config"])
+    if e2e_config is not None:
+        _reset_e2e_db(e2e_config)
 
     if uc == "UC-002":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -3042,10 +3060,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # — or succeeds — on the wire. MediaBuyCreateEnv gives the create
             # transport wrappers + the full product/pricing dependency chain; the
             # account Given steps seed the account rows on top.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3059,10 +3076,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # which needs the same full create_media_buy flow to reach the
             # pending-approval audit feed.
             # Use MediaBuyCreateEnv which calls _create_media_buy_impl with real DB.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3079,10 +3095,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # remaining @idempotency-key scenarios (in-flight, expired, conflict,
             # pattern, canonical) stay blanket-xfailed below until their
             # production gaps + steps are wired.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3116,10 +3131,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # transport wrappers (_update_media_buy_impl / update_media_buy_raw /
             # MCP / REST), so update scenarios actually exercise the update flow
             # against the real DB instead of falling through to _create_media_buy_impl.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_dual import MediaBuyDualEnv
 
-            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyDualEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3141,32 +3155,18 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
             # response invariants (e.g. all-failed still returns the success variant).
-            request.getfixturevalue("integration_db")
             from tests.harness.creative_sync import CreativeSyncEnv
 
-            with CreativeSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:
             pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-005":
-        # In-process transports need the per-test database. Over e2e_rest,
-        # integration_db would repoint production's cached engine at an empty
-        # per-test DB while the env's factories write to the live server DB —
-        # so in-process production calls inside an e2e scenario (e.g. the
-        # format_id-roundtrip TRANSPORT-BYPASS Given calling
-        # _get_products_impl) would read the wrong database. Point production
-        # at the server DB instead for the scenario duration.
-        e2e_config = ctx.get("e2e_config")
-        if e2e_config is None:
-            request.getfixturevalue("integration_db")
-            db_scope: AbstractContextManager[None] = nullcontext()
-        else:
-            db_scope = _production_db_pointed_at(e2e_config.postgres_url)
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        with db_scope, CreativeFormatsEnv(e2e_config=e2e_config) as env:
+        with _db_scope_for(request, e2e_config), CreativeFormatsEnv(e2e_config=e2e_config) as env:
             # Seed a tenant ONLY in e2e mode: the live server authenticates the token
             # against the DB tenant, and UC-005 baseline scenarios carry no account/tenant
             # Given step to seed it (unlike UC-006/UC-011). In-process the registry is mocked
@@ -3188,10 +3188,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # CreativeListEnv mocks only the audit logger; DB, repository, and
             # query building are real. The Background auth step switches the env
             # principal; the seed step owns the creatives under it.
-            request.getfixturevalue("integration_db")
             from tests.harness.creative_list import CreativeListEnv
 
-            with CreativeListEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), CreativeListEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -3204,17 +3203,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         harness_type = _detect_uc011_harness(marker_names)
 
         if harness_type == "list":
-            request.getfixturevalue("integration_db")
             from tests.harness.account_list import AccountListEnv
 
-            with AccountListEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), AccountListEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         elif harness_type == "sync":
-            request.getfixturevalue("integration_db")
             from tests.harness.account_sync import AccountSyncEnv
 
-            with AccountSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), AccountSyncEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -3231,10 +3228,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             yield
 
     elif uc == "COMPAT":
-        request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
+        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
             ctx["env"] = env
             yield
 
@@ -3242,32 +3238,32 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         harness_type = _detect_delivery_harness(request)
 
         if harness_type == "poll":
-            request.getfixturevalue("integration_db")
             from tests.harness.delivery_poll import DeliveryPollEnv
 
             # Use "buyer-001" as principal — matches most UC-004 scenarios.
             # _ensure_media_buy_in_db creates media buys owned by the
             # scenario's "owner" (usually "buyer-001"), and _impl filters
             # by the identity's principal. They must match.
-            with DeliveryPollEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+            with (
+                _db_scope_for(request, e2e_config),
+                DeliveryPollEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
+            ):
                 tenant, principal = env.setup_default_data()
                 ctx["env"] = env
                 ctx["db_tenant"] = tenant
                 ctx[f"db_principal_{env._principal_id}"] = principal
                 yield
         elif harness_type == "webhook":
-            request.getfixturevalue("integration_db")
             from tests.harness.delivery_webhook import WebhookEnv
 
-            with WebhookEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), WebhookEnv(e2e_config=e2e_config) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
         elif harness_type == "circuit-breaker":
-            request.getfixturevalue("integration_db")
             from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
-            with CircuitBreakerEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), CircuitBreakerEnv(e2e_config=e2e_config) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -3275,10 +3271,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # Webhook-credential-length scenarios dispatch a real create_media_buy
             # carrying a reporting_webhook so production's Pydantic boundary
             # (Authentication.credentials MinLen=32) accepts/rejects on the wire.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3295,10 +3290,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["env"] = env
             yield
     elif uc == "UC-GET-PRODUCTS":
-        request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
+        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
             ctx["env"] = env
             yield
     else:
