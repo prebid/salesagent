@@ -242,10 +242,10 @@ async def resolve_property_list_typed(ref: PropertyListReference) -> list[Identi
     Async path. Use the sync variant from synchronous code (e.g. ad-server
     adapters whose ``create_media_buy`` API is sync).
     """
-    request_url, headers, validated_ip = _build_request(ref)
     cached = _check_cache(ref)
     if cached is not None:
         return cached
+    request_url, headers, validated_ip = _build_request(ref)
 
     try:
         # Pin the connection to the SSRF-validated IP (the URL keeps its hostname so TLS
@@ -269,10 +269,10 @@ def resolve_property_list_typed_sync(ref: PropertyListReference) -> list[Identif
     the module-level cache with the async variant, so back-to-back async and
     sync lookups for the same list reference only fetch once.
     """
-    request_url, headers, validated_ip = _build_request(ref)
     cached = _check_cache(ref)
     if cached is not None:
         return cached
+    request_url, headers, validated_ip = _build_request(ref)
 
     try:
         # Pin the connection to the SSRF-validated IP (see the async variant above).
