@@ -259,11 +259,17 @@ def given_adapter_has_data(ctx: dict, mb_id: str) -> None:
 
 @given("the ad server adapter has delivery data for both media buys")
 def given_adapter_has_data_both(ctx: dict) -> None:
-    """Configure adapter mock to return data for both media buys."""
+    """Configure adapter mock to return data for both media buys.
+
+    Seeds conversions/conversion_value alongside impressions/spend so the
+    roas / cost_per_acquisition aggregated_totals scalars (BR-RULE-220 INV-2)
+    are derivable: with two buys, roas = 1000/500 = 2.0 and
+    cost_per_acquisition = 500/20 = 25.0.
+    """
     env = ctx["env"]
     media_buys = ctx.get("media_buys", {})
     for mb_id in list(media_buys.keys())[:2]:
-        env.set_adapter_response(media_buy_id=mb_id)
+        env.set_adapter_response(media_buy_id=mb_id, conversions=10.0, conversion_value=500.0)
 
 
 @given("the ad server adapter has delivery data for all media buys")

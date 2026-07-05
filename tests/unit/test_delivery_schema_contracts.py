@@ -74,6 +74,9 @@ class TestDeliveryTotalsFields:
         "video_completions",
         "completion_rate",
         "conversions",
+        # conversion_value: spec core/delivery-metrics.json declares it per buy;
+        # feeds the aggregated_totals roas quotient (BR-RULE-220 INV-2).
+        "conversion_value",
         "viewability",
     }
 

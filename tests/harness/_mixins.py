@@ -119,6 +119,8 @@ class DeliveryPollMixin:
         package_id: str,
         clicks: int | None,
         packages: list[dict[str, Any]] | None,
+        conversions: float | None = None,
+        conversion_value: float | None = None,
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Normalize set_adapter_response params into the delivery intent.
 
@@ -153,6 +155,10 @@ class DeliveryPollMixin:
 
         if clicks is not None:
             totals.clicks = float(clicks)
+        if conversions is not None:
+            totals.conversions = float(conversions)
+        if conversion_value is not None:
+            totals.conversion_value = float(conversion_value)
 
         return AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
@@ -173,18 +179,23 @@ class DeliveryPollMixin:
         package_id: str = "pkg_001",
         clicks: int | None = None,
         packages: list[dict[str, Any]] | None = None,
+        conversions: float | None = None,
+        conversion_value: float | None = None,
     ) -> None:
         """Configure adapter to return specific delivery data for a media buy.
 
         For single-package responses, use the scalar parameters (backward compatible).
         For multi-package responses, pass ``packages`` — a list of dicts with
         ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
-        as the sum of per-package values.
+        as the sum of per-package values. ``conversions`` / ``conversion_value``
+        are totals-level (spec-optional metrics; omitted when None).
 
         In-process: injects the response on the adapter MagicMock. E2E: persists
         a ``DeliverySimulationConfig`` row the live server's Mock adapter reads.
         """
-        resp = self._build_adapter_delivery(media_buy_id, impressions, spend, package_id, clicks, packages)
+        resp = self._build_adapter_delivery(
+            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value
+        )
         self._realize_adapter_response(resp)
 
     @realize_e2e(_persist_simulation_config)

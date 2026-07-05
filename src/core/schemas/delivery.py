@@ -113,6 +113,11 @@ class DeliveryTotals(SalesAgentBaseModel):
         None, ge=0, le=1, description="Video completion rate (completions/impressions)"
     )
     conversions: float | None = Field(None, ge=0, description="Total conversions (if applicable)")
+    conversion_value: float | None = Field(
+        None,
+        ge=0,
+        description="Total monetary value of attributed conversions in the reporting currency (if applicable)",
+    )
     viewability: float | None = Field(None, ge=0, le=1, description="Viewability percentage as 0.0-1.0 (if applicable)")
 
 
