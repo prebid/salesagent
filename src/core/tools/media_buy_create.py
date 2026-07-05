@@ -248,11 +248,17 @@ def _determine_media_buy_status(
 
 
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
-    """Get format specification synchronously using asyncio.run().
+    """Get format specification synchronously from the async registry.
 
     This helper function wraps the async registry.get_format() call to make it
     usable in synchronous contexts. The registry uses in-memory cache (30min TTL)
     and falls back to the creative agent if not cached.
+
+    Uses run_async_in_sync_context (not bare asyncio.run) because this runs
+    inside the live server's async transports, where asyncio.run() raises
+    "cannot be called from a running event loop" — which previously made every
+    format lookup fail on the server and reject valid catalog formats as
+    unknown (salesagent-w2mx).
 
     Args:
         agent_url: Creative agent URL
@@ -261,14 +267,13 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     Returns:
         Format specification object or None if not found
     """
-    import asyncio
-
     from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.validation_helpers import run_async_in_sync_context
 
     registry = get_creative_agent_registry()
 
     try:
-        return asyncio.run(registry.get_format(agent_url, format_id))
+        return run_async_in_sync_context(registry.get_format(agent_url, format_id))
     except Exception as e:
         logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
         return None

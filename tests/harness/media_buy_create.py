@@ -301,7 +301,19 @@ class MediaBuyCreateEnv(IntegrationEnv):
         }
 
         def _format_spec_side_effect(agent_url: str, format_id: str) -> Any:
-            return self._format_specs.get(format_id)
+            spec = self._format_specs.get(format_id)
+            if spec is not None:
+                return spec
+            # Fall back to the 54-format reference catalog — the SAME fixture the
+            # live server resolves under ADCP_TESTING (format_cache), so
+            # in-process and e2e format resolution agree by construction.
+            # Synthetic ids stay unresolvable (None), matching the server.
+            from src.core.format_cache import load_reference_formats
+
+            for fmt in load_reference_formats():
+                if fmt.format_id.id == format_id:
+                    return fmt
+            return None
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 

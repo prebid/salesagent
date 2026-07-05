@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 12 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
+# The 11 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
 # graduated M3 6 get_products tenant-duplicate, M1 6 uc004 REST-422 wire-shape,
 # M4 4 uc004 webhook-observability entries [now tag-declared in conftest]; the
 # uc004 attribution campaign-interval boundary graduated at the main merge after
@@ -35,12 +35,13 @@ from pathlib import Path
 # scenario is tag-declared T-UC-004-aggregated-roas-and-cpa on ALL transports;
 # #1430 items 1-3 graduated the 6 uc011 read-back entries [_db_scope_for repoint
 # + agent auth_token fix] and 2 uc002 ext-o/ext-p entries [auto-approval seeding],
-# all 8 xpassed in-network, innet_050726_2030).
+# all 8 xpassed in-network, innet_050726_2030; the uc002 ext-q upload entry
+# graduated after the fail_on_upload mock-fidelity + catalog-format +
+# run_async_in_sync_context format-resolution fixes, verified in-network).
 # Grouped by gap in the ledger file's section comments; flat here for exact-set
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
-        "tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]",

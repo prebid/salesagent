@@ -321,6 +321,28 @@ class MockAdServer(AdServerAdapter):
             logger.debug("Failed to load test behavior from DB", exc_info=True)
         return {}
 
+    def _raise_injected_failure(self, flag: str) -> None:
+        """Raise the DB-injected adapter failure when ``flag`` is set.
+
+        BDD Given steps persist failure injection (fail_on_create /
+        fail_on_update / fail_on_upload + message/recovery/details) into
+        AdapterConfig test_behavior so the Docker-hosted adapter reproduces
+        the same fault the in-process mock raises via side_effect. No-op when
+        the flag is absent.
+        """
+        test_behavior = self._read_test_behavior()
+        if not test_behavior.get(flag):
+            return
+        from src.core.exceptions import AdCPAdapterError
+
+        raise AdCPAdapterError(
+            test_behavior.get("error_message", "Test adapter failure"),
+            recovery=test_behavior.get("recovery", "transient"),
+            details=test_behavior.get(
+                "error_details", {"suggestion": "Retry the operation or contact ad server support"}
+            ),
+        )
+
     def _validate_targeting(self, targeting_overlay):
         """Mock adapter accepts all targeting."""
         return []  # No unsupported features
@@ -508,17 +530,7 @@ class MockAdServer(AdServerAdapter):
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
-        test_behavior = self._read_test_behavior()
-        if test_behavior.get("fail_on_create"):
-            from src.core.exceptions import AdCPAdapterError
-
-            raise AdCPAdapterError(
-                test_behavior.get("error_message", "Test adapter failure"),
-                recovery=test_behavior.get("recovery", "transient"),
-                details=test_behavior.get(
-                    "error_details", {"suggestion": "Retry the operation or contact ad server support"}
-                ),
-            )
+        self._raise_injected_failure("fail_on_create")
 
         # Log pricing model info if provided (AdCP PR #88)
         if package_pricing_info:
@@ -918,6 +930,9 @@ class MockAdServer(AdServerAdapter):
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
     ) -> list[AssetStatus]:
         """Simulates adding creatives with HITL support."""
+
+        # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
+        self._raise_injected_failure("fail_on_upload")
 
         # HITL Mode Processing
         operation_mode = self._get_operation_mode("add_creative_assets")
@@ -1434,17 +1449,7 @@ class MockAdServer(AdServerAdapter):
         assert self.tenant_id is not None, "tenant_id required for DB operations"
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
-        test_behavior = self._read_test_behavior()
-        if test_behavior.get("fail_on_update"):
-            from src.core.exceptions import AdCPAdapterError
-
-            raise AdCPAdapterError(
-                test_behavior.get("error_message", "Test adapter failure"),
-                recovery=test_behavior.get("recovery", "transient"),
-                details=test_behavior.get(
-                    "error_details", {"suggestion": "Retry the operation or contact ad server support"}
-                ),
-            )
+        self._raise_injected_failure("fail_on_update")
 
         with get_db_session() as session:
             if action == "update_package_budget" and package_id and budget is not None:

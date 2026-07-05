@@ -138,6 +138,7 @@ def _sync_adapter_error_to_db(
     *,
     fail_on_create: bool = False,
     fail_on_update: bool = False,
+    fail_on_upload: bool = False,
     error_message: str | None = None,
     error_details: dict | None = None,
     recovery: str | None = None,
@@ -152,6 +153,7 @@ def _sync_adapter_error_to_db(
     kwargs: dict = {
         "fail_on_create": fail_on_create,
         "fail_on_update": fail_on_update,
+        "fail_on_upload": fail_on_upload,
         "error_message": error_message,
     }
     if error_details is not None:
@@ -1990,11 +1992,15 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
     pkg["creative_ids"] = existing
 
 
-def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_300x250") -> Any:
+def _create_approved_creative(
+    ctx: dict, creative_id: str, fmt: str = "display_300x250", asset_key: str = "primary"
+) -> Any:
     """Create an approved Creative in the DB and return it.
 
     Uses CreativeFactory with the tenant/principal from harness context.
-    Asset key uses "primary" to match the harness format spec's asset_id.
+    The default asset key "primary" matches the harness format spec's
+    asset_id; scenarios seeding a real reference-catalog format pass the
+    format's actual asset_id (e.g. "banner_image" for display_300x250_image).
     """
     from tests.factories.creative import CreativeFactory
 
@@ -2005,7 +2011,7 @@ def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_3
         principal=ctx["principal"],
         format=fmt,
         approved=True,
-        data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
+        data={"assets": {asset_key: {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
     )
     env._commit_factory_data()
     return creative
@@ -2283,8 +2289,22 @@ def given_request_inline_creatives_valid(ctx: dict) -> None:
     rejection surfaces on the create wire.
     """
     _ensure_request_defaults(ctx)
-    creative = _create_approved_creative(ctx, "cr-upload-ok")
+    # A REAL reference-catalog format (not the synthetic display_300x250):
+    # the live server resolves formats from the 54-format fixture under
+    # ADCP_TESTING, so a synthetic id dies CREATIVE_REJECTED before the upload
+    # this scenario tests. display_300x250_image's asset_id is banner_image.
+    creative = _create_approved_creative(ctx, "cr-upload-ok", fmt="display_300x250_image", asset_key="banner_image")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
+    # The default product only accepts display_300x250 — add the real format so
+    # the creative-vs-product compat check passes on the server DB too.
+    product = ctx.get("default_product")
+    if product is not None:
+        env = ctx["env"]
+        product.format_ids = [
+            *(product.format_ids or []),
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+        ]
+        env._commit_factory_data()
     _seed_auto_approval(ctx)
 
 
@@ -2299,23 +2319,22 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     """
     from src.core.exceptions import AdCPAdapterError
 
+    message = "Ad server rejected the creative upload"
+    details = {"suggestion": "Retry the upload or verify the creative meets the ad server's requirements"}
+    recovery = "transient"
+
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
-    upload_error = AdCPAdapterError(
-        "Ad server rejected the creative upload",
-        recovery="transient",
-        details={"suggestion": "Retry the upload or verify the creative meets the ad server's requirements"},
-    )
-    mock_adapter.add_creative_assets.side_effect = upload_error
-    # E2E path: write the failure to the adapter test-behavior config so a
-    # Docker-hosted adapter raises the same error on creative upload.
+    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(message, recovery=recovery, details=details)
+    # E2E path: write the failure to the adapter test-behavior config so the
+    # Docker-hosted adapter raises the same error on creative upload
+    # (MockAdServer.add_creative_assets reads the fail_on_upload flag).
     _sync_adapter_error_to_db(
         ctx,
-        fail_on_create=False,
-        fail_on_update=False,
-        error_message="Ad server rejected the creative upload",
-        error_details={"suggestion": "Retry the upload or verify the creative meets the ad server's requirements"},
-        recovery="transient",
+        fail_on_upload=True,
+        error_message=message,
+        error_details=details,
+        recovery=recovery,
     )
 
 
