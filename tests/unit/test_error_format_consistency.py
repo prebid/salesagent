@@ -684,6 +684,7 @@ class TestMCPRecoveryInErrorResponses:
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
             ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPServiceUnavailableError", "offline", "SERVICE_UNAVAILABLE", "transient"),
+            ("AdCPCapabilityNotSupportedError", "no property_list", "UNSUPPORTED_FEATURE", "correctable"),
         ],
         ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
     )
