@@ -20,7 +20,6 @@ Obligation IDs:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,6 +28,7 @@ from src.core.helpers.creative_helpers import _brand_str_to_ref
 from src.core.schemas import CreateMediaBuyRequest
 from tests.factories import PrincipalFactory
 from tests.helpers.create_media_buy_capture import capture_a2a_forwarded_pnc, capture_mcp_forwarded_pnc
+from tests.unit._media_buy_mock_helpers import mock_pricing_option
 
 # ---------------------------------------------------------------------------
 # Shared helpers for TestMediaBuyBrandPropagation
@@ -74,17 +74,9 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 
 def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
     """Create a mock DB Product with a single pricing option."""
-    pricing_option = MagicMock(spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"])
-    pricing_option.pricing_model = "cpm"
-    pricing_option.currency = currency
-    pricing_option.is_fixed = True
-    pricing_option.rate = Decimal("5.00")
-    pricing_option.min_spend_per_package = None
-    pricing_option.root = pricing_option
-
     product = MagicMock()
     product.product_id = product_id
-    product.pricing_options = [pricing_option]
+    product.pricing_options = [mock_pricing_option(currency)]
     return product
 
 

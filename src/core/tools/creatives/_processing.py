@@ -786,7 +786,7 @@ def _create_new_creative(
         data=data,
     )
 
-    # Update creative_id if it was generated (i6k: model attribute assignment)
+    # Update creative_id if it was generated (model attribute assignment)
     if not creative.creative_id:
         creative.creative_id = db_creative.creative_id
 
