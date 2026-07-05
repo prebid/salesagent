@@ -954,6 +954,21 @@ def _adcp_error_class_for_http_status(status: int) -> type[AdCPError]:
     return AdCPAdapterError
 
 
+def _instantiate_status_error(
+    cls: type[AdCPError], message: str, *, field: str | None, suggestion: str | None
+) -> AdCPError:
+    """Instantiate the selected status->error class, threading ``field``/``suggestion`` only for the validation class.
+
+    ``field``/``suggestion`` enrich the correctable (4xx validation) case; a
+    transient 429/5xx is not fixed by editing the request, so they are ignored
+    there. Shared by the general and ad-server status factories so the
+    class-instantiation rule lives in exactly one place.
+    """
+    if cls is AdCPValidationError:
+        return cls(message, field=field, suggestion=suggestion)
+    return cls(message)
+
+
 def adcp_error_for_http_status(
     status: int, message: str, *, field: str | None = None, suggestion: str | None = None
 ) -> AdCPError:
@@ -968,10 +983,9 @@ def adcp_error_for_http_status(
     ``field``/``suggestion`` enrich the correctable (4xx) case; they are ignored for the
     transient classes (a 429/5xx is not fixed by editing the request).
     """
-    cls = _adcp_error_class_for_http_status(status)
-    if cls is AdCPValidationError:
-        return cls(message, field=field, suggestion=suggestion)
-    return cls(message)
+    return _instantiate_status_error(
+        _adcp_error_class_for_http_status(status), message, field=field, suggestion=suggestion
+    )
 
 
 def _adcp_adapter_error_class_for_http_status(status: int) -> type[AdCPError]:
@@ -1018,10 +1032,9 @@ def adcp_adapter_error_for_http_status(
     credential, so "fix and resend" (correctable) would loop them wrongly. All other
     statuses share the general factory (429/5xx -> transient, other 4xx -> correctable).
     """
-    cls = _adcp_adapter_error_class_for_http_status(status)
-    if cls is AdCPValidationError:
-        return cls(message, field=field, suggestion=suggestion)
-    return cls(message)
+    return _instantiate_status_error(
+        _adcp_adapter_error_class_for_http_status(status), message, field=field, suggestion=suggestion
+    )
 
 
 def adcp_error_for_httpx_exc(

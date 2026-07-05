@@ -1,7 +1,12 @@
-"""Guard: Dockerfile pins base image by digest and runs as non-root.
+"""Guard: Dockerfile supply-chain pins (digest ARGs, FROM pins, non-root USER).
 
-Per D34 + PR 5 of issue #1234. Without these, the runtime image carries
-unverified base-layer provenance and root-equivalent privileges.
+Per D34 + PR 5 of issue #1234. Three independent checks:
+
+- ``assert_dockerfile_digest_args_present`` — digest ARG **presence + sha256 shape
+  only**; does not verify the digest matches pinned ``PYTHON_VERSION`` / ``UV_VERSION``.
+- ``find_unpinned_dockerfile_from_lines`` — every external ``FROM`` must reference
+  ``@sha256:…`` or a digest ``ARG`` substitution, not a tag-only image ref.
+- ``runtime_user_directives`` — runtime stage must not end as root.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ _KNOWN_BAD_FROM = [
 
 @pytest.mark.arch_guard
 def test_dockerfile_digest_args_present() -> None:
-    """Dockerfile must declare digest-pinned UV_IMAGE_DIGEST and PYTHON_BASE_DIGEST ARGs."""
+    """Digest ARG pins present with sha256:<64-hex> shape (not version-digest match)."""
     assert_dockerfile_digest_args_present((repo_root() / "Dockerfile").read_text(encoding="utf-8"))
 
 

@@ -7,11 +7,44 @@ _any_of/_none_of suffix-stripping.
 
 from types import SimpleNamespace
 
+import pytest
+
+from src.core.exceptions import AdCPInvalidRequestError
 from src.core.schemas import Targeting
 from src.services.targeting_capabilities import (
+    raise_for_overlay_targeting,
     validate_overlay_targeting,
     validate_property_targeting_allowed,
 )
+
+
+class TestRaiseForOverlayTargeting:
+    """The shared create/update overlay walk accumulates ALL packages' violations."""
+
+    def test_accumulates_violations_across_all_offending_packages(self):
+        # Two packages, two DISTINCT violations. The single raised envelope must
+        # carry BOTH — pinning accumulate-all. The create path previously raised
+        # inside the per-package loop, so it reported only the first offender.
+        packages = [
+            SimpleNamespace(targeting_overlay=Targeting(key_value_pairs={"foo": "bar"})),
+            SimpleNamespace(targeting_overlay=Targeting(geo_countries=["US"], geo_countries_exclude=["US"])),
+        ]
+        with pytest.raises(AdCPInvalidRequestError) as exc_info:
+            raise_for_overlay_targeting(packages)
+        message = str(exc_info.value)
+        assert "key_value_pairs is managed-only" in message, "first package's violation missing"
+        assert "geo_countries/geo_countries_exclude conflict" in message, (
+            "second package's violation dropped (first-offender regression)"
+        )
+
+    def test_skips_none_overlays_and_does_not_raise_when_all_clean(self):
+        # A package with no overlay, or a clean overlay, produces no violations and
+        # never raises — the None-skip and the empty-violations no-raise both hold.
+        packages = [
+            SimpleNamespace(targeting_overlay=None),
+            SimpleNamespace(targeting_overlay=Targeting(geo_countries=["US", "CA"])),
+        ]
+        raise_for_overlay_targeting(packages)  # must not raise
 
 
 class TestV3GeoFieldsPassValidation:

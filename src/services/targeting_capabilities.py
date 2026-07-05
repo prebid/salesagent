@@ -12,6 +12,7 @@ does not yet define but that adapters actively support.  These are candidates
 for upstream inclusion in AdCP.
 """
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
@@ -474,3 +475,21 @@ def raise_if_overlay_targeting_violations(violations: list[str]) -> None:
             suggestion="Check targeting constraints.",
             field="targeting_overlay",
         )
+
+
+def raise_for_overlay_targeting(packages: Iterable[Any]) -> None:
+    """Validate every package's ``targeting_overlay`` and raise ONCE with all violations.
+
+    The shared create/update walk: collect violations from each non-null overlay
+    via ``collect_overlay_targeting_violations`` and raise the single
+    ``INVALID_REQUEST`` envelope. Accumulate-all (not first-offender), so a buyer
+    with multiple offending packages sees every package's problems in one
+    response — and create/update emit byte-identical envelopes for identical
+    violations rather than create truncating to the first offending package.
+    """
+    violations: list[str] = []
+    for package in packages:
+        overlay = package.targeting_overlay
+        if overlay is not None:
+            violations.extend(collect_overlay_targeting_violations(overlay))
+    raise_if_overlay_targeting_violations(violations)

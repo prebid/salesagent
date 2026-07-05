@@ -15,16 +15,21 @@ import logging
 from typing import NamedTuple
 
 from adcp import (
+    CpaPricingOption,
     CpcPricingOption,
     CpcvPricingOption,
     CpmPricingOption,
     CppPricingOption,
     CpvPricingOption,
+    EventType,
     FlatRatePricingOption,
+    TimeBasedPricingOption,
+    TimeUnit,
     VcpmPricingOption,
 )
 from adcp.types import ReportingCapabilities
 from adcp.types._generated import MediaChannel
+from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
 from packaging.version import InvalidVersion, Version
 
 # Import our extended Product (includes implementation_config)
@@ -109,6 +114,8 @@ def convert_pricing_option_to_adcp(
     | CpvPricingOption
     | CppPricingOption
     | FlatRatePricingOption
+    | CpaPricingOption
+    | TimeBasedPricingOption
 ):
     """Convert database PricingOption to AdCP V3 pricing option.
 
@@ -292,9 +299,88 @@ def convert_pricing_option_to_adcp(
             result_fields["parameters"] = parameters
         return FlatRatePricingOption(**result_fields)
 
+    elif pricing_model == "cpa":
+        # CPA (Cost Per Acquisition) - AdCP v3.1 pricing model for affiliate/conversion pricing.
+        # CPA always emits fixed_price; use a stable _fixed suffix regardless of is_fixed flag.
+        # event_type is required per cpa-option.json; no default — an unknown value is a mispricing.
+        cpa_pricing_option_id = f"cpa_{currency.lower()}_fixed"
+        if not rate:
+            raise ValueError(f"CPA pricing option {cpa_pricing_option_id} requires rate")
+        raw_event = parameters.get("event_type") if isinstance(parameters, dict) else None
+        if not raw_event:
+            raise ValueError(f"CPA pricing option {cpa_pricing_option_id} requires parameters.event_type")
+        try:
+            event_type_val = EventType(raw_event)
+        except ValueError:
+            raise ValueError(
+                f"CPA pricing option {cpa_pricing_option_id} has unknown event_type '{raw_event}'. "
+                f"Supported values: {[e.value for e in EventType]}"
+            )
+        if event_type_val == EventType.custom:
+            custom_event_name = parameters.get("custom_event_name") if isinstance(parameters, dict) else None
+            if not custom_event_name:
+                raise ValueError(
+                    f"CPA pricing option {cpa_pricing_option_id} with event_type 'custom' requires parameters.custom_event_name"
+                )
+        else:
+            custom_event_name = None
+        event_source_id = parameters.get("event_source_id") if isinstance(parameters, dict) else None
+        cpa_fields = {**common_fields, "pricing_option_id": cpa_pricing_option_id}
+        return CpaPricingOption(
+            **cpa_fields,
+            event_type=event_type_val,
+            custom_event_name=custom_event_name,
+            event_source_id=event_source_id,
+            fixed_price=float(rate),
+        )
+
+    elif pricing_model == "time":
+        # Time-Based pricing - AdCP v3.1 model where rate scales with campaign duration.
+        # fixed_price is the cost per time_unit; parameters.time_unit is required.
+        # Supports both fixed (fixed_price) and auction (floor_price) variants.
+        if not parameters or not isinstance(parameters, dict) or "time_unit" not in parameters:
+            raise ValueError(
+                f"Time-based pricing option {pricing_option_id} requires parameters.time_unit "
+                f"(one of: hour, day, week, month)"
+            )
+        raw_time_unit = parameters["time_unit"]
+        try:
+            time_unit_val = TimeUnit(raw_time_unit)
+        except ValueError:
+            raise ValueError(
+                f"Time-based pricing option {pricing_option_id} has unknown time_unit '{raw_time_unit}'. "
+                f"Supported values: {[u.value for u in TimeUnit]}"
+            )
+        time_params = TimeParameters(
+            time_unit=time_unit_val,
+            min_duration=parameters.get("min_duration"),
+            max_duration=parameters.get("max_duration"),
+        )
+        if (
+            time_params.min_duration is not None
+            and time_params.max_duration is not None
+            and time_params.max_duration < time_params.min_duration
+        ):
+            raise ValueError(
+                f"Time-based pricing option {pricing_option_id} has max_duration "
+                f"({time_params.max_duration}) < min_duration ({time_params.min_duration})"
+            )
+        time_fields: dict = {**common_fields, "parameters": time_params}
+        if is_fixed:
+            if rate is None:
+                raise ValueError(f"Fixed time-based pricing option {pricing_option_id} requires rate")
+            time_fields["fixed_price"] = float(rate)
+        else:
+            if floor_price is not None:
+                time_fields["floor_price"] = float(floor_price)
+            if price_guidance:
+                time_fields["price_guidance"] = price_guidance
+        return TimeBasedPricingOption(**time_fields)
+
     else:
         raise ValueError(
-            f"Unsupported pricing_model '{pricing_model}'. Supported models: cpm, vcpm, cpc, cpcv, cpv, cpp, flat_rate"
+            f"Unsupported pricing_model '{pricing_model}'. "
+            f"Supported models: cpm, vcpm, cpc, cpcv, cpv, cpp, flat_rate, cpa, time"
         )
 
 

@@ -813,7 +813,7 @@ Then activation proceeds and deployments are returned
 ### BR-RULE-049: Per-Filter Format Discovery Semantics
 **Obligation ID** BR-RULE-049-01
 **Layer** behavioral
-**Invariant:** type=exact match, format_ids=id match with silent exclusion, asset_types=OR, dimensions=ANY render, is_responsive=bidirectional, name_search=case-insensitive substring.
+**Invariant:** type=exact match, format_ids=(agent_url, id) pair match with silent exclusion, asset_types=OR, dimensions=ANY render, is_responsive=bidirectional, name_search=case-insensitive substring.
 **Scenario:**
 ```gherkin
 Given type_filter="video"

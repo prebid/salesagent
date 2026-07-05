@@ -47,6 +47,15 @@ class TestMCPToolRoundtripMinimal:
         content = result.structured_content if hasattr(result, "structured_content") else result
         assert "products" in content
 
+    async def test_get_products_content_is_summary_not_json(self, mcp_client):
+        """MCP text content is a human-readable summary, not a JSON dump of structured_content."""
+        import json
+
+        result = await mcp_client.call_tool("get_products", {"brand": {"domain": "testbrand.com"}})
+        text = result.content[0].text
+        assert text != json.dumps(result.structured_content)
+        assert not text.strip().startswith("{")
+
     async def test_create_media_buy_minimal(self, mcp_client):
         """Test create_media_buy with minimal required parameters."""
         # Get a product first

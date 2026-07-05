@@ -8,9 +8,32 @@ Updated for a2a-sdk 1.0 (protobuf API).
 import json
 import uuid
 from typing import Any
+from unittest.mock import ANY
 
 from a2a.types import Artifact, Message, Part, Role
 from google.protobuf import json_format, struct_pb2
+
+
+def assert_delivery_forwarded_account(mock_delivery, expected_account) -> None:
+    """Assert ``core_get_media_buy_delivery_tool`` was called once forwarding ``expected_account``.
+
+    Every other kwarg is ``ANY`` — the contract being pinned is that the *validated*
+    ``AccountReference`` reaches the core tool, not the raw dict that crashed
+    ``resolve_account`` (``account_ref.root`` on a dict). Shared by the handler-level
+    unit tests and the ``on_message_send`` wire test so the 10-kwarg assertion lives once.
+    """
+    mock_delivery.assert_called_once_with(
+        media_buy_ids=ANY,
+        status_filter=ANY,
+        start_date=ANY,
+        end_date=ANY,
+        reporting_dimensions=ANY,
+        attribution_window=ANY,
+        include_package_daily_breakdown=ANY,
+        account=expected_account,
+        context=ANY,
+        identity=ANY,
+    )
 
 
 def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:

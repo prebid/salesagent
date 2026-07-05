@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import threading
 from collections import OrderedDict
 from datetime import UTC, datetime
@@ -11,6 +13,23 @@ K = TypeVar("K")
 V = TypeVar("V")
 
 _DEFAULT_MAXSIZE = 10_000
+
+
+def cache_partition_token(secret: str | None, purpose: bytes) -> str:
+    """Non-reversible 16-hex cache-partition token derived from a credential.
+
+    The credential is the HMAC KEY over a constant ``purpose`` label (a keyed
+    PRF / HKDF-extract shape), so the plaintext secret never persists as a
+    process-global cache key while two callers holding different credentials
+    partition into separate entries. A missing secret maps to a stable
+    sentinel so unauthenticated callers share one partition.
+
+    Shared by the property-list resolver and the Kevel site resolver, which
+    previously hand-rolled this derivation separately — a copy-paste of a
+    security primitive is a single point of failure for cache isolation, where
+    a change to one copy silently diverges the other.
+    """
+    return hmac.new((secret or "").encode(), purpose, hashlib.sha256).hexdigest()[:16]
 
 
 class ThreadSafeTTLCache(Generic[K, V]):

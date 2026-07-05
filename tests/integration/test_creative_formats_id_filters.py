@@ -17,14 +17,19 @@ from tests.harness import CreativeFormatsEnv
 from tests.harness.transport import Transport
 
 AGENT_URL = "https://creative.adcontextprotocol.org"
+# A DIFFERENT creative agent — used to seed (agent_url, id) collisions where a
+# foreign reference shares an id with a locally-hosted format.
+THIRD_PARTY_AGENT_URL = "https://other-creative-agent.example.com"
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 
-# REST drops all filter kwargs (build_rest_body returns {}), so filter-specific
-# tests use only IMPL/A2A/MCP. See CreativeFormatsEnv.build_rest_body.
-FILTER_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP]
+# REST now transmits filter kwargs too: CreativeFormatsEnv inherits the base
+# build_rest_body, which serializes the request, and the /creative-formats route
+# maps format_ids + filters into ListCreativeFormatsRequest. So filter-specific
+# tests run on all four transports.
+FILTER_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 
 
 def _fmt(
@@ -175,6 +180,34 @@ class TestFormatIdsFilter:
 
         assert result.is_success
         assert result.payload.formats == []
+
+    @pytest.mark.parametrize("transport", FILTER_TRANSPORTS)
+    def test_foreign_agent_url_does_not_match_local_id(self, integration_db, transport):
+        """UC-005-MAIN-MCP-06: a third-party reference does NOT resolve to a local format sharing its id.
+
+        Federation identity is the (agent_url, id) PAIR. The seller hosts
+        (AGENT_URL, "shared_id"); the buyer references (THIRD_PARTY_AGENT_URL,
+        "shared_id"). Matching on id alone would fabricate a local hit the seller
+        does not host; the pair filter returns nothing — the spec-conformant
+        out-of-scope observation (list_formats: scope.equals $agent_url,
+        on_out_of_scope: warn). The BDD storyboard covers a2a/mcp/rest with the same
+        collision; this pins the discrimination on IMPL, which the BDD layer does not.
+        """
+        formats = [
+            _fmt("shared_id", "Seller's Own Format"),
+            _fmt("display_728", "Leaderboard"),
+        ]
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
+
+            foreign_ref = FormatId(agent_url=THIRD_PARTY_AGENT_URL, id="shared_id")
+            result = _call(env, transport, format_ids=[foreign_ref])
+
+        assert result.is_success
+        assert result.payload.formats == [], (
+            "foreign agent_url must not mis-resolve to a local format that merely shares the id"
+        )
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS)
     def test_no_format_ids_filter_returns_all(self, integration_db, transport):

@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.core.ttl_cache import ThreadSafeTTLCache
+from src.core.ttl_cache import ThreadSafeTTLCache, cache_partition_token
 
 pytestmark = pytest.mark.unit
 
@@ -60,3 +60,28 @@ def test_expired_entry_is_dropped_on_read():
     cache: ThreadSafeTTLCache[str, int] = ThreadSafeTTLCache()
     cache.store("k", 1, datetime.now(UTC) - timedelta(seconds=1))  # already expired
     assert cache.get("k") is None
+
+
+def test_cache_partition_token_is_deterministic_and_keyed():
+    # Same (secret, purpose) -> same 16-hex token; and it is a KEYED HMAC, not a
+    # bare hash of the secret, so a sha256(secret) guess does not match the token.
+    import hashlib
+
+    token = cache_partition_token("buyer-token", b"purpose")
+    assert token == cache_partition_token("buyer-token", b"purpose")
+    assert len(token) == 16 and all(c in "0123456789abcdef" for c in token)
+    assert token != hashlib.sha256(b"buyer-token").hexdigest()[:16]
+
+
+def test_cache_partition_token_separates_by_secret_and_purpose():
+    # Different credentials partition apart (tenant/principal isolation); a fixed
+    # credential under different purpose labels also partitions apart (domain
+    # separation), so one cache cannot be replayed against another's purpose.
+    assert cache_partition_token("a", b"p") != cache_partition_token("b", b"p")
+    assert cache_partition_token("a", b"p1") != cache_partition_token("a", b"p2")
+
+
+def test_cache_partition_token_none_secret_maps_to_stable_sentinel():
+    # A missing secret is stable and equals the empty-string secret, so every
+    # unauthenticated caller shares exactly one partition (not a per-call one).
+    assert cache_partition_token(None, b"p") == cache_partition_token("", b"p")

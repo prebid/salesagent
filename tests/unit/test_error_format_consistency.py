@@ -638,6 +638,23 @@ class TestCrossTransportErrorConsistency:
         assert isinstance(obj, CreateMediaBuySubmitted)
         assert "step_9" in str(obj)
 
+    @pytest.mark.asyncio
+    async def test_reconstruct_submitted_update_response(self):
+        """The update artifact reconstruction handles the submitted variant.
+
+        update_media_buy gained a submitted variant (approval-pending recompile).
+        Without a ``status == "submitted"`` branch mirroring create, the payload
+        (task_id, no media_buy_id) falls into ``UpdateMediaBuyError`` and the text
+        part reads as a failure instead of a pending-approval submission.
+        """
+        from src.core.schemas import UpdateMediaBuySubmitted
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        data = {"status": "submitted", "task_id": "step_42", "message": "pending approval"}
+        obj = handler._reconstruct_response_object("update_media_buy", data)
+        assert isinstance(obj, UpdateMediaBuySubmitted)
+        assert obj.task_id == "step_42"
+
 
 # ---------------------------------------------------------------------------
 # Recovery field in MCP error responses
