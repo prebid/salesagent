@@ -13,6 +13,7 @@ import random
 import secrets
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn, TypedDict, cast
@@ -274,7 +275,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
 
 
 def _validate_creatives_before_adapter_call(
-    packages: list[MediaPackage],
+    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
     tenant_id: str,
     session: "Session | None" = None,
 ) -> None:
@@ -317,6 +318,23 @@ def _validate_creatives_before_adapter_call(
         DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(all_creative_ids))
     )
     creatives_list = list(session.scalars(stmt).all())
+
+    # Referenced creative_ids that don't exist are rejected up front so BOTH
+    # approval paths fail identically before anything is persisted (the pending
+    # path previously skipped missing ids and returned a pending success).
+    found_creative_ids = {str(c.creative_id) for c in creatives_list}
+    missing_ids = all_creative_ids - found_creative_ids
+    if missing_ids:
+        error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
+        logger.error(error_msg)
+        raise AdCPCreativeRejectedError(
+            error_msg,
+            suggestion=(
+                "Sync the creative(s) via sync_creatives (or pick an existing "
+                "creative from list_creatives) before referencing them in a media buy."
+            ),
+            details={"creative_ids": sorted(missing_ids)},
+        )
 
     # Validate each creative has required fields
     validation_errors = []
@@ -433,6 +451,35 @@ def _validate_creatives_before_adapter_call(
             ),
             details={"creative_errors": validation_errors},
         )
+
+
+def _pre_validate_package_creatives(
+    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
+    tenant_id: str,
+    ctx_manager: Any,
+    step: Any,
+) -> None:
+    """Run pre-adapter creative validation inside its own UoW.
+
+    Shared by the auto-approval and manual-approval create paths so the same
+    buyer input is rejected identically (CREATIVE_REJECTED) regardless of the
+    tenant's approval mode, BEFORE any media-buy state is persisted (POST-F1).
+    Marks the workflow step failed on rejection. Duck-typed over packages:
+    only ``_get_creative_ids(package)`` and ``package.product_id`` are used.
+    """
+    from src.core.database.repositories import MediaBuyUoW
+
+    try:
+        with MediaBuyUoW(tenant_id) as pre_validate_uow:
+            # FIXME(salesagent-9f2): creative validation should use a repository
+            assert pre_validate_uow.session is not None
+            _validate_creatives_before_adapter_call(packages, tenant_id, session=pre_validate_uow.session)
+    except AdCPError:
+        # Validation failed - creative validation errors already logged
+        # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
+        if step:
+            ctx_manager.update_workflow_step(step.step_id, status="failed", error_message="Creative validation failed")
+        raise
 
 
 def _execute_adapter_media_buy_creation(
@@ -2560,6 +2607,15 @@ async def _create_media_buy_impl(
         if not testing_ctx.dry_run and manual_approval_required and "create_media_buy" in manual_approval_operations:
             # Type narrowing: step and persistent_ctx exist in non-dry_run mode
             assert step is not None and persistent_ctx is not None
+
+            # PRE-VALIDATE: same creative validation the auto path runs, BEFORE any
+            # media-buy state is persisted. Missing creative_ids, format-vs-product
+            # mismatches, terminal states, and malformed reference creatives fail
+            # CREATIVE_REJECTED here identically to auto-approval — the pending
+            # path previously skipped missing ids (pending success) and emitted
+            # VALIDATION_ERROR for format mismatch.
+            if req.packages:
+                _pre_validate_package_creatives(req.packages, tenant["tenant_id"], ctx_manager, step)
             # Update existing workflow step to require approval
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -2865,60 +2921,9 @@ async def _create_media_buy_impl(
                         creatives_map = {str(c.creative_id): c for c in creatives_list}
                         logger.info(f"[CREATIVE_ASSIGN_DEBUG] Loaded {len(creatives_map)} creatives from database")
 
-                        # Validate creative formats against product formats BEFORE creating assignments
-                        # This ensures creatives match the product's supported formats
-                        # Validation happens at assignment time (not sync time) because:
-                        # - Creatives may be synced before being assigned to products
-                        # - A creative may be valid for product A but not product B
-                        # - Same creative can be reused across packages if formats align
-                        # Lazy: tests patch src.core.helpers.validate_creative_format_against_product; the call-time import binds the patched object.
-                        from src.core.helpers import validate_creative_format_against_product
-
-                        for package in req.packages:
-                            pkg_cids = _get_creative_ids(package)
-                            if pkg_cids and package.product_id:
-                                # Load product to check supported formats
-                                product_for_format_validation_stmt = select(ModelProduct).where(
-                                    ModelProduct.tenant_id == tenant["tenant_id"],
-                                    ModelProduct.product_id == package.product_id,
-                                )
-                                product_for_format_validation: ModelProduct | None = session.scalars(
-                                    product_for_format_validation_stmt
-                                ).first()
-
-                                if product_for_format_validation:
-                                    # Validate each creative against this product
-                                    for creative_id in pkg_cids:
-                                        creative = creatives_map.get(creative_id)
-                                        if creative:
-                                            # Simple binary check: does creative's format_id match product?
-                                            # Construct FormatId from database creative's agent_url and format columns
-                                            # (DBCreative stores these as separate string columns, not a FormatId object)
-                                            creative_format_id = FormatId(
-                                                agent_url=creative.agent_url, id=creative.format
-                                            )
-                                            format_is_valid, format_error = validate_creative_format_against_product(
-                                                creative_format_id=creative_format_id,
-                                                product=product_for_format_validation,
-                                            )
-
-                                            if not format_is_valid:
-                                                logger.error(f"[CREATIVE_ASSIGN_DEBUG] {format_error}")
-                                                logger.warning(
-                                                    "Creative format validation failure",
-                                                    extra={
-                                                        "creative_id": creative_id,
-                                                        "product_id": package.product_id,
-                                                        "creative_format": creative.format,
-                                                        "validation_error": format_error,
-                                                    },
-                                                )
-                                                raise AdCPValidationError(format_error or "Format validation failed")
-
-                                            logger.info(
-                                                f"[CREATIVE_ASSIGN_DEBUG] Creative {creative_id} format "
-                                                f"validated against product {package.product_id}"
-                                            )
+                    # Creative existence and format-vs-product validation already ran
+                    # via _pre_validate_package_creatives at the top of this branch
+                    # (shared with the auto path) — before any state was persisted.
 
                     # Create assignments for each package
                     for i, package in enumerate(req.packages):
@@ -3414,19 +3419,7 @@ async def _create_media_buy_impl(
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-        try:
-            with MediaBuyUoW(tenant["tenant_id"]) as pre_validate_uow:
-                # FIXME(salesagent-9f2): creative validation should use a repository
-                assert pre_validate_uow.session is not None
-                _validate_creatives_before_adapter_call(packages, tenant["tenant_id"], session=pre_validate_uow.session)
-        except AdCPError:
-            # Validation failed - creative validation errors already logged
-            # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
-            if step:
-                ctx_manager.update_workflow_step(
-                    step.step_id, status="failed", error_message="Creative validation failed"
-                )
-            raise
+        _pre_validate_package_creatives(packages, tenant["tenant_id"], ctx_manager, step)
 
         # Pre-validate adapter-specific constraints (pricing models, budget limits)
         # This runs regardless of dry_run so adapter restrictions are always enforced.
