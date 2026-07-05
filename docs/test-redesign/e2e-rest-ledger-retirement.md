@@ -7,12 +7,15 @@ attribution campaign-interval boundary retired at the main merge, and the 12
 uc006 account billing-state entries graduated by PR #1417's account-resolution
 wiring) net of 3 uc002 creative-extension entries imported from #1417 brought
 it to **21**; the #1430 item-4 roas/cpa retirement (Then steps written,
-tag-declared production gap) brought it to **20**. Tracked publicly as
+tag-declared production gap) brought it to **20**; #1430 items 1-3 graduated
+the 6 uc011 read-back entries (`_db_scope_for` repoint + agent auth_token fix)
+and the 2 uc002 ext-o/ext-p entries (auto-approval seeding) — all 8 xpassed
+in-network (innet_050726_2030) — bringing it to **12**. Tracked publicly as
 **#1423**; the in-network Docker CI runner that recovered e2e_rest as the 5th
 BDD transport landed on main as **#1420**.
 (Internal epic `salesagent-x0nl`; the per-mechanism sub-task ids below roll up
 to #1423.)
-**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (20 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
+**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (12 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
 
 ## Wave 3 outcome (#1418) — read this first
 
@@ -73,6 +76,30 @@ Each validated by an in-network BDD run with 0 failures:
   **tag-declared strict xfail on ALL transports**
   (`T-UC-004-aggregated-roas-and-cpa` in conftest `_UC004_XFAIL_ADDITIONAL`) —
   off the e2e nodeid ledger; the production feature is ticketed separately.
+- **#1430 items 1-2 — uc011 read-back (6 uc011, 20 → 14):** the wrong-DB class.
+  `integration_db` repointed production's cached engine at an empty per-test DB
+  while the env's factories wrote to the live server DB, so raw
+  `get_db_session()` read-backs and TRANSPORT-BYPASS `_impl` Givens inside e2e
+  scenarios read the wrong database. Closed structurally: every e2e-capable
+  `_harness_env` branch now routes through `_db_scope_for` (integration_db
+  in-process; `_production_db_pointed_at(e2e_config.postgres_url)` over e2e).
+  The scoped-to-agent scenario additionally needed agent identities to carry
+  `auth_token` (the live server 401'd tokenless agent syncs and the Given
+  errors were swallowed — both fixed, plus a structural guard banning
+  swallowed dispatch errors). All 6 xpassed in-network (innet_050726_2030).
+- **#1430 item 3 — uc002 ext-o/ext-p auto-approval seeding (2 uc002, 14 → 12):**
+  over e2e the live tenant defaulted to `human_review_required=True` and the
+  real adapter requires approval for create_media_buy, so the scenarios landed
+  on the PENDING-approval path (which silently skips missing creatives and
+  emits VALIDATION_ERROR for format mismatch) instead of the auto path's
+  CREATIVE_REJECTED they assert. The ext-o/ext-p Givens now seed auto-approval
+  via the shared `_seed_auto_approval` helper. Both xpassed in-network
+  (innet_050726_2030). The pending-path validation divergence itself is
+  ticketed as production bug work.
+- **Side effect worth auditing:** the `_db_scope_for` repoint also flipped 13
+  uc004 webhook/circuit-breaker/sort_by e2e_rest scenarios (declared impl-only
+  by tag, jdy1-M4) to xpass — their in-process webhook services now see the
+  server DB. Tag-family retirement is tracked separately.
 - **Tenant-seed idempotency extended (0 ledger impact):** the newly wired
   uc005 format_id-roundtrip and uc018 list-creatives scenarios hit the same
   `tenants_pkey` shared-DB collision jdy1-M3 fixed for get_products; the

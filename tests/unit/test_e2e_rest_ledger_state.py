@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 20 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
+# The 12 genuine-gap e2e_rest nodeids remaining (47 after Wave 3 triage; jdy1
 # graduated M3 6 get_products tenant-duplicate, M1 6 uc004 REST-422 wire-shape,
 # M4 4 uc004 webhook-observability entries [now tag-declared in conftest]; the
 # uc004 attribution campaign-interval boundary graduated at the main merge after
@@ -32,13 +32,14 @@ from pathlib import Path
 # creative extension entries imported at the #1417 merge — newly wired there,
 # confirmed still failing in-network post-merge, innet_040726_0013; the uc004
 # roas/cpa entry retired at #1430 item 4 — its Then steps now exist and the
-# scenario is tag-declared T-UC-004-aggregated-roas-and-cpa on ALL transports).
+# scenario is tag-declared T-UC-004-aggregated-roas-and-cpa on ALL transports;
+# #1430 items 1-3 graduated the 6 uc011 read-back entries [_db_scope_for repoint
+# + agent auth_token fix] and 2 uc002 ext-o/ext-p entries [auto-approval seeding],
+# all 8 xpassed in-network, innet_050726_2030).
 # Grouped by gap in the ledger file's section comments; flat here for exact-set
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
-        "tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]",
-        "tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]",
         "tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]",
@@ -50,13 +51,7 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
-        "tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_false_preserves_absent_accounts_delete_missing__false_with_absent_accounts[e2e_rest]",
-        "tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_omitted__default_preserves_accounts_delete_missing_omitted[e2e_rest]",
-        "tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_scoped_to_authenticated_agent_only[e2e_rest]",
-        "tests/bdd/test_uc011_manage_accounts.py::test_dry_run_false__normal_sync_applies_changes_dry_run__false[e2e_rest]",
-        "tests/bdd/test_uc011_manage_accounts.py::test_dry_run_omitted__default_behavior_applies_changes_dry_run_omitted[e2e_rest]",
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
-        "tests/bdd/test_uc011_manage_accounts.py::test_sandbox_account_provisioned_via_sync_accounts_with_sandbox_flag[e2e_rest]",
     }
 )
 

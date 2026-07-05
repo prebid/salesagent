@@ -48,17 +48,13 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary
 # state not server-seeded). PR #1417's account-resolution + canonical error-code
 # wiring makes all 12 pass in-network — xpass confirmed innet_040726_0013.
 
-# --- uc011 account sync DB read-back (6) ---
-# GENUINE GAP: delete_missing / dry_run / sandbox read-back assertions find 0 accounts
-# in the server DB. The pre-existing accounts the scenario asserts on are never seeded
-# server-side (the sync that would create them dispatches into the live server but the
-# expected pre-state is absent). Needs server-side account seeding (harness, exec-n48i).
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_false_preserves_absent_accounts_delete_missing__false_with_absent_accounts[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_omitted__default_preserves_accounts_delete_missing_omitted[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_scoped_to_authenticated_agent_only[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_dry_run_false__normal_sync_applies_changes_dry_run__false[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_dry_run_omitted__default_behavior_applies_changes_dry_run_omitted[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sandbox_account_provisioned_via_sync_accounts_with_sandbox_flag[e2e_rest]
+# --- uc011 account sync DB read-back — GRADUATED (#1430 items 1-2) ---
+# Was: read-back assertions found 0 accounts in the server DB. Root cause was the
+# wrong-DB class (integration_db repointed production's cached engine at an empty
+# per-test DB while env factories wrote to the live server DB) plus tokenless agent
+# identities being 401'd with the Given errors swallowed. Fixed by _db_scope_for
+# (production engine pointed at the server DB over e2e) and the uc011 agent
+# auth_token + fail-loudly Given fix; all 6 xpassed in-network (innet_050726_2030).
 
 # --- get_products inventory-profile tenant duplicate — GRADUATED (#1430 jdy1-M3) ---
 # Fixed by idempotent get-or-create given_tenant (uc_get_products_inventory.py); the 6
@@ -83,14 +79,15 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # conftest _UC004_XFAIL_ADDITIONAL (production computes neither roas nor
 # cost_per_acquisition nor conversion_value; src/ feature work).
 
-# --- uc002 creative extension scenarios, newly wired by #1417 (3) ---
-# Imported from PR #1417's ledger at the media-buy-validation merge: its UC-002 wiring
-# activates these @extension scenarios on e2e_rest ("create succeeds,
-# creative_assignments=None" — server-side creative state not observable/seeded over
-# HTTP). GENUINE GAP confirmed by the post-merge in-network run (innet_040726_0013:
-# all 3 xfail). Needs server-side creative seeding/observability (same family as
-# exec-n48i).
-tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]
-tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]
+# --- uc002 creative extension scenarios, newly wired by #1417 (1) ---
+# Imported from PR #1417's ledger at the media-buy-validation merge. ext-o/ext-p
+# GRADUATED (#1430 item 3): over e2e the live tenant defaulted to the
+# PENDING-approval path (different validation semantics than the auto path the
+# scenarios assert); seeding auto-approval in the ext-o/ext-p Givens
+# (_seed_auto_approval) makes both xpass in-network (innet_050726_2030).
+# ext-q remains a GENUINE mock-fidelity GAP: the scenario's display_300x250 format
+# is not in the server's 54-format reference catalog (dies CREATIVE_REJECTED before
+# the upload), and MockAdServer.add_creative_assets has no fail_on_upload test
+# behavior to reproduce the injected upload failure server-side.
 tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]
 
