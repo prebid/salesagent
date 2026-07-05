@@ -82,6 +82,16 @@ def test_adapter_does_not_advertise_property_list_targeting_support(
     )
 
 
+def test_non_compiling_adapter_enumeration_is_nonempty():
+    """Non-empty tripwire for the parametrize above: if the derived adapter list is ever
+    empty (an import regression, or every adapter declared capable), the default-False
+    invariant must fail loudly here rather than silently collecting zero parametrized cases."""
+    assert _non_compiling_adapters(), (
+        "no concrete non-compiling adapters were discovered — the property_list "
+        "default-False invariant would go unchecked (zero parametrized cases)"
+    )
+
+
 def test_mock_adapter_declares_property_list_targeting_support() -> None:
     """MockAdServer's simulation is its compile path — the declaration is honest.
 

@@ -481,7 +481,8 @@ class AdCPRequestHandler(RequestHandler):
                 # Discriminate on shape: the submitted variant carries task-status
                 # "submitted" and no media_buy_id; success carries media_buy_id
                 # (and may carry advisory message/ext); everything else is the
-                # error variant.
+                # error variant. (The create-replay path in media_buy_create
+                # discriminates on stored task_id/media_buy_id — keep the two in sync.)
                 if data.get("status") == "submitted":
                     return CreateMediaBuySubmitted(**data)
                 if "media_buy_id" in data:

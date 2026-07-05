@@ -51,6 +51,12 @@ from src.services.identifier_matching import identifier_dicts, property_matches_
 
 logger = logging.getLogger(__name__)
 
+# Single source of the operator-side observability marker for buyer property_list
+# advisories. Emitted here (the drop event) and by the create-side advisory builder
+# (media_buy_create resolve-failure / intersection-failure) so operators grep one
+# stable token — a typo in any one copy would silently split alerting.
+INTERSECTION_ADVISORY_MARKER = "[INTERSECTION-ADVISORY]"
+
 
 class DropReason(StrEnum):
     """Why a product was excluded from the intersection."""
@@ -124,7 +130,7 @@ class PropertyIntersection:
                 # here means both get_products and the create-side advisory builder inherit
                 # consistent observability for a buyer property_list drop.
                 logger.warning(
-                    "[INTERSECTION-ADVISORY] product %s excluded by buyer property_list (reason=%s)",
+                    INTERSECTION_ADVISORY_MARKER + " product %s excluded by buyer property_list (reason=%s)",
                     getattr(product, "product_id", "?"),
                     outcome.value,
                 )
