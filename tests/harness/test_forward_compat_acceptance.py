@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.request_compat import normalize_request_params
+from tests.helpers import assert_envelope_shape
 
 # ---------------------------------------------------------------------------
 # Payloads: each is a (tool_name, params) tuple
@@ -766,17 +767,18 @@ class TestErrorPropagation:
 
         asyncio.run(_call())
 
-    def test_second_attempt_error_propagates_not_original(self):
+    def test_second_attempt_error_uses_retry_error_envelope(self):
         """TypeAdapter rejects → deep-strip → retry → retry ALSO fails.
-        The RETRY error must propagate, not the original.
+        The buyer-facing envelope must describe the retry error, not the original.
 
         This catches a subtle bug: if the middleware catches the retry
-        exception and re-raises the original instead, the buyer gets a
-        confusing error about fields that were already stripped.
+        exception and wraps the original instead, the buyer gets a confusing
+        error about fields that were already stripped.
         """
         from pydantic import ValidationError
 
         from src.core.mcp_compat_middleware import RequestCompatMiddleware
+        from src.core.tool_error_logging import AdCPToolError
 
         middleware = RequestCompatMiddleware()
 
@@ -805,10 +807,10 @@ class TestErrorPropagation:
                 patch.dict(os.environ, {"ENVIRONMENT": "production"}),
                 patch.object(middleware, "_get_tool_schema", return_value=_simple_tool_schema()),
             ):
-                with pytest.raises(ValidationError) as exc_info:
+                with pytest.raises(AdCPToolError) as exc_info:
                     await middleware.on_call_tool(ctx, call_next_with_different_errors)
-                # The retry error should propagate (the one from the 2nd call_next)
-                assert exc_info.value is retry_error
+                assert_envelope_shape(exc_info.value, "VALIDATION_ERROR", recovery="correctable")
+                assert exc_info.value.__cause__ is retry_error
 
         asyncio.run(_call())
 
@@ -821,11 +823,12 @@ class TestErrorPropagation:
 class TestMiddlewareAdversarial:
     """Adversarial scenarios designed to break the middleware."""
 
-    def test_schema_lookup_fails_error_propagates(self):
-        """_get_tool_schema returns None → original error propagates (no retry)."""
+    def test_schema_lookup_fails_error_becomes_envelope(self):
+        """_get_tool_schema returns None → no retry, but no raw validation leak."""
         from pydantic import ValidationError
 
         from src.core.mcp_compat_middleware import RequestCompatMiddleware
+        from src.core.tool_error_logging import AdCPToolError
 
         middleware = RequestCompatMiddleware()
 
@@ -838,8 +841,10 @@ class TestMiddlewareAdversarial:
                 patch.dict(os.environ, {"ENVIRONMENT": "production"}),
                 patch.object(middleware, "_get_tool_schema", return_value=None),
             ):
-                with pytest.raises(ValidationError):
+                with pytest.raises(AdCPToolError) as exc_info:
                     await middleware.on_call_tool(ctx, call_next)
+                assert_envelope_shape(exc_info.value, "VALIDATION_ERROR", recovery="correctable")
+                assert exc_info.value.__cause__ is error
                 # Only called once — no retry when schema unavailable
                 assert call_next.call_count == 1
 

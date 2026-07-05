@@ -10,6 +10,8 @@ import pytest
 
 from src.core.mcp_compat_middleware import RequestCompatMiddleware
 from src.core.request_compat import NormalizationResult
+from src.core.tool_error_logging import AdCPToolError
+from tests.helpers import assert_envelope_shape
 
 
 @pytest.fixture()
@@ -36,6 +38,16 @@ def _make_copied_context(original, **kwargs):
     copied.message = kwargs.get("message", original.message)
     copied.copy = original.copy
     return copied
+
+
+def _typeadapter_validation_error(tool_name: str, line_error: dict):
+    """Build the same pydantic ValidationError shape FastMCP TypeAdapter raises."""
+    from pydantic import ValidationError
+
+    return ValidationError.from_exception_data(
+        title=f"call[{tool_name}]",
+        line_errors=[line_error],
+    )
 
 
 class TestMiddlewareCallsNormalizer:
@@ -155,6 +167,57 @@ class TestShouldRetry:
         exc = RuntimeError("unexpected")
         with patch("src.core.config.is_production", return_value=True):
             assert middleware._should_retry(exc) is False
+
+
+class TestTypeAdapterValidationEnvelope:
+    """FastMCP TypeAdapter validation errors become AdCP wire envelopes."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_name", "arguments", "line_error", "field"),
+        [
+            (
+                "list_creatives",
+                {"filters": {"statuses": []}},
+                {
+                    "type": "too_short",
+                    "loc": ("filters", "statuses"),
+                    "input": [],
+                    "ctx": {"field_type": "List", "min_length": 1, "actual_length": 0},
+                },
+                "filters.statuses",
+            ),
+            (
+                "create_media_buy",
+                {"packages": []},
+                {
+                    "type": "missing",
+                    "loc": ("buyer_ref",),
+                    "input": {},
+                },
+                "buyer_ref",
+            ),
+        ],
+    )
+    async def test_typeadapter_validation_errors_are_adcp_tool_errors(
+        self, middleware, tool_name, arguments, line_error, field
+    ):
+        ctx = _make_context(tool_name, arguments)
+        validation_error = _typeadapter_validation_error(tool_name, line_error)
+        call_next = AsyncMock(side_effect=validation_error)
+
+        with patch("src.core.config.is_production", return_value=False):
+            with pytest.raises(AdCPToolError) as exc_info:
+                await middleware.on_call_tool(ctx, call_next)
+
+        assert_envelope_shape(
+            exc_info.value,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr=field,
+            check_mcp_tool_error=True,
+        )
+        assert exc_info.value.envelope["errors"][0]["field"] == field
 
 
 class TestMiddlewareEdgeCases:
