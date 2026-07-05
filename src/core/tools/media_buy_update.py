@@ -8,6 +8,7 @@ Handles media buy updates including:
 - Currency limit validation
 """
 
+import asyncio
 import logging
 import os
 from datetime import UTC, date, datetime, timedelta
@@ -1470,7 +1471,10 @@ async def update_media_buy(
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
-    response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
+    # Offload the sync _impl to a worker thread: its Kevel targeting compile can make a
+    # multi-second /v1/site fetch that would otherwise block the event loop (the async
+    # create path keeps the same fetch off-loop via prewarm_targeting + to_thread).
+    response = await asyncio.to_thread(_update_media_buy_impl, req=req, identity=identity, context_id=_ctx_id)
     return ToolResult(content=str(response), structured_content=response)
 
 

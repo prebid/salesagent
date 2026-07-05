@@ -76,6 +76,24 @@ def _common_patches(mock_uow, protocol: str = "mcp"):
     )
 
 
+def test_mcp_wrapper_offloads_impl_to_worker_thread():
+    """The async MCP wrapper runs the sync _impl off the event loop via asyncio.to_thread, so the
+    update path's blocking Kevel /v1/site targeting compile cannot stall the loop. Reverting to a
+    direct ``_update_media_buy_impl(...)`` call reddens this (event-loop-stall regression guard)."""
+    from src.core.tools.media_buy_update import _update_media_buy_impl
+
+    sentinel = {"status": "completed", "media_buy_id": "mb_offload"}
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.get_state = AsyncMock(side_effect=["identity_x", "ctx_x"])
+
+    with patch(f"{MODULE}.asyncio.to_thread", new=AsyncMock(return_value=sentinel)) as to_thread:
+        result = asyncio.run(update_media_buy(media_buy_id="mb_offload", budget=1000.0, ctx=mock_ctx))
+
+    to_thread.assert_awaited_once()
+    assert to_thread.await_args.args[0] is _update_media_buy_impl
+    assert result.structured_content == sentinel
+
+
 def test_mcp_wrapper_preserves_existing_currency_for_float_budget():
     """MCP boundary should preserve the existing media buy currency on float-only budget updates."""
     mock_uow = _mock_uow(

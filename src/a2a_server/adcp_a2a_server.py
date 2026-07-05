@@ -4,6 +4,7 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -1941,8 +1942,11 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
 
-        # Call core function with validated fields + raw nested structures and identity
-        response = core_update_media_buy_tool(
+        # Call core function with validated fields + raw nested structures and identity.
+        # Offloaded to a worker thread: the sync update path's Kevel targeting compile can
+        # make a multi-second /v1/site fetch that would otherwise block the event loop.
+        response = await asyncio.to_thread(
+            core_update_media_buy_tool,
             media_buy_id=req.media_buy_id or "",
             paused=req.paused,
             start_time=params.get("start_time"),
