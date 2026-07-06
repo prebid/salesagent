@@ -147,23 +147,25 @@ DISCOVERY_SKILLS = frozenset(
 
 
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
-    """Canonical InternalError shape for non-skill A2A boundary failures.
+    """Canonical InternalError shape for non-Task A2A boundary failures.
 
     Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
     dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
-    surface those as a two-layer envelope on a failed Task's DataPart. Non-skill
-    paths (``on_message_send`` fallthrough, NL handlers) historically picked their
-    own prefixes (``"Message processing failed: "``, ``"Error in ..."``)
-    for semantically identical untyped failures — divergence on the buyer-
-    facing wire message for the same condition.
+    surface those as a two-layer envelope on a failed Task's DataPart —
+    including the top-level ``on_message_send`` fallthrough, which per AdCP
+    3.1.x transport rules (building/operating/transport-errors.mdx "Layer
+    Separation") RETURNS a failed Task carrying the envelope artifact rather
+    than raising this helper. JSON-RPC errors are reserved for genuine
+    transport faults (``A2AError``) and methods with no Task to carry the
+    envelope.
 
-    Use this helper at every non-skill ``InternalError(...)`` raise site that
-    is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). The canonical prefix is ``"{operation} failed: {exc}"`` so
-    storyboard runners can parse the failure uniformly.
+    Use this helper only at ``InternalError(...)`` raise sites that have no
+    async Task to attach an envelope artifact to. The canonical prefix is
+    ``"{operation} failed: {exc}"`` so storyboard runners can parse the
+    failure uniformly.
 
     The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
-    this helper too — they have no async Task to carry a DataPart, so the two-layer
+    this helper — they have no async Task to carry a DataPart, so the two-layer
     envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
     / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
     SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
@@ -582,6 +584,11 @@ class AdCPRequestHandler(RequestHandler):
             self._task_push_configs[task_id] = push_notification_config
         self.tasks[task_id] = task
 
+        # Initialized before the try so the outer error handler can always read
+        # it — a failure during auth-token extraction (before resolution) must
+        # not turn into a NameError inside the except block.
+        identity: ResolvedIdentity | None = None
+
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
@@ -605,7 +612,6 @@ class AdCPRequestHandler(RequestHandler):
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
             # to all downstream handlers. No handler should call resolve_identity().
-            identity: ResolvedIdentity | None = None
             if auth_token:
                 identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
             elif not requires_auth:
@@ -864,9 +870,10 @@ class AdCPRequestHandler(RequestHandler):
                 # ``_create_media_buy`` is an NL stub that always raises
                 # ``AdCPCapabilityNotSupportedError`` — the explicit-skill
                 # path is the spec contract for media buy creation. The
-                # outer error handler at on_message_send catches the raise
-                # and attaches a spec-compliant two-layer envelope to the
-                # failed Task artifact.
+                # outer error handler at on_message_send catches the raise,
+                # attaches a spec-compliant two-layer envelope to the failed
+                # Task artifact, and returns that failed Task (never a
+                # JSON-RPC error).
                 await self._create_media_buy(combined_text, identity)
             else:
                 # General help response
@@ -957,12 +964,14 @@ class AdCPRequestHandler(RequestHandler):
                 principal_id=err_principal_id,
             )
 
-            # Send protocol-level webhook notification for failure if configured
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
             # Attach error to task artifacts as a spec-compliant two-layer
             # envelope (same shape as failed-skill DataParts) so storyboard
             # runners can ``JSON.parse`` the artifact uniformly regardless of
-            # which failure path produced it.
+            # which failure path produced it. ``_build_error_envelope``
+            # normalizes untyped exceptions to base AdCPError (wire code
+            # SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING) and passes
+            # through a typed AdCPError's own wire code.
             del task.artifacts[:]
             task.artifacts.append(
                 Artifact(
@@ -972,10 +981,17 @@ class AdCPRequestHandler(RequestHandler):
                 )
             )
 
+            # Send protocol-level webhook notification for failure if configured
             await self._send_protocol_webhook(task, status="failed")
 
-            # Raise A2A error instead of creating failed task
-            raise _internal_error_for("message processing", e)
+            # Per AdCP 3.1.x transport rules (spec prose:
+            # building/operating/transport-errors.mdx "Layer Separation" and the
+            # two-layer error-handling model), application/task-execution
+            # failures MUST be returned in the task response body as a failed
+            # Task carrying the envelope artifact. JSON-RPC errors are reserved
+            # for genuine transport faults (A2AError, re-raised above). So we
+            # fall through to the shared store-and-return below — never raise
+            # InternalError here.
 
         self.tasks[task_id] = task
         return task
