@@ -2127,7 +2127,7 @@ class TestDeliveryProtocol:
         # Optional fields exist as attributes (may be None)
         assert hasattr(totals, "clicks")
         assert hasattr(totals, "ctr")
-        assert hasattr(totals, "video_completions")
+        assert hasattr(totals, "completed_views")
         assert hasattr(totals, "completion_rate")
 
     def test_unpopulated_fields_handled_gracefully(self):
@@ -2158,7 +2158,7 @@ class TestDeliveryProtocol:
         delivery = response.media_buy_deliveries[0]
         # daily_breakdown is optional and not populated
         assert delivery.daily_breakdown is None
-        # video_completions is optional
-        assert delivery.totals.video_completions is None
+        # completed_views is optional
+        assert delivery.totals.completed_views is None
         # aggregated_totals optional fields
-        assert response.aggregated_totals.video_completions is None
+        assert response.aggregated_totals.completed_views is None

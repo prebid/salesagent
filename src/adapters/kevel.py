@@ -534,7 +534,7 @@ class Kevel(AdServerAdapter):
                 media_buy_id=media_buy_id,
                 reporting_period=date_range,
                 totals=DeliveryTotals(
-                    impressions=impressions, spend=spend, clicks=0, ctr=0.0, video_completions=0, completion_rate=0.0
+                    impressions=impressions, spend=spend, clicks=0, ctr=0.0, completed_views=0, completion_rate=0.0
                 ),
                 by_package=[],
                 currency="USD",
@@ -574,7 +574,7 @@ class Kevel(AdServerAdapter):
                     spend=total_revenue,
                     clicks=0,
                     ctr=0.0,
-                    video_completions=0,
+                    completed_views=0,
                     completion_rate=0.0,
                 ),
                 by_package=[],

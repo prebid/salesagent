@@ -449,10 +449,16 @@ def _resolve_status_filter(
 # The persisted status is authoritative: terminal/explicit states
 # (paused, completed, rejected, canceled) are lifecycle decisions that
 # cannot be re-derived from flight dates. "failed" has no AdCP equivalent
-# and is reported as the closest terminal state, "rejected". Pre-serving
-# states (draft/pending/pending_approval) map to "pending_start"
-# (consistent with media_buy_create._compute_initial_media_buy_status).
-# Generic serving states (active/approved) are date-refined below.
+# and is reported as the closest terminal state, "rejected". "draft" maps
+# to "pending_creatives": the lifecycle machinery (media_buy_create /
+# media_buy_update transitions) stamps pending_creatives on any buy without
+# assigned creatives, so a lingering "draft" is a buy that never got
+# creatives — the spec enum describes pending_creatives as exactly that
+# state (enums/media-buy-status.json). This matches
+# media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL so both tools report
+# the same status for the same buy. Submitted-but-unapproved states
+# (pending/pending_approval) map to "pending_start". Generic serving
+# states (active/approved) are date-refined below.
 _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
     "active": MediaBuyStatus.active,
     "approved": MediaBuyStatus.active,
@@ -461,7 +467,7 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
     "rejected": MediaBuyStatus.rejected,
     "canceled": MediaBuyStatus.canceled,
     "failed": MediaBuyStatus.rejected,
-    "draft": MediaBuyStatus.pending_start,
+    "draft": MediaBuyStatus.pending_creatives,
     "pending": MediaBuyStatus.pending_start,
     "pending_approval": MediaBuyStatus.pending_start,
     "pending_creatives": MediaBuyStatus.pending_creatives,

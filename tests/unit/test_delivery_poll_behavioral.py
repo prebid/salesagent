@@ -168,7 +168,16 @@ class TestValidStatusValuesAccepted:
 
         Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
         """
-        valid_internal = {"active", "ready", "paused", "completed", "failed"}
+        valid_internal = {
+            "active",
+            "pending_creatives",
+            "pending_start",
+            "paused",
+            "completed",
+            "failed",
+            "rejected",
+            "canceled",
+        }
 
         # Use a mock with .value = "all" to simulate the "all" special case
         mock_status = MagicMock()
@@ -801,11 +810,29 @@ class TestStatusFilterRawString:
     """
 
     def test_raw_string_active_is_recognized(self):
-        valid = {"active", "ready", "paused", "completed", "failed"}
+        valid = {
+            "active",
+            "pending_creatives",
+            "pending_start",
+            "paused",
+            "completed",
+            "failed",
+            "rejected",
+            "canceled",
+        }
         result = _resolve_delivery_status_filter("active", valid, lambda s: s.value)
         assert result == ["active"]
 
     def test_unknown_raw_string_defaults_to_active(self):
-        valid = {"active", "ready", "paused", "completed", "failed"}
+        valid = {
+            "active",
+            "pending_creatives",
+            "pending_start",
+            "paused",
+            "completed",
+            "failed",
+            "rejected",
+            "canceled",
+        }
         result = _resolve_delivery_status_filter("nonexistent", valid, lambda s: s.value)
         assert result == ["active"]

@@ -11,7 +11,7 @@ Handles delivery metrics reporting including:
 import logging
 from datetime import UTC, date, datetime, timedelta
 from math import floor
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -97,6 +97,7 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
     MediaBuyDeliveryData,
+    MediaBuyDeliveryStatus,
     PackageDelivery,
     PlacementBreakdown,
     PricingModel,
@@ -234,18 +235,12 @@ def _get_media_buy_delivery_impl(
                         datetime.combine(buy_end_date, datetime.min.time()),
                     )
 
-                # Determine status
-                # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                buy_start_date_status = cast(date, buy.start_date)
-                buy_end_date_status = cast(date, buy.end_date)
-                if getattr(buy, "is_paused", False):
-                    status = "paused"
-                elif simulation_datetime.date() < buy_start_date_status:
-                    status = "ready"
-                elif simulation_datetime.date() > buy_end_date_status:
-                    status = "completed"
-                else:
-                    status = "active"
+                # Determine status from the persisted lifecycle column,
+                # date-refined only for serving states — the same single
+                # source of truth as the status_filter path. A canceled,
+                # rejected, or draft buy inside its flight window must not
+                # report "active" just because the dates line up.
+                status = _internal_status_for_buy(buy, simulation_datetime.date())
 
                 # Override status when circuit breaker is open (reporting degraded),
                 # but not for paused buys (paused takes priority)
@@ -410,7 +405,7 @@ def _get_media_buy_delivery_impl(
                                 impressions=package_impressions or 0.0,
                                 spend=package_spend or 0.0,
                                 clicks=package_clicks,
-                                video_completions=None,  # Optional field, not calculated in this implementation
+                                completed_views=None,  # Optional field, not calculated in this implementation
                                 pacing_index=1.0 if status == "active" else 0.0,
                                 # Add pricing fields from package_config
                                 pricing_model=pricing_info.get("pricing_model") if pricing_info else None,
@@ -451,9 +446,7 @@ def _get_media_buy_delivery_impl(
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
                 # Cast status to match Literal type requirement
-                status_typed = cast(
-                    Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"], status
-                )
+                status_typed = cast(MediaBuyDeliveryStatus, status)
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
                     status=status_typed,
@@ -466,7 +459,7 @@ def _get_media_buy_delivery_impl(
                         spend=spend,
                         clicks=clicks,  # Optional field
                         ctr=ctr,  # Optional field
-                        video_completions=None,  # Optional field
+                        completed_views=None,  # Optional field
                         completion_rate=None,  # Optional field
                         conversions=adapter_conversions,  # From adapter totals
                         viewability=adapter_viewability,  # From adapter totals
@@ -550,7 +543,7 @@ def _get_media_buy_delivery_impl(
                 impressions=float(total_impressions),
                 spend=total_spend,
                 clicks=float(total_clicks) if total_clicks else None,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=media_buy_count,
             ),
             media_buy_deliveries=deliveries,
@@ -757,7 +750,8 @@ def _resolve_delivery_status_filter(
 # (completed, paused, rejected, canceled) are lifecycle decisions that
 # cannot be re-derived from flight dates. Transitional pre-serving states
 # (draft, pending_approval, pending_creatives, pending_start) map to
-# "ready" so the default "active" filter excludes them.
+# their spec taxonomy values (pending_creatives / pending_start), which the
+# default "active" filter still excludes.
 _PERSISTED_STATUS_TO_INTERNAL: dict[str, str] = {
     "active": "active",
     "approved": "active",
@@ -766,11 +760,11 @@ _PERSISTED_STATUS_TO_INTERNAL: dict[str, str] = {
     "rejected": "rejected",
     "canceled": "canceled",
     "failed": "failed",
-    "draft": "ready",
-    "pending": "ready",
-    "pending_approval": "ready",
-    "pending_creatives": "ready",
-    "pending_start": "ready",
+    "draft": "pending_creatives",
+    "pending": "pending_start",
+    "pending_approval": "pending_start",
+    "pending_creatives": "pending_creatives",
+    "pending_start": "pending_start",
 }
 
 
@@ -780,7 +774,7 @@ def _internal_status_for_buy(buy: MediaBuy, reference_date: date) -> str:
     The persisted ``MediaBuy.status`` is the source of truth. Only when the
     buy is in a generic serving state ("active"/"approved") do we refine
     against flight dates — an "active" buy whose flight window has not yet
-    started is "ready", and one past its end date is "completed".
+    started is "pending_start", and one past its end date is "completed".
     """
     persisted = (buy.status or "").lower()
     internal = _PERSISTED_STATUS_TO_INTERNAL.get(persisted, persisted)
@@ -796,7 +790,7 @@ def _internal_status_for_buy(buy: MediaBuy, reference_date: date) -> str:
     if getattr(buy, "is_paused", False):
         return "paused"
     if reference_date < start_compare:
-        return "ready"
+        return "pending_start"
     if reference_date > end_compare:
         return "completed"
     return "active"
@@ -808,18 +802,23 @@ def _get_target_media_buys(
     repo: MediaBuyRepository,
     reference_date: date,
 ) -> list[tuple[str, MediaBuy]]:
-    # Resolve status_filter to a set of internal status strings.
-    # Internal statuses: ready, active, paused, completed, failed,
-    # plus terminal lifecycle states (rejected, canceled).
-    # AdCP MediaBuyStatus: pending_creatives, pending_start, active,
-    # paused, completed, rejected, canceled.
-    # Map: pending_start/pending_creatives -> ready (internal).
-    valid_internal_statuses = {"active", "ready", "paused", "completed", "failed", "rejected", "canceled"}
+    # Resolve status_filter to a set of internal status strings. The
+    # internal delivery vocabulary matches the AdCP MediaBuyStatus enum
+    # (pending_creatives, pending_start, active, paused, completed,
+    # rejected, canceled) plus internal-only "failed".
+    valid_internal_statuses = {
+        "active",
+        "pending_creatives",
+        "pending_start",
+        "paused",
+        "completed",
+        "failed",
+        "rejected",
+        "canceled",
+    }
 
     def _to_internal(status: MediaBuyStatus) -> str:
         """Convert AdCP MediaBuyStatus enum to internal status string."""
-        if status in (MediaBuyStatus.pending_start, MediaBuyStatus.pending_creatives):
-            return "ready"
         return status.value
 
     # When specific IDs are provided without an explicit status_filter,

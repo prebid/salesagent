@@ -88,6 +88,8 @@ class TestWebhookNotificationTypeFinal:
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
+                # Was serving; flight ended -> date-refined to "completed"
+                status="active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 6, 30),
             )
@@ -775,6 +777,7 @@ class TestPackageLevelBreakdowns:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_active",
+                status="active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
                 raw_request={
@@ -863,14 +866,17 @@ class TestPackageLevelBreakdowns:
 class TestPackageDeliveryStatus:
     """Media buy status computation based on package delivery states.
 
-    The production code computes media-buy-level status (ready/active/completed)
+    The production code computes media-buy-level status (pending_start/active/completed)
     based on date comparison against the request end_date (reference_date).
 
     Covers: UC-004-MAIN-10
     """
 
-    def test_rq1_buy_before_start_has_ready_status(self, integration_db):
-        """Media buy before its start date gets status 'ready'.
+    def test_rq1_buy_before_start_has_pending_start_status(self, integration_db):
+        """Media buy before its start date gets spec status 'pending_start'.
+
+        Spec: enums/media-buy-status.json — pending_start is "ready to serve
+        and waiting for its flight date to begin".
 
         Covers: UC-004-MAIN-10
         """
@@ -899,7 +905,49 @@ class TestPackageDeliveryStatus:
             )
 
             assert len(resp.media_buy_deliveries) == 1
-            assert resp.media_buy_deliveries[0].status == "ready"
+            assert resp.media_buy_deliveries[0].status == "pending_start"
+
+    def test_draft_buy_matches_pending_creatives_filter_not_pending_start(self, integration_db):
+        """A draft buy is pending_creatives — filterable as such, invisible to pending_start.
+
+        Regression: the pending_creatives filter value used to be conflated
+        into pending_start, so filtering by pending_creatives returned
+        pending_start buys and missed actual draft buys. Spec:
+        enums/media-buy-status.json — pending_creatives is "approved but has
+        no creatives assigned".
+
+        Covers: UC-004-MAIN-10
+        """
+        from adcp.types import MediaBuyStatus
+
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_draft",
+                status="draft",
+                start_date=date(2025, 6, 1),
+                end_date=date(2025, 12, 31),
+            )
+            env.set_adapter_response("mb_draft", impressions=0, spend=0.0)
+
+            common = {
+                "media_buy_ids": ["mb_draft"],
+                "start_date": "2025-01-01",
+                "end_date": "2025-03-15",
+            }
+
+            resp = env.call_impl(status_filter=[MediaBuyStatus.pending_creatives], **common)
+            assert [d.media_buy_id for d in resp.media_buy_deliveries] == ["mb_draft"]
+            assert resp.media_buy_deliveries[0].status == "pending_creatives"
+
+            resp = env.call_impl(status_filter=[MediaBuyStatus.pending_start], **common)
+            assert resp.media_buy_deliveries == []
 
     def test_rq2_buy_in_flight_has_active_status(self, integration_db):
         """Media buy within its flight dates gets status 'active'.
@@ -916,6 +964,7 @@ class TestPackageDeliveryStatus:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_active",
+                status="active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -988,6 +1037,7 @@ class TestPackageDeliveryStatus:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_active",
+                status="active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
             )
@@ -995,6 +1045,7 @@ class TestPackageDeliveryStatus:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_completed",
+                status="active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 3, 31),
             )
@@ -1017,7 +1068,7 @@ class TestPackageDeliveryStatus:
 
             assert len(resp.media_buy_deliveries) == 3
             status_map = {d.media_buy_id: d.status for d in resp.media_buy_deliveries}
-            assert status_map["mb_future"] == "ready"
+            assert status_map["mb_future"] == "pending_start"
             assert status_map["mb_active"] == "active"
             assert status_map["mb_completed"] == "completed"
 
@@ -1415,7 +1466,7 @@ class TestUnpopulatedFieldsGraceful:
             spend=250.0,
             clicks=0,
             ctr=None,
-            video_completions=None,
+            completed_views=None,
             completion_rate=None,
         )
         assert not hasattr(totals, "effective_rate") or "effective_rate" not in DeliveryTotals.model_fields
@@ -1436,7 +1487,7 @@ class TestUnpopulatedFieldsGraceful:
             impressions=5000.0,
             spend=250.0,
             clicks=None,
-            video_completions=None,
+            completed_views=None,
             pacing_index=1.0,
             pricing_model=None,
             rate=None,
@@ -1651,8 +1702,8 @@ class TestDeliveryMetricsFieldPresence:
             assert totals.clicks is not None or hasattr(totals, "clicks")
             assert hasattr(totals, "ctr")
 
-    def test_totals_include_video_completions_field(self, integration_db):
-        """Delivery totals include video_completions field (where applicable).
+    def test_totals_include_completed_views_field(self, integration_db):
+        """Delivery totals include completed_views field (where applicable).
 
         Covers: UC-004-MAIN-19
         """
@@ -1672,8 +1723,8 @@ class TestDeliveryMetricsFieldPresence:
             )
 
             delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery.totals, "video_completions")
-            assert delivery.totals.video_completions is None
+            assert hasattr(delivery.totals, "completed_views")
+            assert delivery.totals.completed_views is None
 
     def test_totals_include_conversions_field(self, integration_db):
         """Delivery totals include conversions metric field.
@@ -2494,6 +2545,7 @@ class TestCircuitBreakerReportingDelayed:
                 buy = MediaBuyFactory(
                     tenant=tenant,
                     principal=principal,
+                    status="active",
                     start_date=date(2026, 1, 1),
                     end_date=date(2026, 12, 31),
                 )
@@ -2532,6 +2584,7 @@ class TestCircuitBreakerReportingDelayed:
                 buy = MediaBuyFactory(
                     tenant=tenant,
                     principal=principal,
+                    status="active",
                     start_date=date(2026, 1, 1),
                     end_date=date(2026, 12, 31),
                 )
@@ -2736,7 +2789,7 @@ class TestStartTimeFallbackForStatus:
 
             # start_date says 2025-01-01..2027-12-31 (active for any reasonable date)
             # but start_time says 2028-01-01..2028-12-31 (not yet started)
-            # If start_time is used, status should be "ready" (not yet active)
+            # If start_time is used, status should be "pending_start" (not yet active)
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
@@ -2750,12 +2803,12 @@ class TestStartTimeFallbackForStatus:
             env.set_adapter_response("mb_time", impressions=0, spend=0.0)
 
             # Query for "active" only — if start_time is respected, mb_time
-            # should NOT appear (it's "ready", not "active")
+            # should NOT appear (it's "pending_start", not "active")
             result = env.call_impl(
                 media_buy_ids=[buy.media_buy_id],
                 status_filter="active",
             )
 
-            # The media buy should be filtered out because start_time makes it "ready"
+            # The media buy should be filtered out because start_time makes it "pending_start"
             returned_ids = {d.media_buy_id for d in result.media_buy_deliveries}
             assert "mb_time" not in returned_ids

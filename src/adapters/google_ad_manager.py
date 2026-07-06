@@ -1039,7 +1039,7 @@ class GoogleAdManager(AdServerAdapter):
                 reporting_period=date_range,
                 by_package=[],
                 totals=DeliveryTotals(
-                    impressions=0, spend=0, clicks=None, ctr=None, video_completions=None, completion_rate=None
+                    impressions=0, spend=0, clicks=None, ctr=None, completed_views=None, completion_rate=None
                 ),
                 currency="USD",
             )
@@ -1052,7 +1052,7 @@ class GoogleAdManager(AdServerAdapter):
                 reporting_period=date_range,
                 by_package=[],
                 totals=DeliveryTotals(
-                    impressions=0, spend=0, clicks=None, ctr=None, video_completions=None, completion_rate=None
+                    impressions=0, spend=0, clicks=None, ctr=None, completed_views=None, completion_rate=None
                 ),
                 currency="USD",
             )
@@ -1076,7 +1076,7 @@ class GoogleAdManager(AdServerAdapter):
                         spend=0,
                         clicks=0,
                         ctr=0.0,
-                        video_completions=None,
+                        completed_views=None,
                         completion_rate=None,
                     ),
                     currency="USD",
@@ -1102,7 +1102,7 @@ class GoogleAdManager(AdServerAdapter):
                     spend=total_budget * progress,
                     clicks=int(total_budget * 1000 * progress * 0.01),  # 1% CTR
                     ctr=1.0,
-                    video_completions=None,
+                    completed_views=None,
                     completion_rate=None,
                 ),
                 currency=str(media_buy.currency or "USD"),
@@ -1227,7 +1227,7 @@ class GoogleAdManager(AdServerAdapter):
                 spend=total_spend,
                 clicks=total_clicks if total_clicks > 0 else None,
                 ctr=avg_ctr if avg_ctr > 0 else None,
-                video_completions=None,
+                completed_views=None,
                 completion_rate=None,
             ),
             currency=str(media_buy.currency or "USD"),

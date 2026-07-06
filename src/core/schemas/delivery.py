@@ -92,23 +92,20 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 # AdCP-compliant delivery models
 # FIXME(salesagent-jz3y): DeliveryTotals and PackageDelivery duplicate fields from
 # adcp library Totals/ByPackageItem instead of inheriting. These should extend the
-# library types (Pattern #1). Blocked on aligning video_completions -> completed_views
-# and adjusting all adapter call sites.
+# library types (Pattern #1). Field names are now spec-aligned (completed_views);
+# remaining work is switching to inheritance.
 class DeliveryTotals(SalesAgentBaseModel):
     """Aggregate metrics for a media buy or package.
 
-    Note: Does not yet extend library Totals. Library uses ``completed_views``;
-    salesagent uses ``video_completions``. A rename across all adapters is needed
-    before switching to inheritance.
+    Note: Does not yet extend library Totals, but field names are aligned with
+    the AdCP spec (delivery-metrics.json), including ``completed_views``.
     """
 
     impressions: float = Field(ge=0, description="Total impressions delivered")
     spend: float = Field(ge=0, description="Total amount spent")
     clicks: float | None = Field(None, ge=0, description="Total clicks (if applicable)")
     ctr: float | None = Field(None, ge=0, le=1, description="Click-through rate (clicks/impressions)")
-    # FIXME(salesagent-jz3y): adcp spec uses ``completed_views``, not ``video_completions``.
-    # Rename across all adapters to align with spec, then inherit from library Totals.
-    video_completions: float | None = Field(None, ge=0, description="Total video completions (if applicable)")
+    completed_views: float | None = Field(None, ge=0, description="Total completed views (if applicable)")
     completion_rate: float | None = Field(
         None, ge=0, le=1, description="Video completion rate (completions/impressions)"
     )
@@ -163,8 +160,7 @@ class PackageDelivery(SalesAgentBaseModel):
     impressions: float = Field(ge=0, description="Package impressions")
     spend: float = Field(ge=0, description="Package spend")
     clicks: float | None = Field(None, ge=0, description="Package clicks")
-    # FIXME(salesagent-jz3y): adcp spec uses ``completed_views``, not ``video_completions``.
-    video_completions: float | None = Field(None, ge=0, description="Package video completions")
+    completed_views: float | None = Field(None, ge=0, description="Package completed views")
     pacing_index: float | None = Field(
         None, ge=0, description="Delivery pace (1.0 = on track, <1.0 = behind, >1.0 = ahead)"
     )
@@ -227,23 +223,37 @@ class DailyBreakdown(SalesAgentBaseModel):
     spend: float = Field(ge=0, description="Daily spend")
 
 
+# Status vocabulary of the AdCP delivery response (pinned
+# get-media-buy-delivery-response.json status enum). Wider than the
+# media-buy lifecycle enum: delivery responses may additionally report
+# "failed" and "reporting_delayed".
+MediaBuyDeliveryStatus = Literal[
+    "pending_creatives",
+    "pending_start",
+    "active",
+    "paused",
+    "completed",
+    "rejected",
+    "canceled",
+    "failed",
+    "reporting_delayed",
+]
+
+
 class MediaBuyDeliveryData(SalesAgentBaseModel):
     """AdCP-compliant delivery data for a single media buy.
 
-    Note: Does not yet extend library MediaBuyDelivery. Blocked on aligning
-    DeliveryTotals (video_completions -> completed_views) and PackageDelivery
-    with their library counterparts.
+    Note: Does not yet extend library MediaBuyDelivery. Field names are
+    spec-aligned (completed_views); remaining work is switching DeliveryTotals
+    and PackageDelivery to extend their library counterparts.
 
     TODO(salesagent-jz3y): Add buyer_campaign_ref field from adcp spec
     (present in library MediaBuyDelivery but missing here).
     """
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
-    # FIXME(salesagent-jz3y): Library uses Status enum with ``pending_start``
-    # where salesagent uses ``ready``. Align naming to spec when updating
-    # _compute_media_buy_status and all status references.
-    status: Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"] = Field(
-        description="Current media buy status. 'ready' means scheduled to go live at flight start date (spec: pending_start)."
+    status: MediaBuyDeliveryStatus = Field(
+        description="Current media buy status per the AdCP delivery-response taxonomy (get-media-buy-delivery-response.json)."
     )
     expected_availability: str | None = Field(
         default=None,
