@@ -3859,13 +3859,11 @@ async def _create_media_buy_impl(
                                     logger.error(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
                                     raise AdCPAdapterError(
                                         f"Failed to upload creative {creative_id} to GAM: {str(upload_error)}",
-                                        details={
-                                            "suggestion": (
-                                                "The ad server rejected the creative upload. Retry the request, or "
-                                                "verify the creative meets the ad server's technical requirements "
-                                                "before re-submitting."
-                                            )
-                                        },
+                                        suggestion=(
+                                            "The ad server rejected the creative upload. Retry the request, or "
+                                            "verify the creative meets the ad server's technical requirements "
+                                            "before re-submitting."
+                                        ),
                                     ) from upload_error
 
                             # Create database assignment
