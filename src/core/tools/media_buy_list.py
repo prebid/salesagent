@@ -490,7 +490,8 @@ def _compute_status(buy: MediaBuy | _MediaBuyData) -> MediaBuyStatus:
     """Resolve a media buy's AdCP status from its PERSISTED status column.
 
     Persisted-status-authoritative, per the AdCP lifecycle requirement "persist
-    status, never recompute from dates" (dist/docs media-buys: status "MUST be
+    status, never recompute from dates" (dist/docs/<version>/media-buy/media-buys/
+    index.mdx: status "MUST be
     stored as an explicit field and mutated only by protocol events ... date
     comparison sets the INITIAL status at create_media_buy time; after that, the
     state machine owns the field"). The ``media_buy_status_scheduler`` owns the
