@@ -47,6 +47,11 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     # media_buy_status would pass a membership check. A fresh auto-approved buy with
     # no creatives is pending_creatives (rc.12 storyboard L147-149).
     And the wire media_buy_status should be "pending_creatives"
+    # Pin the exact PROTOCOL value: rc.12 grades top-level status = field_value
+    # 'completed' on synchronous create success (protocol-envelope.json
+    # required: [status], storyboard L150-153). Without this pin a regression
+    # emitting status='submitted' or dropping status entirely would pass.
+    And the wire status should be "completed"
 
   # @T-UC-003-ext-dual-emit routes through MediaBuyDualEnv with a seeded existing
   # media buy, exercising the real _update_media_buy_impl flow (conftest _harness_env).
@@ -70,6 +75,9 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     # a protocol value {completed,canceled,rejected} leaked into media_buy_status would
     # still pass a MediaBuyStatus membership check.
     And the wire media_buy_status should be "pending_start"
+    # Pin the exact PROTOCOL value: rc.12 grades top-level status = field_value
+    # 'completed' on synchronous update success (storyboard L245-248).
+    And the wire status should be "completed"
 
   # salesagent-3ec1: a pre-flight 'scheduled' persisted status (set by admin approval)
   # is not in the AdCP vocabulary. The update response must normalize it to the domain

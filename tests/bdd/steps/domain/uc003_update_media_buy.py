@@ -143,19 +143,37 @@ def given_buyer_owns_media_buy_with_id(ctx: dict, mb_id: str) -> None:
         ctx["existing_media_buy_id"] = mb_id
 
 
+def _assert_wire_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Assert a REAL wire field equals the expected value (strict equality).
+
+    Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
+    payload. Shared dumb value comparator for the wire value-pin steps."""
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    actual = wire.get(field)
+    assert actual == expected, f"Expected wire {field} '{expected}', got {actual!r} (wire keys: {sorted(wire)})"
+
+
 @then(parsers.parse('the wire media_buy_status should be "{status}"'))
 def then_wire_media_buy_status_value(ctx: dict, status: str) -> None:
     """Assert the REAL wire ``media_buy_status`` equals the expected DOMAIN status.
 
-    Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
-    payload. Used to pin that a persisted status whose name differs from its AdCP
+    Used to pin that a persisted status whose name differs from its AdCP
     value (e.g. 'scheduled') is normalized to the correct domain MediaBuyStatus on
     the update response (salesagent-3ec1)."""
-    from tests.bdd.steps._outcome_helpers import wire_dict
+    _assert_wire_field_equals(ctx, "media_buy_status", status)
 
-    wire = wire_dict(ctx)
-    actual = wire.get("media_buy_status")
-    assert actual == status, f"Expected wire media_buy_status '{status}', got {actual!r} (wire keys: {sorted(wire)})"
+
+@then(parsers.parse('the wire status should be "{status}"'))
+def then_wire_status_value(ctx: dict, status: str) -> None:
+    """Assert the REAL wire top-level ``status`` equals the expected PROTOCOL TaskStatus.
+
+    rc.12 storyboard pending_creatives_to_start.yaml grades top-level
+    ``status`` = field_value 'completed' on synchronous create/update success
+    (protocol-envelope.json required: [status]) — a different namespace from
+    the domain ``media_buy_status`` (salesagent-zsdt)."""
+    _assert_wire_field_equals(ctx, "status", status)
 
 
 @then(parsers.parse('the wire valid_actions should include "{action}"'))

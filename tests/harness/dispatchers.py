@@ -17,6 +17,7 @@ Usage (internal — called by BaseTestEnv.call_via)::
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -169,7 +170,11 @@ class RestDispatcher:
                 )
 
             body = response.json()
-            payload = env.parse_rest_response(body)
+            # Parse a COPY: env parsers strip envelope keys in place (e.g.
+            # _parse_update_rest_response pops "status", salesagent-d45l), which
+            # would silently delete fields from the stashed wire capture — the
+            # dispatcher owns the pristine-wire guarantee (salesagent-zsdt).
+            payload = env.parse_rest_response(copy.deepcopy(body))
             # Real REST wire: the HTTP JSON body dict.
             return TransportResult(payload=payload, envelope=envelope, raw_response=response, wire_response=body)
         except Exception as exc:
@@ -308,7 +313,9 @@ class RestE2EDispatcher:
 
         try:
             wire_response = response.json()
-            payload = env.parse_rest_response(wire_response)
+            # Parse a COPY — same pristine-wire guarantee as the in-process
+            # RestDispatcher (parsers strip envelope keys in place, salesagent-zsdt).
+            payload = env.parse_rest_response(copy.deepcopy(wire_response))
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
 
