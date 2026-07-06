@@ -106,43 +106,6 @@ def _verify_existing_media_buy(ctx: dict) -> None:
     )
 
 
-@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{mb_id}"'))
-def given_buyer_owns_media_buy_with_id(ctx: dict, mb_id: str) -> None:
-    """Set up an existing media buy with the given ID.
-
-    For unit-env harnesses (MediaBuyUpdateEnv), configures the mock UoW to
-    return a media buy with the specified ID. For integration harnesses, creates
-    a real media buy in DB.
-    """
-    env = ctx["env"]
-    from tests.harness.media_buy_update import MediaBuyUpdateEnv
-
-    if isinstance(env, MediaBuyUpdateEnv):
-        # Unit env — configure mock via set_media_buy
-        mock_mb = env.set_media_buy(media_buy_id=mb_id)
-        ctx["existing_media_buy"] = mock_mb
-        ctx["existing_media_buy_id"] = mb_id
-    else:
-        # Integration env — create real media buy via factory
-        tenant = ctx.get("tenant")
-        principal = ctx.get("principal")
-        if tenant is None:
-            tenant, principal = env.setup_default_data()
-            ctx["tenant"] = tenant
-            ctx["principal"] = principal
-        from tests.factories import MediaBuyFactory
-
-        mb = MediaBuyFactory(
-            tenant=tenant,
-            principal=principal,
-            media_buy_id=mb_id,
-            status="active",
-        )
-        env._commit_factory_data()
-        ctx["existing_media_buy"] = mb
-        ctx["existing_media_buy_id"] = mb_id
-
-
 def _assert_wire_field_equals(ctx: dict, field: str, expected: str) -> None:
     """Assert a REAL wire field equals the expected value (strict equality).
 

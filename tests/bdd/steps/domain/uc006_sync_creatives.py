@@ -455,13 +455,18 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENT_PACKAGE_ID_REQUIRED",
         "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
         "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
+        # Idempotency-key length codes — merged from the shadowed duplicate step
+        # def this literal used to have (salesagent-fvva): production does not
+        # validate idempotency_key length yet.
+        "IDEMPOTENCY_KEY_TOO_SHORT",
+        "IDEMPOTENCY_KEY_TOO_LONG",
     }
 
     error = ctx.get("error")
     if error is None and error_code in _SPEC_PRODUCTION_GAP_CODES:
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: production does not raise {error_code} for empty/malformed "
-            "assignment entries — spec defines these codes but production silently accepts them"
+            f"SPEC-PRODUCTION GAP: production does not raise {error_code} — "
+            "spec defines this code but production silently accepts the input"
         )
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
@@ -4471,35 +4476,6 @@ def then_request_proceed_normally(ctx: dict) -> None:
     assert has_products or has_creatives, (
         f"Expected a successful response with products or creatives, got {type(resp).__name__}"
     )
-
-
-@then(parsers.parse("the error should be {error_code} with suggestion"))
-def then_idempotency_error_with_suggestion(ctx: dict, error_code: str) -> None:
-    """Assert idempotency_key validation error with the specified code and a suggestion.
-
-    Delegates to the existing then_error_code_with_suggestion for known codes.
-    For idempotency-specific codes (not yet in production), uses SPEC-PRODUCTION GAP.
-    """
-    _IDEMPOTENCY_CODES = {
-        "IDEMPOTENCY_KEY_TOO_SHORT",
-        "IDEMPOTENCY_KEY_TOO_LONG",
-    }
-    if error_code in _IDEMPOTENCY_CODES:
-        error = ctx.get("error")
-        if error is None:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: production does not validate idempotency_key length. "
-                f"Spec requires {error_code} but no error was raised."
-            )
-        actual_code, suggestion = _extract_error_code_and_suggestion(error)
-        if actual_code != error_code:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: expected {error_code}, got '{actual_code}'. "
-                f"Production may not enforce idempotency_key length constraints."
-            )
-        assert suggestion, f"Expected suggestion on {error_code}, got {suggestion!r}"
-    else:
-        then_error_code_with_suggestion(ctx, error_code)
 
 
 # ═══════════════════════════════════════════════════════════════════════
