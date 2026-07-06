@@ -612,7 +612,7 @@ class AdCPRequestHandler(RequestHandler):
                     data=build_two_layer_error_envelope(
                         AdCPAuthRequiredError(
                             "Authentication required - Bearer token required in Authorization header",
-                            details={"suggestion": AUTH_REQUIRED_SUGGESTION},
+                            suggestion=AUTH_REQUIRED_SUGGESTION,
                         )
                     ),
                 )

@@ -846,22 +846,18 @@ class BaseTestEnv:
         """Install per-request FastAPI auth-dep overrides for the test app.
 
         Single source of truth for the REST auth contract every dispatcher needs
-        (must run AFTER ``get_rest_client``). With ``identity=None`` the require
-        dep raises the production ``AUTH_REQUIRED`` error — carrying the shared
-        buyer-facing suggestion — so the no-auth wire envelope matches what the
-        real REST auth boundary emits; otherwise both deps return the identity.
+        (must run AFTER ``get_rest_client``). With ``identity=None`` the
+        ``_require_auth_dep`` override is REMOVED so the real production
+        dependency runs against the token-less request and raises the real
+        ``AUTH_REQUIRED`` error — the harness must not hand-copy the production
+        raise (a simulated raise drifted from production once already,
+        salesagent-9val/cx41); otherwise both deps return the identity.
         """
         from src.app import app
         from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
 
         if identity is None:
-            from src.core.auth import AUTH_REQUIRED_SUGGESTION
-            from src.core.exceptions import AdCPAuthRequiredError
-
-            def _no_auth() -> None:
-                raise AdCPAuthRequiredError("Authentication required", details={"suggestion": AUTH_REQUIRED_SUGGESTION})
-
-            app.dependency_overrides[_require_auth_dep] = _no_auth
+            app.dependency_overrides.pop(_require_auth_dep, None)
             app.dependency_overrides[_resolve_auth_dep] = lambda: None
         else:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
