@@ -402,8 +402,8 @@ _PG_IMAGE_REF_PATTERN = (
 _PG_IMAGE_LITERAL = re.compile(_PG_IMAGE_REF_PATTERN, re.MULTILINE)
 _PG_TAG_PATTERN = _PG_IMAGE_REF_PATTERN
 
-# ADR-008: ruff target-version stays py311 until post-#1234 follow-up PR.
-_ADR_008_DEFERRED_TARGET_VERSION = "3.11"
+# ADR-008: ruff target-version pinned to py312 (runtime .python-version is 3.12).
+_ADR_008_TARGET_VERSION = "3.12"
 
 
 def postgres_image_ref(tag: str) -> str:
@@ -520,18 +520,18 @@ def iter_hardcoded_python_version_yaml(repo: Path) -> Iterator[tuple[Path, int, 
 
 
 def assert_adr008_target_version_pinned(anchors: Iterable[tuple[Path, str, str]], repo: Path) -> None:
-    """Assert ADR-008 deferred ruff ``target-version`` stays exactly py311 (normalized ``3.11``)."""
+    """Assert ADR-008 ruff ``target-version`` stays exactly py312 (normalized ``3.12``)."""
     target_versions = [version for _, version, anchor_kind in anchors if anchor_kind == "target-version"]
     if not target_versions:
         raise AssertionError("non-vacuity: pyproject.toml target-version anchor must be scanned")
     drift = [
         f"{path.relative_to(repo)}: {version}"
         for path, version, anchor_kind in anchors
-        if anchor_kind == "target-version" and version != _ADR_008_DEFERRED_TARGET_VERSION
+        if anchor_kind == "target-version" and version != _ADR_008_TARGET_VERSION
     ]
     if drift:
         raise AssertionError(
-            f"ADR-008 target-version must stay py311 ({_ADR_008_DEFERRED_TARGET_VERSION!r}):\n"
+            f"ADR-008 target-version must stay py312 ({_ADR_008_TARGET_VERSION!r}):\n"
             + "\n".join(f"  {item}" for item in drift)
         )
 

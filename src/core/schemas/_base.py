@@ -65,8 +65,8 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPNotFoundError
 from src.core.ext_namespace import PROPERTY_LIST_ADVISORIES_KEY, prebid_vendor
 
-# For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
-LibraryPackage: TypeAlias = AdCPPackage
+# For backward compatibility, alias AdCPPackage as LibraryPackage
+LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export used as base class
 # Simple types that match library exactly
 # V3: Structured geo targeting types
 from adcp.types import ActivateSignalRequest as LibraryActivateSignalRequest
@@ -2392,8 +2392,8 @@ from adcp.types.generated_poc.core.property import (
     Identifier as PropertySpecificIdentifier,
 )  # TODO: no stable alias in adcp.types (different from adcp.types.Identifier)
 
-PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
-Property: TypeAlias = LibraryProperty
+PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # noqa: UP040 — runtime re-export
+Property: TypeAlias = LibraryProperty  # noqa: UP040 — runtime re-export
 
 
 class PropertyTagMetadata(SalesAgentBaseModel):
