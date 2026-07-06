@@ -489,11 +489,14 @@ def _sync_to_cacheable(response: SyncAccountsResponse) -> tuple[BaseModel, str] 
     return response, "completed"
 
 
-# sync_accounts' binding of the shared verbatim-replay engine. Unlike create_media_buy,
-# sync has no separate resource backstop: its upsert is state-idempotent and the cache's
-# own unique index is the only race backstop (find_backstop_anchor=None). A concurrent
-# same-key race surfaces as the cache-write IntegrityError, resolved via on_race at the
-# call site so the loser replays the winner's verbatim response.
+# sync_accounts' binding of the shared verbatim-replay engine. The cache's unique index
+# deduplicates the RESPONSE by request hash: a retry — or a same-hash concurrent race —
+# replays the recorded response instead of re-executing. It does NOT make the account
+# upsert atomic: get_by_natural_key + create is check-then-act, and the AccountUoW commits
+# before this cache write, so two concurrent creates with the same natural key can still
+# insert duplicate account rows (no natural-key unique index; find_backstop_anchor=None).
+# on_race here resolves only the cache-write collision, replaying the winner's response to
+# the loser. Hardening the account-level write-write race is tracked in #1535.
 _SYNC_REPLAY_POLICY: idempotency_replay.IdempotencyReplayPolicy[SyncAccountsResponse] = (
     idempotency_replay.IdempotencyReplayPolicy(
         tool_name=_SYNC_IDEMPOTENCY_TOOL_NAME,
@@ -546,8 +549,8 @@ async def _sync_accounts_impl(
     delete_missing = bool(req.delete_missing)
 
     # Idempotency probe (AdCP 3.0.1): a retry with the same client-supplied key replays
-    # the original success verbatim. sync's upsert is state-idempotent, so the cache's
-    # unique index — not a separate resource index — is its race backstop.
+    # the original success verbatim. This dedups the RESPONSE, not the account upsert —
+    # see _SYNC_REPLAY_POLICY for why concurrent same-key creates can still duplicate rows.
     request_hash: str | None = None
     if req.idempotency_key:
         request_hash = request_hash_for(req, raw_wire_payload)
@@ -759,10 +762,10 @@ async def _sync_accounts_impl(
         context=req.context,
     )
 
-    # Cache the verbatim success. sync's cache unique index is its race backstop: a
-    # concurrent same-key winner raises IntegrityError on the cache write, and on_race
-    # resolves this loser to the winner's verbatim replay (or fails closed). dry-runs are
-    # not cached (the policy's to_cacheable returns None).
+    # Cache the verbatim success. on_race resolves a concurrent same-hash cache-write
+    # IntegrityError by replaying the winner's response to the loser (or failing closed);
+    # this backstops the RESPONSE only and does not prevent duplicate account rows (see
+    # _SYNC_REPLAY_POLICY). dry-runs are not cached (the policy's to_cacheable returns None).
     if not req.idempotency_key:
         return response
     idempotency_key = req.idempotency_key

@@ -4,9 +4,10 @@ sync_accounts drives the shared verbatim-replay engine (``src.services.idempoten
 via ``_SYNC_REPLAY_POLICY``: a retry with the same client ``idempotency_key`` replays the
 original success verbatim (marked ``replayed: true``), a different canonical payload under
 the same key is ``IDEMPOTENCY_CONFLICT``, and dry-runs are never cached. Unlike
-create_media_buy, sync has no separate resource backstop — its upsert is state-idempotent,
-so the ``idempotency_attempts`` unique index is the race backstop and a concurrent same-key
-loser replays the winner (or fails closed) via ``on_race``.
+create_media_buy, sync has no separate resource backstop: the ``idempotency_attempts`` unique
+index deduplicates the RESPONSE by request hash, so a concurrent same-key loser replays the
+winner (or fails closed) via ``on_race``. It does NOT make the account upsert atomic — a
+concurrent same-natural-key create can still duplicate account rows (tracked in #1535).
 
 The parametrized replay test also pins the wire ``replayed`` marker on every transport: a
 miss there would mean the ``@model_serializer`` marker did not survive that transport's
@@ -129,7 +130,9 @@ class TestSyncAccountsConflict:
 
 
 class TestSyncAccountsRace:
-    """sync's cache unique index is the race backstop; the degraded path never fabricates."""
+    """The cache unique index dedups the RESPONSE by request hash; these pin the degraded
+    replay path failing closed (cache absent/expired) — never fabricating a body. Account-row
+    upsert atomicity is out of scope here (tracked in #1535)."""
 
     def test_degraded_replay_fails_closed_when_cache_absent(self, integration_db):
         # When the cache row is not visible (a true in-flight race for a cache-only-backstop
