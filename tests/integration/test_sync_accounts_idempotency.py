@@ -119,43 +119,60 @@ class TestSyncAccountsLogSafety:
     %-arg would redden.
     """
 
-    def test_cache_write_race_log_scrubs_injected_idempotency_key(self, integration_db, caplog):
+    def test_cache_write_race_log_scrubs_injected_idempotency_key(self, integration_db):
         import logging
 
         tenant_id, principal_id = "sync_idem_logsafe", "agent_idem"
         injected = "k\r\nINJECTED-FORGED-LOG-LINE"
 
-        with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
-            env.setup_default_data()
-            # A real sync yields a valid cacheable response to reuse as the manual-write payload.
-            seed = env.call_via(Transport.IMPL, req=SyncAccountsRequest(accounts=[_ACME], idempotency_key="seed-clean"))
-            assert seed.is_success, f"seed sync failed: {seed.error}"
+        # Capture via a handler attached DIRECTLY to the engine logger (not caplog): the
+        # in-network app reconfigures the root logger (force=True + JSON handler), which
+        # breaks caplog's propagation-based capture. A handler on the logger itself, with an
+        # explicit level, records the emitted message regardless — and only from this logger,
+        # so the unrelated DB-session error sink (a separate, pre-existing raw-text log) does
+        # not pollute the assertion.
+        records: list[str] = []
 
-            from src.core.tools.accounts import _SYNC_REPLAY_POLICY
+        class _Recorder(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record.getMessage())
 
-            common = {
-                "tenant_id": tenant_id,
-                "principal_id": principal_id,
-                "account_id": None,
-                "idempotency_key": injected,
-                "request_hash": "hash-A",
-            }
-            # First write records a row under the injected key; the second collides on the
-            # unique index. on_race=None (the create-style resource-backstop path) makes
-            # cache_and_return LOG the race instead of resolving it — the sink under test.
-            idempotency_replay.cache_and_return(_SYNC_REPLAY_POLICY, seed.payload, on_race=None, **common)
-            with caplog.at_level(logging.INFO, logger="src.services.idempotency_replay"):
+        engine_logger = logging.getLogger("src.services.idempotency_replay")
+        recorder = _Recorder()
+        prev_level = engine_logger.level
+        engine_logger.addHandler(recorder)
+        engine_logger.setLevel(logging.INFO)
+        try:
+            with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+                env.setup_default_data()
+                # A real sync yields a valid cacheable response to reuse as the manual-write payload.
+                seed = env.call_via(
+                    Transport.IMPL, req=SyncAccountsRequest(accounts=[_ACME], idempotency_key="seed-clean")
+                )
+                assert seed.is_success, f"seed sync failed: {seed.error}"
+
+                from src.core.tools.accounts import _SYNC_REPLAY_POLICY
+
+                common = {
+                    "tenant_id": tenant_id,
+                    "principal_id": principal_id,
+                    "account_id": None,
+                    "idempotency_key": injected,
+                    "request_hash": "hash-A",
+                }
+                # First write records a row under the injected key; the second collides on the
+                # unique index. on_race=None (the create-style resource-backstop path) makes
+                # cache_and_return LOG the race instead of resolving it — the sink under test.
                 idempotency_replay.cache_and_return(_SYNC_REPLAY_POLICY, seed.payload, on_race=None, **common)
+                idempotency_replay.cache_and_return(_SYNC_REPLAY_POLICY, seed.payload, on_race=None, **common)
+        finally:
+            engine_logger.removeHandler(recorder)
+            engine_logger.setLevel(prev_level)
 
-        # Scope to the shared engine's own logger — the sink under test. (The generic
-        # DB-session error handler logs the driver's raw error text on the same
-        # IntegrityError; that is a separate, pre-existing sink outside this engine's
-        # sanitization contract.)
-        engine_messages = [r.getMessage() for r in caplog.records if r.name == "src.services.idempotency_replay"]
-        assert any("INJECTED-FORGED-LOG-LINE" in m for m in engine_messages), (
-            f"the cache-write race log sink must fire, else this oracle proves nothing: {engine_messages}"
+        assert any("INJECTED-FORGED-LOG-LINE" in m for m in records), (
+            f"the cache-write race log sink must fire, else this oracle proves nothing: {records}"
         )
-        for m in engine_messages:
+        for m in records:
             assert injected not in m, f"the raw CR/LF-bearing key must never reach the engine log (CWE-117): {m!r}"
             assert "\r" not in m and "\n" not in m, f"no control char may reach an idempotency engine log line: {m!r}"
 
