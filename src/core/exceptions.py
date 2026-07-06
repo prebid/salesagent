@@ -792,7 +792,7 @@ class AdCPIdempotencyInFlightError(AdCPError):
     ``SERVICE_UNAVAILABLE`` this replaces on the in-flight path: the request is correct,
     the seller is merely not done committing. Rule 9 entered at AdCP 3.1.0-beta.0. The
     code is not yet in the SDK's ``STANDARD_ERROR_CODES`` (the published-enum-vs-SDK
-    drift), so it is registered in the compliance guard's ``_SPEC_CODES`` passthrough
+    drift), so it is registered in the compliance guard's ``SPEC_CODES`` passthrough
     set and reaches the wire unchanged.
     """
 
