@@ -124,8 +124,14 @@ class TestUC003McpUpdateErrorCapture:
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
     def test_empty_update_surfaces_wire_error_envelope(self, env_with_media_buy, transport):
-        """An empty update (no updatable fields) is a VALIDATION_ERROR whose
+        """An empty update (no updatable fields) is an INVALID_REQUEST whose
         two-layer envelope must be captured at the wire layer on every transport.
+
+        Grounded against AdCP 3.1 GA (nzjx): every update field is optional in
+        update-media-buy-request.json, so an empty update passes schema validation
+        and is a SEMANTIC rejection (BR-RULE-022) -> INVALID_REQUEST, not the
+        schema-level VALIDATION_ERROR (GA L3 error-handling). The rejection carries
+        a top-level buyer suggestion (error.json), not a copy buried in details.
 
         Fails on MCP before ihwl: wire_error_envelope is None because the raw
         AdCPError never becomes an AdCPToolError.
@@ -133,7 +139,7 @@ class TestUC003McpUpdateErrorCapture:
         from src.core.schemas import UpdateMediaBuyRequest
 
         env, media_buy = env_with_media_buy
-        # No updatable fields -> production raises AdCPValidationError at the boundary.
+        # No updatable fields -> production raises AdCPInvalidRequestError at the boundary.
         req = UpdateMediaBuyRequest(media_buy_id=media_buy.media_buy_id)
 
         result = env.call_via(transport, req=req)
@@ -145,7 +151,12 @@ class TestUC003McpUpdateErrorCapture:
         )
         assert_envelope_shape(
             result.wire_error_envelope,
-            "VALIDATION_ERROR",
+            "INVALID_REQUEST",
             recovery="correctable",
             message_substr="at least one updatable field",
+        )
+        suggestion = self._top_level_suggestion(result.wire_error_envelope)
+        assert suggestion and "at least one updatable field" in suggestion.lower(), (
+            f"{transport}: empty-update rejection must carry a non-empty TOP-LEVEL "
+            f"'suggestion' (error.json) naming the updatable fields, got {suggestion!r}"
         )

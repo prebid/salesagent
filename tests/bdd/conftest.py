@@ -581,16 +581,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-9vgz.18): UC-003 empty update — production does not reject
-        # requests with no updatable fields. Instead returns completed with empty
-        # affected_packages. BR-RULE-022 INV-3 says: "No updatable fields → rejected".
-        if "T-UC-003-empty-update" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="empty update not rejected by production (BR-RULE-022 INV-3 spec-production gap)",
-                    strict=True,
-                )
-            )
+        # GRADUATED (#1417/nzjx): UC-003 empty update now rejected. Production raises
+        # AdCPInvalidRequestError (INVALID_REQUEST + buyer suggestion) per BR-RULE-022
+        # INV-3. Grounded against AdCP 3.1 GA: update fields are all optional in
+        # update-media-buy-request.json, so an empty update passes schema validation and
+        # is a SEMANTIC rejection → INVALID_REQUEST, not the schema-level VALIDATION_ERROR
+        # (GA L3 error-handling). The two Scenario-Outline rows that asserted
+        # VALIDATION_ERROR were corrected to INVALID_REQUEST in the same change.
 
         # FIXME(salesagent-9vgz.14): UC-003 keyword_targets_add — production applies the
         # keyword additions but returns empty affected_packages. All transports pass the When
@@ -681,7 +678,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Production has NO privilege gate on update, and the AdCP buyer protocol has
         # no principal-role concept (roles live on the admin-UI User model, not
         # Principal). The fields-less ext-n request also short-circuits through the
-        # empty-update VALIDATION_ERROR path before any adapter call. The step now
+        # empty-update INVALID_REQUEST path before any adapter call. The step now
         # arms the real update adapter with a canonical PERMISSION_DENIED rejection,
         # so this strict xfail flips to a wire-asserted pass the moment production
         # gates admin-only update actions. Strict: fails loudly when that lands.
@@ -690,7 +687,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 pytest.mark.xfail(
                     reason="production gap: no admin-only privilege gate on update_media_buy; "
                     "AdCP buyers have no principal-role concept and the fields-less request "
-                    "short-circuits via empty-update VALIDATION_ERROR before any adapter call "
+                    "short-circuits via empty-update INVALID_REQUEST before any adapter call "
                     "(canonical target: PERMISSION_DENIED) — salesagent-gh8p.11",
                     strict=True,
                 )
@@ -700,7 +697,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # refused. canceled IS a valid UpdateMediaBuyRequest field but production
         # never reads it, has no state-based NOT_CANCELLABLE check, and
         # has_updatable_fields() omits canceled — so a media_buy_id+canceled
-        # request trips the empty-update VALIDATION_ERROR path instead of
+        # request trips the empty-update INVALID_REQUEST path instead of
         # NOT_CANCELLABLE. The step arms the update adapter with the canonical
         # NOT_CANCELLABLE refusal and dispatches the real cancel on the wire, so
         # this strict xfail flips to a pass when production wires the cancel path.
@@ -709,7 +706,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 pytest.mark.xfail(
                     reason="production gap: update_media_buy never reads canceled and has no state-based "
                     "cancellation gate; has_updatable_fields() omits canceled so the request short-circuits "
-                    "via empty-update VALIDATION_ERROR (canonical target: NOT_CANCELLABLE) — salesagent-gh8p.13",
+                    "via empty-update INVALID_REQUEST (canonical target: NOT_CANCELLABLE) — salesagent-gh8p.13",
                     strict=True,
                 )
             )

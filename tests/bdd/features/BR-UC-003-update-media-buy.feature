@@ -1890,7 +1890,7 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition     | update_fields                    | outcome                                 |
-      | empty_update  | no updatable fields in request   | error "VALIDATION_ERROR" with suggestion    |
+      | empty_update  | no updatable fields in request   | error "INVALID_REQUEST" with suggestion    |
 
   @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
@@ -1907,7 +1907,7 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                              | update_config                          | outcome                                 |
       | request with exactly one updatable field    | 1 package with budget update only      | success                                 |
       | request with all updatable fields           | packages with all updatable fields     | success                                 |
-      | request with zero updatable fields          | no updatable fields in request         | error "VALIDATION_ERROR" with suggestion    |
+      | request with zero updatable fields          | no updatable fields in request         | error "INVALID_REQUEST" with suggestion    |
 
   @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>

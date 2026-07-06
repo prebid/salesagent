@@ -2279,10 +2279,15 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
+    # Model a CONFORMANT adapter error: the buyer suggestion rides the first-class
+    # suggestion= param so the envelope builder lifts it to the top-level error.json
+    # position. Burying it in details={"suggestion": ...} yields a non-conformant wire
+    # error (empty top-level suggestion) — the disease ioni/9val/cx41 removed. The e2e
+    # sibling below keeps error_details; mock_ad_server pops it back to first-class (wwyx).
     upload_error = AdCPAdapterError(
         "Ad server rejected the creative upload",
         recovery="transient",
-        details={"suggestion": "Retry the upload or verify the creative meets the ad server's requirements"},
+        suggestion="Retry the upload or verify the creative meets the ad server's requirements",
     )
     mock_adapter.add_creative_assets.side_effect = upload_error
     # E2E path: write the failure to the adapter test-behavior config so a

@@ -1448,12 +1448,21 @@ def _build_update_request(
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
 
-    # BR-RULE-022: reject empty updates (no updatable fields beyond identifier)
+    # BR-RULE-022: reject empty updates (no updatable fields beyond identifier).
+    # This is a SEMANTIC rejection of a schema-valid request (update fields are all
+    # optional per AdCP 3.1 GA update-media-buy-request.json), so the canonical code
+    # is INVALID_REQUEST — NOT VALIDATION_ERROR (which GA L3 error-handling reserves
+    # for schema-validation failures: missing required fields / bad types / range).
     if not req.has_updatable_fields():
-        raise AdCPValidationError(
+        raise AdCPInvalidRequestError(
             "Update request must include at least one updatable field "
             "(paused, start_time, end_time, packages, budget, "
-            "push_notification_config, reporting_webhook, context, ext)"
+            "push_notification_config, reporting_webhook, context, ext)",
+            suggestion=(
+                "Include at least one updatable field in the request: paused, "
+                "start_time, end_time, packages, budget, push_notification_config, "
+                "reporting_webhook, context, or ext."
+            ),
         )
 
     return req
