@@ -101,8 +101,17 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
 
 @given("a valid create_media_buy request")
 def given_valid_request(ctx: dict) -> None:
-    """Set up a generic valid create_media_buy request (account populated separately)."""
+    """Set up a generic valid create_media_buy request (account populated separately).
+
+    Populates ctx['request_kwargs'] with the shared valid defaults so the step
+    text's claim ("a VALID request") holds for full-create dispatch — without
+    this, dispatch fails request validation before ever reaching the gate the
+    scenario targets (e.g. the transport auth gates, salesagent-b0kx).
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
     ctx.setdefault("account_ref", None)
+    _ensure_request_defaults(ctx)
 
 
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
