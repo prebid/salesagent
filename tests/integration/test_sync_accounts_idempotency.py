@@ -64,6 +64,10 @@ class TestSyncAccountsReplay:
             # Byte-level: the replay is the ORIGINAL success body verbatim plus the
             # replayed marker — proves no field diverged on the wire, not just .accounts.
             assert second.raw_response.json() == {**first.raw_response.json(), "replayed": True}
+            # ...and the marker is OMITTED (not ``false``) on the fresh response, so a fresh
+            # body stays byte-identical to a pre-marker world. The byte-identity above would
+            # still pass if fresh carried ``replayed: false``, so pin the absence explicitly.
+            assert "replayed" not in first.raw_response.json()
 
     @pytest.mark.asyncio
     async def test_no_idempotency_key_re_executes(self, integration_db):
