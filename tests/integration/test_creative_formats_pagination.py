@@ -115,9 +115,13 @@ class TestCreativeAgentReferrals:
         assert response.creative_agents is not None
         for agent in response.creative_agents:
             assert agent.capabilities is not None
-            # Verify expected capability types — exactly the backed set
+            # Verify expected capability types — exactly the backed set,
+            # derived from the production constant (the unit-level policy
+            # anchor stays hardcoded in test_creative_formats_behavioral.py)
+            from src.core.tools.creative_formats import ADVERTISED_CREATIVE_AGENT_CAPABILITIES
+
             cap_values = {c.value for c in agent.capabilities}
-            assert cap_values == {"validation", "assembly", "preview"}
+            assert cap_values == {c.value for c in ADVERTISED_CREATIVE_AGENT_CAPABILITIES}
 
     def test_creative_agent_has_name(self, integration_db):
         """UC-005-MAIN-MCP-13: each referral includes agent name."""

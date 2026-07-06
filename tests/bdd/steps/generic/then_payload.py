@@ -134,10 +134,14 @@ def then_referral_fields(ctx: dict) -> None:
     assert resp is not None, "Expected a response"
     referrals = resp.creative_agents
     assert referrals, "No referrals to verify -- expected at least one creative agent"
-    # Capabilities are commitments (AdCP design principle): only the set backed
-    # by the registry integration may be advertised. `delivery` is excluded —
-    # get_creative_delivery is unimplemented.
-    known_capabilities = {"validation", "assembly", "preview"}
+    # Capabilities are commitments (AdCP design principle): referrals must
+    # advertise exactly the backed set — extras are unbacked commitments,
+    # omissions are silent capability loss. Derived from the production
+    # constant; the unit-level policy anchor
+    # (test_creative_formats_behavioral.py) stays hardcoded on purpose.
+    from src.core.tools.creative_formats import ADVERTISED_CREATIVE_AGENT_CAPABILITIES
+
+    known_capabilities = {c.value for c in ADVERTISED_CREATIVE_AGENT_CAPABILITIES}
     for ref in referrals:
         url_value = ref.agent_url
         assert url_value, f"Missing agent_url in referral: {ref}"
@@ -148,8 +152,10 @@ def then_referral_fields(ctx: dict) -> None:
         assert isinstance(caps, (list, tuple)), f"capabilities should be a list, got: {type(caps).__name__}"
         assert caps, "capabilities should be non-empty, got empty list"
         cap_strs = {str(c.value) if isinstance(c, Enum) else str(c) for c in caps}
-        unknown = cap_strs - known_capabilities
-        assert not unknown, f"Unknown capabilities: {unknown}. Expected subset of {known_capabilities}"
+        assert cap_strs == known_capabilities, (
+            f"Advertised capabilities {cap_strs} != backed set {known_capabilities} "
+            "(extras are unbacked commitments; omissions are silent capability loss)"
+        )
 
 
 # -- Format field presence -----------------------------------------------------

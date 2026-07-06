@@ -56,13 +56,18 @@ logger = logging.getLogger(__name__)
 #   - delivery is deliberately NOT advertised: it commits to variant-level
 #     delivery reporting via a `get_creative_delivery` task, which this agent
 #     does not implement.
-# All configured agents (default + tenant DB agents) share the registry's
-# uniform client surface, so one static set is truthful for all of them.
-ADVERTISED_CREATIVE_AGENT_CAPABILITIES: list[CreativeAgentCapability] = [
+# All configured agents (default + tenant DB agents) are called through the
+# registry's uniform client surface, and agent config carries no per-agent
+# capability metadata yet, so a single static set is the best truthful
+# declaration available today. Caveat: the registry does not verify a remote
+# agent's tool surface up front — a tenant-registered agent that lacks one of
+# these tools fails at call time. Per-agent capability tracking is the
+# follow-up that would close that gap.
+ADVERTISED_CREATIVE_AGENT_CAPABILITIES: tuple[CreativeAgentCapability, ...] = (
     CreativeAgentCapability.validation,
     CreativeAgentCapability.assembly,
     CreativeAgentCapability.preview,
-]
+)
 
 
 def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> FormatT:
