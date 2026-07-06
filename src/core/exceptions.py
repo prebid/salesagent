@@ -124,6 +124,19 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     }
 )
 
+# Spec-required wire codes the SDK's STANDARD_ERROR_CODES does not yet include.
+# These are mandated by the AdCP spec / BDD feature files but absent from the
+# SDK constant (spec is authoritative — see docs/adcp-spec-version.md). They
+# pass through translate_error_code() unchanged and are the single source of
+# truth for the error-code compliance guards.
+SPEC_CODES: frozenset[str] = frozenset(
+    {
+        "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
+        "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
+        "VERSION_UNSUPPORTED",  # version negotiation: caller pins an unsupported AdCP major
+    }
+)
+
 # Sanity check: every mapping target must be a standard code.
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(STANDARD_ERROR_CODES)
 assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
@@ -387,6 +400,22 @@ class AdCPValidationError(AdCPError):
     _default_status_code: ClassVar[int] = 400
     _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPVersionUnsupportedError(AdCPError):
+    """Caller pinned an AdCP major version this build does not speak (400).
+
+    AdCP version negotiation: the SDK client sends ``adcp_major_version``; a
+    seller that cannot speak it MUST reject with ``VERSION_UNSUPPORTED`` and name
+    its supported set (spec: error-compliance storyboard, unsupported-major
+    probe). ``VERSION_UNSUPPORTED`` is a spec code not yet in the SDK's
+    ``STANDARD_ERROR_CODES`` — see ``SPEC_CODES``. Recovery is ``terminal``
+    (the codebase-internal equivalent of the spec's ``fatal``).
+    """
+
+    _default_status_code: ClassVar[int] = 400
+    _default_error_code: ClassVar[str] = "VERSION_UNSUPPORTED"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPInvalidRequestError(AdCPValidationError):

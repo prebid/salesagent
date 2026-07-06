@@ -45,6 +45,7 @@ class ResolvedIdentity(BaseModel, frozen=True):
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
+from src.core.http_utils import normalize_adcp_auth_token
 
 
 def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
@@ -57,7 +58,10 @@ def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
     """
     token = _get_header_case_insensitive(headers, "x-adcp-auth")
     if token:
-        return token, "x-adcp-auth"
+        # Tolerate "Bearer <token>" and padding inside x-adcp-auth.
+        token = normalize_adcp_auth_token(token)
+        if token:
+            return token, "x-adcp-auth"
 
     authorization = _get_header_case_insensitive(headers, "Authorization")
     if authorization and authorization.lower().startswith("bearer "):

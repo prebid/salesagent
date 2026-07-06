@@ -12,7 +12,7 @@ test fires.
 
 Boundaries enforced (production paths only — dead helpers are deliberately not
 pinned because a guard against unreachable code is a false positive of safety):
-  - ``src/core/tool_error_logging.py::_translate_to_tool_error`` (MCP)
+  - ``src/core/tool_error_logging.py::translate_to_tool_error`` (MCP)
   - ``src/a2a_server/adcp_a2a_server.py::AdCPRequestHandler._build_error_envelope`` (A2A — production path called from on_message_send)
   - ``src/app.py::adcp_error_handler`` (REST/FastAPI)
 """
@@ -32,7 +32,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # (filepath, qualified_name) — qualified_name supports `Class.method` for class methods.
 BOUNDARY_FUNCTIONS = [
-    ("src/core/tool_error_logging.py", "_translate_to_tool_error"),
+    ("src/core/tool_error_logging.py", "translate_to_tool_error"),
     ("src/a2a_server/adcp_a2a_server.py", "AdCPRequestHandler._build_error_envelope"),
     ("src/app.py", "adcp_error_handler"),
 ]
@@ -114,8 +114,8 @@ class TestBoundaryTranslatorsUseEnvelope:
 
     @pytest.mark.arch_guard
     def test_mcp_boundary_uses_envelope(self):
-        """``_translate_to_tool_error`` must call build_two_layer_error_envelope()."""
-        path, fn = "src/core/tool_error_logging.py", "_translate_to_tool_error"
+        """``translate_to_tool_error`` must call build_two_layer_error_envelope()."""
+        path, fn = "src/core/tool_error_logging.py", "translate_to_tool_error"
         assert _function_calls_builder(path, fn), (
             f"{path}::{fn} must call ``{ENVELOPE_BUILDER}`` so the MCP wire response "
             f"carries both adcp_error.code and errors[0].code (spec 3.0.0)."

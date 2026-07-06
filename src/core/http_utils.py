@@ -25,3 +25,21 @@ def get_header_case_insensitive(headers: Mapping[str, Any], header_name: str) ->
         if key.lower() == header_name_lower:
             return value
     return None
+
+
+def normalize_adcp_auth_token(raw: str) -> str:
+    """Normalize a raw x-adcp-auth header value to the bare token.
+
+    Tolerates clients that put "Bearer <token>" inside x-adcp-auth (some
+    runners reuse one credential string for both header styles) and
+    padded/newline-carrying values — verbatim use failed the DB lookup as
+    "invalid for tenant 'any'".
+
+    Semantics: trim, case-insensitive "bearer " prefix strip, re-trim.
+    May return an empty string (e.g. for "Bearer " with no token) — callers
+    treat that as no token.
+    """
+    token = raw.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token

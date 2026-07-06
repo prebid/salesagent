@@ -20,6 +20,14 @@ V25_SIGNALS: frozenset[str] = frozenset({"brand_manifest", "promoted_offerings",
 # Tools where brand_manifest → brand translation applies.
 _BRAND_TOOLS: frozenset[str] = frozenset({"get_products", "create_media_buy"})
 
+# AdCP version-negotiation envelope fields. Every AdCP SDK client injects these
+# on each request (Stripe-style API-version pinning); they are protocol envelope,
+# not tool parameters, so no tool wrapper declares them. Stripped before MCP
+# arg-validation so strict per-tool validation does not reject conformant SDK
+# clients. Consuming them for negotiation (VERSION_UNSUPPORTED, version echo) is
+# a follow-up — see https://github.com/prebid/salesagent/issues/1512.
+ADCP_NEGOTIATION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
+
 
 @dataclass
 class NormalizationResult:
@@ -157,6 +165,70 @@ def normalize_request_params(
         inferred_version=inferred,
         translations_applied=translations,
     )
+
+
+# Standard AdCP envelope-framing fields that SOME tools declare as real
+# parameters and others don't (unlike ADCP_NEGOTIATION_FIELDS, which no tool
+# declares). Stripped from a request only when the target tool does not declare
+# them — so a conformant client's envelope doesn't trip strict per-tool
+# validation, while tools that use these fields still receive them. See #1512.
+ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
+    {
+        "context",
+        "ext",
+        "push_notification_config",
+        # Concurrency/idempotency framing — spec "always permitted" request fields:
+        # tools that declare them (e.g. create_media_buy's idempotency_key) still
+        # receive them; tools that don't must tolerate them.
+        "idempotency_key",
+        "revision",
+    }
+)
+
+
+def strip_undeclared_envelope_fields(
+    params: dict[str, Any], known_params: set[str] | None
+) -> tuple[dict[str, Any], list[str]]:
+    """Strip standard AdCP envelope fields the target tool does not declare.
+
+    ``context``/``ext``/``push_notification_config`` are protocol envelope that
+    AdCP SDK clients may send on any request. A tool that declares one receives
+    it; a tool that does not would otherwise reject it under FastMCP's strict
+    per-tool arg-validation. Strip only the undeclared ones, in all
+    environments. When ``known_params`` is None (schema lookup failed) strip
+    nothing — the production fallback handles it. See #1512.
+
+    Returns:
+        Tuple of (params without the undeclared envelope fields, sorted removed
+        keys). Returns the original dict object unchanged when nothing is removed.
+    """
+    if known_params is None:
+        return params, []
+    present = (params.keys() & ADCP_ENVELOPE_FIELDS) - known_params
+    if not present:
+        return params, []
+    cleaned = {k: v for k, v in params.items() if k not in present}
+    return cleaned, sorted(present)
+
+
+def strip_negotiation_fields(params: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Remove AdCP version-negotiation envelope fields from top-level params.
+
+    ``adcp_version`` / ``adcp_major_version`` are injected by every AdCP SDK
+    client for version negotiation. They are protocol envelope, not tool
+    parameters, so FastMCP's strict per-tool arg-validation rejects them and
+    makes the agent uncallable by conformant SDK clients. Strip them in all
+    environments before dispatch. See #1512.
+
+    Returns:
+        Tuple of (params without negotiation fields, sorted list of removed keys).
+        Returns the original dict object unchanged when none are present.
+    """
+    present = params.keys() & ADCP_NEGOTIATION_FIELDS
+    if not present:
+        return params, []
+    cleaned = {k: v for k, v in params.items() if k not in ADCP_NEGOTIATION_FIELDS}
+    return cleaned, sorted(present)
 
 
 def strip_unknown_params(

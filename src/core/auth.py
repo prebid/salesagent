@@ -37,6 +37,7 @@ _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODU
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
+from src.core.http_utils import normalize_adcp_auth_token
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:
@@ -216,6 +217,9 @@ def get_principal_from_context(
     # Accept either x-adcp-auth (preferred) or Authorization: Bearer (standard HTTP/MCP)
     # This ensures compatibility with MCP clients that only support Authorization header
     auth_token = _get_header_case_insensitive(headers, "x-adcp-auth")
+    if auth_token:
+        # Tolerate "Bearer <token>" and padding inside x-adcp-auth.
+        auth_token = normalize_adcp_auth_token(auth_token)
     auth_source = "x-adcp-auth" if auth_token else None
 
     # If x-adcp-auth not present, try Authorization: Bearer (for Anthropic, standard MCP clients)

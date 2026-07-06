@@ -14,7 +14,16 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
 
-from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
+from src.core.adcp_version import validate_adcp_major_version
+from src.core.exceptions import AdCPError
+from src.core.request_compat import (
+    deep_strip_to_schema,
+    normalize_request_params,
+    strip_negotiation_fields,
+    strip_undeclared_envelope_fields,
+    strip_unknown_params,
+)
+from src.core.tool_error_logging import translate_to_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +31,19 @@ logger = logging.getLogger(__name__)
 class RequestCompatMiddleware(Middleware):
     """Normalize, strip, and provide forward-compatible fallback for MCP tools.
 
-    Three-stage pipeline:
+    Pipeline:
     1. Translate deprecated field names via normalize_request_params()
-    2. Strip fields not in the tool's JSON Schema via strip_unknown_params()
-    3. (Production only) If TypeAdapter rejects the arguments with a structural
+    2. Reject an unsupported AdCP major version via validate_adcp_major_version()
+       (VERSION_UNSUPPORTED) — before the fields are stripped below.
+    3. Drop AdCP version-negotiation envelope fields (adcp_version,
+       adcp_major_version) via strip_negotiation_fields() — all environments,
+       since no tool wrapper declares them (issue #1512).
+    4. Drop standard AdCP envelope fields the tool doesn't declare
+       (context, ext, push_notification_config) via
+       strip_undeclared_envelope_fields() — all environments (issue #1512).
+    5. Strip fields not in the tool's JSON Schema via strip_unknown_params()
+       (production only).
+    6. (Production only) If TypeAdapter rejects the arguments with a structural
        validation error, erase complex types to raw dicts via JSON round-trip
        and retry. This lets our Pydantic models (with extra='ignore') be the
        sole validation gate — matching A2A and REST behavior.
@@ -53,24 +71,58 @@ class RequestCompatMiddleware(Middleware):
         if compat_result.translations_applied:
             modified = True
 
-        # Step 2: Strip unknown fields (schema-aware, production only)
+        # Step 2: Version negotiation — reject an unsupported AdCP major.
+        # Runs before the negotiation-field strip below, while the claim is
+        # still present. validate_* raises a transport-agnostic AdCPError; a
+        # middleware raise bypasses the tool wrapper's error handler, so we
+        # translate to the AdCPToolError wire envelope here (VERSION_UNSUPPORTED),
+        # the same conversion with_error_logging applies to tool exceptions.
+        try:
+            validate_adcp_major_version(normalized)
+        except AdCPError as exc:
+            translate_to_tool_error(exc)
+
+        # Step 3: Drop AdCP version-negotiation envelope fields (all environments).
+        # Every AdCP SDK client injects adcp_version / adcp_major_version for
+        # version negotiation; no tool wrapper declares them, so FastMCP's strict
+        # per-tool arg-validation would reject conformant clients (#1512). These
+        # are protocol envelope, not tool params — unlike Step 5's schema strip,
+        # this runs in every environment.
+        normalized, dropped = strip_negotiation_fields(normalized)
+        if dropped:
+            modified = True
+            logger.debug("Dropped AdCP negotiation fields from %s: %s", tool_name, ", ".join(dropped))
+
+        # Resolve the tool's declared params once — used by the envelope strip
+        # (all environments) and the production unknown-field strip below.
+        known_params = await self._get_known_params(context, tool_name)
+
+        # Step 4: Drop standard AdCP envelope fields the tool doesn't declare
+        # (context / ext / push_notification_config), all environments. SDK
+        # clients send these on any request; a tool that declares one receives
+        # it, a tool that doesn't would otherwise reject it (#1512). Protocol
+        # envelope, not business data — unlike Step 5's general unknown strip.
+        normalized, dropped_env = strip_undeclared_envelope_fields(normalized, known_params)
+        if dropped_env:
+            modified = True
+            logger.debug("Dropped undeclared AdCP envelope fields from %s: %s", tool_name, ", ".join(dropped_env))
+
+        # Step 5: Strip unknown fields (schema-aware, production only)
         # In dev mode, unknown fields reach TypeAdapter and fail loudly —
         # this is how we detect that the seller agent doesn't support a
         # field the spec requires. In production, strip silently to avoid
         # rejecting callers using newer schema versions.
         from src.core.config import is_production
 
-        if is_production():
-            known_params = await self._get_known_params(context, tool_name)
-            if known_params is not None:
-                normalized, stripped = strip_unknown_params(normalized, known_params)
-                if stripped:
-                    modified = True
-                    logger.warning(
-                        "Stripped unknown fields from %s: %s",
-                        tool_name,
-                        ", ".join(stripped),
-                    )
+        if is_production() and known_params is not None:
+            normalized, stripped = strip_unknown_params(normalized, known_params)
+            if stripped:
+                modified = True
+                logger.warning(
+                    "Stripped unknown fields from %s: %s",
+                    tool_name,
+                    ", ".join(stripped),
+                )
 
         if modified:
             new_message = CallToolRequestParams(
@@ -79,7 +131,7 @@ class RequestCompatMiddleware(Middleware):
             )
             context = context.copy(message=new_message)
 
-        # Step 3: Dispatch — with production fallback on TypeAdapter rejection
+        # Step 6: Dispatch — with production fallback on TypeAdapter rejection
         try:
             return await call_next(context)
         except Exception as exc:

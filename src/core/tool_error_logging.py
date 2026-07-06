@@ -269,7 +269,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
     record_boundary_error("mcp", tool_name, error, tenant_id=tenant_id, principal_id=principal_id)
 
 
-def _translate_to_tool_error(error: Exception) -> NoReturn:
+def translate_to_tool_error(error: Exception) -> NoReturn:
     """Translate typed exceptions to AdCPToolError at the MCP boundary.
 
     AdCPError → AdCPToolError carrying a two-layer envelope built by
@@ -320,7 +320,7 @@ def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, k
 
     tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
     _log_tool_error(tool_func.__name__, error, tenant_id, principal_id)
-    _translate_to_tool_error(error)
+    translate_to_tool_error(error)
 
 
 def with_error_logging(tool_func: Callable) -> Callable:

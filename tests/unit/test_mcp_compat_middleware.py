@@ -85,6 +85,124 @@ class TestMiddlewareReplacesContext:
             assert captured_ctx.message.arguments == {"brand": {"domain": "acme.com"}}
 
 
+class TestMiddlewareRejectsUnsupportedMajor:
+    """Unsupported adcp_major_version is rejected before dispatch (#1512 Tier 2)."""
+
+    @pytest.mark.asyncio
+    async def test_unsupported_major_raises_version_unsupported_envelope(self, middleware):
+        import json
+
+        from src.core.tool_error_logging import AdCPToolError
+
+        ctx = _make_context("get_products", {"brief": "ads", "adcp_major_version": 99})
+        call_next = AsyncMock()
+
+        # Middleware translates the AdCPError to the wire envelope (VERSION_UNSUPPORTED),
+        # the same shape the tool wrapper emits — not a bare AdCPError.
+        with pytest.raises(AdCPToolError) as exc:
+            await middleware.on_call_tool(ctx, call_next)
+        assert "VERSION_UNSUPPORTED" in json.dumps(exc.value.envelope)
+        call_next.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_supported_major_dispatches(self, middleware):
+        from src.core.adcp_version import adcp_major_version
+
+        ctx = _make_context("get_products", {"brief": "ads", "adcp_major_version": adcp_major_version()})
+        captured_ctx = None
+
+        async def capturing_call_next(context):
+            nonlocal captured_ctx
+            captured_ctx = context
+
+        await middleware.on_call_tool(ctx, capturing_call_next)
+        # dispatched, and the negotiation field was stripped on the way through
+        assert captured_ctx is not None
+        assert "adcp_major_version" not in captured_ctx.message.arguments
+
+
+class TestMiddlewareDropsUndeclaredEnvelopeFields:
+    """context/ext/push_notification_config are stripped when the tool doesn't
+    declare them, so a conformant client's envelope doesn't trip validation (#1512)."""
+
+    @pytest.mark.asyncio
+    async def test_context_stripped_when_tool_does_not_declare_it(self, middleware):
+        ctx = _make_context("get_adcp_capabilities", {"context": {"correlation_id": "c1"}})
+        captured_ctx = None
+
+        async def capturing_call_next(context):
+            nonlocal captured_ctx
+            captured_ctx = context
+
+        # get_adcp_capabilities declares only `protocols` — not the AdCP `context` field.
+        with patch.object(middleware, "_get_known_params", AsyncMock(return_value={"protocols"})):
+            with patch("src.core.config.is_production", return_value=False):
+                await middleware.on_call_tool(ctx, capturing_call_next)
+
+        assert captured_ctx is not None
+        assert "context" not in captured_ctx.message.arguments
+
+    @pytest.mark.asyncio
+    async def test_context_kept_when_tool_declares_it(self, middleware):
+        ctx = _make_context("get_products", {"brief": "ads", "context": {"correlation_id": "c1"}})
+        captured_ctx = None
+
+        async def capturing_call_next(context):
+            nonlocal captured_ctx
+            captured_ctx = context
+
+        # get_products declares `context` — it must reach the handler untouched.
+        with patch.object(middleware, "_get_known_params", AsyncMock(return_value={"brief", "context"})):
+            with patch("src.core.config.is_production", return_value=False):
+                await middleware.on_call_tool(ctx, capturing_call_next)
+
+        # no envelope strip happened → original context passes through unchanged
+        call_args = captured_ctx.message.arguments if captured_ctx is not None else ctx.message.arguments
+        assert call_args.get("context") == {"correlation_id": "c1"}
+
+
+class TestMiddlewareDropsNegotiationFields:
+    """Middleware strips AdCP version-negotiation envelope fields in all envs (#1512).
+
+    The AdCP SDK client injects adcp_version / adcp_major_version on every
+    request. No tool wrapper declares them, so without stripping, FastMCP's
+    strict per-tool arg-validation rejects conformant clients.
+    """
+
+    @pytest.mark.asyncio
+    async def test_negotiation_fields_removed_before_dispatch(self, middleware):
+        ctx = _make_context(
+            "get_products",
+            {"brief": "ads", "adcp_version": "3.1", "adcp_major_version": 3},
+        )
+        captured_ctx = None
+
+        async def capturing_call_next(context):
+            nonlocal captured_ctx
+            captured_ctx = context
+
+        # Not production, and no deprecated-field translations — proves the drop
+        # is independent of both the env gate and normalize_request_params.
+        with patch("src.core.config.is_production", return_value=False):
+            await middleware.on_call_tool(ctx, capturing_call_next)
+
+        assert captured_ctx is not None
+        assert captured_ctx.message.arguments == {"brief": "ads"}
+        assert "adcp_version" not in captured_ctx.message.arguments
+        assert "adcp_major_version" not in captured_ctx.message.arguments
+
+    @pytest.mark.asyncio
+    async def test_no_negotiation_fields_leaves_args_untouched(self, middleware):
+        ctx = _make_context("get_products", {"brief": "ads"})
+        call_next = AsyncMock()
+
+        with patch("src.core.config.is_production", return_value=False):
+            await middleware.on_call_tool(ctx, call_next)
+
+        ctx.copy.assert_not_called()
+        call_next.assert_called_once_with(ctx)
+
+
 class TestMiddlewarePassthrough:
     """When no translations, original context passes through unchanged."""
 

@@ -30,6 +30,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+from src.core.adcp_version import adcp_major_version
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
@@ -91,7 +92,7 @@ def _get_adcp_capabilities_impl(
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
             adcp=Adcp(
-                major_versions=[MajorVersion(root=3)],
+                major_versions=[MajorVersion(root=adcp_major_version())],
                 idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
             ),
             supported_protocols=[SupportedProtocol.media_buy],
@@ -263,7 +264,7 @@ def _get_adcp_capabilities_impl(
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
-            major_versions=[MajorVersion(root=3)],
+            major_versions=[MajorVersion(root=adcp_major_version())],
             idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
         ),
         supported_protocols=[SupportedProtocol.media_buy],

@@ -183,3 +183,77 @@ class TestAuthorizationBearerEdgeCases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestBearerPrefixInsideXAdcpAuth:
+    """x-adcp-auth carrying 'Bearer <token>' (or padding) must still authenticate.
+
+    Some conformance runners reuse one credential string for both header
+    styles; the raw value was previously passed verbatim to the DB lookup and
+    failed as "invalid for tenant 'any'".
+    """
+
+    @patch("src.core.auth.get_http_headers")
+    @patch("src.core.auth.get_principal_from_token")
+    @patch("src.core.auth.get_current_tenant")
+    @patch("src.core.auth.get_tenant_by_virtual_host")
+    @patch("src.core.auth.set_current_tenant")
+    def test_bearer_prefix_and_padding_stripped(
+        self, mock_set_tenant, mock_get_virtual_host, mock_get_tenant, mock_get_principal, mock_get_headers
+    ):
+        from src.core.auth import get_principal_from_context
+
+        mock_get_headers.return_value = {
+            "x-adcp-auth": "  Bearer test-1512-token \n",
+            "Host": "localhost:8080",
+        }
+        mock_get_virtual_host.return_value = {"tenant_id": "test_tenant"}
+        mock_get_principal.return_value = ("test_principal_id", None)
+        mock_get_tenant.return_value = {"tenant_id": "test_tenant"}
+
+        principal_id, _ = get_principal_from_context(None)
+
+        assert principal_id == "test_principal_id"
+        # The DB lookup must receive the bare token — prefix and padding stripped.
+        assert mock_get_principal.call_args.args[0] == "test-1512-token"
+
+
+class TestUnifiedAuthMiddlewareBearerPrefix:
+    """UnifiedAuthMiddleware (REST + A2A auth_ctx path) must apply the same tolerance.
+
+    The middleware feeds AuthContext, whose token is passed pre-extracted into
+    resolve_identity() — which then SKIPS its own tolerant extraction. So a
+    'Bearer <token>' value surviving the middleware verbatim would fail the DB
+    lookup for REST and A2A even though MCP tolerates it.
+    """
+
+    @staticmethod
+    def _auth_context_for(x_adcp_auth_value: str):
+        """Run a request through UnifiedAuthMiddleware and return the AuthContext."""
+        import asyncio
+
+        from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
+        from src.core.auth_middleware import UnifiedAuthMiddleware
+
+        scope = {
+            "type": "http",
+            "headers": [(b"x-adcp-auth", x_adcp_auth_value.encode("latin-1"))],
+        }
+
+        async def inner_app(inner_scope, receive, send):
+            pass
+
+        middleware = UnifiedAuthMiddleware(inner_app)
+        asyncio.run(middleware(scope, None, None))
+        return scope["state"][AUTH_CONTEXT_STATE_KEY]
+
+    def test_bearer_prefix_and_padding_stripped(self):
+        """'Bearer <token>' in x-adcp-auth must yield the bare token in AuthContext."""
+        auth_ctx = self._auth_context_for("  Bearer test-1512-token \n")
+        assert auth_ctx.auth_token == "test-1512-token"
+
+    def test_bearer_form_matches_bare_form(self):
+        """The Bearer-wrapped form must produce the same AuthContext token as the bare form."""
+        bare_ctx = self._auth_context_for("test-1512-token")
+        bearer_ctx = self._auth_context_for("Bearer test-1512-token")
+        assert bearer_ctx.auth_token == bare_ctx.auth_token == "test-1512-token"

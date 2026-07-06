@@ -7,7 +7,13 @@ The normalizer translates known deprecated AdCP field names to their current
 equivalents, mirroring the JS adcp-client's normalizeRequestParams() logic.
 """
 
-from src.core.request_compat import normalize_request_params, strip_unknown_params
+from src.core.request_compat import (
+    ADCP_NEGOTIATION_FIELDS,
+    normalize_request_params,
+    strip_negotiation_fields,
+    strip_undeclared_envelope_fields,
+    strip_unknown_params,
+)
 
 # ---------------------------------------------------------------------------
 # 1. brand_manifest → brand (BrandReference)
@@ -339,3 +345,84 @@ class TestStripUnknownParams:
         )
         assert cleaned == {"brief": None}
         assert stripped == ["unknown"]
+
+
+# ---------------------------------------------------------------------------
+# strip_negotiation_fields — AdCP version-negotiation envelope (#1512)
+# ---------------------------------------------------------------------------
+
+
+class TestStripNegotiationFields:
+    """adcp_version / adcp_major_version are stripped so strict MCP arg
+    validation does not reject conformant AdCP SDK clients (#1512)."""
+
+    def test_strips_both_negotiation_fields(self):
+        cleaned, stripped = strip_negotiation_fields(
+            {"brief": "ads", "adcp_version": "3.1", "adcp_major_version": 3},
+        )
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["adcp_major_version", "adcp_version"]
+
+    def test_strips_version_only(self):
+        cleaned, stripped = strip_negotiation_fields({"brief": "ads", "adcp_version": "3.1-beta.3"})
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["adcp_version"]
+
+    def test_no_negotiation_fields_returns_original_object(self):
+        params = {"brief": "ads"}
+        cleaned, stripped = strip_negotiation_fields(params)
+        assert cleaned is params  # unchanged object, no copy
+        assert stripped == []
+
+    def test_does_not_touch_real_tool_params(self):
+        cleaned, _ = strip_negotiation_fields({"account": {"account_id": "a1"}, "adcp_version": "3.1"})
+        assert cleaned == {"account": {"account_id": "a1"}}
+
+    def test_constant_holds_exactly_the_two_envelope_fields(self):
+        assert ADCP_NEGOTIATION_FIELDS == frozenset({"adcp_version", "adcp_major_version"})
+
+
+class TestStripUndeclaredEnvelopeFields:
+    """context/ext/push_notification_config are stripped only when the tool
+    does not declare them (schema-aware), so conformant clients aren't rejected
+    while tools that use these fields still receive them (#1512)."""
+
+    def test_strips_context_when_tool_does_not_declare_it(self):
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            {"brief": "ads", "context": {"correlation_id": "c1"}},
+            known_params={"brief"},  # e.g. get_adcp_capabilities has no `context`
+        )
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["context"]
+
+    def test_keeps_context_when_tool_declares_it(self):
+        params = {"brief": "ads", "context": {"correlation_id": "c1"}}
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            params,
+            known_params={"brief", "context"},  # e.g. get_products declares `context`
+        )
+        assert cleaned is params  # untouched
+        assert stripped == []
+
+    def test_strips_multiple_undeclared_envelope_fields(self):
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            {"brief": "ads", "context": {}, "ext": {}, "push_notification_config": {}},
+            known_params={"brief"},
+        )
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["context", "ext", "push_notification_config"]
+
+    def test_none_known_params_strips_nothing(self):
+        params = {"brief": "ads", "context": {}}
+        cleaned, stripped = strip_undeclared_envelope_fields(params, known_params=None)
+        assert cleaned is params
+        assert stripped == []
+
+    def test_does_not_touch_non_envelope_unknowns(self):
+        # Only the standard envelope set is in scope here; other unknowns are
+        # left for the production strip / dev fail-loud path.
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            {"context": {}, "some_business_field": 1}, known_params={"brief"}
+        )
+        assert cleaned == {"some_business_field": 1}
+        assert stripped == ["context"]

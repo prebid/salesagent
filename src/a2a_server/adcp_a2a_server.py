@@ -1389,6 +1389,14 @@ class AdCPRequestHandler(RequestHandler):
         compat_result = normalize_request_params(skill_name, parameters)
         parameters = compat_result.params
 
+        # Version-negotiation parity with the MCP path: reject an unsupported AdCP
+        # major before any handler runs. Raises AdCPVersionUnsupportedError, which
+        # the dispatch's ``except AdCPError`` handler renders as a
+        # VERSION_UNSUPPORTED failed-Task envelope. See #1512.
+        from src.core.adcp_version import validate_adcp_major_version
+
+        validate_adcp_major_version(parameters)
+
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
         # Validate identity for non-discovery skills
