@@ -109,23 +109,27 @@ class TestMCPToolTypedSchemas:
         )
 
     def test_update_media_buy_uses_typed_parameters(self):
-        """update_media_buy should use TargetingOverlay, PackageUpdate types.
+        """update_media_buy should use the PackageUpdate type for packages.
 
-        V3 Migration: Packages renamed to PackageUpdate in adcp library.
+        V3 Migration: Packages renamed to PackageUpdate in adcp library. The top-level
+        targeting_overlay param was removed — per AdCP, update targeting is per-package
+        (packages[].targeting_overlay); the top-level param was accepted-and-silently-dropped.
         """
         from src.core.tools.media_buy_update import update_media_buy
 
         sig = inspect.signature(update_media_buy)
         params = sig.parameters
 
-        # Check targeting_overlay uses TargetingOverlay type
-        assert "TargetingOverlay" in str(params["targeting_overlay"].annotation), (
-            f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
-        )
-
         # Check packages uses PackageUpdate type (V3: was Packages)
         assert "PackageUpdate" in str(params["packages"].annotation), (
             f"packages should use PackageUpdate type (V3), got {params['packages'].annotation}"
+        )
+
+        # Guard against re-adding the dead top-level targeting_overlay param: AdCP has no
+        # such update field, and accepting it only re-introduces the silent drop.
+        assert "targeting_overlay" not in params, (
+            "update_media_buy must not accept a top-level targeting_overlay — AdCP puts "
+            "update targeting at package level (packages[].targeting_overlay)"
         )
 
     def test_list_creative_formats_uses_typed_parameters(self):

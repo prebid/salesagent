@@ -738,7 +738,7 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
 
     Recovery=correctable: the buyer can fix this and resend — either replay the
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
-    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    new payload. This matches the AdCP 3.1.0-beta.3 prose example envelope and the
     conformance storyboard's stated expectation. The SDK's
     ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
     table is only a default applied when no recovery is supplied — an explicit
@@ -763,7 +763,7 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     buyer agent recovers autonomously — a natural-key existence check (e.g.
     ``get_media_buys`` by ``context.internal_campaign_id``) to learn whether the
     original request succeeded, then either accept that result or mint a fresh
-    idempotency_key for a new attempt. The 3.0.1 ``error-code.json`` enum
+    idempotency_key for a new attempt. The 3.1.0-beta.3 ``error-code.json`` enum
     description classifies the code ``correctable`` (that buyer-recovery path),
     and the recovery taxonomy reserves ``terminal`` for conditions requiring
     HUMAN action (account suspended, payment required) — not an agent-resolvable

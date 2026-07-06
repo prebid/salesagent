@@ -154,7 +154,11 @@ from src.core.tools.financial_validation import (
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
-from src.services.property_intersection import PropertyIntersection, property_list_drop_advisory
+from src.services.property_intersection import (
+    INTERSECTION_ADVISORY_MARKER,
+    PropertyIntersection,
+    property_list_drop_advisory,
+)
 from src.services.targeting_capabilities import (
     raise_for_overlay_targeting,
     raise_if_property_list_unsupported,
@@ -1514,7 +1518,7 @@ async def _resolve_property_list_identifiers(packages: list | None) -> dict[tupl
             identifiers = await resolve_property_list_typed(ref)
         except Exception as exc:
             logger.warning(
-                "[INTERSECTION-ADVISORY] Failed to resolve property_list %s/%s: %s",
+                INTERSECTION_ADVISORY_MARKER + " Failed to resolve property_list %s/%s: %s",
                 ref.agent_url,
                 loggable_list_id(ref.list_id),
                 exc,
@@ -1587,7 +1591,7 @@ def _build_property_list_advisories(
             result = intersection.filter_products([schema_product], buyer_identifiers)
         except Exception as exc:
             logger.warning(
-                "[INTERSECTION-ADVISORY] Intersection failed for packages[%d]: %s",
+                INTERSECTION_ADVISORY_MARKER + " Intersection failed for packages[%d]: %s",
                 index,
                 exc,
                 exc_info=True,
@@ -1725,6 +1729,9 @@ def _replay_create_from_envelope(envelope: dict[str, Any]) -> CreateMediaBuyResu
     try:
         protocol_status, raw = split_response_envelope(envelope)
         response: CreateMediaBuySuccess | CreateMediaBuySubmitted
+        # NB: discriminates on STORED shape (task_id + no media_buy_id). The A2A
+        # reconstructor (adcp_a2a_server._reconstruct_response_object) encodes the same
+        # "is this submitted?" decision on the LIVE status field — keep the two in sync.
         if isinstance(raw, dict) and raw.get("task_id") and not raw.get("media_buy_id"):
             response = CreateMediaBuySubmitted.model_validate(raw)
         else:

@@ -24,7 +24,7 @@ _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 
 # Ratchet ceiling — this may only ever DECREASE. When you graduate ledger
 # entries, lower it to the new count. It must never be raised.
-_LEDGER_CEILING = 308
+_LEDGER_CEILING = 304
 
 
 def _ledger_entries() -> list[str]:
