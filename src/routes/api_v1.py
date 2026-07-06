@@ -35,6 +35,7 @@ from src.core.tools import products as products_module
 from src.core.tools import properties as properties_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
+from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
 
 logger = logging.getLogger(__name__)
@@ -236,7 +237,8 @@ async def list_creative_formats(body: ListCreativeFormatsBody, identity: Resolve
     from src.core.schemas import ListCreativeFormatsRequest
 
     body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
-    req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
+    with adcp_validation_boundary(context="list_creative_formats request"):
+        req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
 
     response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

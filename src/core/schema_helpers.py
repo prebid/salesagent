@@ -24,11 +24,9 @@ from adcp.types import (
     PropertyListReference,
     ReportingWebhook,
 )
-from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -152,13 +150,8 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     """
     if filters is None or isinstance(filters, CreativeFilters):
         return filters
-    try:
+    with adcp_validation_boundary(context="list_creatives filters"):
         return CreativeFilters.model_validate(filters)
-    except ValidationError as e:
-        raise AdCPValidationError(
-            format_validation_error(e, context="list_creatives filters"),
-            suggestion="Fix the filters object — e.g. concept_ids must contain at least 1 concept id.",
-        ) from e
 
 
 def create_get_products_request(

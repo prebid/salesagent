@@ -10,7 +10,6 @@ import uuid
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -19,7 +18,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
-from src.core.validation_helpers import format_validation_error, suggest_validation_fix
+from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +230,7 @@ def _build_activate_signal_request(
     behavior. Wiring real destinations/idempotency_key from the wire is tracked
     separately (mock-activation gap), not in this boundary-shape refactor.
     """
-    try:
+    with adcp_validation_boundary(context="activate_signal request"):
         return ActivateSignalRequest(
             signal_agent_segment_id=signal_agent_segment_id,
             destinations=[{"type": "platform", "platform": "mock"}],
@@ -240,11 +239,6 @@ def _build_activate_signal_request(
             media_buy_id=media_buy_id,
             context=context,
         )
-    except ValidationError as e:
-        raise AdCPValidationError(
-            format_validation_error(e, context="activate_signal request"),
-            suggestion=suggest_validation_fix(e),
-        ) from e
 
 
 async def _activate_signal_impl(

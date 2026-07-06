@@ -34,7 +34,6 @@ from adcp.types import ContextObject, ReportingWebhook, TargetingOverlay
 from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
 from sqlalchemy import select
 
 from src.core.exceptions import (
@@ -91,7 +90,7 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error, package_field_path, suggest_validation_fix
+from src.core.validation_helpers import adcp_validation_boundary, package_field_path
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -1446,13 +1445,8 @@ def _build_update_request(
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
 
-    try:
+    with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
-    except ValidationError as e:
-        raise AdCPValidationError(
-            format_validation_error(e, context="update_media_buy request"),
-            suggestion=suggest_validation_fix(e),
-        ) from e
 
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier)
     if not req.has_updatable_fields():

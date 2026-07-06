@@ -16,7 +16,6 @@ from adcp.types.generated_poc.creative.list_creatives_request import (
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field as PydanticField
-from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
@@ -31,7 +30,7 @@ from src.core.schemas import (
     ListCreativesResponse,
 )
 from src.core.tool_context import ToolContext
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -105,12 +104,20 @@ def _build_list_creatives_request(
         try:
             created_after_dt = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
         except ValueError:
-            raise AdCPValidationError(f"Invalid created_after date format: {created_after}")
+            raise AdCPValidationError(
+                f"Invalid created_after date format: {created_after}",
+                field="created_after",
+                suggestion="Provide 'created_after' as an ISO 8601 datetime (e.g. 2026-01-01T00:00:00Z) and resend.",
+            )
     if created_before:
         try:
             created_before_dt = datetime.fromisoformat(created_before.replace("Z", "+00:00"))
         except ValueError:
-            raise AdCPValidationError(f"Invalid created_before date format: {created_before}")
+            raise AdCPValidationError(
+                f"Invalid created_before date format: {created_before}",
+                field="created_before",
+                suggestion="Provide 'created_before' as an ISO 8601 datetime (e.g. 2026-01-01T00:00:00Z) and resend.",
+            )
 
     # Validate sort_order is valid Literal
     from typing import Literal
@@ -168,7 +175,7 @@ def _build_list_creatives_request(
     mapped_field = field_mapping.get(sort_by, "created_date")
     structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)
 
-    try:
+    with adcp_validation_boundary(context="list_creatives request"):
         return ListCreativesRequest(
             filters=structured_filters,
             pagination=structured_pagination,
@@ -177,8 +184,6 @@ def _build_list_creatives_request(
             include_assignments=include_assignments,
             context=context,
         )
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="list_creatives request")) from e
 
 
 def _list_creatives_impl(

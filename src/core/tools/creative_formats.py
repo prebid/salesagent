@@ -39,9 +39,8 @@ from pydantic import Field
 FormatT = TypeVar("FormatT", bound=AdcpFormat)
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
 
-from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
+from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
@@ -69,7 +68,7 @@ from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _infer_asset_type(asset_id: str) -> str:
@@ -550,7 +549,7 @@ async def list_creative_formats(
     Returns:
         ToolResult with ListCreativeFormatsResponse data
     """
-    try:
+    with adcp_validation_boundary(context="list_creative_formats request"):
         req = build_list_creative_formats_request(
             format_ids=format_ids,
             output_format_ids=output_format_ids,
@@ -567,8 +566,6 @@ async def list_creative_formats(
             disclosure_persistence=disclosure_persistence,
             context=context,
         )
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="list_creative_formats request")) from e
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_creative_formats_impl(req, identity)

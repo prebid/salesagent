@@ -193,6 +193,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: creative agent partition/boundary tests (salesagent-7fqx)
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(beads-dul): suggestion field not in production error model
+    # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable as-is — the
+    # When step no-ops (type filter removed in adcp 3.12), so the scenario
+    # fails on "operation should fail", not on the missing suggestion.
+    # Suggestion parity for list_creative_formats is pinned instead by
+    # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # FIXME(beads-dul): disclosure validation errors not implemented
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
@@ -1099,8 +1104,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
                 True,
             ),
-            # Invalid status filter: production doesn't validate enum values
-            "T-UC-004-filter-invalid": ("invalid status_filter values not rejected", True),
+            # Invalid status filter: NOT a production gap — the generic
+            # 'with {request_params}' When step shadows the specific
+            # status_filter step and parses 'status_filter "X"' (no '=') to {},
+            # so the request dispatches with NO params and succeeds (ah98
+            # red-step inspection, 2026-07-06). GetMediaBuyDeliveryRequest DOES
+            # reject invalid values; the REST wire already returns 400.
+            # Suggestion parity for this path is pinned by
+            # tests/integration/test_request_validation_suggestion_parity.py.
+            "T-UC-004-filter-invalid": ("step shadowing: generic request_params step drops status_filter", True),
             # Date range validation: production doesn't validate start>end
             "T-UC-004-daterange-invalid": ("date range validation (start>end) not implemented", True),
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
@@ -2017,7 +2029,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # inv-151-1, inv-152-1/2/3/5, inv-154-tenant, sandbox-production,
         # snapshot available variants, principal_scoping valid variants.
         _UC019_XFAIL_TAGS: set[str] = {
-            # Status filter invalid — all parametrizations still fail
+            # Status filter invalid — all parametrizations still fail.
+            # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable —
+            # with this entry removed the scenario still xfails at the fixture
+            # ("No harness wired for None": not env-wired), and its examples
+            # assert non-canonical codes (STATUS_FILTER_INVALID_VALUE /
+            # STATUS_FILTER_EMPTY — absent from the pinned error-code enum),
+            # which the shared-boundary fix will not emit. Reconcile upstream.
+            # Suggestion parity for get_media_buys is pinned by
+            # tests/integration/test_request_validation_suggestion_parity.py.
             "T-UC-019-partition-status-filter-invalid",
             # Creative approval mapping — not implemented
             "T-UC-019-partition-approval",

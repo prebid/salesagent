@@ -153,7 +153,7 @@ from src.core.tools.financial_validation import (
 )
 
 # Import get_product_catalog from main (after refactor)
-from src.core.validation_helpers import format_validation_error, package_field_path, suggest_validation_fix
+from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -4230,7 +4230,7 @@ def _build_create_media_buy_request(
     # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
     if isinstance(brand, str):
         brand = BrandReference(domain=brand)
-    try:
+    with adcp_validation_boundary(context="request"):
         return CreateMediaBuyRequest(
             brand=brand,
             packages=packages,
@@ -4247,11 +4247,6 @@ def _build_create_media_buy_request(
             # None type error.
             **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
-    except ValidationError as e:
-        raise AdCPValidationError(
-            format_validation_error(e, context="request"),
-            suggestion=suggest_validation_fix(e),
-        ) from e
 
 
 async def create_media_buy(
