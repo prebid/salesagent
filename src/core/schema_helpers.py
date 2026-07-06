@@ -11,6 +11,7 @@ Philosophy:
 """
 
 from typing import Any
+from urllib.parse import urlparse
 
 # FIXME(#1388): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
 from adcp import CreativeFilters, GetProductsResponse, Product
@@ -67,6 +68,22 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
     return None  # Fallback for unexpected types
 
 
+def brand_shorthand_to_domain(value: str) -> str:
+    """Normalize AdCP v3 brand string shorthand to a domain hostname.
+
+    Storyboard runners may send ``https://test.example``; ``BrandReference.domain``
+    expects a hostname (no scheme/path) per the adcp library pattern.
+    """
+    value = value.strip()
+    if not value:
+        return value
+    if "://" in value or value.startswith("//"):
+        parsed = urlparse(value if "://" in value else f"https:{value}")
+        if parsed.hostname:
+            return parsed.hostname.lower()
+    return value.lower()
+
+
 def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> BrandReference | None:
     """Convert dict/string brand to BrandReference for adcp 3.6.0 compatibility.
 
@@ -81,7 +98,7 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
     if isinstance(brand, BrandReference):
         return brand
     if isinstance(brand, str):
-        return BrandReference(domain=brand)
+        return BrandReference(domain=brand_shorthand_to_domain(brand))
     if isinstance(brand, dict):
         return BrandReference(**brand)
     return None  # Fallback for unexpected types

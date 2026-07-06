@@ -10,11 +10,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
+
+from src.core.schema_helpers import brand_shorthand_to_domain
 
 logger = logging.getLogger(__name__)
-
-# Fields whose presence signals a v2.5 caller.
 V25_SIGNALS: frozenset[str] = frozenset({"brand_manifest", "promoted_offerings", "campaign_ref"})
 
 # Tools where brand_manifest → brand translation applies.
@@ -40,6 +39,9 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
 
     url: str | None = None
     if isinstance(value, str):
+        # brand_manifest callers always sent URLs, never bare domain shorthand
+        if "://" not in value and not value.startswith("//"):
+            return None
         url = value
     elif isinstance(value, dict):
         url = value.get("url")
@@ -47,14 +49,8 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
     if not url or not isinstance(url, str):
         return None
 
-    try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if hostname:
-            return {"domain": hostname}
-    except Exception:  # noqa: BLE001
-        logger.debug("Could not parse domain from agent_url", exc_info=True)
-    return None
+    domain = brand_shorthand_to_domain(url)
+    return {"domain": domain} if domain else None
 
 
 def _normalize_packages(packages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:

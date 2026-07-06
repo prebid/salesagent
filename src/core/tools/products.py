@@ -799,11 +799,7 @@ async def get_products(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
-    if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
-
-    # Build request object for shared implementation
+    # create_get_products_request coerces string/dict brand via to_brand_reference
     try:
         req = create_get_products_request(
             brief=brief,
