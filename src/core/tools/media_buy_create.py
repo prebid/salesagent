@@ -3516,7 +3516,7 @@ async def _create_media_buy_impl(
         try:
             with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
                 assert create_uow.media_buys is not None
-                create_uow.media_buys.create_from_request(
+                created_mb = create_uow.media_buys.create_from_request(
                     media_buy_id=response.media_buy_id,
                     req=req,
                     principal_id=principal_id,
@@ -3531,6 +3531,12 @@ async def _create_media_buy_impl(
                     account_id=identity.account_id if identity else None,
                     payload_hash=request_hash,
                 )
+                # Capture persisted values while the session is open (the
+                # instance is expired after UoW commit). confirmed_at on the
+                # create response and get_media_buys both report this same
+                # persisted created_at; revision is the persisted counter (1).
+                persisted_confirmed_at = created_mb.created_at
+                persisted_revision = created_mb.revision
                 # UoW auto-commits on clean exit
         except IntegrityError as exc:
             return _resolve_idempotency_race_or_raise(
@@ -3940,6 +3946,12 @@ async def _create_media_buy_impl(
             creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
             errors=property_list_unsupported_advisories(req.packages, adapter),
+            # AdCP 3.1.1 success-arm required fields: the buy is committed
+            # synchronously here. confirmed_at is the persisted created_at —
+            # the same value get_media_buys reports — and revision is the
+            # persisted monotonic counter at its initial value (1).
+            confirmed_at=persisted_confirmed_at,
+            revision=persisted_revision,
         )
 
         # Log activity

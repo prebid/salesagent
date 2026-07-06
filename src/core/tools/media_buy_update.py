@@ -357,6 +357,8 @@ def _update_media_buy_impl(
                 # Build simulated response
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
+                    # dry-run: nothing persisted — echo the current revision
+                    revision=_dry_run_mb.revision if _dry_run_mb else 1,
                     affected_packages=simulated_affected,
                     valid_actions=valid_actions_for_status(_dry_run_status),
                     context=req.context,
@@ -381,6 +383,8 @@ def _update_media_buy_impl(
                 _approval_status = _approval_mb.status if _approval_mb else ""
                 approval_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
+                    # Nothing applied yet (pending approval) — current persisted revision.
+                    revision=_approval_mb.revision if _approval_mb else 1,
                     affected_packages=[],  # Not yet applied — pending approval
                     valid_actions=valid_actions_for_status(_approval_status),
                     context=req.context,
@@ -530,6 +534,8 @@ def _update_media_buy_impl(
                     )
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
+                        # Current persisted revision for this buy.
+                        revision=_post_action_mb.revision if _post_action_mb else 1,
                         affected_packages=affected_pkgs,
                         valid_actions=valid_actions_for_status(_post_action_status),
                         errors=property_list_unsupported_advisories(req.packages, adapter),
@@ -1076,6 +1082,15 @@ def _update_media_buy_impl(
                             )
                         )
 
+            # Package-level changes above persist directly on the session
+            # (package_config writes, creative assignment rows, adapter
+            # pause/resume) without passing through the MediaBuy repository
+            # update methods — bump the buy's persisted revision once for the
+            # accepted package change set so consecutive updates always return
+            # strictly increasing revisions.
+            if req.packages and (affected_packages_list or any(pkg.paused is not None for pkg in req.packages)):
+                uow.media_buys.bump_revision(req.media_buy_id)
+
             # Handle budget updates (handle both float and Budget object)
             if req.budget is not None:
                 # Extract budget amount - handle both float and Budget object
@@ -1225,6 +1240,9 @@ def _update_media_buy_impl(
             _final_status = _final_mb.status if _final_mb else ""
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
+                # Persisted revision after this update's mutations (bumped by
+                # update_fields / bump_revision above).
+                revision=_final_mb.revision if _final_mb else 1,
                 affected_packages=affected_packages_list,
                 valid_actions=valid_actions_for_status(_final_status),
                 context=req.context,

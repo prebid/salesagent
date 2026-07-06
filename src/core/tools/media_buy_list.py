@@ -41,6 +41,10 @@ class _MediaBuyData:
     updated_at: datetime | None
     status: str | None
     is_paused: bool
+    # Persisted monotonic optimistic-concurrency counter (media_buys.revision).
+    # Defaults to the create-time value for callers that build this dataclass
+    # outside the ORM fetch path (production always passes the row's value).
+    revision: int = 1
 
 
 @dataclass
@@ -281,6 +285,12 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
+                # AdCP 3.1.1 GA required item fields. confirmed_at is the
+                # persisted created_at (same source create_media_buy returns);
+                # revision is the persisted monotonic counter bumped by
+                # MediaBuyRepository on every successful mutation.
+                confirmed_at=buy.created_at,
+                revision=buy.revision,
             )
         )
 
@@ -407,6 +417,7 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
             status=buy.status,
             is_paused=buy.is_paused,
+            revision=buy.revision,
         )
         for buy in buys
         if filter_statuses is None or _compute_status(buy, today) in filter_statuses

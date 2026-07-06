@@ -163,6 +163,14 @@ class MediaBuyCreateEnv(IntegrationEnv):
                 principal_id=kwargs.get("principal_id", self._principal_id),
             )
 
+        def _get_or_create_context(*_args: Any, **kwargs: Any):
+            # Delegate to the REAL manager (update_media_buy's entry path) so
+            # a real Context row backs the workflow step FKs — a bare MagicMock
+            # context_id is unstorable ("can't adapt type 'MagicMock'").
+            kwargs.setdefault("tenant_id", self._tenant_id)
+            kwargs.setdefault("principal_id", self._principal_id)
+            return real.get_or_create_context(**kwargs)
+
         def _create_workflow_step(*_args: Any, **kwargs: Any):
             kwargs.setdefault("step_type", "media_buy_creation")
             kwargs.setdefault("owner", "system")
@@ -173,6 +181,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
             return real.link_workflow_to_object(**kwargs)
 
         mgr.create_context.side_effect = _create_context
+        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.get_context.return_value = None
         mgr.create_workflow_step.side_effect = _create_workflow_step
         mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
@@ -305,6 +314,37 @@ class MediaBuyCreateEnv(IntegrationEnv):
             req = CreateMediaBuyRequest(**_ensure_idempotency_key(kwargs))
 
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
+
+    def create_default_buy(
+        self, product: Any, *, brand_domain: str = "harness-default.example"
+    ) -> CreateMediaBuySuccess:
+        """Drive a one-package create through ``call_impl``; assert and return success.
+
+        Shared by tests that just need a persisted buy (a 30-day flight starting
+        tomorrow, one CPM package at 5000.0) without caring about the request
+        shape. Tests exercising create parameters call ``call_impl`` directly.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from tests.helpers.adcp_factories import create_test_package_request_dict
+
+        start = datetime.now(UTC) + timedelta(days=1)
+        end = start + timedelta(days=30)
+        result = self.call_impl(
+            brand={"domain": brand_domain},
+            packages=[
+                create_test_package_request_dict(
+                    product_id=product.product_id,
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=5000.0,
+                )
+            ],
+            start_time=start.isoformat(),
+            end_time=end.isoformat(),
+        )
+        created = result.response
+        assert isinstance(created, CreateMediaBuySuccess), f"create must succeed, got {type(created).__name__}"
+        return created
 
     def _flatten_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Convert a ``req=`` kwarg into the flat parameter dict the wrappers take.

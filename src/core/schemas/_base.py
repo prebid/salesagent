@@ -267,6 +267,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # SDK 5.7 removed these from parent — declare locally
     account: Any | None = None
     sandbox: bool | None = None
+    # AdCP 3.1.1 GA success-arm REQUIRED fields (create-media-buy-response.json
+    # oneOf[0].required includes confirmed_at + revision). Absent from the
+    # pinned beta.3 SDK model; strict GA clients (adcp>=6.3) reject a success
+    # response without them ("oneOf composition failed"). Forward-compatible
+    # additions under beta.3 (additionalProperties: true).
+    confirmed_at: datetime | None = None
+    revision: int | None = None
     # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
     # it (adapters/base.py _build_create_success). Declare it for parity/typing so
     # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
@@ -430,6 +437,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     # while still being AdCP-compliant (those fields are excluded via exclude=True)
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
+
+    # AdCP 3.1.1 GA success-arm REQUIRED field (update-media-buy-response.json
+    # oneOf[0].required = [media_buy_id, revision]). The persisted monotonic
+    # counter bumped by MediaBuyRepository on every successful mutation.
+    revision: int | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -2425,6 +2437,13 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
     created_at: datetime | None = Field(default=None, description="When this media buy was created")
     updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
+    # AdCP 3.1.1 GA required item fields (get-media-buys-response.json
+    # media_buys[].required). revision is the persisted monotonic counter
+    # bumped by MediaBuyRepository on every successful mutation.
+    confirmed_at: datetime | None = Field(
+        default=None, description="When this media buy was committed by the seller (stable after set)"
+    )
+    revision: int | None = Field(default=None, description="Current revision number for optimistic-concurrency updates")
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)

@@ -39,7 +39,9 @@ class MediaBuyRepository:
         tenant_id: Tenant scope for all queries.
     """
 
-    _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "media_buy_id", "created_at"})
+    # "revision" is repository-managed (bumped on every successful mutation);
+    # callers may never write it directly — see _bump_revision.
+    _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "media_buy_id", "created_at", "revision"})
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
 
     def __init__(self, session: Session, tenant_id: str) -> None:
@@ -424,6 +426,33 @@ class MediaBuyRepository:
         self._session.flush()
         return media_buy
 
+    @staticmethod
+    def _bump_revision(media_buy: MediaBuy) -> None:
+        """Increment the persisted monotonic revision counter by 1.
+
+        Single shared bump used by every mutation path (update_status,
+        update_fields, bump_revision). The counter is the AdCP GA
+        ``revision`` optimistic-concurrency token: it starts at 1 on create
+        and MUST strictly increase on every successful mutation — never
+        derived from timestamps.
+        """
+        media_buy.revision = (media_buy.revision or 0) + 1
+
+    def bump_revision(self, media_buy_id: str) -> MediaBuy | None:
+        """Bump the revision of a media buy that was mutated outside this repository.
+
+        For tool paths that persist changes to a buy's packages/assignments
+        directly on the session (e.g. package targeting_overlay writes) and
+        therefore never pass through ``update_status``/``update_fields``.
+        Returns the updated MediaBuy, or None if not found in this tenant.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            return None
+        self._bump_revision(media_buy)
+        self._session.flush()
+        return media_buy
+
     def update_status(
         self,
         media_buy_id: str,
@@ -434,6 +463,7 @@ class MediaBuyRepository:
     ) -> MediaBuy | None:
         """Update the status of a media buy within this tenant.
 
+        Bumps the persisted revision counter (successful mutation).
         Returns the updated MediaBuy, or None if not found in this tenant.
         """
         media_buy = self.get_by_id(media_buy_id)
@@ -444,6 +474,7 @@ class MediaBuyRepository:
             media_buy.approved_at = approved_at
         if approved_by is not None:
             media_buy.approved_by = approved_by
+        self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
@@ -451,10 +482,11 @@ class MediaBuyRepository:
         """Update arbitrary fields on a media buy within this tenant.
 
         Only updates fields that are valid MediaBuy column attributes.
+        Bumps the persisted revision counter (successful mutation).
         Returns the updated MediaBuy, or None if not found in this tenant.
         Raises ValueError if any kwarg is not a valid MediaBuy attribute or
-        if the caller attempts to update an immutable field (tenant_id,
-        media_buy_id, created_at).
+        if the caller attempts to update an immutable/repository-managed
+        field (tenant_id, media_buy_id, created_at, revision).
         """
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
@@ -466,6 +498,7 @@ class MediaBuyRepository:
             if not hasattr(media_buy, key):
                 raise ValueError(f"MediaBuy has no attribute {key!r}")
             setattr(media_buy, key, value)
+        self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
