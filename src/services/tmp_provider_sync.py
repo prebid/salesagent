@@ -168,11 +168,26 @@ def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
         tenant_id:    Tenant scope — used for both repository queries.
         media_buy_id: The media buy whose packages should be synced.
     """
-    # --- Step 1: load packages (read-only, session closed before HTTP calls) ---
+    # --- Step 1: load packages and build payloads (inside session scope) ---
+    # Payloads are built while the session is still open so that ORM attribute
+    # access (pkg_row.package_config) does not hit a detached instance.
+    # HTTP calls happen after this block — no open transaction during network I/O.
     try:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.media_buys is not None
             pkg_rows = uow.media_buys.get_packages(media_buy_id)
+
+            if not pkg_rows:
+                logger.debug(
+                    "[TMP sync] No packages found for media_buy_id=%s — skipping sync",
+                    media_buy_id,
+                )
+                return
+
+            # --- Step 2: resolve seller_agent URL and build payloads ---
+            # Done inside the UoW block so pkg_row attributes are accessible.
+            seller_agent_url = _resolve_seller_agent_url(tenant_id)
+            payloads = [_build_package_payload(media_buy_id, row, seller_agent_url) for row in pkg_rows]
     except Exception:
         logger.exception(
             "[TMP sync] Failed to load packages for media_buy_id=%s tenant=%s",
@@ -180,17 +195,6 @@ def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
             tenant_id,
         )
         return
-
-    if not pkg_rows:
-        logger.debug(
-            "[TMP sync] No packages found for media_buy_id=%s — skipping sync",
-            media_buy_id,
-        )
-        return
-
-    # --- Step 2: resolve seller_agent URL ---
-    seller_agent_url = _resolve_seller_agent_url(tenant_id)
-    payloads = [_build_package_payload(media_buy_id, row, seller_agent_url) for row in pkg_rows]
 
     logger.info(
         "[TMP sync] Built %d package payload(s) for media_buy=%s seller_agent=%s",
