@@ -38,12 +38,13 @@ def _wire_suggestion(ctx: dict) -> str | None:
     Mirrors ``_wire_code``: when the scenario dispatched through a wire transport
     (REST/A2A/MCP), the ``suggestion`` is the buyer-facing contract and must be
     read from the real envelope, not the lossy reconstructed ``ctx['error']``.
-    AdCP carries the suggestion either directly on the error object or nested
-    under ``details.suggestion`` (account/auth errors use the latter), in either
-    the ``errors[0]`` or the envelope-level ``adcp_error`` layer — the same
-    canonical lookup as ``TransportResult.assert_wire_error``. Returns ``None``
-    on IMPL / no-wire scenarios so callers fall back to the reconstructed
-    exception (salesagent-ztl6.6).
+    STRICT error.json conformance: only the top-level ``suggestion`` on the
+    error object (``errors[0]`` or ``adcp_error`` layer) counts — a suggestion
+    buried in ``details`` is a conformance bug the harness surfaces, not masks
+    (salesagent-9val). Same canonical lookup as
+    ``TransportResult.assert_wire_error``. Returns ``None`` on IMPL / no-wire
+    scenarios so callers fall back to the reconstructed exception
+    (salesagent-ztl6.6).
     """
     from tests.harness.transport import extract_wire_suggestion
 
@@ -116,10 +117,11 @@ def _get_error_dict(error: object) -> dict:
     if isinstance(error, AdCPError):
         d = error.to_dict()
         # AdCPError.to_dict() has: error_code, message, recovery, details
-        # Map to the assertion vocabulary used in feature files
+        # Map to the assertion vocabulary used in feature files.
+        # Deliberately NO promotion of details["suggestion"]: error.json places
+        # suggestion at the top level, and to_dict() already carries it there
+        # when the emitter is conformant (salesagent-9val).
         d["code"] = d.get("error_code", "")
-        if error.details and "suggestion" in error.details:
-            d["suggestion"] = error.details["suggestion"]
         return d
     # adcp.types.Error model (from partial success response.errors) — has code,
     # message, suggestion, recovery, field as direct attributes.

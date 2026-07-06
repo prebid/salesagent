@@ -1292,8 +1292,9 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
-        assert error.details is not None, "Expected error details with suggestion, got None"
-        assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+        # STRICT error.json conformance: suggestion is a top-level error
+        # attribute; a copy buried in details does not count (salesagent-9val).
+        assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
         return
 
     # Check if first word is a structured error code (UPPER_CASE with _).
@@ -1320,8 +1321,8 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         if recovery is not None:
             assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
         if require_suggestion:
-            assert error.details is not None, "Expected error details with suggestion, got None"
-            assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+            # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+            assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
     else:
         # Descriptive: "error unknown sort field"
         description = remainder

@@ -2721,8 +2721,10 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
         assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
         if require_suggestion:
-            suggestion = (error.details or {}).get("suggestion")
-            assert suggestion, f"Expected suggestion in error for {field}, got details: {error.details}"
+            # STRICT error.json conformance: suggestion is a top-level error
+            # attribute; a copy buried in the free-form details dict does not
+            # count (salesagent-9val).
+            assert error.suggestion, f"Expected top-level suggestion in error for {field}, got: {error.suggestion!r}"
         return
 
     raise AssertionError(f"Unexpected expected value '{expected}' for {field}")

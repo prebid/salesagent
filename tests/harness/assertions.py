@@ -102,39 +102,6 @@ def assert_rejected(
         assert message_contains in str(message), f"Expected '{message_contains}' in message. Got: {str(message)[:200]}"
 
 
-def assert_rejected_with_suggestion(
-    result: TransportResult,
-    *,
-    code: str,
-    suggestion_contains: str | None = None,
-) -> None:
-    """Assert rejection with a suggestion for the caller.
-
-    Checks error code and optionally that a suggestion/recovery hint is present.
-    On transports that support structured details (impl/a2a), checks details dict.
-    On MCP, checks the error message string (details serialized as JSON in the message).
-    """
-    assert_rejected(result, code=code)
-
-    error = result.error
-    error_str = str(error)
-
-    # Check for suggestion in details or message
-    details = getattr(error, "details", None) or {}
-    has_suggestion = bool(details.get("suggestion")) or "suggestion" in error_str.lower()
-
-    if suggestion_contains is not None:
-        details_str = str(details)
-        assert suggestion_contains in error_str or suggestion_contains in details_str, (
-            f"Expected suggestion containing '{suggestion_contains}'. "
-            f"Error: {error_str[:200]}, Details: {details_str[:200]}"
-        )
-    else:
-        assert has_suggestion, (
-            f"Expected suggestion in error with code '{code}'. Error: {error_str[:200]}, Details: {details}"
-        )
-
-
 def assert_payload_field(
     result: TransportResult,
     field: str,

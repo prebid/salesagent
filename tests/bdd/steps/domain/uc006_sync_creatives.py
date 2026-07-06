@@ -430,22 +430,16 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str | None]:
     """Return (error_code, suggestion) for either AdCPError or adcp.types.Error.
 
-    - AdCPError: error_code attribute; suggestion lives in details['suggestion'].
-    - adcp.types.Error: code attribute; suggestion is a top-level field.
+    STRICT error.json conformance: ``suggestion`` is a top-level attribute on
+    both shapes — a copy buried in the free-form ``details`` dict is a
+    conformance bug and deliberately does not count (salesagent-9val).
     """
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
-        code = error.error_code
-        suggestion = (error.details or {}).get("suggestion") if error.details else None
-        return code, suggestion
+        return error.error_code, error.suggestion
     code = getattr(error, "error_code", None) or getattr(error, "code", None)
-    suggestion = getattr(error, "suggestion", None)
-    if suggestion is None:
-        details = getattr(error, "details", None)
-        if isinstance(details, dict):
-            suggestion = details.get("suggestion")
-    return code, suggestion
+    return code, getattr(error, "suggestion", None)
 
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))
@@ -2130,8 +2124,11 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
             self.error_code = code
             self.code = code
             self.message = message
+            # STRICT error.json conformance: suggestion is top-level ONLY —
+            # synthesizing a details copy would feed the exact non-conformant
+            # position the harness must reject (salesagent-9val).
             self.suggestion = suggestion
-            self.details = {"suggestion": suggestion} if suggestion else {}
+            self.details: dict = {}
 
         def __str__(self) -> str:
             return self.message
