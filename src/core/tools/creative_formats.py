@@ -14,7 +14,7 @@ import concurrent.futures
 import logging
 import time
 from collections.abc import Sequence
-from typing import Annotated, TypeVar
+from typing import Annotated
 
 # FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
@@ -31,13 +31,11 @@ from adcp.types import (
 )
 from adcp.types import Format as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
-from pydantic import Field
 
-# TypeVar for Format to preserve subclass type through backward compatibility function
-FormatT = TypeVar("FormatT", bound=AdcpFormat)
+# Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
 from src.core.helpers import enum_value
@@ -46,7 +44,7 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 
 
-def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
+def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> FormatT:
     """Pass-through function for backward compatibility.
 
     Note: adcp 3.2.0 removed the deprecated `assets_required` field from Format.
