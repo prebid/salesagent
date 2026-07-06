@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_architecture_guard_trees, repo_root
+from tests.unit._architecture_helpers import iter_architecture_guard_trees
 
 _EXEMPT = {
     Path("tests/unit/_architecture_helpers.py"),
@@ -49,6 +49,11 @@ def _assigns_handrolled_allowlist_diff(node: ast.AST) -> bool:
         if isinstance(target, ast.Name) and target.id in _ALLOWLIST_DIFF_TARGET_NAMES:
             return True
     return False
+
+
+def _assign_nodes_from_source(source: str) -> list[ast.Assign]:
+    tree = ast.parse(source)
+    return [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
 
 
 def _find_handrolled_allowlist_diffs() -> list[str]:
@@ -97,24 +102,24 @@ def test_no_ast_helpers_imports() -> None:
 @pytest.mark.arch_guard
 def test_allowlist_diff_guard_catches_direct_set_diff() -> None:
     """Self-test: the scanner flags inline stale = ALLOWLIST - found."""
-    repo = repo_root()
-    probe = repo / "tests" / "unit" / "test_architecture_probe_handrolled_allowlist_diff.py"
-    probe.write_text("stale = ALLOWLIST - found\n", encoding="utf-8")
-    try:
-        violations = _find_handrolled_allowlist_diffs()
-        assert any("test_architecture_probe_handrolled_allowlist_diff.py" in v for v in violations)
-    finally:
-        probe.unlink(missing_ok=True)
+    assign_nodes = _assign_nodes_from_source("stale = ALLOWLIST - found\n")
+    assert any(_assigns_handrolled_allowlist_diff(node) for node in assign_nodes)
 
 
 @pytest.mark.arch_guard
 def test_allowlist_diff_guard_catches_sorted_set_diff() -> None:
     """Self-test: the scanner flags stale = sorted(ALLOWLIST - found)."""
-    repo = repo_root()
-    probe = repo / "tests" / "unit" / "test_architecture_probe_handrolled_allowlist_diff.py"
-    probe.write_text("stale = sorted(ALLOWLIST - found)\n", encoding="utf-8")
-    try:
-        violations = _find_handrolled_allowlist_diffs()
-        assert any("test_architecture_probe_handrolled_allowlist_diff.py" in v for v in violations)
-    finally:
-        probe.unlink(missing_ok=True)
+    assign_nodes = _assign_nodes_from_source("stale = sorted(ALLOWLIST - found)\n")
+    assert any(_assigns_handrolled_allowlist_diff(node) for node in assign_nodes)
+
+
+@pytest.mark.arch_guard
+def test_allowlist_diff_guard_allows_assert_violations_match_allowlist() -> None:
+    """Self-test: assert_violations_match_allowlist() usage is not flagged."""
+    assign_nodes = _assign_nodes_from_source(
+        "from tests.unit._architecture_helpers import assert_violations_match_allowlist\n"
+        "ALLOWLIST = set()\n"
+        "found = set()\n"
+        "assert_violations_match_allowlist(found, ALLOWLIST, fix_hint='remove fixed entries')\n"
+    )
+    assert not any(_assigns_handrolled_allowlist_diff(node) for node in assign_nodes)
