@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from fastmcp.server.context import Context
 
@@ -89,8 +89,7 @@ def test_mcp_wrapper_offloads_impl_to_worker_thread():
     with patch(f"{MODULE}.asyncio.to_thread", new=AsyncMock(return_value=sentinel)) as to_thread:
         result = asyncio.run(update_media_buy(media_buy_id="mb_offload", budget=1000.0, ctx=mock_ctx))
 
-    to_thread.assert_awaited_once()
-    assert to_thread.await_args.args[0] is _update_media_buy_impl
+    to_thread.assert_awaited_once_with(_update_media_buy_impl, req=ANY, identity=ANY, context_id=ANY)
     assert result.structured_content == sentinel
 
 
