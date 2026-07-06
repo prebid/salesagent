@@ -67,7 +67,7 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -1649,6 +1649,12 @@ class AdCPRequestHandler(RequestHandler):
         # Create ToolContext from A2A auth info and resolve identity
         tool_context = self._make_tool_context(identity, "list_creatives")
 
+        # Structured AdCP CreativeFilters (statuses, concept_ids, format_ids, …)
+        # arrive over the wire as a JSON dict; coerce to the typed model the core
+        # function expects so they are honoured rather than dropped. Invalid filters
+        # raise AdCPValidationError (VALIDATION_ERROR + suggestion) via the shared helper.
+        filters = coerce_creative_filters(parameters.get("filters"))
+
         # Call core function with optional parameters (fixing original validation bug)
         response = core_list_creatives_tool(
             media_buy_id=parameters.get("media_buy_id"),
@@ -1658,6 +1664,7 @@ class AdCPRequestHandler(RequestHandler):
             created_after=parameters.get("created_after"),
             created_before=parameters.get("created_before"),
             search=parameters.get("search"),
+            filters=filters,
             page=parameters.get("page", 1),
             limit=parameters.get("limit", 50),
             sort_by=parameters.get("sort_by", "created_date"),

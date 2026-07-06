@@ -23,7 +23,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
-from src.core.schema_helpers import to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -117,6 +117,10 @@ class ListCreativesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel 
     media_buy_ids: list[str] | None = None
     status: str | None = None
     format: str | None = None
+    # Structured AdCP CreativeFilters object (statuses, concept_ids, format_ids,
+    # tags, date ranges, …). Coerced to a typed CreativeFilters in the handler so
+    # REST honours the same structured filters as MCP/A2A instead of dropping them.
+    filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -363,11 +367,13 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
 @router.post("/creatives")
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
+    filters = coerce_creative_filters(body.filters)
     response = creatives_listing_module.list_creatives_raw(
         media_buy_id=body.media_buy_id,
         media_buy_ids=body.media_buy_ids,
         status=body.status,
         format=body.format,
+        filters=filters,
         identity=identity,
     )
     return response.model_dump(mode="json")

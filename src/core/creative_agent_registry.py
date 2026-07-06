@@ -33,7 +33,7 @@ from typing import Any
 
 # FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
-from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
+from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
 from adcp.types import ImageFormatAsset
@@ -41,7 +41,6 @@ from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
@@ -491,18 +490,10 @@ class CreativeAgentRegistry:
                     recovery="terminal",
                 )
 
-        except ADCPAuthenticationError as e:
-            logger.error(f"Authentication failed for creative agent {agent.name}: {e.message}")
-            raise AdCPAuthenticationError(f"Authentication failed: {e.message}") from e
-        except ADCPTimeoutError as e:
-            logger.error(f"Request to creative agent {agent.name} timed out: {e.message}")
-            raise AdCPServiceUnavailableError(f"Request timed out: {e.message}") from e
-        except ADCPConnectionError as e:
-            logger.error(f"Failed to connect to creative agent {agent.name}: {e.message}")
-            raise AdCPServiceUnavailableError(f"Connection failed: {e.message}") from e
         except ADCPError as e:
-            logger.error(f"AdCP error with creative agent {agent.name}: {e.message}")
-            raise AdCPAdapterError(str(e.message)) from e
+            from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
+
+            raise_mapped_adcp_error(e, agent_label=f"creative agent {agent.name}", logger=logger)
 
     async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
         """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.
