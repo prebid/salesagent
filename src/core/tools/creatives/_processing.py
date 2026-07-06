@@ -786,9 +786,12 @@ def _create_new_creative(
         data=data,
     )
 
-    # Update creative_id if it was generated (model attribute assignment)
+    # Update creative_id if it was generated (model attribute assignment).
+    # CreativeAsset is a RootModel with a __getattr__ proxy — mypy cannot see
+    # through it to the inner model's creative_id field, so the assignment needs
+    # a type: ignore. The proxy is defined in adcp.types.generated_poc.core.creative_asset.
     if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id
+        creative.creative_id = db_creative.creative_id  # type: ignore[attr-defined]
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":

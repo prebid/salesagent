@@ -1,10 +1,5 @@
 """Creative Agent Registry for dynamic format discovery per AdCP v2.4.
 
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [attr-defined] on line ~35: FormatReferenceStructuredObject, ImageFormatAsset,
-  and VideoFormatAsset live under adcp.types at runtime but mypy stubs don't
-  expose them at the top-level namespace. Permanent until upstream updates stubs.
-
 This module provides:
 1. Creative agent registry (system defaults + tenant-specific)
 2. Dynamic format discovery via MCP
@@ -35,7 +30,7 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
-from adcp.types import (  # type: ignore[attr-defined]
+from adcp.types import (
     BrandReference,
     FormatReferenceStructuredObject,
     ImageFormatAsset,
@@ -1029,7 +1024,7 @@ class CreativeAgentRegistry:
 
         idempotency_key = str(_uuid.uuid4())
 
-        request = _BuildCreativeRequestConcrete(  # type: ignore[operator]
+        request = _BuildCreativeRequestConcrete(
             message=message,
             target_format_id=FormatReferenceStructuredObject(
                 agent_url=agent_url,
