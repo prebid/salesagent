@@ -97,7 +97,14 @@ class TestCreativeAgentReferrals:
             assert agent.agent_url is not None
 
     def test_creative_agent_has_capabilities(self, integration_db):
-        """UC-005-MAIN-MCP-13: each referral includes capability information."""
+        """UC-005-MAIN-MCP-13: each referral includes capability information.
+
+        AdCP design principle: capabilities are commitments — the referral
+        advertises only capabilities backed by the registry integration
+        (validation/preview via preview_creative, assembly via build_creative).
+        `delivery` must NOT be advertised while get_creative_delivery is
+        unimplemented.
+        """
         formats = [_make_format("d1", "Display Banner")]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -108,13 +115,9 @@ class TestCreativeAgentReferrals:
         assert response.creative_agents is not None
         for agent in response.creative_agents:
             assert agent.capabilities is not None
-            assert len(agent.capabilities) > 0
-            # Verify expected capability types
+            # Verify expected capability types — exactly the backed set
             cap_values = {c.value for c in agent.capabilities}
-            assert "validation" in cap_values
-            assert "assembly" in cap_values
-            assert "preview" in cap_values
-            assert "delivery" in cap_values
+            assert cap_values == {"validation", "assembly", "preview"}
 
     def test_creative_agent_has_name(self, integration_db):
         """UC-005-MAIN-MCP-13: each referral includes agent name."""

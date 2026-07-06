@@ -134,7 +134,10 @@ def then_referral_fields(ctx: dict) -> None:
     assert resp is not None, "Expected a response"
     referrals = resp.creative_agents
     assert referrals, "No referrals to verify -- expected at least one creative agent"
-    known_capabilities = {"validation", "assembly", "preview", "delivery"}
+    # Capabilities are commitments (AdCP design principle): only the set backed
+    # by the registry integration may be advertised. `delivery` is excluded —
+    # get_creative_delivery is unimplemented.
+    known_capabilities = {"validation", "assembly", "preview"}
     for ref in referrals:
         url_value = ref.agent_url
         assert url_value, f"Missing agent_url in referral: {ref}"

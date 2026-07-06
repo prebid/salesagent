@@ -22,6 +22,7 @@ from adcp.types import (
     AssetContentType,
     AudioFormatAsset,
     ContextObject,
+    CreativeAgentCapability,
     HtmlFormatAsset,
     ImageFormatAsset,
     TextFormatAsset,
@@ -42,6 +43,26 @@ from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
+
+# Capabilities advertised for every creative agent referral in
+# list_creative_formats. AdCP design principle: capabilities are commitments —
+# the conformance runner probes each advertised capability, so only declare
+# what the registry integration actually backs:
+#   - validation/preview: backed by the agent's `preview_creative` tool
+#     (CreativeAgentRegistry.preview_creative, used by sync_creatives for
+#     validation + preview generation).
+#   - assembly: backed by the agent's `build_creative` tool
+#     (CreativeAgentRegistry.build_creative, used by sync_creatives refinement).
+#   - delivery is deliberately NOT advertised: it commits to variant-level
+#     delivery reporting via a `get_creative_delivery` task, which this agent
+#     does not implement.
+# All configured agents (default + tenant DB agents) share the registry's
+# uniform client surface, so one static set is truthful for all of them.
+ADVERTISED_CREATIVE_AGENT_CAPABILITIES: list[CreativeAgentCapability] = [
+    CreativeAgentCapability.validation,
+    CreativeAgentCapability.assembly,
+    CreativeAgentCapability.preview,
+]
 
 
 def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> FormatT:
@@ -432,7 +453,6 @@ def _list_creative_formats_impl(
     )
 
     # Build creative_agents referrals from registry (POST-S4)
-    from adcp.types import CreativeAgentCapability
     from adcp.types.generated_poc.media_buy.list_creative_formats_response import (
         CreativeAgent as AdcpCreativeAgent,
     )
@@ -447,12 +467,7 @@ def _list_creative_formats_impl(
                     AdcpCreativeAgent(
                         agent_url=agent.agent_url,
                         agent_name=agent.name,
-                        capabilities=[
-                            CreativeAgentCapability.validation,
-                            CreativeAgentCapability.assembly,
-                            CreativeAgentCapability.preview,
-                            CreativeAgentCapability.delivery,
-                        ],
+                        capabilities=list(ADVERTISED_CREATIVE_AGENT_CAPABILITIES),
                     )
                 )
     except Exception:
