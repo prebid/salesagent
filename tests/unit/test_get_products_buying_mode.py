@@ -188,6 +188,12 @@ _SUGGESTION_CASES = [
         {"buying_mode": "bogus_mode"},
         "Use buying_mode='brief', 'wholesale', or 'refine'.",
     ),
+    # refine action='finalize' is not yet supported — pins the finalize rejection (raised via
+    # _reject_unsupported_finalize) so it, too, carries a non-None wire suggestion.
+    (
+        {"buying_mode": "refine", "refine": [{"scope": "proposal", "proposal_id": "prop_x", "action": "finalize"}]},
+        "Remove action='finalize'; proposal commit is not yet supported. Iterate with refine, then finalize separately once it lands.",
+    ),
 ]
 
 

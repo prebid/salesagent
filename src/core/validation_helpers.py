@@ -56,6 +56,10 @@ _BUYING_MODE_SUGGESTIONS: tuple[tuple[str, str], ...] = (
         "refine array is required when buying_mode is 'refine'",
         "Provide a refine array with at least one entry, or use a different buying_mode.",
     ),
+    (
+        "action='finalize'",
+        "Remove action='finalize'; proposal commit is not yet supported. Iterate with refine, then finalize separately once it lands.",
+    ),
 )
 
 
