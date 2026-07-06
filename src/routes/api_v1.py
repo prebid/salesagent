@@ -261,14 +261,25 @@ def _schedule_tmp_sync(
     Extracted to eliminate the duplicated deferred-import + add_task block that
     appeared verbatim in create_media_buy and update_media_buy.  BackgroundTasks
     runs after the response is sent — _impl is never touched.
+
+    ``response`` may be a ``CreateMediaBuyResult`` wrapper (create path) or a
+    direct ``UpdateMediaBuySuccess | UpdateMediaBuyError`` (update path).
+    ``CreateMediaBuyResult`` serializes flat but stores the domain response in
+    its ``.response`` field — ``media_buy_id`` lives there, not on the wrapper.
+    Use ``getattr`` with an inner-response fallback to handle both shapes.
     """
     from src.services.tmp_provider_sync import sync_packages_for_media_buy
 
-    if response.media_buy_id and identity.tenant_id:
+    media_buy_id = getattr(response, "media_buy_id", None)
+    if media_buy_id is None:
+        inner = getattr(response, "response", None)
+        media_buy_id = getattr(inner, "media_buy_id", None)
+
+    if media_buy_id and identity.tenant_id:
         background_tasks.add_task(
             sync_packages_for_media_buy,
             identity.tenant_id,
-            response.media_buy_id,
+            media_buy_id,
         )
 
 

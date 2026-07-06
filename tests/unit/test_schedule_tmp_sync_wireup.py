@@ -145,3 +145,92 @@ class TestScheduleTmpSyncOnUpdate:
             app.dependency_overrides.pop(_require_auth_dep, None)
 
         mock_schedule.assert_not_called()
+
+
+class TestScheduleTmpSyncInternals:
+    """Unit tests for _schedule_tmp_sync media_buy_id extraction logic.
+
+    The function must handle two response shapes:
+    - ``CreateMediaBuyResult`` wrapper: media_buy_id is on ``.response.media_buy_id``
+    - ``UpdateMediaBuySuccess | UpdateMediaBuyError``: media_buy_id is directly on the object
+    """
+
+    def _make_background_tasks(self):
+        from fastapi import BackgroundTasks
+
+        return BackgroundTasks()
+
+    def _make_identity(self, tenant_id: str = "tenant-1") -> MagicMock:
+        identity = MagicMock()
+        identity.tenant_id = tenant_id
+        return identity
+
+    def test_extracts_media_buy_id_from_direct_attribute(self):
+        """Update path: media_buy_id directly on response (UpdateMediaBuySuccess shape)."""
+        from src.routes.api_v1 import _schedule_tmp_sync
+
+        resp = MagicMock()
+        resp.media_buy_id = "mb-direct-001"
+        identity = self._make_identity()
+        bg = self._make_background_tasks()
+
+        with patch("src.services.tmp_provider_sync.sync_packages_for_media_buy"):
+            _schedule_tmp_sync(bg, identity, resp)
+
+        assert len(bg.tasks) == 1
+
+    def test_extracts_media_buy_id_from_inner_response(self):
+        """Create path: media_buy_id on .response.media_buy_id (CreateMediaBuyResult shape).
+
+        CreateMediaBuyResult has no direct media_buy_id — it wraps a
+        CreateMediaBuySuccess in its .response field. Accessing .media_buy_id
+        directly raises AttributeError; the fix uses getattr with a fallback.
+        """
+        from src.routes.api_v1 import _schedule_tmp_sync
+
+        # Simulate CreateMediaBuyResult: inner response has media_buy_id, wrapper does not.
+        inner = MagicMock()
+        inner.media_buy_id = "mb-inner-001"
+
+        class _WrapperWithNoMediaBuyId:
+            """Minimal stand-in for CreateMediaBuyResult (no media_buy_id attribute)."""
+
+            response = inner
+
+        identity = self._make_identity()
+        bg = self._make_background_tasks()
+
+        with patch("src.services.tmp_provider_sync.sync_packages_for_media_buy"):
+            _schedule_tmp_sync(bg, identity, _WrapperWithNoMediaBuyId())
+
+        assert len(bg.tasks) == 1
+
+    def test_no_task_when_media_buy_id_absent(self):
+        """No task scheduled when neither direct nor inner response has media_buy_id."""
+        from src.routes.api_v1 import _schedule_tmp_sync
+
+        class _NoIdResponse:
+            """Response with no media_buy_id anywhere."""
+
+        identity = self._make_identity()
+        bg = self._make_background_tasks()
+
+        with patch("src.services.tmp_provider_sync.sync_packages_for_media_buy"):
+            _schedule_tmp_sync(bg, identity, _NoIdResponse())
+
+        assert len(bg.tasks) == 0
+
+    def test_no_task_when_tenant_id_absent(self):
+        """No task scheduled when identity has no tenant_id."""
+        from src.routes.api_v1 import _schedule_tmp_sync
+
+        resp = MagicMock()
+        resp.media_buy_id = "mb-001"
+        identity = MagicMock()
+        identity.tenant_id = None
+        bg = self._make_background_tasks()
+
+        with patch("src.services.tmp_provider_sync.sync_packages_for_media_buy"):
+            _schedule_tmp_sync(bg, identity, resp)
+
+        assert len(bg.tasks) == 0
