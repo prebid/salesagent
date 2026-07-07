@@ -1742,8 +1742,10 @@ class TestDeliveryAdapterError:
         assert result.errors is not None and any("mb_log" in e.message for e in result.errors)
         # Error was logged before the advisory error was returned
         mock_logger.error.assert_called()
-        log_message = mock_logger.error.call_args[0][0]
-        assert "mb_log" in log_message
+        # Lazy logging: the media_buy_id is a %-arg, not baked into the format string.
+        call = mock_logger.error.call_args
+        rendered = call[0][0] % call[0][1:] if len(call[0]) > 1 else call[0][0]
+        assert "mb_log" in rendered
 
     def test_adapter_error_no_state_change(self):
         """UC-004-EXT-F4: adapter error is returned (degrade); operation stays read-only.

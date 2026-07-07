@@ -325,7 +325,7 @@ def _get_media_buy_delivery_impl(
                         adapter_viewability = getattr(adapter_response.totals, "viewability", None)
 
                     except Exception as e:
-                        logger.error(f"Error getting delivery for {media_buy_id}: {e}")
+                        logger.error("Error getting delivery for %s: %s", media_buy_id, e)
                         # Write adapter failure to audit trail (NFR-003)
                         try:
                             from src.core.database.models import AuditLog
@@ -342,7 +342,7 @@ def _get_media_buy_delivery_impl(
                             if uow.session is not None:
                                 uow.session.add(audit_log)
                         except Exception as audit_err:
-                            logger.error(f"Failed to write adapter failure audit log: {audit_err}")
+                            logger.error("Failed to write adapter failure audit log: %s", audit_err)
                         adapter_errors.append(
                             Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                                 code="SERVICE_UNAVAILABLE",
@@ -754,7 +754,6 @@ def get_media_buy_delivery_raw(
 def _resolve_delivery_status_filter(
     status_filter: Any,
     valid_internal_statuses: set[str],
-    to_internal: Any,
 ) -> list[str]:
     """Resolve status_filter to a list of internal status strings.
 
@@ -764,6 +763,9 @@ def _resolve_delivery_status_filter(
     - list[MediaBuyStatus] -> convert each
     - Single MediaBuyStatus enum -> convert
     - Special "all" value (via .value attribute) -> all valid statuses
+
+    ``enum_value`` unwraps a MediaBuyStatus to its wire string and passes plain
+    strings through, so no per-representation converter is needed.
     """
     if not status_filter:
         return ["active"]
@@ -774,16 +776,16 @@ def _resolve_delivery_status_filter(
 
     # Handle list of statuses (plain list or unwrapped RootModel)
     if isinstance(status_filter, list):
-        result = []
+        result: list[str] = []
         for s in status_filter:
-            internal = to_internal(s) if isinstance(s, MediaBuyStatus) else str(s)
-            if internal in valid_internal_statuses:
+            internal = enum_value(s)
+            if internal is not None and internal in valid_internal_statuses:
                 result.append(internal)
         return result
 
     # Handle single enum value
     if isinstance(status_filter, MediaBuyStatus):
-        return [to_internal(status_filter)]
+        return [enum_value(status_filter)]
 
     # Handle special values (e.g., "all" via mock or raw string)
     status_str = enum_value(status_filter)
@@ -812,10 +814,6 @@ def _get_target_media_buys(
     # rejected, canceled, plus delivery-only "failed").
     valid_internal_statuses = set(CANONICAL_STATUSES)
 
-    def _to_internal(status: MediaBuyStatus) -> str:
-        """Convert AdCP MediaBuyStatus enum to internal status string."""
-        return status.value
-
     # When specific IDs are provided without an explicit status_filter,
     # return all matching buys regardless of status (fetch-by-ID semantics).
     # The "active" default only applies when browsing (no specific IDs).
@@ -823,7 +821,7 @@ def _get_target_media_buys(
     if has_explicit_ids and not req.status_filter:
         filter_statuses = list(valid_internal_statuses)
     else:
-        filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
+        filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses)
 
     # Fetch media buys by IDs or all for principal
     if req.media_buy_ids:
