@@ -8,33 +8,17 @@ non-collision, and host extraction for adapter site indexes.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from src.services.identifier_matching import (
     buyer_identifier_matches_host,
     host_from_url_or_host,
     identifier_dicts,
-    identifier_type_str,
     property_matches_buyer_list,
 )
 from tests.helpers.adcp_factories import create_test_identifier as _identifier
 
 pytestmark = pytest.mark.unit
-
-
-class TestIdentifierTypeStr:
-    """identifier_type_str normalizes enum-typed and bare-string identifier types."""
-
-    def test_enum_type_returns_value(self):
-        assert identifier_type_str(_identifier("espn.com")) == "domain"
-
-    def test_bare_string_type_returns_str(self):
-        # Defensive path: some deserializations leave ``.type`` as a bare string
-        # (no ``.value``). SimpleNamespace mimics that shape without an enum.
-        bare = SimpleNamespace(type="ios_bundle", value="com.example.app")
-        assert identifier_type_str(bare) == "ios_bundle"
 
 
 class TestIdentifierDicts:

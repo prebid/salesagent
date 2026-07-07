@@ -45,7 +45,6 @@ from src.core.ttl_cache import ThreadSafeTTLCache, cache_partition_token
 from src.services.identifier_matching import (
     buyer_identifier_matches_host,
     host_from_url_or_host,
-    identifier_type_str,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,9 +133,7 @@ class KevelSiteResolver:
         one place (callable without instantiating a resolver — no HTTP needed).
         """
         return {
-            ident_type
-            for ident in identifiers
-            if (ident_type := identifier_type_str(ident)) not in SUPPORTED_IDENTIFIER_TYPES
+            ident_type for ident in identifiers if (ident_type := ident.type.value) not in SUPPORTED_IDENTIFIER_TYPES
         }
 
     def resolve(self, ref: PropertyListReference) -> ResolvedSiteIds:
@@ -149,7 +146,7 @@ class KevelSiteResolver:
         unresolvable_values: list[str] = []
 
         for ident in identifiers:
-            if identifier_type_str(ident) not in SUPPORTED_IDENTIFIER_TYPES:
+            if ident.type.value not in SUPPORTED_IDENTIFIER_TYPES:
                 continue
             # Spec value grammar via the SDK matcher: one identifier can select
             # multiple sites (``*.espn.com``) or none. A linear scan over the

@@ -36,20 +36,16 @@ from adcp.adagents import domain_matches, identifiers_match
 from adcp.types import Identifier
 
 
-def identifier_type_str(ident: Identifier) -> str:
-    """Return an identifier's type as a plain string.
-
-    ``Identifier.type`` is an enum on typed SDK objects but can arrive as a
-    bare string after some deserialization paths; normalize both to the string
-    form used for type-membership checks.
-    """
-    return ident.type.value if hasattr(ident.type, "value") else str(ident.type)
-
-
 def identifier_dicts(identifiers: list[Identifier]) -> list[dict[str, str]]:
     """Shape typed ``Identifier`` objects into the ``[{"type", "value"}]`` dicts
-    the SDK matchers accept."""
-    return [{"type": identifier_type_str(ident), "value": ident.value} for ident in identifiers]
+    the SDK matchers accept.
+
+    ``Identifier.type`` is a real ``PropertyIdentifierTypes`` enum on every
+    validation path (construction, ``model_validate``, JSON round-trip), so
+    ``.value`` is read directly — an untyped object reaching here is a bug and
+    should fail loud.
+    """
+    return [{"type": ident.type.value, "value": ident.value} for ident in identifiers]
 
 
 def property_matches_buyer_list(
@@ -74,7 +70,7 @@ def buyer_identifier_matches_host(ident: Identifier, host: str) -> bool:
     (``subdomain``) require exact host equality — a subdomain identifier names
     that specific host.
     """
-    if identifier_type_str(ident) == "domain":
+    if ident.type.value == "domain":
         return domain_matches(host, ident.value)
     return host == host_from_url_or_host(ident.value)
 
