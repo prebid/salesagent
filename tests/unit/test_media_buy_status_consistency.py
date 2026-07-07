@@ -125,7 +125,7 @@ class TestLegacyAndUnknownStatusesNotDropped:
     """
 
     def test_legacy_and_unknown_statuses_resolve_to_valid_status(self):
-        for persisted in ("ready", "scheduled", "pending_activation", "totally_unknown_legacy"):
+        for persisted in ("ready", "scheduled", "totally_unknown_legacy"):
             buy = _buy(persisted)  # inside the flight window
             delivery_status = resolve_canonical_status(buy, _REF)
 
@@ -140,11 +140,29 @@ class TestLegacyAndUnknownStatusesNotDropped:
         """A legacy "ready"/"scheduled" buy follows the flight window like any serving buy."""
         before = _buy("ready", start=date(2025, 9, 1), end=date(2025, 12, 31))
         within = _buy("scheduled", start=date(2025, 1, 1), end=date(2025, 12, 31))
-        after = _buy("pending_activation", start=date(2025, 1, 1), end=date(2025, 3, 31))
+        after = _buy("ready", start=date(2025, 1, 1), end=date(2025, 3, 31))
 
         assert resolve_canonical_status(before, _REF) == "pending_start"
         assert resolve_canonical_status(within, _REF) == "active"
         assert resolve_canonical_status(after, _REF) == "completed"
+
+    def test_legacy_pending_activation_maps_to_pending_start_not_serving(self):
+        """pending_activation is scheduler-held until creatives approve, like pending_start.
+
+        The scheduler (media_buy_status_scheduler.py) promotes pending_activation
+        to active only after creative approval — identical to pending_start. Date-
+        refining it to the serving state made a past-start buy with unapproved
+        creatives read as "active". It maps to pending_start regardless of the
+        flight window; both tools agree.
+        """
+        for window in (
+            {"start": date(2025, 9, 1), "end": date(2025, 12, 31)},  # before flight
+            {"start": date(2025, 1, 1), "end": date(2025, 12, 31)},  # mid-flight
+            {"start": date(2025, 1, 1), "end": date(2025, 3, 31)},  # past flight
+        ):
+            buy = _buy("pending_activation", start=window["start"], end=window["end"])
+            assert resolve_canonical_status(buy, _REF) == "pending_start", window
+            assert _compute_status(buy, _REF).value == "pending_start", window
 
 
 class TestSimulationReachesTerminalStatus:

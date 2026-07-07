@@ -33,16 +33,14 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, cast
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # NOTE: ``buy`` is typed ``Any`` rather than a structural Protocol because the
 # ORM ``MediaBuy`` annotates its date columns ``Mapped[Date]`` (the SQLAlchemy
 # type, not Python ``date``), so no Protocol matches it without first correcting
-# the model annotations (out of scope here). The two ``cast(date, ...)`` in the
-# refinement below exist for the same reason. FIXME(#1545): revisit once the ORM
-# date annotations are ``Mapped[date]``.
+# the model annotations (out of scope here).
 
 # Generic serving state: the persisted value that means "delivering, subject to
 # the flight window". These resolve to CANONICAL_SERVING and are then
@@ -70,16 +68,20 @@ NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
 # media_buy_create.py, the lifecycle transitions, the status scheduler, and the
 # admin blueprints. Includes the legacy aliases still resident in production
 # rows so an existing buy is never dropped:
-#   - "ready" (PR #375): approved & scheduled to go live at flight start.
-#   - "scheduled" / "pending_activation": admin/scheduler pre-serving states.
-# All three denote an approved buy whose serving is date-gated, so they resolve
-# to the generic serving state and date-refine exactly like "active".
+#   - "ready" (PR #375) / "scheduled": approved buys whose serving is purely
+#     date-gated — they resolve to the generic serving state and date-refine
+#     exactly like "active".
+#   - "pending_activation": held un-promoted by the status scheduler until
+#     creatives are approved (media_buy_status_scheduler.py), exactly like
+#     "pending_start" — so it maps to "pending_start", NOT the serving state.
+#     Date-refining it to "active" made a past-start buy with unapproved
+#     creatives read as serving.
 PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
     "active": "active",
     "approved": "active",
     "ready": "active",
     "scheduled": "active",
-    "pending_activation": "active",
+    "pending_activation": "pending_start",
     "paused": "paused",
     "completed": "completed",
     "rejected": "rejected",
@@ -147,8 +149,8 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
     # the flight window. Prefer the precise start_time/end_time when present.
     start_time = getattr(buy, "start_time", None)
     end_time = getattr(buy, "end_time", None)
-    start_compare = start_time.date() if start_time else cast(date, buy.start_date)
-    end_compare = end_time.date() if end_time else cast(date, buy.end_date)
+    start_compare = start_time.date() if start_time else buy.start_date
+    end_compare = end_time.date() if end_time else buy.end_date
 
     if getattr(buy, "is_paused", False):
         return "paused"
