@@ -38,6 +38,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -209,8 +210,36 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
     if status.concept_id and not data.get("concept_id"):
         data["concept_id"] = status.concept_id
         data["concept_name"] = status.concept_name
+        # Every current producer sets concept_source (GAM → "gam_order"); the fallback
+        # only fires for a future non-GAM adapter that derives a concept without tagging
+        # provenance, so the marker is never silently empty.
         data["concept_source"] = status.concept_source or "adapter_enrichment"
     return data
+
+
+def _apply_creative_enrichment(creative: DBCreative, status: AssetStatus) -> dict | None:
+    """Merge an adapter push result into a creative's ``data`` blob, ready to persist.
+
+    Wraps :func:`_merge_creative_enrichment` with the change detection + provenance log
+    shared by all three GAM push paths (auto-approval create, manual-approval execution,
+    and retroactive per-creative push — #1506). Returns the merged dict when the merge
+    adds something the caller must persist, or ``None`` when it is a no-op (nothing to
+    write). Callers persist the returned dict through ``CreativeRepository.update_data``
+    so the enrichment has a single persistence path::
+
+        merged = _apply_creative_enrichment(creative, status)
+        if merged is not None:
+            creatives_repo.update_data(creative, merged)
+    """
+    merged = _merge_creative_enrichment(creative.data, status)
+    if merged == (creative.data or {}):
+        return None
+    logger.info(
+        f"Enriched creative {creative.creative_id} from adapter push "
+        f"(platform_creative_id={merged.get('platform_creative_id')}, "
+        f"concept_source={merged.get('concept_source')})"
+    )
+    return merged
 
 
 def _determine_media_buy_status(
@@ -1078,12 +1107,25 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                             )
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
-                            # Log any failures
+                            # Enrich creatives (concept + platform id) on success; log failures.
+                            # This is the manual-approval push path — the third of three GAM push
+                            # sites, wired here so admin-approved buys enrich like the other two
+                            # (#1506). uow2 commits the writeback on block exit.
+                            creatives_repo = CreativeRepository(session, tenant_id)
                             for status in asset_statuses:
                                 if status.status == "failed":
                                     logger.error(
                                         f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"
                                     )
+                                    continue
+                                if not status.creative_id:
+                                    continue
+                                creative = creative_map.get(status.creative_id)
+                                if creative is None:
+                                    continue
+                                merged = _apply_creative_enrichment(creative, status)
+                                if merged is not None:
+                                    creatives_repo.update_data(creative, merged)
                         else:
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
@@ -1233,14 +1275,9 @@ def push_creative_to_existing_buy(
                 if status.creative_id == creative_id:
                     if status.status == "failed":
                         return False, status.message or "Adapter reported upload failure"
-                    merged_data = _merge_creative_enrichment(creative.data, status)
-                    if merged_data != (creative.data or {}):
+                    merged_data = _apply_creative_enrichment(creative, status)
+                    if merged_data is not None:
                         uow.creatives.update_data(creative, merged_data)
-                        logger.info(
-                            f"[GATE-PUSH] Enriched creative {creative_id} from adapter push "
-                            f"(platform_creative_id={merged_data.get('platform_creative_id')}, "
-                            f"concept_source={merged_data.get('concept_source')})"
-                        )
                     logger.info(
                         f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
                         f"{media_buy_id} (platform order {platform_order_id})"
@@ -3827,16 +3864,12 @@ async def _create_media_buy_impl(
 
                                     if upload_result and len(upload_result) > 0:
                                         uploaded_status = upload_result[0]
-                                        merged_data = _merge_creative_enrichment(creative.data, uploaded_status)
-                                        if merged_data != (creative.data or {}):
-                                            creative.data = merged_data
-                                            session.add(creative)
-                                            logger.info(
-                                                f"Enriched creative {creative_id} from adapter push "
-                                                f"(platform_creative_id={merged_data.get('platform_creative_id')}, "
-                                                f"concept_source={merged_data.get('concept_source')})"
+                                        merged_data = _apply_creative_enrichment(creative, uploaded_status)
+                                        if merged_data is not None:
+                                            CreativeRepository(session, tenant["tenant_id"]).update_data(
+                                                creative, merged_data
                                             )
-                                        pcid = merged_data.get("platform_creative_id")
+                                        pcid = (creative.data or {}).get("platform_creative_id")
                                         if pcid:
                                             platform_creative_ids.append(pcid)
                                 except AdCPError:

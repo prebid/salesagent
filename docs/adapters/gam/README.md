@@ -59,14 +59,16 @@ present** — a buyer-supplied concept always takes precedence and is never over
 
 Notes and limitations:
 
-- Only creatives **pushed to GAM** (i.e. trafficked into a media buy) are enriched.
-  Library-only creatives that were synced but never assigned carry no concept until
-  they are trafficked.
+- Only creatives **pushed to GAM** (i.e. trafficked into a media buy) are enriched —
+  uniformly across all three push paths (auto-approval creation, manual-approval
+  execution, and retroactive per-creative push). Library-only creatives that were
+  synced but never assigned carry no concept until they are trafficked.
 - The Order is a coarse grouping: creatives reused across orders, or unrelated
   creatives in one order, will not map cleanly. It is a best-effort fallback.
 
-Implemented in `src/adapters/gam/managers/creatives.py` (`add_creative_assets`), folded
-into the creative `data` blob by `_merge_creative_enrichment`
+Implemented in `src/adapters/gam/managers/creatives.py` (`add_creative_assets`). Each of
+the three push paths folds the result into the creative `data` blob via the shared
+`_apply_creative_enrichment` helper and persists it through `CreativeRepository.update_data`
 (`src/core/tools/media_buy_create.py`). Follow-up to #1407 (see #1506).
 
 ## Documentation

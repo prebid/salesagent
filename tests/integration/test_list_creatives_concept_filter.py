@@ -144,18 +144,21 @@ class TestNonScalarConceptValueDropped:
 
 
 class TestSellerConceptEnrichmentIsFilterable:
-    """The seller-side concept the GAM producer writes (#1506) is findable by the
-    #1407 concept_ids filter and surfaced on the wire. This chains the real producer
-    helper → data blob → filter, so a key-name drift between the producer and the
-    reader (e.g. writing ``concept`` while the filter reads ``concept_id``) reddens
-    this end-to-end. It is the production data source #1506 exists to provide."""
+    """The concept the #1506 merge helper writes is findable by the #1407 concept_ids
+    filter and surfaced on the wire. This chains the merge helper's output → data blob
+    → filter, so a key-name drift between the helper and the reader (e.g. writing
+    ``concept`` while the filter reads ``concept_id``) reddens here. The full
+    producer → real writeback → DB → reader chain (which this does NOT exercise — it
+    calls the merge helper directly, not a writeback site) is pinned separately by
+    ``test_execute_approved_platform_ids.py``."""
 
     def _enriched_data(self, order_id: str):
         from src.core.schemas import AssetStatus
         from src.core.tools.media_buy_create import _merge_creative_enrichment
 
-        # Exactly what the GAM adapter surfaces for a creative pushed into an order,
-        # folded into the data blob by the production writeback path.
+        # The AssetStatus the GAM producer surfaces for a creative pushed into an order,
+        # run through the real merge helper directly (the production writeback sites are
+        # covered by test_execute_approved_platform_ids.py).
         status = AssetStatus(
             creative_id=f"gam_{order_id}",
             status="approved",
@@ -193,3 +196,7 @@ class TestSellerConceptEnrichmentIsFilterable:
             assert len(creatives) == 1, f"expected only the order-789 creative, got {creatives!r}"
             assert creatives[0]["concept_id"] == "gam-order-789"
             assert creatives[0]["concept_name"] == "GAM Order 789"
+            # The internal provenance marker must never reach the wire. Today it can't
+            # (the reader projects explicit kwargs + the subclass extra="ignore" policy),
+            # but nothing else pins it — a future schema change that echoed data must redden.
+            assert "concept_source" not in creatives[0]
