@@ -1092,6 +1092,53 @@ class TestPackageDeliveryStatus:
         )
 
 
+@pytest.mark.requires_db
+class TestLegacyPersistedStatusNotStranded:
+    """A legacy persisted status (e.g. "ready", "scheduled") must not strand the buy.
+
+    Regression (finding #1): production historically persisted status="ready"
+    (PR #375) and admin flows persist "scheduled". The old delivery resolver
+    passed an unmapped value through verbatim, which then failed the internal
+    status filter, so even fetch-by-ID returned MEDIA_BUY_NOT_FOUND for a buy
+    that exists — while get_media_buys mapped the same row to a valid status.
+    The shared resolver now date-refines any legacy value, so the buy is
+    returned with a valid delivery status and no not-found error.
+
+    Covers: UC-004-MAIN-10
+    """
+
+    @pytest.mark.parametrize("legacy_status", ["ready", "scheduled", "pending_activation"])
+    def test_legacy_status_buy_returned_by_fetch_by_id(self, integration_db, legacy_status):
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_legacy",
+                status=legacy_status,
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 12, 31),
+            )
+            env.set_adapter_response("mb_legacy", impressions=1000, spend=50.0)
+
+            resp = env.call_impl(
+                media_buy_ids=["mb_legacy"],
+                start_date="2025-01-01",
+                end_date="2025-06-15",
+            )
+
+            # The buy is returned (not stranded) with a valid, date-refined status ...
+            assert [d.media_buy_id for d in resp.media_buy_deliveries] == ["mb_legacy"]
+            assert resp.media_buy_deliveries[0].status == "active"
+            # ... and no MEDIA_BUY_NOT_FOUND advisory was emitted for it.
+            error_codes = {e.code for e in (resp.errors or [])}
+            assert "MEDIA_BUY_NOT_FOUND" not in error_codes
+
+
 # ---------------------------------------------------------------------------
 # UC-004-MAIN-11
 # ---------------------------------------------------------------------------

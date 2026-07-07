@@ -1,56 +1,151 @@
 """Cross-tool media-buy status mapping consistency.
 
-get_media_buy_delivery and get_media_buys each map the persisted
-``MediaBuy.status`` column onto their wire status vocabulary. The spec
-requires the two required tools to describe the same buy with the same
-lifecycle status (enums/media-buy-status.json). This module pins the two
-mirrored maps together so they cannot drift.
+get_media_buy_delivery and get_media_buys both derive their wire status from
+the persisted ``MediaBuy.status`` column. The spec requires the two required
+tools to describe the same buy with the same lifecycle status
+(enums/media-buy-status.json). Both now delegate to the single shared resolver
+``resolve_canonical_status`` (CLAUDE.md DRY invariant), so this module pins the
+resolver's behavior AND the two tools' thin adaptations of it — including the
+divergence points (delivery-only "failed", the legacy/unknown fallback) that a
+dict-only comparison would miss.
 """
 
 from __future__ import annotations
 
+from datetime import date
+from types import SimpleNamespace
+
 from adcp.types import MediaBuyStatus
+
+from src.core.tools._media_buy_status import (
+    CANONICAL_STATUSES,
+    PERSISTED_STATUS_TO_CANONICAL,
+    resolve_canonical_status,
+)
+from src.core.tools.media_buy_list import _compute_status
+
+# A reference date inside the default flight window below, so a generic serving
+# status resolves to "active" (not date-refined away).
+_REF = date(2025, 6, 1)
+
+
+def _buy(
+    status: str,
+    *,
+    start: date = date(2025, 1, 1),
+    end: date = date(2025, 12, 31),
+    is_paused: bool = False,
+) -> SimpleNamespace:
+    """A minimal buy-like row (matches the MediaBuy / _MediaBuyData surface the resolver reads)."""
+    return SimpleNamespace(
+        status=status,
+        start_date=start,
+        end_date=end,
+        start_time=None,
+        end_time=None,
+        is_paused=is_paused,
+    )
 
 
 class TestCrossToolStatusMappingConsistency:
     """get_media_buy_delivery and get_media_buys report the same status for the same buy.
 
-    Regression: the two tools' mirrored persisted-status maps disagreed on
-    "draft" (delivery said pending_creatives, list said pending_start), so
-    one buy reported two different statuses depending on which required tool
-    the buyer called. The maps are mirrored rather than shared because the
-    output vocabularies genuinely differ ("failed" is reportable on delivery
-    responses but has no lifecycle equivalent) — this test pins the shared
-    subset together so they cannot drift again.
+    Regression: the two tools kept mirrored persisted-status maps that drifted
+    (they disagreed on "draft"; delivery dropped unmapped legacy rows while list
+    showed them). They now share one resolver. Delivery emits the canonical
+    string; list adapts only the delivery-only "failed" (no lifecycle
+    equivalent) to "rejected".
 
     Spec: enums/media-buy-status.json (lifecycle vocabulary);
     get-media-buy-delivery-response.json (delivery status enum).
     """
 
-    def test_shared_persisted_statuses_map_identically(self):
-        from src.core.tools.media_buy_delivery import _PERSISTED_STATUS_TO_INTERNAL
-        from src.core.tools.media_buy_list import _PERSISTED_STATUS_TO_ADCP
+    def test_both_tools_agree_for_every_persisted_status(self):
+        """For every mapped persisted status the two tools' wire values agree.
 
-        assert set(_PERSISTED_STATUS_TO_INTERNAL) == set(_PERSISTED_STATUS_TO_ADCP)
+        The only sanctioned divergence: delivery may report "failed"; the
+        lifecycle enum has none, so get_media_buys reports "rejected".
+        """
+        for persisted in PERSISTED_STATUS_TO_CANONICAL:
+            buy = _buy(persisted)
+            delivery_status = resolve_canonical_status(buy, _REF)
+            list_status = _compute_status(buy, _REF).value
 
-        for persisted, internal in _PERSISTED_STATUS_TO_INTERNAL.items():
-            if persisted == "failed":
-                # Delivery may report "failed"; the lifecycle enum has no
-                # equivalent so get_media_buys reports the closest terminal
-                # state, "rejected".
-                assert _PERSISTED_STATUS_TO_ADCP[persisted] is MediaBuyStatus.rejected
-                continue
-            assert _PERSISTED_STATUS_TO_ADCP[persisted].value == internal, (
-                f"persisted status {persisted!r}: delivery maps to {internal!r} "
-                f"but get_media_buys maps to {_PERSISTED_STATUS_TO_ADCP[persisted].value!r}"
-            )
+            assert delivery_status in CANONICAL_STATUSES, persisted
+            if delivery_status == "failed":
+                assert list_status == "rejected", persisted
+            else:
+                assert list_status == delivery_status, (
+                    f"persisted {persisted!r}: delivery -> {delivery_status!r}, list -> {list_status!r}"
+                )
+
+    def test_failed_is_reportable_on_delivery_only(self):
+        """ "failed" is a real delivery status but collapses to "rejected" on the lifecycle surface."""
+        buy = _buy("failed")
+        assert resolve_canonical_status(buy, _REF) == "failed"
+        assert _compute_status(buy, _REF) is MediaBuyStatus.rejected
 
     def test_draft_is_pending_creatives(self):
-        """A lingering draft buy has no creatives assigned (the lifecycle
-        transitions stamp pending_creatives/pending_start as creatives land),
-        which is exactly the spec description of pending_creatives."""
-        from src.core.tools.media_buy_delivery import _PERSISTED_STATUS_TO_INTERNAL
-        from src.core.tools.media_buy_list import _PERSISTED_STATUS_TO_ADCP
+        """A lingering draft buy has no creatives assigned — exactly pending_creatives."""
+        buy = _buy("draft")
+        assert resolve_canonical_status(buy, _REF) == "pending_creatives"
+        assert _compute_status(buy, _REF) is MediaBuyStatus.pending_creatives
 
-        assert _PERSISTED_STATUS_TO_INTERNAL["draft"] == "pending_creatives"
-        assert _PERSISTED_STATUS_TO_ADCP["draft"] is MediaBuyStatus.pending_creatives
+
+class TestLegacyAndUnknownStatusesNotDropped:
+    """Legacy persisted values and unknown statuses resolve to a valid status, never dropped.
+
+    Regression (delivery): the old delivery resolver passed an unmapped
+    persisted value through verbatim, so a legacy "ready" row (written by
+    PR #375) or an admin "scheduled" row failed the internal-status filter and
+    made even fetch-by-ID report MEDIA_BUY_NOT_FOUND for a buy that exists —
+    while get_media_buys mapped the same row to a valid status. Both tools now
+    treat any unmapped/legacy value as a generic serving state and date-refine
+    it, so it always lands in CANONICAL_STATUSES (== the delivery fetch-by-ID
+    filter set) and both tools agree.
+    """
+
+    def test_legacy_and_unknown_statuses_resolve_to_valid_status(self):
+        for persisted in ("ready", "scheduled", "pending_activation", "totally_unknown_legacy"):
+            buy = _buy(persisted)  # inside the flight window
+            delivery_status = resolve_canonical_status(buy, _REF)
+
+            # Never a raw passthrough — must be in the delivery filter set so
+            # fetch-by-ID cannot drop it.
+            assert delivery_status in CANONICAL_STATUSES, persisted
+            assert delivery_status == "active", persisted
+            # And the two tools still agree.
+            assert _compute_status(buy, _REF).value == delivery_status, persisted
+
+    def test_legacy_ready_alias_date_refines_like_active(self):
+        """A legacy "ready"/"scheduled" buy follows the flight window like any serving buy."""
+        before = _buy("ready", start=date(2025, 9, 1), end=date(2025, 12, 31))
+        within = _buy("scheduled", start=date(2025, 1, 1), end=date(2025, 12, 31))
+        after = _buy("pending_activation", start=date(2025, 1, 1), end=date(2025, 3, 31))
+
+        assert resolve_canonical_status(before, _REF) == "pending_start"
+        assert resolve_canonical_status(within, _REF) == "active"
+        assert resolve_canonical_status(after, _REF) == "completed"
+
+
+class TestSimulationReachesTerminalStatus:
+    """Under time simulation, a non-terminal buy follows the simulated clock; terminals are preserved.
+
+    Regression (finding #3): honoring the persisted lifecycle short-circuited
+    date refinement, so a time-simulation client (jump_to_event) on a buy
+    created as pending_creatives never reached "completed" and the "final"
+    delivery notification was unreachable.
+    """
+
+    def test_simulated_pending_buy_reaches_completed_past_flight(self):
+        buy = _buy("pending_creatives", start=date(2025, 1, 1), end=date(2025, 3, 31))
+        past_flight = date(2025, 6, 1)
+        assert resolve_canonical_status(buy, past_flight, simulate=True) == "completed"
+        # Without simulation the persisted lifecycle stays authoritative.
+        assert resolve_canonical_status(buy, past_flight, simulate=False) == "pending_creatives"
+
+    def test_simulation_preserves_terminal_decisions(self):
+        """Simulation must not resurrect a buy the seller deliberately stopped."""
+        for terminal in ("canceled", "rejected", "paused"):
+            buy = _buy(terminal, start=date(2025, 1, 1), end=date(2025, 3, 31))
+            assert resolve_canonical_status(buy, date(2025, 6, 1), simulate=True) == terminal

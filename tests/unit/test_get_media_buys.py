@@ -164,7 +164,7 @@ class TestComputeStatus:
 
     def test_paused_flag_overrides_active_window(self):
         """Regression (salesagent-36d): is_paused True reports paused even when
-        the flight window covers today, mirroring _internal_status_for_buy."""
+        the flight window covers today, via the shared resolve_canonical_status."""
         buy = make_media_buy(
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),

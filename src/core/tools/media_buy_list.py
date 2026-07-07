@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.tools._media_buy_status import resolve_canonical_status
 
 logger = logging.getLogger(__name__)
 
@@ -437,73 +438,21 @@ def _resolve_status_filter(
     return {status_filter}
 
 
-# Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
-# transitions) maps onto the AdCP MediaBuyStatus wire vocabulary below.
-# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL (the
-# salesagent-18h.1 fix) but targets the AdCP enum used by list_media_buys
-# instead of the internal delivery filter vocabulary — the two output
-# vocabularies are genuinely different (AdCP has no "failed"/"ready"/"draft"),
-# so per the CLAUDE.md DRY guidance ("not about collapsing two genuinely
-# different operations") the mapping is mirrored, not shared.
-#
-# The persisted status is authoritative: terminal/explicit states
-# (paused, completed, rejected, canceled) are lifecycle decisions that
-# cannot be re-derived from flight dates. "failed" has no AdCP equivalent
-# and is reported as the closest terminal state, "rejected". "draft" maps
-# to "pending_creatives": the lifecycle machinery (media_buy_create /
-# media_buy_update transitions) stamps pending_creatives on any buy without
-# assigned creatives, so a lingering "draft" is a buy that never got
-# creatives — the spec enum describes pending_creatives as exactly that
-# state (enums/media-buy-status.json). This matches
-# media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL so both tools report
-# the same status for the same buy. Submitted-but-unapproved states
-# (pending/pending_approval) map to "pending_start". Generic serving
-# states (active/approved) are date-refined below.
-_PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
-    "active": MediaBuyStatus.active,
-    "approved": MediaBuyStatus.active,
-    "paused": MediaBuyStatus.paused,
-    "completed": MediaBuyStatus.completed,
-    "rejected": MediaBuyStatus.rejected,
-    "canceled": MediaBuyStatus.canceled,
-    "failed": MediaBuyStatus.rejected,
-    "draft": MediaBuyStatus.pending_creatives,
-    "pending": MediaBuyStatus.pending_start,
-    "pending_approval": MediaBuyStatus.pending_start,
-    "pending_creatives": MediaBuyStatus.pending_creatives,
-    "pending_start": MediaBuyStatus.pending_start,
-}
-
-
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
     """Resolve a media buy's AdCP status from its persisted status column.
 
-    The persisted ``MediaBuy.status`` is the source of truth. Only when the
-    buy is in a generic serving state ("active"/"approved") do we refine
-    against the flight window — a serving buy whose flight has not started
-    yet is "pending_start", one past its end date is "completed", and one
-    flagged ``is_paused`` is "paused". Terminal/explicit lifecycle states
-    (paused, completed, rejected, canceled) come straight from the column
-    and cannot be re-derived from flight dates (salesagent-36d).
+    Delegates the persisted-status map + flight-window refinement to the shared
+    ``resolve_canonical_status`` (the single source of truth also used by
+    get_media_buy_delivery, so both required tools describe the same buy with
+    the same status — pinned by test_media_buy_status_consistency). The only
+    adaptation to the lifecycle surface: the canonical vocabulary's delivery-only
+    "failed" has no AdCP lifecycle equivalent, so it collapses to the closest
+    terminal state, "rejected" (enums/media-buy-status.json).
     """
-    persisted = (buy.status or "").lower()
-    mapped = _PERSISTED_STATUS_TO_ADCP.get(persisted, MediaBuyStatus.active)
-
-    if mapped != MediaBuyStatus.active:
-        return mapped
-
-    # Generic serving state — refine against the flight window.
-    if getattr(buy, "is_paused", False):
-        return MediaBuyStatus.paused
-
-    start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
-    end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
-
-    if today < start:
-        return MediaBuyStatus.pending_start
-    if today > end:
-        return MediaBuyStatus.completed
-    return MediaBuyStatus.active
+    canonical = resolve_canonical_status(buy, today)
+    if canonical == "failed":
+        return MediaBuyStatus.rejected
+    return MediaBuyStatus(canonical)
 
 
 def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:

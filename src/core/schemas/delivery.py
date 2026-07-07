@@ -6,7 +6,7 @@ from ``src.core.schemas`` for backward compatibility.
 
 from datetime import date
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from adcp.types import AggregatedTotals as LibraryAggregatedTotals
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
@@ -18,6 +18,7 @@ from adcp.types import (
 from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
+from adcp.types import MediaBuyDeliveryStatus as LibraryMediaBuyDeliveryStatus
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     ByDeviceTypeItem as LibraryByDeviceTypeItem,
@@ -223,21 +224,14 @@ class DailyBreakdown(SalesAgentBaseModel):
     spend: float = Field(ge=0, description="Daily spend")
 
 
-# Status vocabulary of the AdCP delivery response (pinned
-# get-media-buy-delivery-response.json status enum). Wider than the
-# media-buy lifecycle enum: delivery responses may additionally report
-# "failed" and "reporting_delayed".
-MediaBuyDeliveryStatus = Literal[
-    "pending_creatives",
-    "pending_start",
-    "active",
-    "paused",
-    "completed",
-    "rejected",
-    "canceled",
-    "failed",
-    "reporting_delayed",
-]
+# Status vocabulary of the AdCP delivery response. Re-export the pinned adcp
+# library enum (Pattern #1: use the library type, never duplicate) rather than a
+# hand-maintained Literal that had already drifted — it omitted "pending", which
+# both the library enum and the pinned get-media-buy-delivery-response.json
+# fixture list (as a legacy alias for pending_start). Wider than the media-buy
+# lifecycle enum: delivery responses may additionally report "pending", "failed",
+# and "reporting_delayed".
+MediaBuyDeliveryStatus = LibraryMediaBuyDeliveryStatus
 
 
 class MediaBuyDeliveryData(SalesAgentBaseModel):
@@ -250,6 +244,12 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
     TODO(salesagent-jz3y): Add buyer_campaign_ref field from adcp spec
     (present in library MediaBuyDelivery but missing here).
     """
+
+    # use_enum_values keeps ``status`` (and ``pricing_model``) as their str
+    # values after validation, so the library MediaBuyDeliveryStatus enum
+    # validates the wire vocabulary while downstream ``status == "completed"``
+    # comparisons and JSON serialization stay string-native.
+    model_config = ConfigDict(extra=get_pydantic_extra_mode(), use_enum_values=True)
 
     media_buy_id: str = Field(description="Publisher's media buy identifier")
     status: MediaBuyDeliveryStatus = Field(

@@ -106,6 +106,11 @@ from src.core.schemas import (
     ReportingPeriod as MediaBuyReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
+from src.core.tools._media_buy_status import (
+    CANONICAL_STATUSES,
+    TERMINAL_STATUSES,
+    resolve_canonical_status,
+)
 from src.core.validation_helpers import format_validation_error
 
 
@@ -218,6 +223,12 @@ def _get_media_buy_delivery_impl(
         media_buy_count = 0
         total_clicks = 0
 
+        # Time-simulation mode (mock_time / jump_to_event): the buyer is
+        # modeling delivery at a hypothetical clock, so non-terminal buys must
+        # follow the simulated flight window to reach "completed"/final — see
+        # resolve_canonical_status(simulate=...).
+        simulate_time = bool(testing_ctx.mock_time or testing_ctx.jump_to_event)
+
         for media_buy_id, buy in target_media_buys:
             try:
                 # Apply time simulation from testing context
@@ -237,14 +248,18 @@ def _get_media_buy_delivery_impl(
 
                 # Determine status from the persisted lifecycle column,
                 # date-refined only for serving states — the same single
-                # source of truth as the status_filter path. A canceled,
-                # rejected, or draft buy inside its flight window must not
-                # report "active" just because the dates line up.
-                status = _internal_status_for_buy(buy, simulation_datetime.date())
+                # source of truth (resolve_canonical_status) as the
+                # status_filter path and get_media_buys. A canceled, rejected,
+                # or draft buy inside its flight window must not report "active"
+                # just because the dates line up.
+                status = resolve_canonical_status(buy, simulation_datetime.date(), simulate=simulate_time)
 
-                # Override status when circuit breaker is open (reporting degraded),
-                # but not for paused buys (paused takes priority)
-                if status != "paused" and _is_circuit_breaker_open(tenant["tenant_id"]):
+                # Override status when circuit breaker is open (reporting
+                # degraded). "reporting_delayed" means "data temporarily
+                # unavailable, will report later", so it must not overwrite a
+                # terminal or paused buy that is not awaiting fresh data — that
+                # would tell the buyer to expect a report that will never come.
+                if status not in TERMINAL_STATUSES and _is_circuit_breaker_open(tenant["tenant_id"]):
                     status = "reporting_delayed"
 
                 # Get delivery metrics from adapter
@@ -744,56 +759,10 @@ def _resolve_delivery_status_filter(
 
 
 # -- Helper functions --
-# Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
-# transitions) maps onto the internal delivery filter vocabulary below.
-# The persisted status is authoritative: terminal/explicit states
-# (completed, paused, rejected, canceled) are lifecycle decisions that
-# cannot be re-derived from flight dates. Transitional pre-serving states
-# (draft, pending_approval, pending_creatives, pending_start) map to
-# their spec taxonomy values (pending_creatives / pending_start), which the
-# default "active" filter still excludes.
-_PERSISTED_STATUS_TO_INTERNAL: dict[str, str] = {
-    "active": "active",
-    "approved": "active",
-    "paused": "paused",
-    "completed": "completed",
-    "rejected": "rejected",
-    "canceled": "canceled",
-    "failed": "failed",
-    "draft": "pending_creatives",
-    "pending": "pending_start",
-    "pending_approval": "pending_start",
-    "pending_creatives": "pending_creatives",
-    "pending_start": "pending_start",
-}
-
-
-def _internal_status_for_buy(buy: MediaBuy, reference_date: date) -> str:
-    """Resolve a media buy's filterable status from its persisted column.
-
-    The persisted ``MediaBuy.status`` is the source of truth. Only when the
-    buy is in a generic serving state ("active"/"approved") do we refine
-    against flight dates — an "active" buy whose flight window has not yet
-    started is "pending_start", and one past its end date is "completed".
-    """
-    persisted = (buy.status or "").lower()
-    internal = _PERSISTED_STATUS_TO_INTERNAL.get(persisted, persisted)
-
-    if internal != "active":
-        return internal
-
-    # Generic serving state — refine against the flight window.
-    # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime).
-    start_compare = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
-    end_compare = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
-
-    if getattr(buy, "is_paused", False):
-        return "paused"
-    if reference_date < start_compare:
-        return "pending_start"
-    if reference_date > end_compare:
-        return "completed"
-    return "active"
+# The persisted-status -> canonical-status map and its date-refinement live in
+# _media_buy_status.resolve_canonical_status — the single source of truth shared
+# with get_media_buys (CLAUDE.md DRY invariant). This module consumes the
+# canonical delivery vocabulary (CANONICAL_STATUSES) directly.
 
 
 def _get_target_media_buys(
@@ -802,20 +771,10 @@ def _get_target_media_buys(
     repo: MediaBuyRepository,
     reference_date: date,
 ) -> list[tuple[str, MediaBuy]]:
-    # Resolve status_filter to a set of internal status strings. The
-    # internal delivery vocabulary matches the AdCP MediaBuyStatus enum
-    # (pending_creatives, pending_start, active, paused, completed,
-    # rejected, canceled) plus internal-only "failed".
-    valid_internal_statuses = {
-        "active",
-        "pending_creatives",
-        "pending_start",
-        "paused",
-        "completed",
-        "failed",
-        "rejected",
-        "canceled",
-    }
+    # The internal delivery filter vocabulary is exactly the canonical status
+    # set (pending_creatives, pending_start, active, paused, completed,
+    # rejected, canceled, plus delivery-only "failed").
+    valid_internal_statuses = set(CANONICAL_STATUSES)
 
     def _to_internal(status: MediaBuyStatus) -> str:
         """Convert AdCP MediaBuyStatus enum to internal status string."""
@@ -840,7 +799,7 @@ def _get_target_media_buys(
     return [
         (buy.media_buy_id, buy)
         for buy in fetched_buys
-        if _internal_status_for_buy(buy, reference_date) in filter_statuses
+        if resolve_canonical_status(buy, reference_date) in filter_statuses
     ]
 
 
