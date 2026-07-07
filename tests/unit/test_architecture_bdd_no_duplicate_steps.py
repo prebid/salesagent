@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Threshold: flag when N or more functions share the same body
@@ -84,6 +86,21 @@ def _normalize_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return ast.dump(ast.Module(body=stmts, type_ignores=[]))
 
 
+def _collect_step_function_names() -> set[str]:
+    """Return names of all @given/@when/@then decorated functions under tests/bdd/steps/."""
+    names: set[str] = set()
+    for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
+        if py_file.name.startswith("_"):
+            continue
+        tree = ast.parse(py_file.read_text(), filename=str(py_file))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if _is_step_decorated(node):
+                names.add(node.name)
+    return names
+
+
 def _scan_bdd_steps() -> list[tuple[str, list[str]]]:
     """Find groups of step functions with identical bodies.
 
@@ -137,4 +154,16 @@ class TestBddNoDuplicateSteps:
         assert not duplicates, (
             f"Found {len(duplicates)} group(s) of step functions with identical bodies "
             f"(threshold: {_DUPLICATE_THRESHOLD}+):" + "".join(lines)
+        )
+
+    @pytest.mark.arch_guard
+    def test_allowed_duplicate_entries_still_exist(self) -> None:
+        """Every _ALLOWED_DUPLICATES entry must still name a live BDD step function."""
+        step_names = _collect_step_function_names()
+        found = {(name,) for name in _ALLOWED_DUPLICATES if name in step_names}
+        allowlist = {(name,) for name in _ALLOWED_DUPLICATES}
+        assert_violations_match_allowlist(
+            found,
+            allowlist,
+            fix_hint="Remove renamed/removed steps from _ALLOWED_DUPLICATES.",
         )
