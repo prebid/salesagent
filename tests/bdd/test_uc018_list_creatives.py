@@ -1,7 +1,7 @@
 """BDD scenarios + steps for UC-018: list_creatives library queries.
 
-Binds the UC-018 feature; two storyboard scenarios are wired (the rest xfail at
-the conftest harness fixture):
+Binds the UC-018 feature; several scenarios are wired (the rest xfail at the
+conftest harness fixture):
 
 - ``T-UC-018-storyboard-list-all-creatives-after-sync`` (#1405): after the buyer
   syncs creatives across formats, ``list_creatives`` with no filters returns the
@@ -14,7 +14,17 @@ the conftest harness fixture):
   ``core/creative-filters.json`` (concept_ids) and ``list-creatives-response.json``
   (concept_id/concept_name).
 
-Both pinned at v3.1-04f59d2d5 (adcp 3.1.0-beta.3).
+The first two are pinned at v3.1-04f59d2d5 (adcp 3.1.0-beta.3).
+
+- ``T-UC-018-inv-034-1-holds`` / ``T-UC-018-inv-034-1-violated`` (#1503):
+  BR-RULE-034 cross-principal isolation. Two principals in one tenant each own
+  creatives; a buyer authenticated as one sees exactly its own library (holds) and
+  never the other's (counter). Enforced in production by
+  ``CreativeRepository.get_by_principal``'s ``principal_id`` filter — dropping it
+  leaks the co-tenant principal's rows and fails these scenarios. principal_id is
+  ``Field(exclude=True)`` (never on the wire), so ownership is verified by matching
+  returned creative_ids to the seeded per-principal id sets. See the section comment
+  above those steps.
 
 Wired to real production across all wire transports (auto-parametrized; UC-018
 -> CreativeListEnv via conftest ``_detect_uc`` / ``_harness_env``). The repo
@@ -69,19 +79,33 @@ scenarios("features/BR-UC-018-list-creatives.feature")
 # ── Given ────────────────────────────────────────────────────────────
 
 
-@given(parsers.parse('the Buyer is authenticated as principal "{principal_id}"'))
-def given_buyer_authenticated_as_principal(ctx: dict, principal_id: str) -> None:
-    """Authenticate the listing buyer as *principal_id* (Background).
+def _authenticate_env_as(ctx: dict, principal_id: str) -> Any:
+    """Authenticate the harness env as *principal_id*; return the env.
 
-    Mutates the harness env identity so list_creatives is principal-scoped to
-    this buyer, and records it so the seed step owns the creatives under the same
-    principal the query authenticates as (list_creatives is principal-scoped — a
-    mismatch would return an empty library).
+    Shared by the Background Given and the BR-RULE-034 When (#1503). Mutates the env
+    so list_creatives is principal-scoped to this buyer, and records the principal so
+    the seed steps own their creatives under the same id the query authenticates as
+    (list_creatives is principal-scoped — a mismatch returns an empty library).
+
+    Clears the identity cache so the NEXT identity build re-resolves the principal's
+    real auth_token from the DB. Background runs before any principal row exists, so
+    the first ``env.identity`` access caches a tokenless identity under the "mcp"
+    protocol key (shared by IMPL+MCP). Clearing here — invoked again from the When
+    step, after the seed steps have committed the principals — lets the wire dispatch
+    rebuild identity with the real token and run the full header -> token -> DB-lookup
+    auth chain rather than the tokenless injection shortcut.
     """
     env = ctx["env"]
     env._identity_cache.clear()
     env._principal_id = principal_id
     ctx["principal_id"] = principal_id
+    return env
+
+
+@given(parsers.parse('the Buyer is authenticated as principal "{principal_id}"'))
+def given_buyer_authenticated_as_principal(ctx: dict, principal_id: str) -> None:
+    """Authenticate the listing buyer as *principal_id* (Background)."""
+    env = _authenticate_env_as(ctx, principal_id)
     # Post-condition: verify the identity mutation took effect.
     actual = env.identity.principal_id
     assert actual == principal_id, f"env.identity.principal_id is {actual!r} after setting {principal_id!r}"
@@ -344,3 +368,116 @@ def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
             f"creative {entry.get('creative_id')!r} concept_id mismatch: {entry}"
         )
         assert entry.get("concept_name"), f"creative {entry.get('creative_id')!r} missing concept_name: {entry}"
+
+
+# ── @BR-RULE-034 cross-principal isolation scenarios (#1503) ────────────
+#
+# BR-RULE-034 (P0): list_creatives is principal-scoped — a buyer sees only its own
+# creatives, never another principal's, even within the same tenant. Enforced in
+# production by CreativeRepository.get_by_principal's ``principal_id=principal_id``
+# filter (src/core/database/repositories/creative.py). Dropping that filter leaks
+# the co-tenant principal's rows and fails both scenarios below (INV-1 holds asserts
+# an exact-set match; INV-1 counter asserts zero overlap with the other principal).
+#
+# principal_id is ``Field(exclude=True)`` on the Creative schema, so it never appears
+# on the buyer-facing wire. Ownership is therefore verified by matching each returned
+# creative_id against the per-principal id sets recorded at seed time — CreativeFactory
+# assigns a globally-unique creative_id per row, so the two principals' id sets are
+# disjoint and the isolation assertion is well-formed. Assertions read
+# ctx["wire_response"] (the real serialized bytes on a2a/mcp/rest) via _wire_creatives,
+# satisfying the "actual wire bytes" constraint.
+
+_ISOLATION_CREATIVES_KEY = "isolation_creatives_by_principal"
+
+
+@given(parsers.parse('principal "{principal_id}" has {count:d} creatives'))
+@given(parsers.parse('principal "{principal_id}" has {count:d} creatives in the same tenant'))
+def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) -> None:
+    """Seed *count* approved creatives owned by *principal_id* under the shared tenant.
+
+    Both isolation scenarios seed two principals in ONE tenant. The tenant is created
+    on the first seed and reused on subsequent ones: neither TenantFactory nor
+    PrincipalFactory uses ``sqlalchemy_get_or_create``, so a second
+    ``TenantFactory(tenant_id=...)`` would raise a duplicate-PK IntegrityError.
+    Records each principal's creative_ids so the Then steps can attribute ownership
+    (principal_id is off-wire — see the section comment).
+
+    Two ``@given`` phrasings map to this one body: ``parsers.parse`` requires a
+    whole-string match, so the "in the same tenant" variant needs its own decorator.
+    """
+    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+
+    env = ctx["env"]
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        tenant = TenantFactory(tenant_id=env._tenant_id)
+        ctx["tenant"] = tenant
+    principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
+    seeded: dict[str, list[str]] = ctx.setdefault(_ISOLATION_CREATIVES_KEY, {})
+    seeded[principal_id] = [
+        CreativeFactory(
+            tenant=tenant,
+            principal=principal,
+            status="approved",
+            # Present-but-empty assets object: the repository drops rows whose
+            # data["assets"] IS NULL (legacy guard), so the key must exist.
+            data={"assets": {}},
+        ).creative_id
+        for _ in range(count)
+    ]
+
+
+@when(parsers.parse('the Buyer Agent authenticated as "{principal_id}" sends a list_creatives request'))
+def when_authenticated_principal_lists_creatives(ctx: dict, principal_id: str) -> None:
+    """Authenticate as *principal_id* and dispatch an unfiltered list_creatives.
+
+    Re-authenticates via the shared helper (which clears the identity cache) AFTER the
+    seed steps committed the principals, so the wire dispatch resolves the principal's
+    real token and runs the full auth chain. Reuses the canonical generic dispatch
+    helper (``_call_via`` stashes response / wire_response / error on ctx).
+    """
+    from tests.bdd.steps.generic.when_request import _call_via
+
+    _authenticate_env_as(ctx, principal_id)
+    _call_via(ctx, ctx.get("transport"))
+
+
+def _returned_creative_ids(ctx: dict) -> set[str]:
+    """The set of creative_ids in the wire response.
+
+    Ownership is id-based: principal_id is ``Field(exclude=True)`` and never on the
+    wire, so a returned creative's owner is identified by which seeded id set its
+    creative_id came from.
+    """
+    return {entry["creative_id"] for entry in _wire_creatives(ctx)}
+
+
+@then(parsers.parse("the response contains exactly {count:d} creatives"))
+def then_response_contains_exactly_n_creatives(ctx: dict, count: int) -> None:
+    """Assert the wire response carries exactly *count* creatives (all fit on page 1)."""
+    creatives = _wire_creatives(ctx)
+    assert len(creatives) == count, (
+        f"expected exactly {count} creatives, got {len(creatives)}: "
+        f"{sorted(entry.get('creative_id') for entry in creatives)}"
+    )
+
+
+@then(parsers.parse('all creatives belong to principal "{principal_id}"'))
+def then_all_creatives_belong_to(ctx: dict, principal_id: str) -> None:
+    """Assert the returned creatives are exactly the ones this principal seeded."""
+    owned = set(ctx[_ISOLATION_CREATIVES_KEY][principal_id])
+    returned = _returned_creative_ids(ctx)
+    assert returned, "list_creatives returned an empty creatives array"
+    strangers = returned - owned
+    assert not strangers, f"creatives not owned by {principal_id!r} leaked into the response: {sorted(strangers)}"
+    # Falsifiability anchor: an unscoped query returns MORE than the owner's library.
+    assert returned == owned, f"expected exactly {principal_id!r}'s creatives {sorted(owned)}, got {sorted(returned)}"
+
+
+@then(parsers.parse('none of the returned creatives belong to principal "{principal_id}"'))
+def then_none_belong_to(ctx: dict, principal_id: str) -> None:
+    """Assert no returned creative belongs to the co-tenant principal (isolation counter)."""
+    leaked = _returned_creative_ids(ctx) & set(ctx[_ISOLATION_CREATIVES_KEY][principal_id])
+    assert not leaked, (
+        f"cross-principal leak: creatives owned by {principal_id!r} appeared in the response: {sorted(leaked)}"
+    )

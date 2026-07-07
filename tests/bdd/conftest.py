@@ -2846,13 +2846,18 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             yield
 
     elif uc == "UC-018":
-        # list_creatives — the wired storyboard scenarios are @list-after-sync
-        # (#1405) and @concept-id (#1407). The remaining UC-018 scenarios
-        # (main/partition/boundary/other filter siblings) have no step definitions
-        # yet, so xfail fast at the fixture (mirrors UC-002/006/011) rather than
-        # spinning up a DB per scenario only to auto-xfail at the first missing step.
+        # list_creatives — the wired scenarios are @list-after-sync (#1405),
+        # @concept-id (#1407), and the @BR-RULE-034 cross-principal isolation
+        # invariants (#1503). The remaining UC-018 scenarios (main/partition/
+        # boundary/other filter siblings) have no step definitions yet, so xfail
+        # fast at the fixture (mirrors UC-002/006/011) rather than spinning up a
+        # DB per scenario only to auto-xfail at the first missing step.
+        #
+        # BR-RULE-034 is unambiguous here: this branch only runs for T-UC-018-*
+        # scenarios (see _detect_uc), so the tag never collides with the UC-006
+        # BR-RULE-034 scenarios routed elsewhere.
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"list-after-sync", "concept-id"}:
+        if marker_names & {"list-after-sync", "concept-id", "BR-RULE-034"}:
             # CreativeListEnv mocks only the audit logger; DB, repository, and
             # query building are real. The Background auth step switches the env
             # principal; the seed step owns the creatives under it.
@@ -2864,7 +2869,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(
-                "UC-018 harness wired only for the @list-after-sync (#1405) and @concept-id (#1407) storyboard scenarios"
+                "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
+                "and @BR-RULE-034 isolation (#1503) scenarios"
             )
 
     elif uc == "UC-011":
