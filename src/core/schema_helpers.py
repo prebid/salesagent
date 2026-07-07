@@ -107,7 +107,10 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
     if isinstance(brand, str):
         domain = brand_shorthand_to_domain(brand)
         if not domain:
-            return None
+            raise AdCPValidationError(
+                f"Invalid brand: could not derive domain from brand shorthand {brand!r}",
+                field="brand",
+            )
         return BrandReference(domain=domain)
     if isinstance(brand, dict):
         return BrandReference(**brand)

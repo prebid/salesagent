@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schema_helpers import brand_shorthand_to_domain, create_get_products_request, to_brand_reference
 
 
@@ -50,5 +51,6 @@ def test_brand_shorthand_to_domain_malformed_url_non_raising(malformed_url: str)
     assert brand_shorthand_to_domain(malformed_url) == ""
 
 
-def test_to_brand_reference_malformed_url_returns_none() -> None:
-    assert to_brand_reference("https://[") is None
+def test_to_brand_reference_malformed_url_raises_validation_error() -> None:
+    with pytest.raises(AdCPValidationError, match="Invalid brand"):
+        to_brand_reference("https://[")
