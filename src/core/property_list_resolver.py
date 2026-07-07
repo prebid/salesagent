@@ -25,6 +25,7 @@ from adcp.types import GetPropertyListResponse, Identifier, PropertyListReferenc
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPAdapterError, adcp_error_for_http_status
+from src.core.log_safety import loggable
 from src.core.security.url_validator import (
     resolve_validated_ip,
     ssrf_pinned_async_transport,
@@ -60,8 +61,9 @@ def loggable_list_id(list_id: str) -> str:
 
     ``PropertyListReference.list_id`` has no charset constraint, so embedded
     newlines would otherwise let a buyer forge operator log lines (CWE-117).
+    Caps length on top of the shared :func:`loggable` scrub.
     """
-    return "".join(ch for ch in list_id if ch.isprintable())[:128]
+    return loggable(list_id)[:128]
 
 
 def package_property_list_ref(package: Any) -> PropertyListReference | None:

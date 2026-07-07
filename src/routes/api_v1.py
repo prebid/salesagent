@@ -67,6 +67,9 @@ class GetProductsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (P
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
     property_list: dict[str, Any] | None = None  # PropertyListReference; coerced by the request factory
+    context: dict[str, Any] | None = None
+    buying_mode: str | None = None
+    refine: list[dict[str, Any]] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -167,6 +170,7 @@ class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (
     accounts: list[dict[str, Any]] = []
     delete_missing: bool = False
     dry_run: bool = False
+    idempotency_key: str | None = None
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
@@ -184,13 +188,17 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
-    req = products_module.create_get_products_request(
+    req, pre_v3_defaulted = products_module.create_get_products_request(
         brief=body.brief,
         brand=body.brand,
         filters=body.filters,
         property_list=body.property_list,
+        context=body.context,
+        buying_mode=body.buying_mode,
+        refine=body.refine,
+        adcp_version=body.adcp_version,
     )
-    response = await products_module._get_products_impl(req, identity)
+    response = await products_module._get_products_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
     result = response.model_dump(mode="json")
     return apply_version_compat("get_products", result, body.adcp_version)
 
@@ -376,10 +384,14 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
 
 
 @router.post("/accounts/sync")
-async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
+async def sync_accounts(
+    body: SyncAccountsBody,
+    identity: ResolvedIdentity = require_auth,
+    raw_wire_payload: dict[str, Any] = raw_json_body,
+):
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
-    response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
+    response = await accounts_module.sync_accounts_raw(req=req, identity=identity, raw_wire_payload=raw_wire_payload)
     return response.model_dump(mode="json")

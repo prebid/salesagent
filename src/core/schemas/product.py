@@ -231,10 +231,20 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
+    """One request model spanning all three get_products buying modes.
 
-    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
-    We widen buying_mode to str|None so callers aren't forced into a single mode.
+    Runtime shape: this is a single class subclassing ``AdcpVersionEnvelope`` (via
+    ``AdCPBaseModel``), not a union. It extends the library's
+    ``GetProductsWholesaleRequest`` (imported as ``LibraryGetProductsRequest``); the
+    sibling names ``GetProductsWholesaleRequest`` and ``GetProductsRefineRequest`` are
+    ``TypeAlias`` bindings to this same class, not distinct types. The library declares
+    ``buying_mode`` as a required ``BuyingMode`` enum; we widen it to ``str | None`` so a
+    single model serves every mode (and forward/pre-v3 construction without a mode).
+
+    The three modes the validator enforces cross-mode rules for:
+    - ``brief``: the publisher curates products from a required ``brief``; ``refine`` forbidden.
+    - ``wholesale``: the buyer requests raw inventory; ``brief`` forbidden.
+    - ``refine``: iterate on a prior response via a required ``refine`` array; ``brief`` forbidden.
 
     Library provides: account, brand, brief, buyer_campaign_ref, catalog,
     context, ext, fields, filters, pagination, property_list, refine.
@@ -262,6 +272,79 @@ class GetProductsRequest(LibraryGetProductsRequest):
         description="Selectors to filter the brand manifest product catalog for product discovery",
         exclude=True,
     )
+
+    @model_validator(mode="after")
+    def _validate_buying_mode_invariants(self) -> "GetProductsRequest":
+        """Enforce the version-agnostic cross-mode rules the library union does not check.
+
+        Rule sources: AdCP 3.0.1 ``get_products`` buying-mode prose and
+        tests/bdd/features/BR-UC-001-discover-available-inventory.feature.
+
+        Scope boundary: this model is version-agnostic and only enforces the
+        cross-mode invariants that hold once a mode is declared (brief requires a
+        brief and forbids refine; wholesale/refine forbid a brief; refine requires
+        the refine array). Whether a *missing* buying_mode is allowed is version-keyed
+        per spec ("v3 clients MUST include buying_mode; pre-v3 clients without it
+        SHOULD default to 'brief'") and needs the client's ``adcp_version``, which
+        this model does not carry. So required-ness lives in the version-aware
+        wrapper (``create_get_products_request``): it defaults pre-v3 clients and
+        rejects v3 omissions before construction. A ``None`` mode is accepted here
+        so direct/forward-compat construction keeps working.
+        """
+        from src.core.helpers import enum_value
+
+        if self.buying_mode is None:
+            return self
+        mode = enum_value(self.buying_mode)
+        if mode not in {"brief", "wholesale", "refine"}:
+            raise ValueError(f"buying_mode must be one of 'brief', 'wholesale', 'refine'; got {mode!r}")
+
+        has_brief = bool(self.brief and self.brief.strip())
+        refine_present = self.refine is not None
+
+        if mode == "brief":
+            if not has_brief:
+                raise ValueError("brief is required when buying_mode is 'brief'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'brief'")
+        elif mode == "wholesale":
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'wholesale'")
+            if refine_present:
+                raise ValueError("refine must not be provided when buying_mode is 'wholesale'")
+        else:  # mode == "refine"
+            if has_brief:
+                raise ValueError("brief must not be provided when buying_mode is 'refine'")
+            if not refine_present:
+                raise ValueError("refine array is required when buying_mode is 'refine'")
+            self._reject_unsupported_finalize()
+
+        return self
+
+    def _reject_unsupported_finalize(self) -> None:
+        """Reject refine arrays carrying ``action: "finalize"`` until proposal commit lands.
+
+        AdCP 3.1.0-beta.3 refinement.mdx ("Finalize is exclusive within ``refine[]``"):
+        ``action: "finalize"`` is a commit, not a refinement — it transitions a draft
+        proposal to committed with an expires_at hold window, and if any entry finalizes
+        then ALL entries MUST be proposal-scoped ``action: "finalize"``. refine is a stub
+        here (``refinement_applied`` reports ``status: "unable"``); proposal-state
+        persistence and the commit transition are not implemented. The honest declaration
+        is to reject any finalize outright with INVALID_REQUEST rather than silently
+        accept a commit we cannot perform. (``ValueError`` here is translated to
+        ``AdCPInvalidRequestError`` by ``create_get_products_request``.)
+        """
+        from src.core.helpers import enum_value
+
+        for entry in self.refine or []:
+            inner = getattr(entry, "root", entry)
+            action = getattr(inner, "action", None)
+            if action is not None and enum_value(action) == "finalize":
+                raise ValueError(
+                    "refine action='finalize' (proposal commit) is not yet supported; "
+                    "sequence a refine call then a separate finalize call once proposal "
+                    "commit is implemented"
+                )
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):

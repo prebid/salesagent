@@ -55,7 +55,7 @@ def _make_request(brief="test brief", filters=None):
     """Create a GetProductsRequest using the factory."""
     from src.core.schema_helpers import create_get_products_request
 
-    return create_get_products_request(brief=brief, filters=filters)
+    return create_get_products_request(brief=brief, filters=filters).request
 
 
 def _mock_uow_with_products(products):

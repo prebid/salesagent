@@ -470,11 +470,11 @@ class TestDataPreservationE2E:
             # Intercept _get_products_impl to capture the request
             original_impl = None
 
-            async def capturing_impl(req, identity=None):
+            async def capturing_impl(req, identity=None, pre_v3_defaulted=False):
                 captured_req["brand"] = req.brand
                 captured_req["brief"] = req.brief
                 # Call original to produce a valid response
-                return await original_impl(req, identity)
+                return await original_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
             with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
                 for p in patches:
@@ -521,10 +521,10 @@ class TestDataPreservationE2E:
             patches = _get_products_patches()
             original_impl = None
 
-            async def capturing_impl(req, identity=None):
+            async def capturing_impl(req, identity=None, pre_v3_defaulted=False):
                 captured_req["context"] = req.context
                 captured_req["brief"] = req.brief
-                return await original_impl(req, identity)
+                return await original_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
             with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
                 for p in patches:
@@ -571,11 +571,11 @@ class TestDataPreservationE2E:
             patches = _get_products_patches()
             original_impl = None
 
-            async def capturing_impl(req, identity=None):
+            async def capturing_impl(req, identity=None, pre_v3_defaulted=False):
                 captured_req["brief"] = req.brief
                 captured_req["brand"] = req.brand
                 captured_req["context"] = req.context
-                return await original_impl(req, identity)
+                return await original_impl(req, identity, pre_v3_defaulted=pre_v3_defaulted)
 
             with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
                 for p in patches:
@@ -624,10 +624,15 @@ class TestErrorPropagation:
     """
 
     def test_business_logic_error_propagates_through_middleware(self):
-        """_impl raises AdCPValidationError → buyer sees error, not success.
+        """A post-TypeAdapter validation error → buyer sees error, not success.
 
-        get_products requires at least one of brief/brand/filters.
-        Sending none should return a clear error, not be silently accepted.
+        A cross-mode violation (buying_mode='wholesale' with a brief) passes TypeAdapter
+        (both are valid param types) but is rejected by the request builder before _impl.
+        Deep-strip must NOT swallow it.
+
+        An empty get_products no longer errors: a pre-v3 client with no brief defaults to
+        'wholesale' raw-inventory discovery (see resolve_pre_v3_buying_mode), so this test
+        drives a request that still reaches the rejection path.
         """
         from fastmcp import Client
 
@@ -642,17 +647,15 @@ class TestErrorPropagation:
                     async with Client(mcp) as client:
                         result = await client.call_tool(
                             "get_products",
-                            {},  # No brief, no brand, no filters → _impl rejects
+                            # wholesale forbids a brief → rejected after TypeAdapter
+                            {"buying_mode": "wholesale", "brief": "video ads"},
                             raise_on_error=False,
                         )
-                        assert result.is_error, "Empty get_products should return an error, not succeed silently"
-                        # The error should mention what's missing
+                        assert result.is_error, "Cross-mode violation should return an error, not succeed silently"
                         error_text = str(result.content) if result.content else ""
-                        assert (
-                            "brief" in error_text.lower()
-                            or "brand" in error_text.lower()
-                            or "filter" in error_text.lower()
-                        ), f"Error should mention missing brief/brand/filters, got: {error_text[:200]}"
+                        assert "brief" in error_text.lower() or "wholesale" in error_text.lower(), (
+                            f"Error should explain the cross-mode violation, got: {error_text[:200]}"
+                        )
                 finally:
                     for p in patches:
                         p.stop()

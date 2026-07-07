@@ -53,6 +53,22 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
     return None
 
 
+def _stashed_wire_envelope(exc: Exception) -> dict[str, Any] | None:
+    """Return the REAL wire envelope stashed on a reconstructed AdCPError, if any.
+
+    Both wire unwrappers — ``_unwrap_a2a_server_error`` (A2A) and
+    ``_unwrap_mcp_tool_error`` (MCP) — reconstruct an ``AdCPError`` from the
+    bytes the buyer received and stash the originating two-layer envelope on it
+    via ``_envelope_to_adcp_error`` (``exc._wire_error_envelope = envelope``).
+    By the time a dispatcher catches the exception the raw ``ToolError`` /
+    ``A2AError`` is gone, so the stash is the single place the real wire bytes
+    survive. Shared by the A2A and MCP capture helpers so both transports read
+    the wire from one source.
+    """
+    real_wire = getattr(exc, "_wire_error_envelope", None)
+    return real_wire if isinstance(real_wire, dict) else None
+
+
 def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
     """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
 
@@ -63,14 +79,29 @@ def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
     if present; otherwise falls back to ``_envelope_from_adcp_error``
     (synthesized — same helper production calls).
     """
-    real_wire = getattr(exc, "_wire_error_envelope", None)
-    if isinstance(real_wire, dict):
-        return real_wire
+    stashed = _stashed_wire_envelope(exc)
+    if stashed is not None:
+        return stashed
     return _envelope_from_adcp_error(exc)
 
 
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
-    """Extract the wire envelope from an MCP ToolError's JSON string."""
+    """Extract the REAL wire envelope from an MCP error.
+
+    ``BaseTestEnv._run_mcp_client`` lets FastMCP raise its ``ToolError`` (whose
+    ``str()`` is the JSON-encoded two-layer envelope the buyer receives), then
+    unwraps it via ``_unwrap_mcp_tool_error`` into a reconstructed ``AdCPError``
+    that carries the parsed envelope on ``_wire_error_envelope`` — the same
+    design as the A2A path. So by the time ``McpDispatcher`` catches the
+    exception it is no longer a ``ToolError``; prefer the stashed wire envelope.
+    The raw ``ToolError`` branch covers the legacy ``_run_mcp_wrapper`` path,
+    which does not unwrap. Never synthesizes: MCP wire coverage must come from
+    real bytes or be absent, so a boundary-translator regression cannot hide.
+    """
+    stashed = _stashed_wire_envelope(exc)
+    if stashed is not None:
+        return stashed
+
     from fastmcp.exceptions import ToolError
 
     if not isinstance(exc, ToolError):

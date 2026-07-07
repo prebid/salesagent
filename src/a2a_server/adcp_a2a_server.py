@@ -1481,7 +1481,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            if skill_name == "create_media_buy":
+            if skill_name in ("create_media_buy", "sync_accounts"):
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
             else:
                 result = await handler(parameters, identity)
@@ -1527,21 +1527,26 @@ class AdCPRequestHandler(RequestHandler):
         brief = parameters.get("brief", "")
         brand = parameters.get("brand")
         filters = parameters.get("filters")
+        adcp_version = parameters.get("adcp_version")
 
-        # Call core function with identity — _impl validates search criteria
+        # Call core function with identity — _impl validates search criteria. buying_mode
+        # /refine and the pre-v3 default shim (driven by adcp_version) are owned by the
+        # shared create_get_products_request helper, so A2A matches MCP and REST behavior.
         response = await core_get_products_tool(
             brief=brief,
             brand=brand,
             filters=filters,
             property_list=parameters.get("property_list"),
             context=parameters.get("context"),
+            buying_mode=parameters.get("buying_mode"),
+            refine=parameters.get("refine"),
+            adcp_version=adcp_version,
             identity=identity,
         )
 
         # Apply v2 compat for pre-3.0 clients at the boundary
         from src.core.version_compat import apply_version_compat
 
-        adcp_version = parameters.get("adcp_version")
         if isinstance(response, dict):
             response_data = response
         else:
@@ -1862,7 +1867,9 @@ class AdCPRequestHandler(RequestHandler):
         )
         return core_list_accounts_tool(req=request, identity=identity)
 
-    async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
+    async def _handle_sync_accounts_skill(
+        self, parameters: dict, identity: ResolvedIdentity | None, raw_wire_payload: dict | None = None
+    ) -> Any:
         """Handle explicit sync_accounts skill invocation.
 
         Authentication is REQUIRED per BR-RULE-055.
@@ -1873,9 +1880,10 @@ class AdCPRequestHandler(RequestHandler):
             accounts=parameters.get("accounts", []),
             delete_missing=parameters.get("delete_missing", False),
             dry_run=parameters.get("dry_run", False),
+            idempotency_key=parameters.get("idempotency_key"),
             context=parameters.get("context"),
         )
-        return await core_sync_accounts_tool(req=request, identity=identity)
+        return await core_sync_accounts_tool(req=request, identity=identity, raw_wire_payload=raw_wire_payload)
 
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None

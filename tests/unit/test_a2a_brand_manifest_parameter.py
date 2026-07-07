@@ -54,9 +54,9 @@ async def test_handle_get_products_skill_passes_brand():
 async def test_handle_get_products_skill_extracts_all_parameters():
     """Test that _handle_get_products_skill extracts spec parameters and ignores non-spec ones.
 
-    Non-spec parameters (min_exposures, strategy_id, adcp_version) MUST NOT be forwarded
-    to the core tool — they are not in the AdCP GetProductsRequest schema. adcp_version is
-    used at the transport boundary for version compat, not forwarded to the wrapper.
+    Non-spec parameters (min_exposures, strategy_id) MUST NOT be forwarded to the core tool —
+    they are not in the AdCP GetProductsRequest schema. adcp_version IS forwarded: the shared
+    create_get_products_request helper uses it to drive the pre-v3 buying_mode default shim.
     """
     handler = AdCPRequestHandler()
 
@@ -84,7 +84,7 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         assert call_kwargs["filters"] == {"delivery_type": "guaranteed"}
         assert "min_exposures" not in call_kwargs, "min_exposures is not in AdCP spec — must not be forwarded"
         assert "strategy_id" not in call_kwargs, "strategy_id is not in AdCP spec — must not be forwarded"
-        assert "adcp_version" not in call_kwargs, "adcp_version is a transport concern — must not be forwarded"
+        assert call_kwargs["adcp_version"] == "3.6.0", "adcp_version IS forwarded — it drives the pre-v3 shim"
         assert "brand_manifest" not in call_kwargs
 
 

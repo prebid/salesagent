@@ -882,6 +882,7 @@ class TestErrorCodeVocabularyConsistency:
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
         "IDEMPOTENCY_CONFLICT",  # SDK standard: AdCPIdempotencyConflictError
         "IDEMPOTENCY_EXPIRED",  # SDK standard: AdCPIdempotencyExpiredError
+        "IDEMPOTENCY_IN_FLIGHT",  # Spec passthrough (SPEC_CODES): AdCPIdempotencyInFlightError
         # Adapter-taxonomy codes (internal; wire → SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING)
         "WORKFLOW_CREATION_FAILED",  # Internal: AdCPWorkflowError
         "ACTIVATION_WORKFLOW_FAILED",  # Internal: AdCPActivationWorkflowError

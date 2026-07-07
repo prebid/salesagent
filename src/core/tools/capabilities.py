@@ -15,6 +15,7 @@ from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
+    BuyingMode,
     Execution,
     GeoMetros,
     GeoPostalAreas,
@@ -248,11 +249,14 @@ def _get_adcp_capabilities_impl(
         targeting=targeting,
     )
 
-    # Build media_buy capabilities
+    # Build media_buy capabilities. Declare the buying modes this agent serves so the
+    # capability response is explicit rather than leaving buying_modes unset (None):
+    # get_products serves brief and wholesale (refine is a stub that rejects finalize).
     media_buy = MediaBuy(
         portfolio=portfolio,
         features=features,
         execution=execution,
+        buying_modes=[BuyingMode.brief, BuyingMode.wholesale],
     )
 
     # Build response

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestBaseClassContract:
     """BaseTestEnv must work in both integration (use_real_db=True) and unit modes."""
@@ -339,3 +341,80 @@ class TestEnvMethodNamingConsistency:
             "CreativeSyncEnv should NOT have set_registry_formats — "
             "that name belongs to CreativeFormatsEnv (different mechanic)"
         )
+
+
+class TestWireErrorEnvelopeCapture:
+    """Wire transports must surface the REAL error envelope through ``call_via``.
+
+    Regression guard for the MCP error-wire asymmetry. ``_run_mcp_client`` lets
+    FastMCP raise its ``ToolError`` (whose ``str()`` is the JSON two-layer
+    envelope the buyer receives) and then unwraps it into a reconstructed
+    ``AdCPError`` BEFORE ``McpDispatcher`` sees it — stashing the real wire
+    envelope on the exception, exactly as the A2A path does. A dispatcher that
+    only recognizes a raw ``ToolError`` silently drops ``wire_error_envelope`` to
+    ``None`` on MCP while A2A/REST populate it, so a buyer-facing wire regression
+    would pass unnoticed. Earlier MCP wire tests masked this by driving
+    ``Client(mcp)`` directly instead of ``call_via``; this pins the canonical
+    ``call_via`` path for both stash-and-unwrap transports.
+    """
+
+    @staticmethod
+    def _two_layer_envelope() -> dict:
+        from src.core.exceptions import AdCPInvalidRequestError, build_two_layer_error_envelope
+
+        return build_two_layer_error_envelope(
+            AdCPInvalidRequestError("brief must not be provided when buying_mode is 'wholesale'")
+        )
+
+    def _reconstructed_for(self, transport_name: str) -> Exception:
+        """Build the exact reconstructed-and-stashed exception each dispatcher receives.
+
+        Uses production-shaped wire bytes and the harness's own unwrappers, so the
+        guard exercises the real unwrap → stash chain rather than a hand-set
+        attribute.
+        """
+        envelope = self._two_layer_envelope()
+        if transport_name == "mcp":
+            import json
+
+            from fastmcp.exceptions import ToolError
+
+            from tests.harness._base import _unwrap_mcp_tool_error
+
+            # _run_mcp_client re-raises _unwrap_mcp_tool_error(ToolError(json)).
+            return _unwrap_mcp_tool_error(ToolError(json.dumps(envelope)))
+
+        from tests.harness._base import _envelope_to_adcp_error
+
+        # The A2A path reconstructs + stashes via _envelope_to_adcp_error.
+        reconstructed = _envelope_to_adcp_error(envelope)
+        assert reconstructed is not None, "well-formed two-layer envelope must reconstruct"
+        return reconstructed
+
+    @pytest.mark.parametrize("transport_name", ["mcp", "a2a"])
+    def test_call_via_surfaces_real_wire_envelope_not_none(self, transport_name):
+        """call_via on a stash-and-unwrap transport surfaces the real wire envelope.
+
+        Asserts symmetry: MCP and A2A both read the stashed ``_wire_error_envelope``,
+        so neither can silently regress ``wire_error_envelope`` to ``None``.
+        """
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        exc = self._reconstructed_for(transport_name)
+        transport = Transport.MCP if transport_name == "mcp" else Transport.A2A
+        method = "call_mcp" if transport_name == "mcp" else "call_a2a"
+
+        def _raise(self, **kwargs):
+            raise exc
+
+        env = type("_WireErrEnv", (BaseTestEnv,), {method: _raise})()
+        result = env.call_via(transport)
+
+        assert result.is_error
+        assert result.wire_error_envelope is not None, (
+            f"{transport.value} dispatcher dropped wire_error_envelope to None — both "
+            "stash-and-unwrap transports must read the stashed _wire_error_envelope so a "
+            "buyer-facing wire-shape regression cannot pass unnoticed."
+        )
+        assert result.wire_error_envelope["adcp_error"]["code"] == "INVALID_REQUEST"

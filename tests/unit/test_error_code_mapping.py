@@ -9,7 +9,7 @@ Verifies that:
 
 from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, AdCPError
+from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, SPEC_CODES, AdCPError
 
 
 class TestErrorCodeMapping:
@@ -51,9 +51,7 @@ class TestErrorCodeMapping:
         salesagent-fnk9). The public ``error_code`` is an instance attribute
         set in ``__init__`` and is not present on the class object.
         """
-        # Spec-required codes not yet in SDK STANDARD_ERROR_CODES
-        spec_codes = {"AUTH_TOKEN_INVALID", "BILLING_NOT_SUPPORTED"}
-        allowed = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | spec_codes
+        allowed = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | SPEC_CODES
         violations = []
         for cls in AdCPError.iter_concrete_subclasses():
             code = cls._default_error_code

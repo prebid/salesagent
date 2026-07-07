@@ -24,7 +24,6 @@ from src.core.schemas import (
     GetProductsResponse,
     ReportingPeriod,
 )
-from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.tools.products import _get_products_impl
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
@@ -32,6 +31,11 @@ from src.services.webhook_delivery_service import (
     CircuitBreaker,
     WebhookDeliveryService,
 )
+
+# Sentinel distinguishing "caller did not pass brief" from "caller passed an empty brief",
+# so contract-probe tests (buying_mode='brief' with no brief) reach the validator's rejection
+# instead of the harness back-filling a default brief.
+_UNSET: Any = object()
 
 
 def make_adapter_update_side_effect() -> Any:
@@ -531,41 +535,88 @@ class ProductMixin:
 
     async def call_impl(  # type: ignore[override]
         self,
-        brief: str = "test brief",
+        brief: Any = _UNSET,
         brand: dict[str, Any] | None = None,
         filters: dict[str, Any] | None = None,
         property_list: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
+        buying_mode: str | None = None,
+        refine: list[dict[str, Any]] | None = None,
+        pre_v3_defaulted: bool = False,
         **extra: Any,
     ) -> GetProductsResponse:
         """Call _get_products_impl with the given parameters.
 
         Args:
-            brief: Search brief text.
+            brief: Search brief text. When the caller does not supply a value, the harness
+                uses 'test brief' for brief mode and None for wholesale/refine. If the caller
+                passes brief explicitly, it is forwarded as-is so the cross-mode validator can
+                reject invalid combinations (e.g. wholesale + brief) — rejection probes rely on this.
             brand: Brand reference dict (defaults to {"domain": "test.com"}).
             filters: ProductFilters dict.
             property_list: PropertyListReference dict.
             context: ContextObject dict.
-            **extra: Additional kwargs forwarded to request construction.
+            buying_mode: Optional explicit buying_mode. When None, the harness picks the mode from
+                caller intent: refine present -> 'refine', explicit brief -> 'brief', else 'wholesale'.
+            refine: refine entries (forces 'refine' mode when buying_mode is unset).
+            **extra: Additional kwargs (identity, adcp_version) consumed below.
 
         Returns:
             GetProductsResponse from the impl function.
         """
         self._commit_factory_data()  # type: ignore[attr-defined]
 
-        # Pop identity — injected by call_via for transport dispatch
-        # but not a GetProductsRequest field.
+        # Pop identity — injected by call_via for transport dispatch but not a request field.
         identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
+
+        # Capture adcp_version to forward to create_get_products_request (the production helper
+        # owns pre-v3 defaulting). Stripping it from extra prevents it reaching the raw model
+        # constructor, where it is rejected.
+        adcp_version = extra.pop("adcp_version", None)
 
         if brand is None:
             brand = {"domain": "test.com"}
 
-        req = GetProductsRequestGenerated(
-            brief=brief,
+        caller_supplied_brief = brief is not _UNSET
+        # Track explicit buying_mode so contract-probe tests can pass buying_mode='brief' without a
+        # brief and observe the validator's rejection — without this the harness would back-fill a
+        # default brief and defeat the probe (see reference_bdd_harness_pitfalls #1).
+        caller_supplied_buying_mode = buying_mode is not None
+        effective_brief: str | None
+        if caller_supplied_brief:
+            effective_brief = brief if (brief and str(brief).strip()) else None
+        else:
+            effective_brief = None  # set after the mode is known
+
+        # When buying_mode AND adcp_version are both unsupplied, default so the happy path works.
+        # When adcp_version is supplied, defer to the helper's pre-v3 shim (matches the wire transports).
+        if buying_mode is None and adcp_version is None:
+            if refine is not None:
+                buying_mode = "refine"
+            elif caller_supplied_brief and effective_brief:
+                buying_mode = "brief"
+            else:
+                buying_mode = "wholesale"
+
+        # Default a brief for brief mode ONLY when neither field was caller-supplied; an explicit
+        # buying_mode='brief' without a brief leaves brief empty so the validator probes the contract.
+        if not caller_supplied_brief and not caller_supplied_buying_mode and buying_mode == "brief":
+            effective_brief = "test brief"
+
+        # Route through the shared helper — the same surface MCP/A2A/REST observe — so the impl
+        # transport probes the real contract (validator + ValidationError -> AdCPInvalidRequestError
+        # translation with cross-mode suggestion). See reference_bdd_harness_pitfalls #4.
+        from src.core.schema_helpers import create_get_products_request
+
+        req, helper_pre_v3_defaulted = create_get_products_request(
+            brief=effective_brief or "",
             brand=brand,
             filters=filters,
             property_list=property_list,
             context=context,
-            **extra,
+            buying_mode=buying_mode,
+            refine=refine,
+            adcp_version=adcp_version,
         )
-        return await _get_products_impl(req, identity)
+        defaulted = pre_v3_defaulted or helper_pre_v3_defaulted
+        return await _get_products_impl(req, identity, pre_v3_defaulted=defaulted)

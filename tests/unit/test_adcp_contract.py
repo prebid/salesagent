@@ -220,13 +220,14 @@ class TestSchemaMatchesLibrary:
         """Compare our schema validation against library for common cases."""
         from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 
-        # Test cases that should work in both (adcp 3.6.0: brand replaces brand_manifest)
-        # buying_mode is required for the wholesale variant in adcp 3.9
+        # Cases valid under BOTH the library wholesale variant and our cross-mode rules.
+        # buying_mode is required for the wholesale variant in adcp 3.9. brief is omitted:
+        # the permissive library accepts brief+wholesale, but our validator forbids brief in
+        # wholesale mode (a deliberate divergence covered by test_get_products_buying_mode.py),
+        # so pairing them here would not exercise field-shape parity.
         test_cases = [
             {"buying_mode": "wholesale"},  # Minimal valid
-            {"buying_mode": "wholesale", "brief": "test"},  # Brief only
             {"buying_mode": "wholesale", "brand": {"domain": "acme.com"}},  # BrandReference
-            {"buying_mode": "wholesale", "brief": "test", "brand": {"domain": "acme.com"}},  # Both
         ]
 
         for case in test_cases:

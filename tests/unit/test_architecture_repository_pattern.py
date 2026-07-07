@@ -31,6 +31,7 @@ IMPL_FILES = [
     "src/core/tools/media_buy_delivery.py",
     "src/core/tools/media_buy_list.py",
     "src/core/tools/products.py",
+    "src/core/tools/accounts.py",
     "src/core/tools/capabilities.py",
     "src/core/tools/creative_formats.py",
     "src/core/tools/properties.py",

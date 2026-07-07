@@ -44,3 +44,33 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
     rate = Decimal("5.00")
     currency = "USD"
     is_fixed = True
+
+
+def create_buying_mode_test_products(tenant) -> tuple[Product, Product]:
+    """Create the standard two-product fixture for UC-001 buying_mode tests.
+
+    Returns a (display_premium, video_premium) pair with CPM pricing options attached.
+    Used by both the BDD step file and the cross-transport integration tests so the
+    setup stays in one place.
+    """
+    p1 = ProductFactory(
+        tenant=tenant,
+        product_id="display_premium",
+        name="Display Premium",
+        description="Premium display inventory",
+        format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
+        delivery_type="guaranteed",
+    )
+    PricingOptionFactory(product=p1, pricing_model="cpm", rate=Decimal("12.0"), is_fixed=True)
+
+    p2 = ProductFactory(
+        tenant=tenant,
+        product_id="video_premium",
+        name="Video Premium",
+        description="Premium video inventory",
+        format_ids=[{"agent_url": "https://test.com", "id": "video_15s"}],
+        delivery_type="guaranteed",
+    )
+    PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("18.0"), is_fixed=True)
+
+    return p1, p2

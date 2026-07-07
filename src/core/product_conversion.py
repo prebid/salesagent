@@ -12,6 +12,7 @@ V3 Migration Notes:
 """
 
 import logging
+from typing import NamedTuple
 
 from adcp import (
     CpaPricingOption,
@@ -26,6 +27,7 @@ from adcp import (
     TimeUnit,
     VcpmPricingOption,
 )
+from adcp.types import ReportingCapabilities
 from adcp.types._generated import MediaChannel
 from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
 from packaging.version import InvalidVersion, Version
@@ -58,6 +60,48 @@ def needs_v2_compat(adcp_version: str | None) -> bool:
     except InvalidVersion:
         logger.warning(f"Unparseable adcp_version '{adcp_version}', defaulting to v2 compat")
         return True
+
+
+def is_pre_v3(adcp_version: str | None) -> bool:
+    """Check if a client is pre-v3 for buying_mode default-to-brief purposes.
+
+    Shares parsing with ``needs_v2_compat`` so version detection has one definition
+    (a 3.0 pre-release like '3.0.0-rc.3' is treated as pre-v3 — the safer choice:
+    forgive an rc client that omits buying_mode).
+    """
+    return needs_v2_compat(adcp_version)
+
+
+class PreV3ModeResolution(NamedTuple):
+    """Outcome of the pre-v3 buying_mode shim.
+
+    Named so the audit-log flag (``pre_v3_defaulted``) can never be confused with a
+    second bool a future spec change might add (e.g. ``brief_inferred``).
+    """
+
+    mode: str | None
+    pre_v3_defaulted: bool
+
+
+def resolve_pre_v3_buying_mode(
+    buying_mode: str | None,
+    adcp_version: str | None,
+    brief: str | None,
+) -> PreV3ModeResolution:
+    """Resolve buying_mode for pre-v3 clients that omitted the field.
+
+    AdCP 3.0.1: "pre-v3 clients without buying_mode SHOULD default to 'brief'." We
+    deliberately deviate in one direction — a pre-v3 client that ALSO sent no brief
+    defaults to 'wholesale', because defaulting to 'brief' on an empty brief would
+    immediately fail the cross-mode validator and break v2 clients that legitimately
+    discover raw inventory with only {brand} or {filters}. Every defaulted request
+    records ``pre_v3_defaulted=True`` in the audit log so the deviation is observable.
+    """
+    if buying_mode is not None or not is_pre_v3(adcp_version):
+        return PreV3ModeResolution(buying_mode, False)
+    if brief and brief.strip():
+        return PreV3ModeResolution("brief", True)
+    return PreV3ModeResolution("wholesale", True)
 
 
 def convert_pricing_option_to_adcp(
@@ -453,15 +497,17 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     if product_model.reporting_capabilities:
         product_data["reporting_capabilities"] = product_model.reporting_capabilities
     else:
-        # adcp 4.3 makes reporting_capabilities required — provide minimal default
-        product_data["reporting_capabilities"] = {
-            "available_reporting_frequencies": ["daily"],
-            "expected_delay_minutes": 1440,
-            "timezone": "UTC",
-            "supports_webhooks": False,
-            "available_metrics": ["impressions"],
-            "date_range_support": "date_range",
-        }
+        # adcp 4.3 makes reporting_capabilities required — provide a minimal typed
+        # default. A plain dict here trips PydanticSerializationUnexpectedValue when
+        # the parent serializes (the field expects a ReportingCapabilities, not a dict).
+        product_data["reporting_capabilities"] = ReportingCapabilities(
+            available_reporting_frequencies=["daily"],
+            expected_delay_minutes=1440,
+            timezone="UTC",
+            supports_webhooks=False,
+            available_metrics=["impressions"],
+            date_range_support="date_range",
+        )
 
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False

@@ -129,6 +129,18 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(STANDARD_ERROR_CODES)
 assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
 
+# Spec-required codes the SDK's STANDARD_ERROR_CODES table does not yet carry (the
+# published-error-enum-vs-SDK drift). Unlike INTERNAL_CODES, these REACH the wire
+# unchanged — valid AdCP codes, merely absent from the vendored SDK helper. Single
+# source for the guards that enumerate acceptable wire codes.
+SPEC_CODES: frozenset[str] = frozenset(
+    {
+        "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
+        "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
+        "IDEMPOTENCY_IN_FLIGHT",  # BR-UC-002/016/020/023/028: rule-9 reject-and-redirect (3.1.0-beta.0)
+    }
+)
+
 
 def translate_error_code(code: str) -> str:
     """Translate a server-side error code to its wire-compliant equivalent.
@@ -762,6 +774,31 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
 
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPIdempotencyInFlightError(AdCPError):
+    """A concurrent same-key request is still in flight (503, IDEMPOTENCY_IN_FLIGHT).
+
+    Raised on the reject-and-redirect path: a request arrives while another request
+    carrying the same idempotency_key is mid-execution (the winner has not yet
+    committed its verbatim response). Per security.mdx#idempotency rule 9, the seller
+    returns ``IDEMPOTENCY_IN_FLIGHT`` with ``retry_after``; the buyer MUST retry with
+    the SAME idempotency_key once the hint elapses and MUST NOT mint a fresh key —
+    minting a new key turns a safe retry into the exact double-execution race the key
+    exists to prevent.
+
+    Recovery=transient — NOT correctable, unlike the sibling CONFLICT/EXPIRED. The buyer
+    recovers by retrying the UNCHANGED request after a delay, exactly as for the
+    ``SERVICE_UNAVAILABLE`` this replaces on the in-flight path: the request is correct,
+    the seller is merely not done committing. Rule 9 entered at AdCP 3.1.0-beta.0. The
+    code is not yet in the SDK's ``STANDARD_ERROR_CODES`` (the published-enum-vs-SDK
+    drift), so it is registered in the compliance guard's ``SPEC_CODES`` passthrough
+    set and reaches the wire unchanged.
+    """
+
+    _default_status_code: ClassVar[int] = 503
+    _default_error_code: ClassVar[str] = "IDEMPOTENCY_IN_FLIGHT"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPCreativeRejectedError(AdCPError):

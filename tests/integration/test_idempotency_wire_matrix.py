@@ -196,6 +196,62 @@ class TestIdempotencyWireMatrix:
             f"{envelope['adcp_error']['suggestion']}"
         )
 
+    def test_in_flight_when_cache_row_absent_after_race(self, integration_db, transport):
+        """A retry whose winner committed the backstop but whose verbatim cache row is not
+        yet present rejects with IDEMPOTENCY_IN_FLIGHT (transient) on the real wire.
+
+        Drives the degraded fail-closed path for the in-flight window: create for real
+        (cache row + MediaBuy backstop), DELETE the cache row while the backstop stays fresh
+        (the race winner's cache write not-yet-committed), then retry. The probe misses the
+        absent row, the create hits the backstop, and — with a FRESH anchor, no surviving
+        cache row, and a matching hash — the degraded path fails closed to transient
+        IN_FLIGHT (rule 9 reject-and-redirect), never a fabricated body. Complements
+        test_expired_replay_window_rejects: an AGED row rejects EXPIRED, an ABSENT row
+        rejects IN_FLIGHT — the two fail-closed branches share one raise site, and this is
+        the only idempotency code otherwise asserted solely through the reconstructed
+        exception, so it is pinned here on every transport's real envelope.
+        """
+        from src.core.database.repositories import MediaBuyUoW
+
+        key = f"wire-inflight-{uuid.uuid4().hex}"
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            kwargs = _create_kwargs(product, idempotency_key=key)
+
+            first = env.call_via(transport, **dict(kwargs))
+            assert first.is_success, f"fresh create failed on {transport.value}: {first.error}"
+
+            # Remove the verbatim cache row while the backstop MediaBuy stays fresh — the
+            # in-flight window (winner committed the resource, its cache write not yet landed).
+            # Reclaim it via the repo's own eviction (as if the replay window had closed),
+            # leaving the row ABSENT — distinct from the EXPIRED leg, where the row survives.
+            with MediaBuyUoW(env._tenant_id) as uow:
+                assert uow.idempotency_attempts is not None
+                row = uow.idempotency_attempts.find_including_expired(
+                    principal_id=env._principal_id, idempotency_key=key
+                )
+                assert row is not None, "the fresh create must have written a cache row"
+                evicted = uow.idempotency_attempts.expire_old(now=datetime.now(UTC) + timedelta(days=2))
+                assert evicted >= 1, "the fresh create's cache row must be reclaimed, leaving it absent"
+
+            second = env.call_via(transport, **dict(kwargs))
+
+        assert second.is_error, f"an in-flight replay must reject on {transport.value}"
+        if transport is Transport.IMPL:
+            # IMPL has no wire — grade the synthesized envelope, exactly as the other legs do.
+            envelope = second.synthesized_error_envelope
+        else:
+            envelope = second.wire_error_envelope
+        assert envelope is not None, f"IN_FLIGHT must carry the two-layer envelope on {transport.value}"
+        assert_envelope_shape(envelope, "IDEMPOTENCY_IN_FLIGHT", recovery="transient")
+        # The transient-recovery guidance must ride the WIRE on both envelope layers, not just
+        # live at the raise site — parity with the EXPIRED leg above.
+        for layer_name, layer in (("adcp_error", envelope["adcp_error"]), ("errors[0]", envelope["errors"][0])):
+            assert layer.get("suggestion"), (
+                f"IN_FLIGHT must carry a suggestion in {layer_name} on {transport.value}: {layer}"
+            )
+
 
 class TestA2ADefaultsDoNotBreakReplay:
     """A2A must not fold server-minted defaults into the canonical payload.

@@ -147,6 +147,32 @@ def url(value: str) -> AnyUrl:
     return AnyUrl(value)  # Pydantic handles string -> AnyUrl conversion
 
 
+def reserialize_nested_models(instance: BaseModel, data: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Re-serialize nested Pydantic model fields with their own ``model_dump()``.
+
+    Pydantic's default serialization doesn't call custom ``model_dump()`` on nested
+    models; this walks ``instance``'s fields and re-dumps any nested ``BaseModel``
+    (single or list) in ``data`` so internal/excluded fields are honored. Resilient to
+    schema changes — no hardcoded field names. Shared by ``NestedModelSerializerMixin``
+    and by response types that compose it with an extra top-level marker (e.g. the
+    idempotency ``replayed`` flag).
+    """
+    for field_name in type(instance).model_fields:
+        if field_name not in data:
+            continue
+        field_value = getattr(instance, field_name, None)
+        if field_value is None:
+            continue
+        # Handle list of Pydantic models
+        if isinstance(field_value, list) and field_value:
+            if isinstance(field_value[0], BaseModel):
+                data[field_name] = [item.model_dump(mode=mode) for item in field_value]
+        # Handle single Pydantic model
+        elif isinstance(field_value, BaseModel):
+            data[field_name] = field_value.model_dump(mode=mode)
+    return data
+
+
 def canonical_agent_url(agent_url: object) -> str:
     """Canonicalize an agent_url for identity comparison (spec MUST canonicalization).
 
@@ -211,27 +237,7 @@ class NestedModelSerializerMixin:
     @model_serializer(mode="wrap")
     def _serialize_nested_models(self, serializer, info):
         """Automatically serialize nested Pydantic models using their custom model_dump()."""
-        # Get default serialization
-        data = serializer(self)
-
-        # Introspect all fields and re-serialize nested Pydantic models
-        for field_name, _ in self.__class__.model_fields.items():
-            if field_name not in data:
-                continue
-
-            field_value = getattr(self, field_name, None)
-            if field_value is None:
-                continue
-
-            # Handle list of Pydantic models
-            if isinstance(field_value, list) and field_value:
-                if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
-            # Handle single Pydantic model
-            elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump(mode=info.mode)
-
-        return data
+        return reserialize_nested_models(self, serializer(self), info.mode)
 
 
 class SalesAgentBaseModel(LibraryAdCPBaseModel):
