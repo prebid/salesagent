@@ -17,41 +17,31 @@ that contract end to end:
 
 - deletion oracle: removing the raw_request fallback in
   ``package_exists_or_raise`` makes ``test_update_with_creative_ids_succeeds_
-  on_raw_request_only_buy`` fail with AdCPPackageNotFoundError.
+  on_raw_request_only_buy`` fail with AdCPPackageNotFoundError at the guard.
 - regression net: if create's dual-write ever stops writing rows, the
   real-flow test fails loudly instead of the gap going unnoticed.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import CreativeFactory, MediaBuyFactory
 from tests.helpers.adcp_factories import create_test_format
-from tests.integration.media_buy_helpers import _get_tenant_dict, _make_create_request
+from tests.integration.conftest import seed_error_test_tenant
+from tests.integration.media_buy_helpers import _make_create_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 DEFAULT_FORMAT_ID = "display_300x250"
-
-
-def _make_identity(principal_id: str, tenant_id: str, tenant: dict) -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -68,47 +58,56 @@ def mock_format_spec():
         yield
 
 
-def _seed_creatives(tenant_id: str, principal_id: str, creative_ids: list[str]) -> None:
-    with get_db_session() as session:
-        for cid in creative_ids:
-            existing = session.scalars(
-                select(DBCreative).where(DBCreative.creative_id == cid, DBCreative.tenant_id == tenant_id)
-            ).first()
-            if not existing:
-                session.add(
-                    DBCreative(
-                        creative_id=cid,
-                        tenant_id=tenant_id,
-                        principal_id=principal_id,
-                        name=f"Guard Creative {cid}",
-                        agent_url="https://creative.adcontextprotocol.org",
-                        format=DEFAULT_FORMAT_ID,
-                        data={
-                            "url": "https://example.com/creative.jpg",
-                            "width": 300,
-                            "height": 250,
-                            "platform_creative_id": f"mock_{cid}",
-                        },
-                    )
-                )
-        session.commit()
+@pytest.fixture
+def _seeded(integration_db):
+    """Factory-seeded tenant/principal/product inside one IntegrationEnv.
+
+    The env stays open for the test's lifetime so factory calls in the test
+    body (creatives, legacy media buy) share the bound session.
+    """
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv():
+        yield seed_error_test_tenant(
+            tenant_id="pkg_guard_test",
+            principal_id="pkg_guard_principal",
+            access_token="pkg_guard_token",
+            product_id="guaranteed_display",
+            subdomain="pkgguard",
+            tenant_name="Package Guard Test Tenant",
+            protocol="mcp",
+        )
+
+
+def _seed_creatives(seeded: dict, creative_ids: list[str]) -> None:
+    for cid in creative_ids:
+        CreativeFactory(
+            tenant=seeded["tenant"],
+            principal=seeded["principal"],
+            creative_id=cid,
+            status="ready",
+            data={
+                "url": "https://example.com/creative.jpg",
+                "width": 300,
+                "height": 250,
+                "platform_creative_id": f"mock_{cid}",
+            },
+        )
 
 
 class TestPackageGuardRealCreateFlow:
     @pytest.mark.asyncio
-    async def test_update_survives_real_create_flow_package_reference(
-        self, sample_tenant, sample_principal, sample_products
-    ):
+    async def test_update_survives_real_create_flow_package_reference(self, _seeded):
         """A buy created through the REAL create path (adapter-populated
         response.packages → media_packages dual-write) must accept an update
         referencing its own package. Fails with PACKAGE_NOT_FOUND if the
         create-side dual-write ever regresses to writing zero rows."""
+        from src.core.database.models import MediaPackage
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        tenant = _get_tenant_dict(sample_tenant["tenant_id"])
-        identity = _make_identity(sample_principal["principal_id"], tenant["tenant_id"], tenant)
+        identity = _seeded["identity"]
         creative_ids = ["c_guard_real_1", "c_guard_real_2"]
-        _seed_creatives(tenant["tenant_id"], sample_principal["principal_id"], creative_ids)
+        _seed_creatives(_seeded, creative_ids)
 
         create_req = _make_create_request(
             packages=[
@@ -125,8 +124,6 @@ class TestPackageGuardRealCreateFlow:
 
         # Reference the package exactly as a buyer would: from the create flow.
         with get_db_session() as session:
-            from src.core.database.models import MediaPackage
-
             rows = session.scalars(select(MediaPackage).where(MediaPackage.media_buy_id == media_buy_id)).all()
             assert rows, (
                 "create_media_buy wrote no media_packages rows for a mock-adapter "
@@ -144,46 +141,33 @@ class TestPackageGuardRealCreateFlow:
 
 
 class TestPackageGuardRawRequestFallback:
-    def test_update_with_creative_ids_succeeds_on_raw_request_only_buy(
-        self, integration_db, sample_tenant, sample_principal
-    ):
+    def test_update_with_creative_ids_succeeds_on_raw_request_only_buy(self, _seeded):
         """A buy whose packages live ONLY in raw_request (pre-dual-write buy,
         or adapter that returned empty response.packages) must not fail its
         own update with a spurious PACKAGE_NOT_FOUND. Deletion oracle:
         removing the raw_request fallback in package_exists_or_raise makes
         this raise AdCPPackageNotFoundError at the guard."""
-        from src.core.database.models import MediaBuy
-
-        tenant = _get_tenant_dict(sample_tenant["tenant_id"])
-        identity = _make_identity(sample_principal["principal_id"], tenant["tenant_id"], tenant)
+        identity = _seeded["identity"]
         creative_ids = ["c_guard_legacy_1"]
-        _seed_creatives(tenant["tenant_id"], sample_principal["principal_id"], creative_ids)
+        _seed_creatives(_seeded, creative_ids)
 
-        media_buy_id = "mb_raw_request_only"
-        with get_db_session() as session:
-            existing = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
-            if existing is None:
-                session.add(
-                    MediaBuy(
-                        media_buy_id=media_buy_id,
-                        tenant_id=tenant["tenant_id"],
-                        principal_id=sample_principal["principal_id"],
-                        order_name="Legacy Order",
-                        advertiser_name="Legacy Advertiser",
-                        status="active",
-                        start_date="2025-11-01",
-                        end_date="2025-11-30",
-                        start_time="2025-11-01T00:00:00Z",
-                        end_time="2025-11-30T23:59:59Z",
-                        # Packages recorded ONLY here — deliberately NO
-                        # MediaPackage rows, matching the pre-dual-write shape.
-                        raw_request={"packages": [{"package_id": "pkg_legacy", "impressions": 100000}]},
-                    )
-                )
-                session.commit()
+        now = datetime.now(UTC)
+        # Deliberately NO MediaPackageFactory row — packages recorded only in
+        # raw_request, matching the pre-dual-write shape.
+        media_buy = MediaBuyFactory(
+            tenant=_seeded["tenant"],
+            principal=_seeded["principal"],
+            media_buy_id="mb_raw_request_only",
+            status="active",
+            start_date=now.date(),
+            end_date=(now + timedelta(days=30)).date(),
+            start_time=now,
+            end_time=now + timedelta(days=30),
+            raw_request={"packages": [{"package_id": "pkg_legacy", "impressions": 100000}]},
+        )
 
         update_req = UpdateMediaBuyRequest(
-            media_buy_id=media_buy_id,
+            media_buy_id=media_buy.media_buy_id,
             packages=[{"package_id": "pkg_legacy", "creative_ids": creative_ids}],
         )
         result = _update_media_buy_impl(req=update_req, identity=identity)
@@ -194,8 +178,8 @@ class TestPackageGuardRawRequestFallback:
         with get_db_session() as session:
             assignments = session.scalars(
                 select(DBAssignment).where(
-                    DBAssignment.tenant_id == tenant["tenant_id"],
-                    DBAssignment.media_buy_id == media_buy_id,
+                    DBAssignment.tenant_id == "pkg_guard_test",
+                    DBAssignment.media_buy_id == "mb_raw_request_only",
                 )
             ).all()
             assert assignments, "expected creative assignment on the raw_request-only buy"
