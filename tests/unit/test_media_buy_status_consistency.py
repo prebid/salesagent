@@ -92,6 +92,25 @@ class TestCrossToolStatusMappingConsistency:
         assert _compute_status(buy, _REF) is MediaBuyStatus.pending_creatives
 
 
+class TestCanonicalVocabularyPinnedToSdk:
+    """CANONICAL_STATUSES stays derived and equivalent to the SDK lifecycle enum.
+
+    The delivery tool uses CANONICAL_STATUSES as its valid internal-filter set,
+    so if it ever diverges from what the resolver can return — or from the pinned
+    SDK MediaBuyStatus enum — a real status becomes unfilterable and fetch-by-ID
+    silently drops buys. Both relationships are pinned here so an SDK bump that
+    widens the lifecycle enum fails loudly instead of drifting.
+    """
+
+    def test_canonical_statuses_is_derived_from_the_map(self):
+        assert CANONICAL_STATUSES == frozenset(PERSISTED_STATUS_TO_CANONICAL.values())
+
+    def test_canonical_statuses_matches_sdk_lifecycle_enum_plus_failed(self):
+        # The lifecycle enum has no "failed"; delivery adds it as a delivery-only
+        # terminal. Every other canonical value must be an SDK lifecycle value.
+        assert CANONICAL_STATUSES == {s.value for s in MediaBuyStatus} | {"failed"}
+
+
 class TestLegacyAndUnknownStatusesNotDropped:
     """Legacy persisted values and unknown statuses resolve to a valid status, never dropped.
 

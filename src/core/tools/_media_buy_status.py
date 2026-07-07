@@ -23,14 +23,26 @@ The two callers adapt this single result to their own surface:
   has no ``failed``) and converts to ``MediaBuyStatus``.
 
 Both use the SAME map and the SAME date-refinement, so the same buy is
-described identically by both tools (pinned by
-``tests/unit/test_media_buy_status_consistency.py``).
+described identically by both tools **outside time simulation** (pinned by
+``tests/unit/test_media_buy_status_consistency.py``). Under time simulation
+(``mock_time`` / ``jump_to_event``) only ``get_media_buy_delivery`` advances the
+clock, so the two tools may legitimately differ there.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
+
+# NOTE: ``buy`` is typed ``Any`` rather than a structural Protocol because the
+# ORM ``MediaBuy`` annotates its date columns ``Mapped[Date]`` (the SQLAlchemy
+# type, not Python ``date``), so no Protocol matches it without first correcting
+# the model annotations (out of scope here). The two ``cast(date, ...)`` in the
+# refinement below exist for the same reason. FIXME(#1545): revisit once the ORM
+# date annotations are ``Mapped[date]``.
 
 # Generic serving state: the persisted value that means "delivering, subject to
 # the flight window". These resolve to CANONICAL_SERVING and are then
@@ -69,11 +81,14 @@ PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
     "pending_start": "pending_start",
 }
 
-# The complete set of values ``resolve_canonical_status`` may return. Used by
-# get_media_buy_delivery as its valid internal-filter vocabulary.
-CANONICAL_STATUSES: frozenset[str] = frozenset(
-    {"pending_creatives", "pending_start", "active", "paused", "completed", "rejected", "canceled", "failed"}
-)
+# The complete set of values ``resolve_canonical_status`` may return, derived
+# from the map so the two can never drift. Used by get_media_buy_delivery as its
+# valid internal-filter vocabulary. Its equivalence to the pinned SDK
+# ``MediaBuyStatus`` enum (plus the delivery-only ``failed``) is pinned by
+# ``tests/unit/test_media_buy_status_consistency.py`` so an SDK bump that widens
+# the lifecycle enum fails loudly instead of silently making a new status
+# unfilterable.
+CANONICAL_STATUSES: frozenset[str] = frozenset(PERSISTED_STATUS_TO_CANONICAL.values())
 
 
 def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool = False) -> str:
@@ -106,6 +121,11 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
         One of ``CANONICAL_STATUSES``.
     """
     persisted = (buy.status or "").lower()
+    if persisted and persisted not in PERSISTED_STATUS_TO_CANONICAL:
+        # Not a failure (the buy is still described, date-refined as serving), but
+        # a writer has introduced a persisted value this map doesn't know about —
+        # surface it so the map can be updated rather than silently guessing.
+        logger.warning("Unmapped persisted media-buy status %r; treating as serving state", persisted)
     canonical = PERSISTED_STATUS_TO_CANONICAL.get(persisted, CANONICAL_SERVING)
 
     should_refine = canonical == CANONICAL_SERVING or (simulate and canonical not in TERMINAL_STATUSES)
@@ -114,7 +134,6 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
 
     # Generic serving state (or a simulated non-terminal state) — refine against
     # the flight window. Prefer the precise start_time/end_time when present.
-    # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime).
     start_time = getattr(buy, "start_time", None)
     end_time = getattr(buy, "end_time", None)
     start_compare = start_time.date() if start_time else cast(date, buy.start_date)

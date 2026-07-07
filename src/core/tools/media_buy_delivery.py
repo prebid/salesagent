@@ -483,8 +483,11 @@ def _get_media_buy_delivery_impl(
 
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
-                # Cast status to match Literal type requirement
-                status_typed = cast(MediaBuyDeliveryStatus, status)
+                # Validate the resolver's string against the library enum at the
+                # construction site (instead of casting a lie past mypy): a status
+                # outside MediaBuyDeliveryStatus fails here, at the source, rather
+                # than surfacing as an opaque validation error downstream.
+                status_typed = MediaBuyDeliveryStatus(status)
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
                     status=status_typed,
