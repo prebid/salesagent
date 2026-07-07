@@ -76,72 +76,74 @@ except (RuntimeError, Exception) as e:
 
 from contextlib import asynccontextmanager
 
+# ---------------------------------------------------------------------------
+# Scheduler registry — one entry per interval scheduler.
+# Each tuple is (name, start_fn_import_path, stop_fn_import_path).
+# Startup iterates forward; shutdown iterates in reverse (LIFO).
+# ---------------------------------------------------------------------------
+_SCHEDULER_REGISTRY = [
+    (
+        "delivery webhook",
+        "src.services.delivery_webhook_scheduler",
+        "start_delivery_webhook_scheduler",
+        "stop_delivery_webhook_scheduler",
+    ),
+    (
+        "media buy status",
+        "src.services.media_buy_status_scheduler",
+        "start_media_buy_status_scheduler",
+        "stop_media_buy_status_scheduler",
+    ),
+    (
+        "TMP health",
+        "src.services.tmp_health_scheduler",
+        "start_tmp_health_scheduler",
+        "stop_tmp_health_scheduler",
+    ),
+]
+
+
+async def _start_scheduler(name: str, module_path: str, fn_name: str) -> None:
+    """Import and call a scheduler start function, logging success/failure."""
+    import importlib
+
+    logger.info("Starting %s scheduler...", name)
+    try:
+        mod = importlib.import_module(module_path)
+        await getattr(mod, fn_name)()
+        logger.info("✅ %s scheduler started", name)
+    except Exception as e:
+        logger.error("Failed to start %s scheduler: %s", name, e, exc_info=True)
+
+
+async def _stop_scheduler(name: str, module_path: str, fn_name: str) -> None:
+    """Import and call a scheduler stop function, logging success/failure."""
+    import importlib
+
+    logger.info("Stopping %s scheduler...", name)
+    try:
+        mod = importlib.import_module(module_path)
+        await getattr(mod, fn_name)()
+        logger.info("✅ %s scheduler stopped", name)
+    except Exception as e:
+        logger.error("Failed to stop %s scheduler: %s", name, e, exc_info=True)
+
 
 # Lifespan context manager for FastMCP startup/shutdown
 @asynccontextmanager
 async def lifespan_context(app):
-    """Handle application startup and shutdown."""
-    # Startup: Initialize delivery webhook scheduler
-    from src.services.delivery_webhook_scheduler import start_delivery_webhook_scheduler
+    """Handle application startup and shutdown.
 
-    logger.info("Starting delivery webhook scheduler...")
-    try:
-        await start_delivery_webhook_scheduler()
-        logger.info("✅ Delivery webhook scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start delivery webhook scheduler: {e}", exc_info=True)
-
-    # Startup: Initialize media buy status scheduler
-    from src.services.media_buy_status_scheduler import start_media_buy_status_scheduler
-
-    logger.info("Starting media buy status scheduler...")
-    try:
-        await start_media_buy_status_scheduler()
-        logger.info("✅ Media buy status scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start media buy status scheduler: {e}", exc_info=True)
-
-    # Startup: Initialize TMP health scheduler
-    from src.services.tmp_health_scheduler import start_tmp_health_scheduler
-
-    logger.info("Starting TMP health scheduler...")
-    try:
-        await start_tmp_health_scheduler()
-        logger.info("✅ TMP health scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start TMP health scheduler: {e}", exc_info=True)
+    Schedulers are started in registry order and stopped in reverse (LIFO)
+    so dependencies are torn down cleanly.
+    """
+    for name, module_path, start_fn, _stop_fn in _SCHEDULER_REGISTRY:
+        await _start_scheduler(name, module_path, start_fn)
 
     yield
 
-    # Shutdown: Stop TMP health scheduler
-    from src.services.tmp_health_scheduler import stop_tmp_health_scheduler
-
-    logger.info("Stopping TMP health scheduler...")
-    try:
-        await stop_tmp_health_scheduler()
-        logger.info("✅ TMP health scheduler stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop TMP health scheduler: {e}", exc_info=True)
-
-    # Shutdown: Stop media buy status scheduler
-    from src.services.media_buy_status_scheduler import stop_media_buy_status_scheduler
-
-    logger.info("Stopping media buy status scheduler...")
-    try:
-        await stop_media_buy_status_scheduler()
-        logger.info("✅ Media buy status scheduler stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop media buy status scheduler: {e}", exc_info=True)
-
-    # Shutdown: Stop delivery webhook scheduler
-    from src.services.delivery_webhook_scheduler import stop_delivery_webhook_scheduler
-
-    logger.info("Stopping delivery webhook scheduler...")
-    try:
-        await stop_delivery_webhook_scheduler()
-        logger.info("✅ Delivery webhook scheduler stopped")
-    except Exception as e:
-        logger.error(f"Failed to stop delivery webhook scheduler: {e}", exc_info=True)
+    for name, module_path, _start_fn, stop_fn in reversed(_SCHEDULER_REGISTRY):
+        await _stop_scheduler(name, module_path, stop_fn)
 
 
 mcp = FastMCP(

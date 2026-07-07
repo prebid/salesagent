@@ -44,23 +44,6 @@ class TMPProviderRepository:
     # List queries
     # ------------------------------------------------------------------
 
-    def list_active(self) -> list[TMPProvider]:
-        """List active providers for the tenant, ordered by name.
-
-        Returns only providers with status='active'. For package sync,
-        use list_syncable() which also includes 'draining' providers.
-        """
-        return list(
-            self._session.scalars(
-                select(TMPProvider)
-                .where(
-                    TMPProvider.tenant_id == self._tenant_id,
-                    TMPProvider.status == "active",
-                )
-                .order_by(TMPProvider.name)
-            ).all()
-        )
-
     def list_syncable(self) -> list[TMPProvider]:
         """List providers that should receive package sync updates.
 
@@ -118,6 +101,25 @@ class TMPProviderRepository:
                 f"Tenant mismatch: repository is scoped to '{self._tenant_id}' "
                 f"but provider has tenant_id='{provider.tenant_id}'"
             )
+        self._session.add(provider)
+        self._session.flush()
+        return provider
+
+    def create_from_fields(self, **kwargs: object) -> TMPProvider:
+        """Build and persist a new TMPProvider from validated field values.
+
+        Symmetric with :meth:`update_fields` — callers pass the same dict of
+        field names and values that ``_validate_provider_form`` produces,
+        without constructing the ORM model inline.
+
+        The ``tenant_id`` is injected automatically from the repository scope.
+        Raises ``ValueError`` if an unknown attribute is supplied.
+        """
+        provider = TMPProvider(tenant_id=self._tenant_id)
+        for key, value in kwargs.items():
+            if not hasattr(provider, key):
+                raise ValueError(f"TMPProvider has no attribute {key!r}")
+            setattr(provider, key, value)
         self._session.add(provider)
         self._session.flush()
         return provider

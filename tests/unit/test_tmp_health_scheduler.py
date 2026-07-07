@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from src.services.tmp_health_scheduler import (
+    TMPHealthScheduler,
     _check_provider_health,
     get_tmp_health_scheduler,
 )
@@ -55,6 +56,16 @@ def _make_provider(provider_id: str, tenant_id: str, endpoint: str) -> MagicMock
     p.tenant_id = tenant_id
     p.endpoint = endpoint
     return p
+
+
+def _make_tmp_uow_cls(mock_repo: MagicMock) -> MagicMock:
+    """Return a mock TMPProviderUoW class whose instances expose tmp_providers=mock_repo."""
+    mock_uow = MagicMock()
+    mock_uow.tmp_providers = mock_repo
+    mock_uow_cls = MagicMock()
+    mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+    mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_uow_cls
 
 
 class TestCheckProviderHealth:
@@ -136,25 +147,41 @@ class TestCheckProviderHealth:
         _, kwargs = mock_cls.call_args
         assert kwargs.get("follow_redirects") is False
 
+    @pytest.mark.asyncio
+    async def test_logs_exception_on_error(self):
+        """Exceptions are logged before mapping to 'error' — no silent failures."""
+        mock_client = _make_async_http_client(get_side_effect=OSError("DNS failure"))
+
+        with (
+            patch("src.services.tmp_health_scheduler.httpx.AsyncClient", return_value=mock_client),
+            patch("src.services.tmp_health_scheduler.logger") as mock_logger,
+        ):
+            result = await _check_provider_health("https://bad-hostname.invalid")
+
+        assert result == "error"
+        mock_logger.exception.assert_called_once()
+
 
 class TestCheckAllProviders:
     """tick() polls every active/draining provider and persists results."""
 
     @pytest.mark.asyncio
     async def test_updates_health_status_for_each_provider(self):
-        """Each provider gets its health_status updated via repository with correct values."""
+        """Each provider gets its health_status updated via UoW with correct values."""
         provider_a = _make_provider("uuid-a", "tenant-1", "https://a.example.com")
         provider_b = _make_provider("uuid-b", "tenant-2", "https://b.example.com")
 
         mock_session_read = MagicMock()
-        mock_session_write = MagicMock()
+        mock_repo = MagicMock()
+        mock_uow_cls = _make_tmp_uow_cls(mock_repo)
 
         with (
             patch(
                 "src.services.tmp_health_scheduler.get_db_session",
-                side_effect=[_make_db_context(mock_session_read), _make_db_context(mock_session_write)],
+                return_value=_make_db_context(mock_session_read),
             ),
             patch("src.services.tmp_health_scheduler.TMPProviderRepository") as mock_repo_cls,
+            patch("src.services.tmp_health_scheduler.TMPProviderUoW", mock_uow_cls),
             patch(
                 "src.services.tmp_health_scheduler._check_provider_health",
                 new=AsyncMock(side_effect=["unhealthy", "error"]),
@@ -162,10 +189,7 @@ class TestCheckAllProviders:
         ):
             mock_repo_cls.get_all_syncable.return_value = [provider_a, provider_b]
 
-            mock_repo_instance = MagicMock()
-            mock_repo_cls.return_value = mock_repo_instance
-
-            scheduler = get_tmp_health_scheduler()
+            scheduler = TMPHealthScheduler()
             await scheduler.tick()
 
         # Verify probes were called with correct endpoints
@@ -176,22 +200,14 @@ class TestCheckAllProviders:
         assert mock_check.call_count == 2
 
         # Verify health status was written with correct provider_id and status values
-        mock_repo_instance.update_health_status.assert_has_calls(
+        mock_repo.update_health_status.assert_has_calls(
             [
                 call("uuid-a", "unhealthy"),
                 call("uuid-b", "error"),
             ],
+            any_order=True,
         )
-        assert mock_repo_instance.update_health_status.call_count == 2
-
-        # Verify repo was constructed with correct session and tenant_ids
-        constructor_calls = [c for c in mock_repo_cls.call_args_list if c != call.get_all_syncable(mock_session_read)]
-        assert len(constructor_calls) == 2
-        assert constructor_calls[0] == call(mock_session_write, "tenant-1")
-        assert constructor_calls[1] == call(mock_session_write, "tenant-2")
-
-        # Verify commit on the write session
-        mock_session_write.commit.assert_called_once_with()
+        assert mock_repo.update_health_status.call_count == 2
 
     @pytest.mark.asyncio
     async def test_healthy_status_written_on_200(self):
@@ -199,14 +215,16 @@ class TestCheckAllProviders:
         provider = _make_provider("uuid-healthy", "tenant-1", "https://healthy.example.com")
 
         mock_session_read = MagicMock()
-        mock_session_write = MagicMock()
+        mock_repo = MagicMock()
+        mock_uow_cls = _make_tmp_uow_cls(mock_repo)
 
         with (
             patch(
                 "src.services.tmp_health_scheduler.get_db_session",
-                side_effect=[_make_db_context(mock_session_read), _make_db_context(mock_session_write)],
+                return_value=_make_db_context(mock_session_read),
             ),
             patch("src.services.tmp_health_scheduler.TMPProviderRepository") as mock_repo_cls,
+            patch("src.services.tmp_health_scheduler.TMPProviderUoW", mock_uow_cls),
             patch(
                 "src.services.tmp_health_scheduler._check_provider_health",
                 new=AsyncMock(return_value="healthy"),
@@ -214,25 +232,24 @@ class TestCheckAllProviders:
         ):
             mock_repo_cls.get_all_syncable.return_value = [provider]
 
-            mock_repo_instance = MagicMock()
-            mock_repo_cls.return_value = mock_repo_instance
-
-            scheduler = get_tmp_health_scheduler()
+            scheduler = TMPHealthScheduler()
             await scheduler.tick()
 
-        mock_repo_instance.update_health_status.assert_called_once_with("uuid-healthy", "healthy")
+        mock_repo.update_health_status.assert_called_once_with("uuid-healthy", "healthy")
 
     @pytest.mark.asyncio
     async def test_skips_when_no_providers(self):
-        """No active providers → no HTTP calls, no commit."""
+        """No active providers → no HTTP calls, no UoW opened."""
         mock_session = MagicMock()
+        mock_uow_cls = MagicMock()
 
         with (
             patch(
                 "src.services.tmp_health_scheduler.get_db_session",
-                side_effect=[_make_db_context(mock_session)],
+                return_value=_make_db_context(mock_session),
             ),
             patch("src.services.tmp_health_scheduler.TMPProviderRepository") as mock_repo_cls,
+            patch("src.services.tmp_health_scheduler.TMPProviderUoW", mock_uow_cls),
             patch(
                 "src.services.tmp_health_scheduler._check_provider_health",
                 new=AsyncMock(),
@@ -240,12 +257,12 @@ class TestCheckAllProviders:
         ):
             mock_repo_cls.get_all_syncable.return_value = []
 
-            scheduler = get_tmp_health_scheduler()
+            scheduler = TMPHealthScheduler()
             await scheduler.tick()
 
         mock_check.assert_not_called()
-        # No write session opened when there are no providers
-        mock_session.commit.assert_not_called()
+        # No UoW opened when there are no providers
+        mock_uow_cls.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_session_closed_before_probes(self):
@@ -255,7 +272,8 @@ class TestCheckAllProviders:
         call_order: list[str] = []
 
         mock_session_read = MagicMock()
-        mock_session_write = MagicMock()
+        mock_repo = MagicMock()
+        mock_uow_cls = _make_tmp_uow_cls(mock_repo)
 
         def track_exit(*_args: object) -> bool:
             call_order.append("session_closed")
@@ -271,15 +289,15 @@ class TestCheckAllProviders:
         with (
             patch(
                 "src.services.tmp_health_scheduler.get_db_session",
-                side_effect=[read_ctx, _make_db_context(mock_session_write)],
+                return_value=read_ctx,
             ),
             patch("src.services.tmp_health_scheduler.TMPProviderRepository") as mock_repo_cls,
+            patch("src.services.tmp_health_scheduler.TMPProviderUoW", mock_uow_cls),
             patch("src.services.tmp_health_scheduler._check_provider_health", side_effect=track_probe),
         ):
             mock_repo_cls.get_all_syncable.return_value = [provider]
-            mock_repo_cls.return_value = MagicMock()
 
-            scheduler = get_tmp_health_scheduler()
+            scheduler = TMPHealthScheduler()
             await scheduler.tick()
 
         # The read session must be closed BEFORE any probe runs
@@ -292,7 +310,8 @@ class TestCheckAllProviders:
         provider_b = _make_provider("uuid-b", "tenant-1", "https://good.example.com")
 
         mock_session_read = MagicMock()
-        mock_session_write = MagicMock()
+        mock_repo = MagicMock()
+        mock_uow_cls = _make_tmp_uow_cls(mock_repo)
 
         # _check_provider_health already maps all exceptions to "error",
         # but simulate a raw exception escaping to test the gather guard.
@@ -304,24 +323,66 @@ class TestCheckAllProviders:
         with (
             patch(
                 "src.services.tmp_health_scheduler.get_db_session",
-                side_effect=[_make_db_context(mock_session_read), _make_db_context(mock_session_write)],
+                return_value=_make_db_context(mock_session_read),
             ),
             patch("src.services.tmp_health_scheduler.TMPProviderRepository") as mock_repo_cls,
+            patch("src.services.tmp_health_scheduler.TMPProviderUoW", mock_uow_cls),
             patch("src.services.tmp_health_scheduler._check_provider_health", side_effect=probe_side_effect),
         ):
             mock_repo_cls.get_all_syncable.return_value = [provider_a, provider_b]
-            mock_repo_instance = MagicMock()
-            mock_repo_cls.return_value = mock_repo_instance
 
             # Should not raise — gather(return_exceptions=True) + coercion handles it
-            scheduler = get_tmp_health_scheduler()
+            scheduler = TMPHealthScheduler()
             await scheduler.tick()
 
         # Both providers must have a status written
-        assert mock_repo_instance.update_health_status.call_count == 2
-        calls = {c.args for c in mock_repo_instance.update_health_status.call_args_list}
+        assert mock_repo.update_health_status.call_count == 2
+        calls = {c.args for c in mock_repo.update_health_status.call_args_list}
         assert ("uuid-a", "error") in calls
         assert ("uuid-b", "healthy") in calls
+
+    @pytest.mark.asyncio
+    async def test_providers_grouped_by_tenant_one_uow_per_tenant(self):
+        """Providers from different tenants each get their own UoW (one commit per tenant)."""
+        provider_a = _make_provider("uuid-a", "tenant-1", "https://a.example.com")
+        provider_b = _make_provider("uuid-b", "tenant-2", "https://b.example.com")
+        provider_c = _make_provider("uuid-c", "tenant-1", "https://c.example.com")
+
+        mock_session_read = MagicMock()
+        mock_repo = MagicMock()
+
+        # Track which tenant_ids TMPProviderUoW was constructed with
+        uow_tenant_ids: list[str] = []
+
+        def make_uow(tenant_id: str) -> MagicMock:
+            uow_tenant_ids.append(tenant_id)
+            mock_uow = MagicMock()
+            mock_uow.tmp_providers = mock_repo
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+            return mock_uow
+
+        with (
+            patch(
+                "src.services.tmp_health_scheduler.get_db_session",
+                return_value=_make_db_context(mock_session_read),
+            ),
+            patch("src.services.tmp_health_scheduler.TMPProviderRepository") as mock_repo_cls,
+            patch("src.services.tmp_health_scheduler.TMPProviderUoW", side_effect=make_uow),
+            patch(
+                "src.services.tmp_health_scheduler._check_provider_health",
+                new=AsyncMock(return_value="healthy"),
+            ),
+        ):
+            mock_repo_cls.get_all_syncable.return_value = [provider_a, provider_b, provider_c]
+
+            scheduler = TMPHealthScheduler()
+            await scheduler.tick()
+
+        # Exactly 2 UoW instances: one per unique tenant
+        assert sorted(uow_tenant_ids) == ["tenant-1", "tenant-2"]
+        # All 3 providers got a status written
+        assert mock_repo.update_health_status.call_count == 3
 
 
 class TestSchedulerLifecycle:
@@ -330,9 +391,8 @@ class TestSchedulerLifecycle:
     @pytest.mark.asyncio
     async def test_start_creates_background_task(self):
         """start() sets is_running and creates an asyncio task."""
-        scheduler = get_tmp_health_scheduler()
-        scheduler.is_running = False
-        scheduler._task = None
+        # Use a fresh instance — never mutate the module-level singleton
+        scheduler = TMPHealthScheduler()
 
         with (
             patch.object(scheduler, "tick", new=AsyncMock(return_value=None)),
@@ -349,9 +409,8 @@ class TestSchedulerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_cancels_task(self):
         """stop() sets is_running=False and cancels the task."""
-        scheduler = get_tmp_health_scheduler()
-        scheduler.is_running = False
-        scheduler._task = None
+        # Use a fresh instance — never mutate the module-level singleton
+        scheduler = TMPHealthScheduler()
 
         with (
             patch.object(scheduler, "tick", new=AsyncMock(return_value=None)),
@@ -422,9 +481,8 @@ class TestSchedulerLifecycle:
     @pytest.mark.asyncio
     async def test_exception_in_tick_does_not_kill_loop(self):
         """An unhandled exception in tick() is logged but the loop continues."""
-        scheduler = get_tmp_health_scheduler()
-        scheduler.is_running = False
-        scheduler._task = None
+        # Use a fresh instance — never mutate the module-level singleton
+        scheduler = TMPHealthScheduler()
 
         call_count = 0
         recovered = asyncio.Event()

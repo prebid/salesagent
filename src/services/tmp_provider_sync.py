@@ -63,13 +63,20 @@ def _resolve_seller_agent_url(tenant_id: str) -> str:
 
     # Load tenant to resolve virtual_host / subdomain.
     # Uses TenantConfigUoW for architecture compliance (no raw get_db_session).
+    #
+    # IMPORTANT: this opens its own UoW/session. Callers MUST NOT invoke this
+    # function from inside another open UoW block (e.g. MediaBuyUoW) — nesting
+    # two UoWs means the inner UoW's __exit__ closes/removes the scoped session
+    # the outer block is still using (get_db_session() is a scoped session).
+    # sync_packages_for_media_buy() resolves the seller_agent URL before
+    # opening the MediaBuyUoW block for exactly this reason.
     try:
         with TenantConfigUoW(tenant_id) as uow:
             assert uow.tenant_config is not None
             tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.virtual_host:
                 host = tenant.virtual_host
-                scheme = "https" if "localhost" not in host else "http"
+                scheme = "http" if _is_local_host(host) else "https"
                 return f"{scheme}://{host}/mcp"
             if tenant and tenant.subdomain:
                 return f"http://{tenant.subdomain}.sales-agent.localhost:8001/mcp"
@@ -81,6 +88,18 @@ def _resolve_seller_agent_url(tenant_id: str) -> str:
         )
 
     return "http://salesagent:8000/mcp"
+
+
+def _is_local_host(host: str) -> bool:
+    """True if *host* (a hostname, optionally with ``:port``) is a local dev host.
+
+    Mirrors ``app.py:get_protocol``'s heuristic: a proper prefix check against
+    ``localhost`` / ``127.0.0.1`` rather than a substring test. A substring
+    test (``"localhost" not in host``) misclassifies a host like
+    ``my-localhost-mirror.example.com`` as local.
+    """
+    hostname = host.split(":", 1)[0]
+    return hostname == "localhost" or hostname.endswith(".localhost") or hostname.startswith("127.0.0.1")
 
 
 def _build_package_payload(
@@ -159,16 +178,27 @@ def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
     successful create_media_buy or update_media_buy response has been sent.
 
     Steps:
-      1. Load packages from media_packages table via MediaBuyRepository.
-      2. Resolve seller_agent URL from tenant config.
-      3. Load active/draining TMP provider endpoints via TMPProviderRepository.
+      1. Resolve seller_agent URL from tenant config (its own UoW, opened and
+         closed BEFORE the MediaBuyUoW block — see note below).
+      2. Load packages from media_packages table via MediaBuyRepository.
+      3. Load active/draining TMP provider endpoints via TMPProviderRepository,
+         materialised into plain tuples before the UoW block closes.
       4. POST /packages/sync to each provider (best-effort, errors logged).
 
     Args:
         tenant_id:    Tenant scope — used for both repository queries.
         media_buy_id: The media buy whose packages should be synced.
     """
-    # --- Step 1: load packages and build payloads (inside session scope) ---
+    # --- Step 1: resolve seller_agent URL BEFORE opening MediaBuyUoW ---
+    # _resolve_seller_agent_url() opens its own TenantConfigUoW. get_db_session()
+    # is a scoped session, so nesting it inside another open UoW block means the
+    # inner UoW's __exit__ closes/removes the session the outer block still
+    # needs — the subsequent row access and outer commit then run against a
+    # removed session. Resolving it here, before MediaBuyUoW opens, avoids the
+    # nesting entirely.
+    seller_agent_url = _resolve_seller_agent_url(tenant_id)
+
+    # --- Step 2: load packages and build payloads (inside session scope) ---
     # Payloads are built while the session is still open so that ORM attribute
     # access (pkg_row.package_config) does not hit a detached instance.
     # HTTP calls happen after this block — no open transaction during network I/O.
@@ -184,9 +214,6 @@ def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
                 )
                 return
 
-            # --- Step 2: resolve seller_agent URL and build payloads ---
-            # Done inside the UoW block so pkg_row attributes are accessible.
-            seller_agent_url = _resolve_seller_agent_url(tenant_id)
             payloads = [_build_package_payload(media_buy_id, row, seller_agent_url) for row in pkg_rows]
     except Exception:
         logger.exception(
@@ -207,10 +234,17 @@ def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
     # Draining providers still serve in-flight requests and need current package data.
     # The router stops sending NEW requests to draining providers, but packages must
     # stay up-to-date for requests already in the pipeline.
+    #
+    # Materialise into plain tuples INSIDE the UoW block — provider.endpoint /
+    # provider.auth_credentials / provider.name are ORM attributes that expire
+    # on commit (default expire_on_commit=True). Reading them after the `with`
+    # block closes hits a detached session and raises DetachedInstanceError,
+    # which then repeats in the except-handler's own attribute reads below.
     try:
         with TMPProviderUoW(tenant_id) as uow:
             assert uow.tmp_providers is not None
-            providers = uow.tmp_providers.list_syncable()
+            provider_rows = uow.tmp_providers.list_syncable()
+            providers = [(p.name, p.endpoint, p.auth_credentials or "") for p in provider_rows]
     except Exception:
         logger.exception(
             "[TMP sync] Failed to load TMP providers for tenant=%s",
@@ -226,17 +260,17 @@ def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
         return
 
     # --- Step 4: fan out to each provider (best-effort) ---
-    for provider in providers:
+    for provider_name, provider_endpoint, provider_auth_credentials in providers:
         try:
-            _post_packages_sync(provider.endpoint, payloads, provider.auth_credentials or "")
+            _post_packages_sync(provider_endpoint, payloads, provider_auth_credentials)
         except Exception:
             # Log with full context but do NOT re-raise — one provider failure
             # must not block the others.  The media buy is already committed.
             logger.warning(
                 "[TMP sync] Failed to sync %d package(s) to provider '%s' (%s) for tenant=%s media_buy=%s",
                 len(payloads),
-                provider.name,
-                provider.endpoint,
+                provider_name,
+                provider_endpoint,
                 tenant_id,
                 media_buy_id,
                 exc_info=True,

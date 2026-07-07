@@ -51,7 +51,7 @@ import secrets
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from src.core.database.repositories.uow import TenantConfigUoW, TMPProviderUoW
+from src.core.database.repositories.uow import TMPProviderUoW
 from src.core.exceptions import (
     AdCPAccountNotFoundError,
     AdCPAuthRequiredError,
@@ -63,6 +63,23 @@ from src.core.security.url_validator import sanitize_for_log
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["tmp-providers"])
+
+
+def _parse_bearer_scheme(header_value: str) -> str:
+    """Parse an ``Authorization`` header value with an explicit scheme check.
+
+    ``removeprefix("Bearer ")`` is a substring strip, not a scheme parse: it
+    silently accepts a scheme-less ``Authorization: <key>`` value (the prefix
+    just isn't there to remove) and rejects the RFC-legal lowercase
+    ``bearer <key>`` scheme (case-sensitive prefix match). Parsing the scheme
+    explicitly and case-insensitively closes both gaps. Fails closed either
+    way (empty string on no match) — this hardens, it does not loosen, the
+    existing behavior.
+    """
+    parts = header_value.strip().split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return ""
 
 
 async def require_api_key(request: Request) -> None:
@@ -100,7 +117,7 @@ async def require_api_key(request: Request) -> None:
     api_key = (
         request.headers.get("x-adcp-auth", "")
         or request.headers.get("X-API-Key", "")
-        or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        or _parse_bearer_scheme(request.headers.get("authorization", ""))
     )
     if not any(secrets.compare_digest(api_key, k) for k in allowed):
         raise AdCPAuthRequiredError(
@@ -123,7 +140,15 @@ async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_
       draining → included (router stops sending new requests but in-flight complete)
       inactive → excluded
     """
-    with TenantConfigUoW(tenant_id) as uow:
+    # Single TMPProviderUoW block: it already exposes both tmp_providers and
+    # tenant_config repositories, so the tenant-existence check and the
+    # provider read run as ONE transaction rather than two separate ones.
+    #
+    # provider.to_dict(...) is also called INSIDE this block — TMPProvider
+    # attributes expire on commit (default expire_on_commit=True), so calling
+    # to_dict() after the `with` block closes hits a detached session and
+    # raises DetachedInstanceError.
+    with TMPProviderUoW(tenant_id) as uow:
         if uow.tenant_config is None:
             raise AdCPServiceUnavailableError("Tenant config repository unavailable.")
         if uow.tenant_config.get_tenant() is None:
@@ -132,13 +157,12 @@ async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_
                 details={"suggestion": "Provide a valid tenant ID."},
             )
 
-    with TMPProviderUoW(tenant_id) as uow:
         assert uow.tmp_providers is not None
         providers = uow.tmp_providers.list_syncable()
 
-    # include_conditional=False: the TMP Router expects countries/uid_types
-    # to always be present (None means "accepts all" for legacy rows).
-    provider_list = [p.to_dict(include_conditional=False) for p in providers]
+        # include_conditional=False: the TMP Router expects countries/uid_types
+        # to always be present (None means "accepts all" for legacy rows).
+        provider_list = [p.to_dict(include_conditional=False) for p in providers]
 
     logger.debug(
         "[TMP discovery] tenant=%s returned %d provider(s)",

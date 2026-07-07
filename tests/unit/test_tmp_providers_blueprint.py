@@ -14,7 +14,6 @@ Note: Discovery endpoint tests are in test_tmp_providers_discovery_route.py
 """
 
 import os
-import unittest.mock
 from unittest.mock import MagicMock, patch
 
 from src.core.database.models import TMPProvider
@@ -60,7 +59,12 @@ class TestTMPProviderAddSSRF:
     """SSRF validation is wired into the add endpoint."""
 
     def test_add_rejects_docker_internal_url(self):
-        """POST /tmp-providers/add with host.docker.internal URL must redirect with error."""
+        """POST /tmp-providers/add with host.docker.internal URL must redirect with error.
+
+        Uses context_match-only form data (no identity_match) so the SSRF check
+        is the sole rejection reason — the test is not accidentally relying on
+        identity_match validation firing first.
+        """
         client = _make_tmp_provider_client()
 
         with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
@@ -75,7 +79,8 @@ class TestTMPProviderAddSSRF:
                         "name": "SSRF Test Provider",
                         "endpoint": "http://host.docker.internal:9999",
                         "context_match": "on",
-                        "identity_match": "on",
+                        # identity_match intentionally omitted — context-only provider
+                        # so the SSRF check is the only validation that fires.
                         "timeout_ms": "50",
                     },
                     follow_redirects=False,
@@ -83,6 +88,7 @@ class TestTMPProviderAddSSRF:
 
         assert response.status_code == 302
         assert "add" in response.headers.get("Location", "")
+        mock_uow.tmp_providers.create_from_fields.assert_not_called()
 
     def test_add_accepts_safe_public_url(self):
         """POST /tmp-providers/add with a safe public URL must proceed past SSRF check."""
@@ -112,7 +118,9 @@ class TestTMPProviderAddSSRF:
         # Must redirect to list (success) — not back to add form
         assert response.status_code == 302
         assert "add" not in response.headers.get("Location", "")
-        mock_uow.tmp_providers.create.assert_called_once_with(unittest.mock.ANY)
+        # create_from_fields is called (not create) — the blueprint uses the
+        # factory method symmetric with update_fields on the edit path.
+        mock_uow.tmp_providers.create_from_fields.assert_called_once()
 
 
 class TestTMPProviderEditSSRF:
@@ -251,8 +259,8 @@ class TestTMPProviderInputValidation:
         assert response.status_code == 302
         assert "add" in response.headers.get("Location", "")
 
-    def test_add_passes_status_to_constructor(self):
-        """POST /tmp-providers/add with explicit status passes it to TMPProvider constructor."""
+    def test_add_passes_status_to_create_from_fields(self):
+        """POST /tmp-providers/add with explicit status passes it to create_from_fields."""
         client = _make_tmp_provider_client()
 
         with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
@@ -261,26 +269,24 @@ class TestTMPProviderInputValidation:
             mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
-                with patch("src.admin.blueprints.tmp_providers.TMPProvider") as mock_cls:
-                    with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-                        response = client.post(
-                            "/tenant/default/tmp-providers/add",
-                            data={
-                                "name": "Draining Provider",
-                                "endpoint": "https://provider.example.com/tmp",
-                                "context_match": "on",
-                                "identity_match": "on",
-                                "countries": "US",
-                                "uid_types": "uid2",
-                                "timeout_ms": "50",
-                                "status": "draining",
-                            },
-                            follow_redirects=False,
-                        )
+                with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                    response = client.post(
+                        "/tenant/default/tmp-providers/add",
+                        data={
+                            "name": "Draining Provider",
+                            "endpoint": "https://provider.example.com/tmp",
+                            "context_match": "on",
+                            "identity_match": "on",
+                            "countries": "US",
+                            "uid_types": "uid2",
+                            "timeout_ms": "50",
+                            "status": "draining",
+                        },
+                        follow_redirects=False,
+                    )
 
         assert response.status_code == 302
-        mock_cls.assert_called_once_with(
-            tenant_id="default",
+        mock_uow.tmp_providers.create_from_fields.assert_called_once_with(
             name="Draining Provider",
             endpoint="https://provider.example.com/tmp",
             context_match=True,
@@ -557,8 +563,12 @@ class TestTMPProviderHealthCheck:
 class TestTMPProviderAuthFields:
     """auth_type and auth_credentials are parsed and passed through the add/edit flow."""
 
-    def test_add_passes_auth_type_and_credentials_to_constructor(self):
-        """POST /tmp-providers/add with auth_type and auth_credentials passes them to TMPProvider."""
+    def test_add_passes_auth_type_and_credentials_to_create_from_fields(self):
+        """POST /tmp-providers/add with auth_type and auth_credentials passes them to create_from_fields.
+
+        The blueprint now calls ``uow.tmp_providers.create_from_fields(**data)`` instead of
+        constructing ``TMPProvider(...)`` inline, so we assert on the repository factory method.
+        """
         client = _make_tmp_provider_client()
 
         with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
@@ -567,27 +577,25 @@ class TestTMPProviderAuthFields:
             mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
-                with patch("src.admin.blueprints.tmp_providers.TMPProvider") as mock_cls:
-                    with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-                        response = client.post(
-                            "/tenant/default/tmp-providers/add",
-                            data={
-                                "name": "Auth Provider",
-                                "endpoint": "https://provider.example.com/tmp",
-                                "context_match": "on",
-                                "identity_match": "on",
-                                "countries": "US",
-                                "uid_types": "uid2",
-                                "timeout_ms": "50",
-                                "auth_type": "bearer",
-                                "auth_credentials": "my-secret-token",
-                            },
-                            follow_redirects=False,
-                        )
+                with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                    response = client.post(
+                        "/tenant/default/tmp-providers/add",
+                        data={
+                            "name": "Auth Provider",
+                            "endpoint": "https://provider.example.com/tmp",
+                            "context_match": "on",
+                            "identity_match": "on",
+                            "countries": "US",
+                            "uid_types": "uid2",
+                            "timeout_ms": "50",
+                            "auth_type": "bearer",
+                            "auth_credentials": "my-secret-token",
+                        },
+                        follow_redirects=False,
+                    )
 
         assert response.status_code == 302
-        mock_cls.assert_called_once_with(
-            tenant_id="default",
+        mock_uow.tmp_providers.create_from_fields.assert_called_once_with(
             name="Auth Provider",
             endpoint="https://provider.example.com/tmp",
             context_match=True,

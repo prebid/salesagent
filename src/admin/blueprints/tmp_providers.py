@@ -22,7 +22,6 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.database.models import TMPProvider
 from src.core.database.repositories.uow import TMPProviderUoW
 from src.core.security.url_validator import check_url_ssrf, sanitize_for_log
 
@@ -219,22 +218,9 @@ def add_tmp_provider(tenant_id):
                 flash(error, "error")
                 return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
 
-            provider = TMPProvider(
-                tenant_id=tenant_id,
-                name=data["name"],
-                endpoint=data["endpoint"],
-                context_match=data["context_match"],
-                identity_match=data["identity_match"],
-                countries=data["countries"],
-                uid_types=data["uid_types"],
-                properties=data["properties"],
-                timeout_ms=data["timeout_ms"],
-                priority=data["priority"],
-                status=data["status"],
-                auth_type=data["auth_type"],
-                auth_credentials=data["auth_credentials"],
-            )
-            uow.tmp_providers.create(provider)
+            # create_from_fields is symmetric with update_fields used in the edit path:
+            # both accept the same validated-form dict without inline ORM construction.
+            uow.tmp_providers.create_from_fields(**data)
 
             flash(f"TMP provider '{data['name']}' added successfully", "success")
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))

@@ -15,9 +15,11 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from sqlalchemy.orm.exc import DetachedInstanceError
 
 from src.services.tmp_provider_sync import (
     _build_package_payload,
+    _is_local_host,
     _post_packages_sync,
     _resolve_seller_agent_url,
     sync_packages_for_media_buy,
@@ -144,6 +146,41 @@ class TestBuildPackagePayload:
 # ---------------------------------------------------------------------------
 
 
+class TestSellerAgentUrlResolvedBeforeMediaBuyUoW:
+    """_resolve_seller_agent_url runs BEFORE MediaBuyUoW opens.
+
+    Regression test for the nested-UoW bug: _resolve_seller_agent_url() opens
+    its own TenantConfigUoW. get_db_session() is a scoped session, so calling
+    it from inside an already-open MediaBuyUoW block means the inner UoW's
+    __exit__ closes/removes the session the outer block is still using.
+    """
+
+    @patch("src.services.tmp_provider_sync._post_packages_sync")
+    @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
+    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
+    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
+    def test_resolve_seller_agent_url_called_before_media_buy_uow_opens(
+        self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post
+    ):
+        """_resolve_seller_agent_url() is called before MediaBuyUoW.__enter__()."""
+        call_order: list[str] = []
+
+        mock_resolve.side_effect = lambda *_a, **_kw: (
+            call_order.append("resolve_seller_agent_url") or "http://agent/mcp"
+        )
+        mock_mb_uow_cls.return_value.__enter__ = MagicMock(
+            side_effect=lambda: (
+                call_order.append("media_buy_uow_entered")
+                or MagicMock(media_buys=MagicMock(get_packages=MagicMock(return_value=[])))
+            )
+        )
+        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        sync_packages_for_media_buy("tenant-1", "mb-1")
+
+        assert call_order == ["resolve_seller_agent_url", "media_buy_uow_entered"]
+
+
 class TestSyncSessionClosedBeforeHTTP:
     """sync_packages_for_media_buy closes the DB session before making HTTP calls."""
 
@@ -186,6 +223,86 @@ class TestSyncSessionClosedBeforeHTTP:
         assert "tp_session_closed" in call_order
         assert "http_called" in call_order
         assert call_order.index("tp_session_closed") < call_order.index("http_called")
+
+
+class TestProviderMaterializedBeforeSessionCloses:
+    """Provider ORM attributes must be read INSIDE the TMPProviderUoW block.
+
+    Regression test for the DetachedInstanceError class of bug: reading
+    provider.endpoint / provider.auth_credentials / provider.name AFTER the
+    UoW block has exited hits an expired/detached ORM instance under real
+    SQLAlchemy (default expire_on_commit=True). A MagicMock provider doesn't
+    reproduce this because MagicMock attribute access never raises — so this
+    test builds a fake object whose attributes raise DetachedInstanceError
+    once the UoW has closed, proving the production code reads them before
+    that point.
+    """
+
+    class _DetachAfterCloseProvider:
+        """Object whose attributes raise DetachedInstanceError once "closed"."""
+
+        def __init__(self, name: str, endpoint: str, auth_credentials: str | None, closed_flag: list[bool]):
+            self._name = name
+            self._endpoint = endpoint
+            self._auth_credentials = auth_credentials
+            self._closed_flag = closed_flag
+
+        def _check(self):
+            if self._closed_flag[0]:
+                raise DetachedInstanceError("Instance is not bound to a Session; attribute access failed")
+
+        @property
+        def name(self):
+            self._check()
+            return self._name
+
+        @property
+        def endpoint(self):
+            self._check()
+            return self._endpoint
+
+        @property
+        def auth_credentials(self):
+            self._check()
+            return self._auth_credentials
+
+    @patch("src.services.tmp_provider_sync._post_packages_sync")
+    @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
+    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
+    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
+    def test_provider_attributes_read_before_uow_exits(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+        """Provider fields are captured inside the `with` block, not after."""
+        pkg = MagicMock()
+        pkg.package_id = "pkg-1"
+        pkg.package_config = {"product_id": "prod-1"}
+        mock_mb_uow = MagicMock()
+        mock_mb_uow.media_buys.get_packages.return_value = [pkg]
+        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_mb_uow)
+        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        closed_flag = [False]
+        provider = self._DetachAfterCloseProvider("Provider A", "http://provider-a:3000", "secret", closed_flag)
+
+        tp_uow_ctx = MagicMock()
+        tp_uow_ctx.tmp_providers = MagicMock()
+        tp_uow_ctx.tmp_providers.list_syncable.return_value = [provider]
+        mock_tp_uow_cls.return_value.__enter__ = MagicMock(return_value=tp_uow_ctx)
+
+        def _mark_closed(*_args):
+            closed_flag[0] = True
+            return False
+
+        mock_tp_uow_cls.return_value.__exit__ = MagicMock(side_effect=_mark_closed)
+
+        # Would raise DetachedInstanceError if provider.endpoint/.auth_credentials
+        # were read after the TMPProviderUoW block closed.
+        sync_packages_for_media_buy("tenant-1", "mb-1")
+
+        mock_post.assert_called_once_with(
+            "http://provider-a:3000",
+            [_build_package_payload("mb-1", pkg, "http://agent/mcp")],
+            "secret",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +491,108 @@ class TestResolveSellAgentUrl:
             result = _resolve_seller_agent_url("test-tenant")
 
         assert result == "http://salesagent:8000/mcp"
+
+    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
+    def test_uses_https_for_public_virtual_host(self, mock_uow_cls):
+        """A public (non-local) virtual_host resolves to https://."""
+        tenant = MagicMock()
+        tenant.virtual_host = "tenant.salesagent.example.com"
+        tenant.subdomain = None
+        mock_uow = MagicMock()
+        mock_uow.tenant_config = MagicMock()
+        mock_uow.tenant_config.get_tenant.return_value = tenant
+        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("ADCP_AGENT_URL", None)
+            result = _resolve_seller_agent_url("test-tenant")
+
+        assert result == "https://tenant.salesagent.example.com/mcp"
+
+    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
+    def test_uses_http_for_localhost_virtual_host(self, mock_uow_cls):
+        """A localhost virtual_host resolves to http:// (dev convenience)."""
+        tenant = MagicMock()
+        tenant.virtual_host = "tenant.sales-agent.localhost:8001"
+        tenant.subdomain = None
+        mock_uow = MagicMock()
+        mock_uow.tenant_config = MagicMock()
+        mock_uow.tenant_config.get_tenant.return_value = tenant
+        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("ADCP_AGENT_URL", None)
+            result = _resolve_seller_agent_url("test-tenant")
+
+        assert result == "http://tenant.sales-agent.localhost:8001/mcp"
+
+    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
+    def test_does_not_misclassify_public_host_containing_localhost_substring(self, mock_uow_cls):
+        """A public host that merely CONTAINS 'localhost' as a substring must get https.
+
+        Regression test for the substring-check bug: "localhost" not in host
+        would incorrectly treat "my-localhost-mirror.example.com" as local.
+        """
+        tenant = MagicMock()
+        tenant.virtual_host = "my-localhost-mirror.example.com"
+        tenant.subdomain = None
+        mock_uow = MagicMock()
+        mock_uow.tenant_config = MagicMock()
+        mock_uow.tenant_config.get_tenant.return_value = tenant
+        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("ADCP_AGENT_URL", None)
+            result = _resolve_seller_agent_url("test-tenant")
+
+        assert result == "https://my-localhost-mirror.example.com/mcp"
+
+
+# ---------------------------------------------------------------------------
+# _is_local_host tests
+# ---------------------------------------------------------------------------
+
+
+class TestIsLocalHost:
+    """_is_local_host distinguishes real local dev hosts from public hosts
+
+    that merely contain "localhost" as a substring.
+    """
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "localhost",
+            "localhost:8001",
+            "tenant.localhost",
+            "tenant.sales-agent.localhost:8001",
+            "127.0.0.1",
+            "127.0.0.1:8000",
+        ],
+    )
+    def test_local_hosts_return_true(self, host):
+        assert _is_local_host(host) is True
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "tenant.salesagent.example.com",
+            "my-localhost-mirror.example.com",
+            "example.com",
+            "localhost.evil.com",
+        ],
+    )
+    def test_public_hosts_return_false(self, host):
+        assert _is_local_host(host) is False
 
 
 # ---------------------------------------------------------------------------

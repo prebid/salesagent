@@ -17,6 +17,12 @@ Design principles (matching tmp_provider_sync.py):
   concurrently via ``httpx.AsyncClient``, then a short session writes the results.
 - ``asyncio.gather(..., return_exceptions=True)`` ensures one bad endpoint
   cannot cancel the remaining probes.
+
+Singleton pattern (same as delivery_webhook_scheduler and media_buy_status_scheduler):
+Each scheduler module owns its own ``_scheduler`` global, ``get_*()``,
+``start_*()``, and ``stop_*()`` functions.  This is intentional: it keeps each
+scheduler independently testable (tests can construct a fresh instance without
+touching the global) and avoids coupling the base class to module-level state.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import httpx
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.tmp_provider import TMPProviderRepository
+from src.core.database.repositories.uow import TMPProviderUoW
 from src.services._provider_http import provider_url
 from src.services._scheduler_base import IntervalScheduler, _parse_interval_env
 
@@ -64,6 +71,7 @@ async def _check_provider_health(endpoint: str) -> str:
             resp = await client.get(health_url)
         return "healthy" if resp.status_code == 200 else "unhealthy"
     except Exception:
+        logger.exception("Health probe failed for %s", endpoint)
         return "error"
 
 
@@ -83,7 +91,8 @@ class TMPHealthScheduler(IntervalScheduler):
         1. Read provider metadata into memory (short DB session).
         2. Close the session — no open transaction during network I/O.
         3. Run health probes concurrently via httpx.AsyncClient.
-        4. Reopen a short session to write the results.
+        4. Write results — one UoW per tenant group so the commit boundary
+           is owned by the UoW, not a raw session.commit() call.
         """
         # --- Step 1: read provider metadata, then close the session ---
         with get_db_session() as session:
@@ -105,16 +114,25 @@ class TMPHealthScheduler(IntervalScheduler):
         # already catches everything, but belt-and-suspenders for future changes).
         statuses = [r if isinstance(r, str) else "error" for r in raw_results]
 
-        # --- Step 3: write results in a short session ---
-        with get_db_session() as session:
-            for (provider_id, tenant_id, _endpoint), status in zip(provider_info, statuses, strict=True):
-                repo = TMPProviderRepository(session, tenant_id)
-                repo.update_health_status(provider_id, status)
-            session.commit()
+        # --- Step 3: write results — group by tenant so each UoW owns its commit ---
+        # Build a per-tenant list of (provider_id, status) pairs first so we can
+        # open exactly one UoW per tenant rather than one raw session for all tenants.
+        from collections import defaultdict
+
+        by_tenant: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for (provider_id, tenant_id, _endpoint), status in zip(provider_info, statuses, strict=True):
+            by_tenant[tenant_id].append((provider_id, status))
+
+        for tenant_id, updates in by_tenant.items():
+            with TMPProviderUoW(tenant_id) as uow:
+                assert uow.tmp_providers is not None
+                for provider_id, status in updates:
+                    uow.tmp_providers.update_health_status(provider_id, status)
 
         logger.debug(
-            "TMP health check complete: %d provider(s) checked",
+            "TMP health check complete: %d provider(s) checked across %d tenant(s)",
             len(provider_info),
+            len(by_tenant),
         )
 
 

@@ -1,7 +1,7 @@
 """Add tmp_providers table with auth fields for Trusted Match Protocol provider registrations
 
 Revision ID: 2fa4c97166ab
-Revises: b4e2bffdd4f8
+Revises: a164b85bab9e
 Create Date: 2026-05-21 09:31:00.000000
 
 Schema aligned with provider-registration.json (AdCP spec PR #2210):
@@ -68,13 +68,13 @@ def upgrade() -> None:
             "created_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
-            nullable=True,
+            nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
-            nullable=True,
+            nullable=False,
         ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("provider_id"),
