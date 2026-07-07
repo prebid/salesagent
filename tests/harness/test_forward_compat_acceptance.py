@@ -36,11 +36,16 @@ CURRENT_SPEC_GET_PRODUCTS = {
     "brand": {"domain": "acme.com"},
 }
 
-# Future spec — extra top-level field
+# Future spec — extra top-level field.
+# NOTE: must be a genuinely-unknown field, NOT adcp_major_version. The latter is
+# a negotiation field (#1512): the middleware validates it and rejects an
+# unsupported major with VERSION_UNSUPPORTED in ALL environments, so it is not a
+# "silently accepted future field." Version negotiation is covered by
+# test_mcp_compat_middleware.py / test_adcp_version.py.
 FUTURE_TOP_LEVEL_FIELD = {
     "brief": "video ads",
     "brand": {"domain": "acme.com"},
-    "adcp_major_version": 5,  # New spec field, not in our signature
+    "experimental_capability": "v5",  # New spec field, not in our signature
 }
 
 # Future spec — extra nested field inside brand
