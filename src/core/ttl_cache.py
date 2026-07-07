@@ -7,10 +7,6 @@ import hmac
 import threading
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import Generic, TypeVar
-
-K = TypeVar("K")
-V = TypeVar("V")
 
 _DEFAULT_MAXSIZE = 10_000
 
@@ -32,7 +28,7 @@ def cache_partition_token(secret: str | None, purpose: bytes) -> str:
     return hmac.new((secret or "").encode(), purpose, hashlib.sha256).hexdigest()[:16]
 
 
-class ThreadSafeTTLCache(Generic[K, V]):
+class ThreadSafeTTLCache[K, V]:
     """Expiring ``key -> (value, expires_at)`` map with locked dict operations.
 
     The locking contract its consumers (the property-list resolver and the
