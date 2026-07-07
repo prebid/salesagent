@@ -250,8 +250,12 @@ def _create_unique_media_buy(
 
 @given(parsers.parse('multiple media buys owned by "{owner}" in various statuses'))
 def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
-    """Create media buys in various statuses for partition testing."""
-    for status in ("active", "completed", "paused"):
+    """Create one media buy per canonical status for partition testing.
+
+    Covers every persisted status the status_filter partitions exercise so a
+    single-status filter always has exactly one matching buy to return.
+    """
+    for status in ("active", "completed", "paused", "rejected", "canceled", "pending_creatives", "pending_start"):
         _create_unique_media_buy(ctx, label=f"mb-{status}", owner=owner, status=status)
 
 
@@ -701,9 +705,15 @@ def when_request_no_identifiers(ctx: dict) -> None:
     dispatch_request(ctx)
 
 
-@when(parsers.parse("the Buyer Agent requests delivery metrics with {request_params}"))
+# Restricted to the key=value identify-mode form (e.g. media_buy_ids=[...]
+# status_filter=[...]). The unrestricted parse-form matched *every* "...with X"
+# line and, because "{request_params}" sorts last, shadowed the specific steps
+# below (status_filter "X", media_buy_ids [...], the partition steps), silently
+# dropping their params via _parse_request_params. Requiring "\w+=" makes it
+# mutually exclusive with those.
+@when(parsers.re(r"the Buyer Agent requests delivery metrics with (?P<request_params>\w+=.+)"))
 def when_request_with_params(ctx: dict, request_params: str) -> None:
-    """Request with arbitrary params (Scenario Outline)."""
+    """Request with arbitrary key=value params (Scenario Outline)."""
     kwargs = _parse_request_params(request_params)
     dispatch_request(ctx, **kwargs)
 
@@ -726,14 +736,25 @@ def when_request_with_buyer_refs(ctx: dict, refs_json: str) -> None:
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<filter_value>[^"]+)"'))
 def when_request_with_status_filter(ctx: dict, filter_value: str) -> None:
-    """Request with status_filter string."""
-    dispatch_request(ctx, status_filter=[filter_value])
+    """Request with status_filter string.
+
+    Records the requested filter in ctx["request_params"] so then_filter_result
+    can reconstruct it. The "(field absent)" / "(omitted)" sentinels mean "send
+    no status_filter at all" — dispatching the literal would resolve to an empty
+    filter and drop every buy.
+    """
+    ctx.setdefault("request_params", {})["status_filter"] = [filter_value]
+    if filter_value in ("(field absent)", "(omitted)"):
+        dispatch_request(ctx)
+    else:
+        dispatch_request(ctx, status_filter=[filter_value])
 
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics with status_filter (?P<filter_json>\[.+?\])"))
 def when_request_with_status_filter_list(ctx: dict, filter_json: str) -> None:
     """Request with status_filter list."""
     status_filter = _parse_json_list(filter_json)
+    ctx.setdefault("request_params", {})["status_filter"] = status_filter
     dispatch_request(ctx, status_filter=status_filter)
 
 
@@ -1033,12 +1054,9 @@ def when_boundary_account(ctx: dict, value: str) -> None:
     _dispatch_partition(ctx, "account", value)
 
 
-@when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<partition_value>[^"]+)"'))
-def when_partition_status_filter(ctx: dict, partition_value: str) -> None:
-    """Partition test: status_filter value."""
-    dispatch_request(ctx, status_filter=[partition_value])
-
-
+# NOTE: the partition status_filter step is identical to
+# when_request_with_status_filter above (same regex + body); the single
+# definition there serves both the alternative and partition scenarios.
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at status_filter boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
     """Boundary test: status_filter value."""

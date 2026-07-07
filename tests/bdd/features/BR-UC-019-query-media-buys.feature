@@ -379,12 +379,14 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-154 INV-5: Results filtered to principal only
 
   @T-UC-019-inv-150-1 @invariant @BR-RULE-150
-  Scenario: INV-1 holds - pre-flight media buy has pending_activation status
+  Scenario: INV-1 holds - pre-flight media buy has pending_start status
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-04-01" and end_date "2026-04-30"
     And today is "2026-03-15"
-    When the Buyer Agent sends a get_media_buys request with status_filter "pending_activation"
-    Then the response should include media buy "mb-001" with status "pending_activation"
-    # BR-RULE-150 INV-1: today < start_date yields pending_activation
+    When the Buyer Agent sends a get_media_buys request with status_filter "pending_start"
+    Then the response should include media buy "mb-001" with status "pending_start"
+    # BR-RULE-150 INV-1: today < start_date yields pending_start.
+    # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: pre-flight is pending_start
+    # ("ready to serve, waiting for its flight date"); "pending_activation" is not a 3.1 wire value.
 
   @T-UC-019-inv-150-2 @invariant @BR-RULE-150
   Scenario: INV-2 holds - in-flight media buy has active status
@@ -501,18 +503,22 @@ Feature: BR-UC-019 Query Media Buys
       | canceled  | canceled  |
 
   @T-UC-019-inv-150-8 @invariant @BR-RULE-150 @schema-v3.1
-  Scenario Outline: INV-8 holds - pre-serving persisted states collapse to pending_start
+  Scenario Outline: INV-8 holds - pre-serving persisted states map to their pending status
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "pending_start"
-    # BR-RULE-150 INV-8: draft/pending/pending_approval -> pending_start; no flight refinement
+    Then the media buy "mb-001" should have status "<expected>"
+    # BR-RULE-150 INV-8: pre-serving persisted states map to their pending status; no flight refinement.
+    # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: a draft buy has no creatives
+    # assigned, so it is pending_creatives ("approved but has no creatives"), NOT pending_start
+    # ("ready to serve, waiting for its flight date"). pending / pending_approval are pre-serving
+    # ready states -> pending_start.
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
-      | persisted        |
-      | draft            |
-      | pending          |
-      | pending_approval |
+      | persisted        | expected          |
+      | draft            | pending_creatives |
+      | pending          | pending_start     |
+      | pending_approval | pending_start     |
 
   @T-UC-019-inv-150-9 @invariant @BR-RULE-150 @schema-v3.1
   Scenario: INV-9 holds - persisted failed maps to rejected

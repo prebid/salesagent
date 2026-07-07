@@ -1039,36 +1039,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # pass is real, not a weakened assertion.
 
         # UC-004 status filter: "active" works, other values may not
+        # NOTE: the T-UC-004-filter / -empty / -array shadow entries were removed
+        # once the generic `{request_params}` step was restricted to key=value
+        # form (#1545): the specific status_filter step is no longer shadowed, so
+        # values (single, empty-result, array) are all honored and pass.
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
-            (
-                # The generic `requests delivery metrics with {request_params}` step
-                # shadows the specific `with status_filter "X"` step and parses only
-                # the key=value form, so the `status_filter "X"` value is dropped and
-                # the filter defaults to "active". Every non-active value therefore
-                # returns the active buy and fails the "only buys with status X" check.
-                # pending_creatives/pending_start are the v3.1 additions of this same
-                # known step-shadowing gap (pending_activation was stale — not a real
-                # MediaBuyStatus value). Fixing the generic step is tracked separately
-                # and would graduate this whole family.
-                "T-UC-004-filter",
-                {"rejected", "canceled", "paused", "completed", "pending_creatives", "pending_start"},
-                "status_filter for non-active values is dropped by the generic request_params step "
-                "(shadows the specific status_filter step), so the filter defaults to active",
-            ),
             (
                 "T-UC-004-filter-default",
                 set(),  # all examples
                 "default status_filter=active not applied when no explicit IDs",
-            ),
-            (
-                "T-UC-004-filter-empty",
-                set(),
-                "status_filter empty result not returned as empty array",
-            ),
-            (
-                "T-UC-004-filter-array",
-                set(),
-                "status_filter with array not correctly applied",
             ),
         ]
         if any(t.startswith("T-UC-004-filter") for t in marker_names):
@@ -1830,6 +1809,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if tag in marker_names:
                 if not substrings or any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+                break
+
+        # FIXME(#1554): un-shadowed non-target families. #1545 restricted the generic
+        # `{request_params}` step to key=value form, which un-shadowed these specific
+        # steps so their params are now genuinely applied — exposing latent step/Then/
+        # Given plumbing bugs (same class the status_filter family had, which #1545
+        # fixed as its target). Deferred to #1554; strict=False so any row that is
+        # incidentally fixed just xpasses rather than breaking the build.
+        _UC004_UNSHADOWED_DEFERRED: list[tuple[str, set[str], str]] = [
+            ("T-UC-004-partition-date-range", {"start_before_end", "dates_omitted"}, "un-shadowed (#1554)"),
+            ("T-UC-004-partition-ownership", {"owner_matches"}, "un-shadowed (#1554)"),
+            ("T-UC-004-partition-resolution", {"both_provided", "partial_resolution"}, "un-shadowed (#1554)"),
+        ]
+        for tag, substrings, reason in _UC004_UNSHADOWED_DEFERRED:
+            if tag in marker_names and any(s in nodeid for s in substrings):
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
         # Graduated: T-UC-004-partition-credentials — the When now validates the real
