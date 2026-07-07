@@ -2259,12 +2259,13 @@ class TestDeliveryProtocol:
 
 
 class TestCircuitBreakerDoesNotMaskTerminalStatus:
-    """An open reporting circuit breaker must not overwrite a terminal status.
+    """An open reporting circuit breaker may only overwrite an actively serving buy.
 
     "reporting_delayed" tells the buyer data is temporarily unavailable and a
     later report will follow. That is a lie for a terminal buy (canceled,
-    rejected, failed, completed) or a paused buy — none are awaiting fresh data.
-    The override is now scoped to non-terminal statuses.
+    rejected, failed, completed), a paused buy, or a pending buy that has never
+    served — none are awaiting fresh delivery data. The override is scoped to
+    status == "active".
 
     Covers: UC-004-EXT-G-03
     """
@@ -2311,6 +2312,33 @@ class TestCircuitBreakerDoesNotMaskTerminalStatus:
             )
 
         assert response.media_buy_deliveries[0].status == "reporting_delayed"
+
+    def test_open_breaker_leaves_pending_status_intact(self):
+        """A never-served pending buy is not masked as reporting_delayed (#1545 O3).
+
+        pending_creatives / pending_start buys have no delivery data pending, so
+        an open breaker must not relabel them — that would promise a report that
+        never comes and contradict a status_filter that selected the pending buy.
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_pending",
+            status="pending_creatives",
+            start_date=date(2025, 1, 1),
+            end_date=date(2027, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_pending")
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_pending"])
+
+        with patch(f"{_PATCH_PREFIX}._is_circuit_breaker_open", return_value=True):
+            response = _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_pending", buy)],
+            )
+
+        assert response.media_buy_deliveries[0].status == "pending_creatives"
 
 
 class TestTimeSimulationReachesFinalNotification:

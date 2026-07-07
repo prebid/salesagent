@@ -108,7 +108,6 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
-    TERMINAL_STATUSES,
     resolve_canonical_status,
 )
 from src.core.validation_helpers import format_validation_error
@@ -276,11 +275,14 @@ def _get_media_buy_delivery_impl(
                 status = resolve_canonical_status(buy, simulation_datetime.date(), simulate=simulate_time)
 
                 # Override status when circuit breaker is open (reporting
-                # degraded). "reporting_delayed" means "data temporarily
-                # unavailable, will report later", so it must not overwrite a
-                # terminal or paused buy that is not awaiting fresh data — that
-                # would tell the buyer to expect a report that will never come.
-                if status not in TERMINAL_STATUSES and _is_circuit_breaker_open(tenant["tenant_id"]):
+                # degraded). "reporting_delayed" means "delivery data temporarily
+                # unavailable, will report later", so it may only overwrite a buy
+                # that is actively serving and therefore genuinely awaiting fresh
+                # data. A terminal/paused buy has no more data coming, and a
+                # pending buy (pending_creatives / pending_start) has never served
+                # — marking either "reporting_delayed" would promise a report that
+                # will never come and contradict the status_filter that selected it.
+                if status == "active" and _is_circuit_breaker_open(tenant["tenant_id"]):
                     status = "reporting_delayed"
 
                 # Get delivery metrics from adapter
