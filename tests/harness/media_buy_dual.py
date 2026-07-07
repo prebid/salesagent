@@ -97,12 +97,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return super().call_mcp(**kwargs)
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        if _is_update_request(kwargs):
-            self._active_update = True
-            try:
-                return self._run_update_rest_request(**kwargs)
-            finally:
-                self._active_update = False
+        # The flag must survive until the dispatcher calls parse_rest_response
+        # (which runs AFTER this method returns), so it is set per dispatch and
+        # only flipped by the next one — never reset in a finally.
+        self._active_update = _is_update_request(kwargs)
+        if self._active_update:
+            return self._run_update_rest_request(**kwargs)
         return super()._run_rest_request(endpoint, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
@@ -167,7 +167,14 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         identity = kwargs.pop("identity", self.identity_for(Transport.MCP))
         mock_ctx = MM(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=identity)
+
+        # The wrapper reads BOTH get_state("identity") and get_state("context_id");
+        # a plain return_value would hand the identity object to the context_id
+        # DB filter (psycopg2 "can't adapt type 'ResolvedIdentity'").
+        async def _get_state(key: str) -> Any:
+            return identity if key == "identity" else None
+
+        mock_ctx.get_state = AsyncMock(side_effect=_get_state)
 
         tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
         data = dict(tool_result.structured_content)

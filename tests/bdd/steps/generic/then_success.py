@@ -19,6 +19,7 @@ _STATUSLESS_SUCCESS_ATTRS: tuple[str, ...] = (
     "formats",  # ListCreativeFormatsResponse
     "media_buy_deliveries",  # GetMediaBuyDeliveryResponse
     "aggregated_totals",  # GetMediaBuyDeliveryResponse
+    "affected_packages",  # UpdateMediaBuySuccess (payload status field is the media-buy status, unset)
 )
 
 
@@ -41,13 +42,15 @@ def then_response_status(ctx: dict, status: str) -> None:
     # Determine if response type declares a ``status`` field via Pydantic metadata.
     # Uses getattr on the class (not instance) to handle non-Pydantic test doubles.
     resp_fields = getattr(type(resp), "model_fields", {})
-    if "status" in resp_fields:
+    if "status" in resp_fields and resp.status is not None:
         # SDK 5.7: status may be a non-StrEnum; enum_value normalizes to str.
         actual_str = enum_value(resp.status)
         assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
         return
 
-    # Status-less response: only the completed/success state is representable.
+    # Status-less response (no field, or the payload leaves it unset — e.g.
+    # UpdateMediaBuySuccess.status is the media-buy lifecycle status, conveyed
+    # only at the protocol envelope): only completed/success is representable.
     if status != "completed":
         raise AssertionError(
             f"Status '{status}' requested but response {type(resp).__name__} "

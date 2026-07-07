@@ -772,6 +772,22 @@ Feature: BR-UC-019 Query Media Buys
     # POST-S6 / INT-006: confirmed_at reflects the original confirmation moment; revision updates do not rewrite it
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
+  @T-UC-019-lifecycle-approval @invariant @confirmed_at @BR-RULE-291 @schema-v3.1
+  Scenario: Manual approval lifecycle - approval advances revision and stamps confirmed_at at the approval instant
+    Given the tenant requires manual approval for media buys
+    And the Buyer Agent has created media buy "mb-pending" awaiting seller approval
+    When the seller approves media buy "mb-pending"
+    And the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-pending"]
+    Then the media buy "mb-pending" revision should be greater than its revision at creation
+    And the media buy "mb-pending" confirmed_at should equal the approval instant
+    And the media buy "mb-pending" confirmed_at should not equal its created_at
+    # BR-RULE-291 / spec MUST: revision increments on every state change — seller approval included
+    # POST-S6 / INT-006: confirmed_at is the seller's confirmation instant (approval moment on the
+    # deferred path), NOT the buyer's create-request time (created_at)
+    # @source repo=adcp ref=3.1.0-beta.3 path=dist/docs/media-buy/specification.mdx (revision MUST
+    #         increment on every state change; confirmed_at stamped at IO-signing per the
+    #         sales-guaranteed conformance storyboard)
+
   @T-UC-019-partition-confirmed-at @partition @confirmed_at @schema-v3.1
   Scenario Outline: confirmed_at - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>

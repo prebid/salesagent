@@ -15,14 +15,6 @@ from tests.bdd.steps._harness_db import db_session as _db_session
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then("the response should succeed")
-def then_response_succeeds(ctx: dict) -> None:
-    """Assert the response is a success (no error, has response object)."""
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-
-
 @then("the pricing validation should pass")
 def then_pricing_validation_passes(ctx: dict) -> None:
     """Assert pricing validation passed — no error, response has media_buy_id."""
@@ -51,16 +43,6 @@ def then_date_validation_passes(ctx: dict) -> None:
     assert resp is not None, "Expected a response but none found (date validation may have failed silently)"
     media_buy_id = _get_response_field(resp, "media_buy_id")
     assert media_buy_id, "Expected media_buy_id in response — date validation passed but no media buy created"
-
-
-@then(parsers.parse('the response should include a "{field}"'))
-def then_response_includes_field(ctx: dict, field: str) -> None:
-    """Assert response includes the specified field with a non-None value."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    # Check on the response object — may be CreateMediaBuyResult wrapping a Success
-    value = _get_response_field(resp, field)
-    assert value is not None, f"Expected '{field}' in response, got None"
 
 
 @then(parsers.parse('the response should include "{field}" matching "{value}"'))
@@ -240,36 +222,6 @@ def then_pending_state(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Status and workflow assertions
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@then(parsers.parse('the media buy status should be "{status}"'))
-def then_media_buy_status(ctx: dict, status: str) -> None:
-    """Assert the media buy has the expected status.
-
-    Checks response first (preferred), then falls back to DB query.
-    Both paths must assert the exact status — no silent fallthrough.
-    """
-    resp = ctx.get("response")
-    media_buy = ctx.get("existing_media_buy")
-    assert resp is not None or media_buy is not None, (
-        "No response or existing media buy to check status — "
-        f"step claims status should be '{status}' but nothing to verify against"
-    )
-    if resp is not None:
-        actual = _get_response_field(resp, "status")
-        assert actual == status, f"Expected media buy status '{status}' in response, got '{actual}'"
-        return
-    # Fallback: check existing media buy in DB (explicit path, not silent)
-    env = ctx["env"]
-    env._commit_factory_data()
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    with _db_session(ctx) as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy.media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy.media_buy_id} not found in DB"
-        assert mb.status == status, f"Expected DB status '{status}', got '{mb.status}'"
 
 
 # ═══════════════════════════════════════════════════════════════════════

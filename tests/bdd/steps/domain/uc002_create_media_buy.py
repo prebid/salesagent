@@ -57,8 +57,15 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
 
 @given("a valid create_media_buy request")
 def given_valid_request(ctx: dict) -> None:
-    """Set up a generic valid create_media_buy request (account populated separately)."""
+    """Assemble a full valid create_media_buy request against the seeded product.
+
+    Wired full-create scenarios (e.g. T-UC-002-v31-success-revision-and-actions)
+    dispatch this request through the parametrized transport; the harness adds
+    the required idempotency_key when the scenario doesn't pin one.
+    """
     ctx.setdefault("account_ref", None)
+    _build_valid_request_kwargs(ctx)
+    ctx["full_create_request"] = True
 
 
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
@@ -447,11 +454,12 @@ def when_send_create_media_buy(ctx: dict) -> None:
 
     - Account-resolution scenarios resolve an ``account_ref`` at the transport
       boundary via ``resolve_account_or_error`` (returns the resolved account_id).
-    - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch a full
+    - Full-create scenarios (``ctx["full_create_request"]`` — v3.1 idempotency and
+      GA-fields scenarios) dispatch a full
       ``create_media_buy`` through the parametrized transport so the production
       idempotency replay path runs end-to-end.
     """
-    if ctx.get("idempotency_create"):
+    if ctx.get("full_create_request"):
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         dispatch_request(ctx, **ctx["request_kwargs"])
@@ -1080,13 +1088,10 @@ def given_tenant_auto_approval(ctx: dict) -> None:
     provisioned by conftest's _harness_env) reach this step; every other UC-002
     scenario using this text is blanket-xfailed before any step runs.
     """
-    env = ctx["env"]
-    tenant = ctx["tenant"]
+    from tests.bdd.steps._outcome_helpers import set_tenant_review_requirement
 
-    tenant.human_review_required = False
-    env._commit_factory_data()
-    env._identity_cache.clear()
-    env._tenant_overrides["human_review_required"] = False
+    env = ctx["env"]
+    set_tenant_review_requirement(ctx, required=False)
 
     adapter_mock = env.mock["adapter"].return_value
     assert adapter_mock.manual_approval_required is False, (
@@ -1117,7 +1122,7 @@ def _idempotency_pricing_option_id(pricing_option) -> str:
     return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
 
 
-def _build_idempotency_request_kwargs(ctx: dict) -> dict:
+def _build_valid_request_kwargs(ctx: dict) -> dict:
     """Assemble a valid create_media_buy request dict against the seeded product.
 
     Stored on ctx["request_kwargs"]; the When step and the "already created"
@@ -1155,9 +1160,9 @@ def _build_idempotency_request_kwargs(ctx: dict) -> dict:
 @given(parsers.parse('a valid create_media_buy request with idempotency_key "{key}"'))
 def given_valid_request_with_idempotency_key(ctx: dict, key: str) -> None:
     """Build a valid create_media_buy request carrying a literal idempotency_key."""
-    kwargs = _build_idempotency_request_kwargs(ctx)
+    kwargs = _build_valid_request_kwargs(ctx)
     kwargs["idempotency_key"] = key
-    ctx["idempotency_create"] = True
+    ctx["full_create_request"] = True
     ctx["idempotency_key"] = key
 
 
@@ -1175,9 +1180,9 @@ def given_request_idempotency_key_omitted(ctx: dict) -> None:
     """
     from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 
-    kwargs = _build_idempotency_request_kwargs(ctx)
+    kwargs = _build_valid_request_kwargs(ctx)
     kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
-    ctx["idempotency_create"] = True
+    ctx["full_create_request"] = True
 
 
 @given("a media buy was already created for the same seller with that idempotency_key")
@@ -1705,3 +1710,68 @@ def then_webhook_notification(ctx: dict) -> None:
             f"step.request_data push_notification_config URL mismatch: "
             f"expected '{expected_url}', got '{step_push_cfg.get('url')}'"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — v3.1 GA sync-success fields: revision / confirmed_at /
+# valid_actions (T-UC-002-v31-success-revision-and-actions, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _require_success_response(ctx: dict) -> object:
+    """Return ctx['response'], failing with the recorded error if absent."""
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
+    return resp
+
+
+@then(parsers.parse('the response should include "confirmed_at" as an ISO 8601 timestamp'))
+def then_response_confirmed_at_is_iso(ctx: dict) -> None:
+    """confirmed_at is stamped on the sync success arm and parses as ISO 8601.
+
+    AdCP 3.1.0-beta.3 media-buy/specification.mdx: a successful synchronous
+    create_media_buy response constitutes order confirmation (prose-MUST;
+    schema-optional in beta.3).
+    """
+    from datetime import datetime
+
+    resp = _require_success_response(ctx)
+    confirmed_at = _get_response_field(resp, "confirmed_at")
+    assert confirmed_at is not None, "sync success response is missing confirmed_at"
+    parsed = (
+        confirmed_at
+        if isinstance(confirmed_at, datetime)
+        else datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00"))
+    )
+    assert parsed.tzinfo is not None, f"confirmed_at must carry a timezone designator, got {confirmed_at!r}"
+
+
+@then(parsers.parse('the response should include "revision" with an integer value of at least 1'))
+def then_response_revision_at_least_1(ctx: dict) -> None:
+    """revision is the persisted optimistic-concurrency counter; created buys start at 1."""
+    resp = _require_success_response(ctx)
+    revision = _get_response_field(resp, "revision")
+    assert isinstance(revision, int), f"Expected an integer revision, got {type(revision).__name__}: {revision!r}"
+    assert revision >= 1, f"Expected revision >= 1, got {revision}"
+
+
+@then(parsers.parse('the response should include a "valid_actions" array'))
+def then_response_valid_actions_array(ctx: dict) -> None:
+    """The sync success arm carries valid_actions so the buyer can plan the next call."""
+    resp = _require_success_response(ctx)
+    actions = _get_response_field(resp, "valid_actions")
+    assert isinstance(actions, list), f"Expected a valid_actions array, got {type(actions).__name__}: {actions!r}"
+
+
+@then("every value in valid_actions should be a member of the media-buy-valid-action enum")
+def then_valid_actions_are_enum_members(ctx: dict) -> None:
+    """Each valid_actions entry belongs to the AdCP media-buy-valid-action enum."""
+    from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
+
+    resp = _require_success_response(ctx)
+    actions = _get_response_field(resp, "valid_actions")
+    assert isinstance(actions, list), f"Expected a valid_actions array, got {actions!r}"
+    allowed = {member.value for member in MediaBuyValidAction}
+    values = [getattr(action, "value", action) for action in actions]
+    outside = [value for value in values if value not in allowed]
+    assert not outside, f"valid_actions contains values outside the enum: {outside} (allowed: {sorted(allowed)})"

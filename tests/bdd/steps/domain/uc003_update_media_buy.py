@@ -160,7 +160,6 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "idempotency_key",
     }
     kwargs = _ensure_update_defaults(ctx)
-    clock = ctx["env"].clock
     # Skip header row (pytest-bdd datatables include the header as first row)
     rows = datatable[1:] if datatable and datatable[0][0].strip() == "field" else datatable
     # Track which fields the table explicitly sets
@@ -177,9 +176,10 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
         elif field == "start_time":
-            kwargs["start_time"] = _resolve_date_token(value, clock)
+            # clock is fetched lazily — only date-token tables need it
+            kwargs["start_time"] = _resolve_date_token(value, ctx["env"].clock)
         elif field == "end_time":
-            kwargs["end_time"] = _resolve_date_token(value, clock)
+            kwargs["end_time"] = _resolve_date_token(value, ctx["env"].clock)
         elif field == "budget":
             kwargs["budget"] = float(value)
         elif field == "packages":
@@ -200,17 +200,6 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
     kwargs = _ensure_update_defaults(ctx)
     for field in ("start_time", "end_time", "paused"):
         kwargs.pop(field, None)
-
-
-@given("the request does NOT include an idempotency_key")
-def given_request_omits_idempotency_key(ctx: dict) -> None:
-    """Declarative guard — ensure idempotency_key is NOT in update_kwargs.
-
-    The default update_kwargs only contains media_buy_id, so idempotency_key is
-    already absent. This step explicitly strips it in case prior Given steps added it.
-    """
-    kwargs = _ensure_update_defaults(ctx)
-    kwargs.pop("idempotency_key", None)
 
 
 @given("the request does not include any updatable fields")
@@ -676,9 +665,11 @@ def when_send_update_request(ctx: dict) -> None:
     from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
-    # Resolve Gherkin package_id labels ("pkg_001") to real factory-generated
-    # package_ids before sending the request to production code. See
-    # _resolve_package_id / _register_package above.
+    # Resolve Gherkin media_buy_id / package_id labels ("mb_existing",
+    # "pkg_001") to real factory-generated ids before sending the request to
+    # production code. See _resolve_package_id / _register_package above.
+    if update_kwargs.get("media_buy_id"):
+        update_kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, update_kwargs["media_buy_id"])
     packages = update_kwargs.get("packages")
     if packages:
         for pkg in packages:
@@ -2118,3 +2109,88 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
             "media_buy_id": mb.media_buy_id,
         }
     return ctx["update_kwargs"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Revision counter steps (T-UC-003-revision-success-increments, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin media buy label (e.g. "mb_existing") to the real id.
+
+    Mirrors _resolve_package_id: falls back to the label itself so scenarios
+    where the label and the real ID coincide continue to work.
+    """
+    return ctx.get("media_buy_labels", {}).get(label, label)
+
+
+@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{label}"'))
+def given_buyer_owns_media_buy_labeled(ctx: dict, label: str) -> None:
+    """Create a real media buy through the create tool and register the label.
+
+    The Background's Gherkin label maps to the factory-generated real
+    media_buy_id; subsequent steps resolve the label before hitting production.
+    Stashes the ORM row as ctx["existing_media_buy"] for the precondition steps.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    env = ctx["env"]
+    created = env.create_default_buy(ctx["default_product"])
+    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
+    media_buy = repo.get_by_id(created.media_buy_id)
+    assert media_buy is not None, f"created media buy {created.media_buy_id} not found in DB"
+    ctx["existing_media_buy"] = media_buy
+    ctx.setdefault("media_buy_labels", {})[label] = media_buy.media_buy_id
+
+
+@given(parsers.parse('the media buy "{label}" is at revision {revision:d}'))
+def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
+    """Advance the persisted revision to the target via real repository bumps.
+
+    Each bump is a real mutation through the production seam
+    (MediaBuyRepository.bump_revision), not a seeded column value, so the
+    precondition itself exercises the counter's strict monotonicity.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    env = ctx["env"]
+    media_buy_id = _resolve_media_buy_id(ctx, label)
+    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
+    media_buy = repo.get_by_id(media_buy_id)
+    assert media_buy is not None, f"media buy {label!r} ({media_buy_id}) not found in DB"
+    current = media_buy.revision or 1
+    assert current <= revision, f"cannot lower persisted revision from {current} to {revision}"
+    while (media_buy.revision or 1) < revision:
+        media_buy = repo.bump_revision(media_buy_id)
+    env._commit_factory_data()
+    assert media_buy.revision == revision, f"expected persisted revision {revision}, got {media_buy.revision}"
+
+
+@given(parsers.parse("the request revision is set to {revision:d}"))
+def given_request_revision(ctx: dict, revision: int) -> None:
+    """Set the optimistic-concurrency token on the update request."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["revision"] = revision
+
+
+@then(parsers.parse("the response should contain a revision with value {revision:d}"))
+def then_response_revision_value(ctx: dict, revision: int) -> None:
+    """The success response returns the new persisted revision (BR-RULE-215 INV-4)."""
+    from tests.bdd.steps._outcome_helpers import _get_response_field
+
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
+    actual = _get_response_field(resp, "revision")
+    assert actual == revision, f"Expected revision {revision}, got {actual!r}"
+
+
+@then("the response should contain a valid_actions array")
+def then_response_contains_valid_actions(ctx: dict) -> None:
+    """The success response carries valid_actions (INT-002)."""
+    from tests.bdd.steps._outcome_helpers import _get_response_field
+
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
+    actions = _get_response_field(resp, "valid_actions")
+    assert isinstance(actions, list), f"Expected a valid_actions array, got {type(actions).__name__}: {actions!r}"

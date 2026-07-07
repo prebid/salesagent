@@ -24,11 +24,13 @@ from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
+from src.core.schemas._base import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
 from src.core.tools import media_buy_create as media_buy_create_module
 from src.core.tools import media_buy_delivery as media_buy_delivery_module
+from src.core.tools import media_buy_list as media_buy_list_module
 from src.core.tools import media_buy_update as media_buy_update_module
 from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
@@ -99,6 +101,17 @@ class GetMediaBuyDeliveryBody(BaseModel):  # FIXME(#1442): extend SalesAgentBase
     attribution_window: AttributionWindow | None = None
     include_package_daily_breakdown: bool | None = None
     account: dict[str, Any] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetMediaBuysBody(SalesAgentBaseModel):
+    """POST /media-buys/query body — mirrors get_media_buys_raw's parameters."""
+
+    media_buy_ids: list[str] | None = None
+    status_filter: Any = None
+    include_snapshot: bool = False
+    account: dict[str, Any] | None = None  # AccountReference; coerced downstream
+    context: Any = None  # ContextObject; coerced by GetMediaBuysRequest
     adcp_version: str = "1.0.0"
 
 
@@ -289,6 +302,24 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         currency=body.currency,
         start_time=body.start_time,
         end_time=body.end_time,
+        identity=identity,
+    )
+    return response.model_dump(mode="json")
+
+
+@router.post("/media-buys/query")
+async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = require_auth):
+    """Query media buys (auth required).
+
+    REST binding for get_media_buys — previously the tool was reachable only
+    over MCP/A2A, breaking transport parity (#1544).
+    """
+    response = media_buy_list_module.get_media_buys_raw(
+        media_buy_ids=body.media_buy_ids,
+        status_filter=body.status_filter,
+        include_snapshot=body.include_snapshot,
+        account=to_account_reference(body.account) if body.account is not None else None,
+        context=body.context,
         identity=identity,
     )
     return response.model_dump(mode="json")

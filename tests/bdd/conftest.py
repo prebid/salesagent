@@ -22,7 +22,7 @@ import os
 import re
 from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -53,8 +53,12 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_success",
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
+    "tests.bdd.steps.generic.given_media_buy",
+    "tests.bdd.steps.generic.then_media_buy",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
+    "tests.bdd.steps.domain.uc003_update_media_buy",
+    "tests.bdd.steps.domain.uc019_query_media_buys",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
@@ -2558,13 +2562,35 @@ _IMPL_ONLY: set[tuple[str, str]] = {
     ("UC-002", "account"),
 }
 
-# UC-002 idempotency scenarios wired to MediaBuyCreateEnv (run a real
-# create_media_buy across all 4 transports). Only these two @idempotency-key
-# tags are live; the rest stay blanket-xfailed in _harness_env until their
-# production gaps + steps are wired.
-_UC002_IDEMPOTENCY_WIRED: set[str] = {
+# UC-002 scenarios wired to MediaBuyCreateEnv (run a real create_media_buy
+# across all 4 transports). Only these tags are live; the rest stay
+# blanket-xfailed in _harness_env until their production gaps + steps are wired.
+_UC002_CREATE_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-replay",
     "T-UC-002-v31-idempotency-missing",
+    # AdCP GA revision/confirmed_at/valid_actions on the sync success arm (#1544)
+    "T-UC-002-v31-success-revision-and-actions",
+}
+
+# UC-003 scenarios wired to MediaBuyDualEnv (real create in the Background,
+# real update through every transport). The rest stay blanket-xfailed in
+# _harness_env until their steps are wired.
+_UC003_WIRED: set[str] = {
+    # AdCP GA revision counter: successful update increments and returns it (#1544)
+    "T-UC-003-revision-success-increments",
+}
+
+# UC-019 scenarios wired to MediaBuyLifecycleEnv (create/update/get composite;
+# queries run through every transport). The rest stay blanket-xfailed in
+# _harness_env until their steps are wired.
+_UC019_WIRED: set[str] = {
+    # AdCP GA revision/confirmed_at invariants (#1544)
+    "T-UC-019-inv-291-1",
+    "T-UC-019-inv-291-4",
+    "T-UC-019-inv-291-5",
+    "T-UC-019-inv-confirmed-at-present",
+    "T-UC-019-inv-confirmed-at-stable",
+    "T-UC-019-lifecycle-approval",
 }
 
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
@@ -2717,18 +2743,9 @@ def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags."""
     marker_names = {m.name for m in request.node.iter_markers()}
-    if any(t.startswith("T-UC-002") for t in marker_names):
-        return "UC-002"
-    if any(t.startswith("T-UC-006") for t in marker_names):
-        return "UC-006"
-    if any(t.startswith("T-UC-005") for t in marker_names):
-        return "UC-005"
-    if any(t.startswith("T-UC-004") for t in marker_names):
-        return "UC-004"
-    if any(t.startswith("T-UC-011") for t in marker_names):
-        return "UC-011"
-    if any(t.startswith("T-UC-018") for t in marker_names):
-        return "UC-018"
+    for uc in ("UC-002", "UC-003", "UC-004", "UC-005", "UC-006", "UC-011", "UC-018", "UC-019"):
+        if any(t.startswith(f"T-{uc}") for t in marker_names):
+            return uc
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names:
@@ -2771,6 +2788,22 @@ def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     return "poll"
 
 
+def _seed_media_buy_ctx(ctx: dict, env: Any) -> None:
+    """Seed the media-buy dependency chain and stash it in ctx.
+
+    Shared by the wired UC-002/UC-003/UC-019 harness branches: creates
+    tenant (with USD CurrencyLimit), principal, product + pricing option via
+    ``setup_media_buy_data()`` and exposes them under the ctx keys the
+    media-buy step modules expect.
+    """
+    tenant, principal, product, pricing_option = env.setup_media_buy_data()
+    ctx["env"] = env
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["default_product"] = product
+    ctx["default_pricing_option"] = pricing_option
+
+
 @pytest.fixture(autouse=True)
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
@@ -2799,27 +2832,50 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
-        elif marker_names & _UC002_IDEMPOTENCY_WIRED:
-            # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
-            # real create_media_buy through every transport (the replay scenario
-            # creates once, then sends the same key again to exercise the
-            # production replay path). Only the two wired tags go live here; the
-            # remaining @idempotency-key scenarios (in-flight, expired, conflict,
-            # pattern, canonical) stay blanket-xfailed below until their
-            # production gaps + steps are wired.
+        elif marker_names & _UC002_CREATE_WIRED:
+            # Wired create scenarios — MediaBuyCreateEnv runs a real
+            # create_media_buy through every transport: the idempotency
+            # replay/missing pair exercises the production replay path, and the
+            # v3.1 success scenario asserts the GA revision/confirmed_at/
+            # valid_actions fields (#1544). Everything else stays
+            # blanket-xfailed below until its production gaps + steps are wired.
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
             with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
+                _seed_media_buy_ctx(ctx, env)
                 yield
         else:
             pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
+
+    elif uc == "UC-003":
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if marker_names & _UC003_WIRED:
+            # Wired revision scenarios — MediaBuyDualEnv drives a real create
+            # (Background) then a real update_media_buy through every transport.
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
+                _seed_media_buy_ctx(ctx, env)
+                yield
+        else:
+            pytest.xfail("UC-003 harness wired only for the revision storyboard scenarios (#1544)")
+
+    elif uc == "UC-019":
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if marker_names & _UC019_WIRED:
+            # Wired revision/confirmed_at invariants — MediaBuyLifecycleEnv
+            # composes create/update/get so Given steps drive real transitions
+            # and the query runs through every transport.
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_lifecycle import MediaBuyLifecycleEnv
+
+            with MediaBuyLifecycleEnv(e2e_config=ctx.get("e2e_config")) as env:
+                _seed_media_buy_ctx(ctx, env)
+                yield
+        else:
+            pytest.xfail("UC-019 harness wired only for the revision/confirmed_at storyboard scenarios (#1544)")
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}

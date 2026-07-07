@@ -216,3 +216,18 @@ def _assert_audit_adapter_mock(ctx: dict) -> None:
         f"(operation='create_media_buy', success=True, with details), "
         f"got: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
     )
+
+
+def set_tenant_review_requirement(ctx: dict, required: bool) -> None:
+    """Flip ``human_review_required`` on the real tenant row AND the env identity.
+
+    Shared by the auto-approval (UC-002) and manual-approval (UC-019) Given
+    steps: commits the row, clears the cached identities, and pins the tenant
+    override so identities built later reflect the new review mode.
+    """
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    tenant.human_review_required = required
+    env._commit_factory_data()
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = required

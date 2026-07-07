@@ -899,18 +899,6 @@ def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> 
     _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=False, null_end=True)
 
 
-@given(parsers.parse("the request targets a sandbox account"))
-def given_sandbox_account(ctx: dict) -> None:
-    """Mark request as targeting a sandbox account."""
-    ctx["sandbox"] = True
-
-
-@given(parsers.parse("the request targets a production account"))
-def given_production_account(ctx: dict) -> None:
-    """Mark request as targeting a production (non-sandbox) account."""
-    ctx["sandbox"] = False
-
-
 @given("an authenticated identity with no principal_id")
 def given_identity_no_principal(ctx: dict) -> None:
     """Simulate an identity resolved but with no principal_id.
@@ -1638,32 +1626,6 @@ def then_error_recovery_correctable(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the error should include a "suggestion" field'))
-def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion field with actionable content.
-
-    Step text: 'the error should include a "suggestion" field'.
-    The error must be an AdCPError with a details dict containing a non-empty
-    suggestion string. No xfail escape — if production omits the suggestion,
-    the test must fail.
-    """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain 'suggestion' field"
-    )
-    assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    suggestion = error.details["suggestion"]
-    assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty suggestion string, got {suggestion!r}"
-    )
-
-
 @then(parsers.parse('the error message should contain "{fragment}"'))
 def then_error_contains(ctx: dict, fragment: str) -> None:
     """Assert error message contains a specific fragment."""
@@ -2063,109 +2025,6 @@ def then_response_has_media_buys_array(ctx: dict) -> None:
     assert isinstance(buys, list), f"Expected media_buys to be a list (array), got {type(buys).__name__}"
 
 
-@then("the response should include sandbox equals true")
-def then_sandbox_true(ctx: dict) -> None:
-    """Assert response includes sandbox=true.
-
-    Scenario-level xfail (T-UC-019-sandbox-happy) handles the expected failure
-    when sandbox mode is not yet implemented in production.
-    """
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
-    sandbox = getattr(resp, "sandbox", None)
-    assert sandbox is True, f"Expected sandbox=true, got {sandbox!r}"
-
-
-@then("the response should not include a sandbox field")
-def then_no_sandbox_field(ctx: dict) -> None:
-    """Assert response does not include sandbox field for production accounts.
-
-    Step text: 'should not include a sandbox field'. If production includes
-    it anyway, this is a spec-production gap.
-    """
-
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
-    sandbox = getattr(resp, "sandbox", None)
-    # Violation path: sandbox IS present when it should NOT be
-    assert sandbox is None, (
-        f"Production response includes sandbox={sandbox!r} for production account — should be absent"
-    )
-
-
-@then("the response should indicate a validation error")
-def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error.
-
-    Step text says 'indicate a validation error' — must verify either:
-    1. An exception was raised with validation-related keywords, OR
-    2. Response.errors contains validation-related content.
-    """
-
-    error = ctx.get("error")
-    if error:
-        # Verify it's actually a validation error, not just any error
-        msg = str(error).lower()
-        assert any(kw in msg for kw in ("validation", "invalid", "required", "type", "field")), (
-            f"Expected a validation error, but error doesn't indicate validation: {error}"
-        )
-        return
-    resp = ctx.get("response")
-    if resp:
-        errors = getattr(resp, "errors", None)
-        if errors:
-            # Verify at least one error relates to validation
-            error_strs = [str(e).lower() for e in errors]
-            has_validation_keyword = any(
-                any(kw in s for kw in ("validation", "invalid", "required", "type", "field")) for s in error_strs
-            )
-            assert has_validation_keyword, f"Response has errors but none indicate validation: {errors}"
-            return
-    raise AssertionError(
-        "Expected validation error: neither error raised nor response.errors contains validation content"
-    )
-
-
-@then("the error should be a real validation error, not simulated")
-def then_real_validation_error(ctx: dict) -> None:
-    """Assert error is a real validation error (not simulated sandbox response)."""
-
-    error = ctx.get("error")
-    assert error is not None, "Expected a real validation error but no error was raised"
-    from src.core.exceptions import AdCPError
-
-    # A "real" validation error is an actual exception (not a response-embedded simulated one)
-    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
-        f"Expected a real validation error (AdCPError/ValueError/TypeError), got {type(error).__name__}: {error}"
-    )
-
-
-@then("the error should include a suggestion for how to fix the issue")
-def then_error_suggestion_for_fix(ctx: dict) -> None:
-    """Assert error includes a suggestion with actionable fix guidance.
-
-    Step text: 'suggestion for how to fix the issue' — the suggestion must be
-    a non-empty string with enough content to be actionable (at least 5 chars).
-    No xfail escape — if production omits suggestions, the test must fail.
-    """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error to check suggestion on"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain suggestion"
-    )
-    suggestion = error.details.get("suggestion")
-    assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
-        f"Expected actionable suggestion string (>= 5 chars) in error details, "
-        f"got {suggestion!r}. Step claims 'how to fix the issue' — suggestion "
-        f"must contain meaningful guidance."
-    )
-
-
 @then(parsers.parse('only media buys with status "{status}" are returned'))
 def then_only_status(ctx: dict, status: str) -> None:
     """Assert only media buys with specified status are in response."""
@@ -2417,4 +2276,337 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
                 return
     raise AssertionError(
         f"snapshot_unavailable_reason='{reason}' not found on any package across {len(buys)} media buy(s)"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Revision / confirmed_at invariants (BR-RULE-291, POST-S6 / INT-006, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _parse_iso_utc(timestamp: str | Any) -> Any:
+    """Normalize an ISO 8601 string (or datetime) to an aware UTC datetime."""
+    from datetime import UTC, datetime
+
+    parsed = (
+        timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    )
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _labeled_buy_from_response(ctx: dict, response: Any, label: str) -> Any:
+    """Find the media buy registered under a Gherkin label in a query response."""
+    assert response is not None, f"Expected a query response, got error: {ctx.get('error')!r}"
+    real_id = ctx.get("media_buy_labels", {}).get(label, label)
+    matches = [b for b in response.media_buys if b.media_buy_id == real_id]
+    assert matches, f"media buy {label!r} ({real_id}) not in response: {[b.media_buy_id for b in response.media_buys]}"
+    return matches[0]
+
+
+def _create_real_buy(ctx: dict, mb_id: str, principal_id: str) -> Any:
+    """Drive a real create through the tool and register the Gherkin label.
+
+    Returns the ORM row loaded through the repository (factory-bound session).
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    created = env.create_default_buy(ctx["default_product"])
+    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
+    media_buy = repo.get_by_id(created.media_buy_id)
+    assert media_buy is not None, f"created media buy {created.media_buy_id} not found in DB"
+    _register_media_buy(ctx, mb_id, media_buy)
+    return media_buy
+
+
+def _seed_buy_confirmed_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """Real-create a buy, then pin its created_at to the literal the scenario asserts.
+
+    On the synchronous path the create response constitutes confirmation, so
+    confirmed_at == created_at; pinning created_at (test plumbing on the
+    factory-bound session — the column is repository-immutable by design)
+    makes the read-back value deterministic.
+    """
+    env = ctx["env"]
+    media_buy = _create_real_buy(ctx, mb_id, principal_id)
+    media_buy.created_at = _parse_iso_utc(timestamp)
+    env._commit_factory_data()
+
+
+# ---- Given ------------------------------------------------------------
+
+
+@given(parsers.parse('the principal "{principal_id}" owns {count:d} media buys'))
+def given_principal_owns_count(ctx: dict, principal_id: str, count: int) -> None:
+    """Seed N active media buys owned by the ctx principal."""
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    for i in range(count):
+        label = f"mb-owned-{i + 1}"
+        mb = MediaBuyFactory(
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            media_buy_id=_generate_unique_id(label),
+            status="active",
+        )
+        _register_media_buy(ctx, label, mb)
+    env._commit_factory_data()
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with persisted revision {revision:d}'))
+def given_owns_media_buy_at_revision(ctx: dict, principal_id: str, mb_id: str, revision: int) -> None:
+    """Real-create a buy (revision 1) and advance it via repository bumps.
+
+    Each bump is a real mutation through the production seam
+    (MediaBuyRepository.bump_revision) — the persisted value is derived from
+    real transitions, never seeded directly.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    env = ctx["env"]
+    media_buy = _create_real_buy(ctx, mb_id, principal_id)
+    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
+    while (media_buy.revision or 1) < revision:
+        media_buy = repo.bump_revision(media_buy.media_buy_id)
+    env._commit_factory_data()
+    assert media_buy.revision == revision, f"expected persisted revision {revision}, got {media_buy.revision}"
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" that was successfully created at "{timestamp}"'
+    )
+)
+def given_owns_media_buy_created_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """A buy whose synchronous create (order confirmation) happened at the literal instant."""
+    _seed_buy_confirmed_at(ctx, principal_id, mb_id, timestamp)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with confirmed_at "{timestamp}"'))
+def given_owns_media_buy_confirmed_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """A confirmed buy whose confirmation instant is the literal timestamp."""
+    _seed_buy_confirmed_at(ctx, principal_id, mb_id, timestamp)
+
+
+@given("no state-changing writes occur between two reads")
+def given_no_writes_between_reads(ctx: dict) -> None:
+    """Declarative precondition — the scenario performs no writes between its reads."""
+    ctx["writes_between_reads"] = 0
+
+
+@given("the tenant requires manual approval for media buys")
+def given_tenant_manual_approval(ctx: dict) -> None:
+    """Configure the tenant so create_media_buy defers to seller approval.
+
+    The production gate (media_buy_create.py) is
+    ``(tenant.human_review_required OR adapter.manual_approval_required) AND
+    'create_media_buy' in adapter.manual_approval_operations`` — so the
+    adapter mock must also list the operation.
+    """
+    from tests.bdd.steps._outcome_helpers import set_tenant_review_requirement
+
+    set_tenant_review_requirement(ctx, required=True)
+    adapter_mock = ctx["env"].mock["adapter"].return_value
+    adapter_mock.manual_approval_operations = ["create_media_buy"]
+
+
+@given(parsers.parse('the Buyer Agent has created media buy "{mb_id}" awaiting seller approval'))
+def given_created_awaiting_approval(ctx: dict, mb_id: str) -> None:
+    """Drive a real create that lands on the submitted (manual-approval) arm."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+    from tests.helpers.adcp_factories import create_test_package_request_dict
+
+    env = ctx["env"]
+    _register_principal(ctx, "buyer-001")
+    start = datetime.now(UTC) + timedelta(days=1)
+    end = start + timedelta(days=30)
+    # TRANSPORT-BYPASS: Given plumbing — the create seeds the pending buy; the
+    # graded read-back (get_media_buys) runs through the parametrized transport
+    result = env.call_impl(
+        brand={"domain": "manual-approval.example"},
+        packages=[
+            create_test_package_request_dict(
+                product_id=ctx["default_product"].product_id,
+                pricing_option_id="cpm_usd_fixed",
+                budget=5000.0,
+            )
+        ],
+        start_time=start.isoformat(),
+        end_time=end.isoformat(),
+    )
+    status = getattr(result, "status", None)
+    assert status == "submitted", f"expected the submitted (manual-approval) arm, got status {status!r}"
+    media_buy_id = result.response.media_buy_id
+    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
+    media_buy = repo.get_by_id(media_buy_id)
+    assert media_buy is not None, f"created media buy {media_buy_id} not found in DB"
+    assert media_buy.status == "pending_approval", f"expected pending_approval, got {media_buy.status!r}"
+    ctx["revision_at_creation"] = media_buy.revision or 1
+    _register_media_buy(ctx, mb_id, media_buy)
+
+
+# ---- When -------------------------------------------------------------
+
+
+def _query_seeded_buys(ctx: dict, read_key: str) -> None:
+    """Read the seeded buys back through the parametrized transport.
+
+    Queries by the seeded real ids: the reads compare per-buy fields across
+    time, so they must return the seeded buys regardless of lifecycle status
+    (a bare no-filter query defaults to active-only).
+    """
+    labels = ctx.get("media_buy_labels", {})
+    assert labels, "no seeded media buy to read"
+    _dispatch_query(ctx, media_buy_ids=list(labels.values()))
+    ctx[read_key] = ctx.pop("response", None)
+    assert ctx[read_key] is not None, f"{read_key} read failed: {ctx.get('error')!r}"
+
+
+@when("the Buyer Agent sends a get_media_buys request at time t1")
+def when_query_at_t1(ctx: dict) -> None:
+    """First read — stash the response for cross-read comparison."""
+    _query_seeded_buys(ctx, "read_t1")
+
+
+@when("the Buyer Agent sends a get_media_buys request at time t2 (t1 < t2)")
+@when("the Buyer Agent sends a get_media_buys request at time t2")
+def when_query_at_t2(ctx: dict) -> None:
+    """Second read — stash the response for cross-read comparison."""
+    _query_seeded_buys(ctx, "read_t2")
+
+
+@when("one successful update_media_buy lands between t1 and t2")
+@when("one successful update_media_buy lands between t1 and t2 (t1 < t2)")
+def when_update_lands_between_reads(ctx: dict) -> None:
+    """Drive a real update_media_buy through the impl between the two reads."""
+    from src.core.schemas import UpdateMediaBuyRequest
+    from src.core.schemas._base import UpdateMediaBuySuccess
+
+    env = ctx["env"]
+    labels = ctx.get("media_buy_labels", {})
+    assert labels, "no seeded media buy to update between the reads"
+    media_buy_id = next(iter(labels.values()))
+    # TRANSPORT-BYPASS: the intervening write is scenario plumbing; the graded
+    # t1/t2 reads run through the parametrized transport
+    result = env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=6100.0))
+    assert isinstance(result, UpdateMediaBuySuccess), f"the intervening update must succeed, got {result!r}"
+
+
+@when(parsers.parse('the seller approves media buy "{label}"'))
+def when_seller_approves(ctx: dict, label: str) -> None:
+    """Drive the approval transition through the production seam.
+
+    Every production approve path (admin blueprint, workflow) routes through
+    MediaBuyRepository.update_status — guard-enforced by
+    test_architecture_media_buy_status_writes (#1544). The step drives that
+    seam: status transition + approved_at/approved_by stamp + revision bump.
+    """
+    from datetime import UTC, datetime
+
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    env = ctx["env"]
+    real_id = ctx.get("media_buy_labels", {}).get(label, label)
+    approval_instant = datetime.now(UTC)
+    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
+    media_buy = repo.update_status(
+        real_id, "scheduled", approved_at=approval_instant, approved_by="seller-admin@example.com"
+    )
+    assert media_buy is not None, f"media buy {label!r} ({real_id}) not found for approval"
+    env._commit_factory_data()
+    ctx["approval_instant"] = approval_instant
+
+
+# ---- Then -------------------------------------------------------------
+
+
+@then("every returned media buy should include an integer revision field")
+def then_every_buy_has_integer_revision(ctx: dict) -> None:
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a query response, got error: {ctx.get('error')!r}"
+    assert resp.media_buys, "expected at least one returned media buy"
+    non_integer = [(b.media_buy_id, b.revision) for b in resp.media_buys if not isinstance(b.revision, int)]
+    assert not non_integer, f"media buys with a non-integer revision: {non_integer}"
+
+
+@then("every revision should be >= 1")
+def then_every_revision_at_least_1(ctx: dict) -> None:
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a query response, got error: {ctx.get('error')!r}"
+    assert resp.media_buys, "expected at least one returned media buy"
+    below_minimum = [(b.media_buy_id, b.revision) for b in resp.media_buys if b.revision < 1]
+    assert not below_minimum, f"media buys with revision below the schema minimum 1: {below_minimum}"
+
+
+@then("the revision at t1 should equal the revision at t2")
+def then_revision_stable_across_reads(ctx: dict) -> None:
+    r1 = _labeled_buy_from_response(ctx, ctx.get("read_t1"), "mb-001").revision
+    r2 = _labeled_buy_from_response(ctx, ctx.get("read_t2"), "mb-001").revision
+    assert r1 == r2, f"revision drifted across reads with no intervening write: t1={r1}, t2={r2}"
+
+
+@then("the revision at t2 should be strictly greater than the revision at t1")
+def then_revision_increased_across_reads(ctx: dict) -> None:
+    r1 = _labeled_buy_from_response(ctx, ctx.get("read_t1"), "mb-001").revision
+    r2 = _labeled_buy_from_response(ctx, ctx.get("read_t2"), "mb-001").revision
+    assert r2 > r1, f"a successful intervening write must increase revision: t1={r1}, t2={r2}"
+
+
+@then(parsers.parse('the media buy "{label}" should include a confirmed_at field'))
+def then_buy_includes_confirmed_at(ctx: dict, label: str) -> None:
+    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
+    assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at"
+
+
+@then(parsers.parse('the confirmed_at value should be the ISO 8601 timestamp "{timestamp}"'))
+def then_confirmed_at_equals_literal(ctx: dict, timestamp: str) -> None:
+    buy = _labeled_buy_from_response(ctx, ctx.get("response"), "mb-001")
+    actual = _parse_iso_utc(buy.confirmed_at)
+    expected = _parse_iso_utc(timestamp)
+    assert actual == expected, f"confirmed_at mismatch: expected {expected.isoformat()}, got {actual.isoformat()}"
+
+
+@then(parsers.parse('the confirmed_at at t{read_index:d} should equal "{timestamp}"'))
+def then_confirmed_at_at_read_equals(ctx: dict, read_index: int, timestamp: str) -> None:
+    read = ctx.get(f"read_t{read_index}")
+    buy = _labeled_buy_from_response(ctx, read, "mb-001")
+    actual = _parse_iso_utc(buy.confirmed_at)
+    expected = _parse_iso_utc(timestamp)
+    assert actual == expected, (
+        f"confirmed_at at t{read_index} drifted: expected {expected.isoformat()}, got {actual.isoformat()}"
+    )
+
+
+@then(parsers.parse('the media buy "{label}" revision should be greater than its revision at creation'))
+def then_revision_greater_than_at_creation(ctx: dict, label: str) -> None:
+    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
+    at_creation = ctx["revision_at_creation"]
+    assert buy.revision > at_creation, (
+        f"revision did not advance at approval: read {buy.revision}, at creation {at_creation}"
+    )
+
+
+@then(parsers.parse('the media buy "{label}" confirmed_at should equal the approval instant'))
+def then_confirmed_at_is_approval_instant(ctx: dict, label: str) -> None:
+    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
+    assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at after approval"
+    actual = _parse_iso_utc(buy.confirmed_at)
+    expected = _parse_iso_utc(ctx["approval_instant"])
+    assert actual == expected, (
+        f"confirmed_at must be the approval instant: expected {expected.isoformat()}, got {actual.isoformat()}"
+    )
+
+
+@then(parsers.parse('the media buy "{label}" confirmed_at should not equal its created_at'))
+def then_confirmed_at_differs_from_created_at(ctx: dict, label: str) -> None:
+    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
+    assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at"
+    confirmed = _parse_iso_utc(buy.confirmed_at)
+    created = _parse_iso_utc(buy.created_at)
+    assert confirmed != created, (
+        f"confirmed_at equals created_at ({confirmed.isoformat()}) — reports the buyer's request time, "
+        "not the seller's approval instant"
     )

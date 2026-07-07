@@ -139,24 +139,6 @@ def _sync_adapter_error_to_db(
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the tenant is configured for auto-approval")
-@given("tenant human_review_required is false")
-def given_tenant_auto_approval(ctx: dict) -> None:
-    """Configure tenant for auto-approval (human_review_required=False)."""
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
-        "No tenant in ctx — step claims 'tenant is configured for auto-approval' but no tenant exists to configure"
-    )
-    tenant.human_review_required = False
-    env = ctx["env"]
-    env._commit_factory_data()
-    # Also update identity's tenant dict (pre-built, not re-read from DB)
-    env._identity_cache.clear()
-    env._tenant_overrides["human_review_required"] = False
-    # Also write to DB so Docker-hosted adapter reads the correct config
-    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
-
-
 @given("the tenant is configured for manual approval")
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
 @given("tenant human_review_required is true")
@@ -2545,13 +2527,6 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Adapter state
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@given("the ad server adapter is available")
-def given_adapter_available(ctx: dict) -> None:
-    """Ensure the mock adapter is configured for success (default state)."""
-    # MediaBuyCreateEnv._configure_mocks() already sets up happy-path adapter
-    ctx.setdefault("adapter_available", True)
 
 
 @given("the ad server adapter returns an error")
