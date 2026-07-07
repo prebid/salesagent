@@ -764,10 +764,12 @@ class TestConfirmedAtGating:
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
         for status in ("draft", "pending", "pending_approval", "rejected", "failed"):
-            buy = SimpleNamespace(status=status, created_at=created)
+            buy = SimpleNamespace(status=status, created_at=created, approved_at=None)
             assert _seller_confirmed_at(buy) is None, f"{status} must not report confirmed_at"
 
-    def test_confirmed_statuses_report_created_at(self):
+    def test_confirmed_statuses_without_approval_report_created_at(self):
+        """Synchronous confirmation: no approved_at, so confirmed_at is created_at
+        (a successful create_media_buy response constitutes order confirmation)."""
         from datetime import UTC, datetime
         from types import SimpleNamespace
 
@@ -775,5 +777,19 @@ class TestConfirmedAtGating:
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
         for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved", "canceled"):
-            buy = SimpleNamespace(status=status, created_at=created)
+            buy = SimpleNamespace(status=status, created_at=created, approved_at=None)
             assert _seller_confirmed_at(buy) == created, f"{status} must report confirmed_at=created_at"
+
+    def test_confirmed_statuses_prefer_approval_instant(self):
+        """Manual-approval path: confirmed_at is approved_at (the moment the seller
+        committed), NOT the buyer's create time — see #1544."""
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from src.core.tools.media_buy_list import _seller_confirmed_at
+
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        approved = datetime(2026, 1, 5, tzinfo=UTC)
+        for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved"):
+            buy = SimpleNamespace(status=status, created_at=created, approved_at=approved)
+            assert _seller_confirmed_at(buy) == approved, f"{status} must report confirmed_at=approved_at"

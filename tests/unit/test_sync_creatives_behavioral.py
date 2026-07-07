@@ -56,6 +56,9 @@ def _make_db_package():
         db_media_buy.media_buy_id = media_buy_id
         db_media_buy.status = mb_status
         db_media_buy.approved_at = mb_approved_at
+        # A real int so the draft→pending_creatives transition can bump the
+        # persisted revision through the repository seam (#1544).
+        db_media_buy.revision = 1
 
         return db_package, db_media_buy
 

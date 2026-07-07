@@ -267,11 +267,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # SDK 5.7 removed these from parent — declare locally
     account: Any | None = None
     sandbox: bool | None = None
-    # AdCP 3.1.1 GA success-arm REQUIRED fields (create-media-buy-response.json
-    # oneOf[0].required includes confirmed_at + revision). Absent from the
-    # pinned beta.3 SDK model; strict GA clients (adcp>=6.3) reject a success
-    # response without them ("oneOf composition failed"). Forward-compatible
-    # additions under beta.3 (additionalProperties: true).
+    # AdCP media-buy spec PROSE (pinned 3.1.0-beta.3 specification.mdx) requires
+    # confirmed_at + revision on the create success response (normative MUST),
+    # but the beta.3 JSON schema lists them optional: create-media-buy-response
+    # oneOf[0].required is [media_buy_id, packages] (a known prose/schema
+    # divergence to file upstream). Absent from the beta.3 SDK model; emitted
+    # always as forward-compatible additions (additionalProperties: true) so
+    # strict GA clients (adcp>=6.3) don't reject with "oneOf composition failed".
     confirmed_at: datetime | None = None
     revision: int | None = None
     # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
@@ -438,9 +440,11 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
 
-    # AdCP 3.1.1 GA success-arm REQUIRED field (update-media-buy-response.json
-    # oneOf[0].required = [media_buy_id, revision]). The persisted monotonic
-    # counter bumped by MediaBuyRepository on every successful mutation.
+    # AdCP media-buy spec PROSE (pinned 3.1.0-beta.3) requires revision on the
+    # update success response (normative MUST); the beta.3 JSON schema lists it
+    # optional — update-media-buy-response oneOf[0].required is [media_buy_id]
+    # (prose/schema divergence to file upstream). The persisted monotonic counter
+    # bumped by MediaBuyRepository on every successful mutation.
     revision: int | None = None
 
     # Internal fields (excluded from AdCP responses)
@@ -2437,9 +2441,12 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
     created_at: datetime | None = Field(default=None, description="When this media buy was created")
     updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
-    # AdCP 3.1.1 GA required item fields (get-media-buys-response.json
-    # media_buys[].required). revision is the persisted monotonic counter
-    # bumped by MediaBuyRepository on every successful mutation.
+    # AdCP media-buy spec PROSE (pinned 3.1.0-beta.3) requires these on each
+    # returned buy; the beta.3 JSON schema lists them optional
+    # (get-media-buys-response media_buys[].required omits both — prose/schema
+    # divergence to file upstream). revision is the persisted monotonic counter;
+    # confirmed_at is the seller confirmation instant (approved_at, else
+    # created_at — see media_buy_list._seller_confirmed_at).
     confirmed_at: datetime | None = Field(
         default=None, description="When this media buy was committed by the seller (stable after set)"
     )

@@ -41,6 +41,9 @@ class _MediaBuyData:
     updated_at: datetime | None
     status: str | None
     is_paused: bool
+    # Seller confirmation instant (media_buys.approved_at): the manual-approval
+    # moment, else None. Drives confirmed_at — see _seller_confirmed_at / #1544.
+    approved_at: datetime | None = None
     # Persisted monotonic optimistic-concurrency counter (media_buys.revision).
     # Defaults to the create-time value for callers that build this dataclass
     # outside the ORM fetch path (production always passes the row's value).
@@ -419,6 +422,7 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
             status=buy.status,
             is_paused=buy.is_paused,
+            approved_at=buy.approved_at,
             revision=buy.revision,
         )
         for buy in buys
@@ -490,11 +494,18 @@ _UNCONFIRMED_STATUSES: frozenset[str] = frozenset({"draft", "pending", "pending_
 
 
 def _seller_confirmed_at(buy: _MediaBuyData) -> datetime | None:
-    """confirmed_at for a listed buy: created_at once the seller has committed,
-    else None (the buy is still pending approval / was never confirmed)."""
+    """confirmed_at for a listed buy: the seller's confirmation instant once the
+    seller has committed, else None (still pending approval / never confirmed).
+
+    The confirmation instant is ``approved_at`` when the buy went through seller
+    approval (manual-approval path — the moment the seller committed), falling
+    back to ``created_at`` for the synchronous path, where "a successful
+    create_media_buy response constitutes order confirmation" (AdCP media-buy
+    spec). Returning ``created_at`` for an approved buy would report the buyer's
+    request time, not the confirmation moment — see #1544."""
     if (buy.status or "").lower() in _UNCONFIRMED_STATUSES:
         return None
-    return buy.created_at
+    return buy.approved_at or buy.created_at
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:

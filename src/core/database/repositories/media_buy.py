@@ -633,3 +633,20 @@ class MediaBuyRepository:
         media buys regardless of tenant. Not tenant-scoped.
         """
         return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
+
+    @staticmethod
+    def apply_status_transition(media_buy: MediaBuy, new_status: str) -> None:
+        """Transition an already-loaded MediaBuy to ``new_status`` and bump revision.
+
+        The seam for paths that already hold a ``MediaBuy`` row on their own
+        session and therefore cannot use tenant-scoped, single-row
+        :meth:`update_status`: the cross-tenant scheduler sweep (rows from
+        :meth:`get_all_by_statuses`) and the creative-sync assignment pass
+        (rows loaded inside ``CreativeUoW``). The caller owns the
+        session/transaction and commits. Bumps the AdCP GA ``revision`` counter
+        so seller-initiated lifecycle transitions (``pending_start`` → ``active``,
+        ``active`` → ``completed``, ``draft`` → ``pending_creatives``) advance the
+        optimistic-concurrency token like any other state change. See #1544.
+        """
+        media_buy.status = new_status
+        MediaBuyRepository._bump_revision(media_buy)

@@ -222,7 +222,15 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                                 f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
                                 "info",
                             )
-                            media_buy.status = "pending_creatives"
+                            # Route through the repository seam so the persisted
+                            # revision bumps and the approval instant is stamped
+                            # (AdCP GA revision + confirmed_at) — see #1544.
+                            media_buy_repo.update_status(
+                                media_buy_id,
+                                "pending_creatives",
+                                approved_at=datetime.now(UTC),
+                                approved_by=user_email,
+                            )
                             db.commit()
                             return jsonify({"success": True}), 200
 
@@ -237,10 +245,15 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
 
-                    # Update media buy status
-                    media_buy.status = "scheduled"
-                    media_buy.approved_at = datetime.now(UTC)
-                    media_buy.approved_by = user_email
+                    # Update media buy status through the repository seam so the
+                    # persisted revision bumps and approved_at/approved_by stamp
+                    # in one place (AdCP GA revision + confirmed_at) — see #1544.
+                    media_buy_repo.update_status(
+                        media_buy_id,
+                        "scheduled",
+                        approved_at=datetime.now(UTC),
+                        approved_by=user_email,
+                    )
                     db.commit()
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")

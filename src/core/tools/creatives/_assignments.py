@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPPackageNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
@@ -200,10 +201,12 @@ def _process_assignments(
                     if actual_package_id is not None:
                         assignments_by_creative[creative_id].append(actual_package_id)
 
-            # Update media buy status if needed (draft -> pending_creatives)
+            # Update media buy status if needed (draft -> pending_creatives).
+            # Route through the repository seam so the persisted revision bumps
+            # on this state change (AdCP GA revision) — see #1544.
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
-                    mb_obj.status = "pending_creatives"
+                    MediaBuyRepository.apply_status_transition(mb_obj, "pending_creatives")
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
 
             # UoW auto-commits on clean exit

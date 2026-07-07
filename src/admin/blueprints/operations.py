@@ -337,8 +337,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             user_info = flask_session.get("user", {})
             user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            approve_repo = MediaBuyRepository(db_session, tenant_id)
-            media_buy = approve_repo.get_by_id(media_buy_id)
+            media_buy_repo = MediaBuyRepository(db_session, tenant_id)
+            media_buy = media_buy_repo.get_by_id(media_buy_id)
 
             # Extract media_buy data to dict to avoid detached instance errors after commit
             media_buy_data = None
@@ -391,7 +391,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # No creatives assigned yet
                         all_creatives_approved = False
 
-                    # Update status based on creative approval state
+                    # Compute the target status based on creative approval state.
                     if all_creatives_approved:
                         if media_buy.start_time and media_buy.end_time:
                             # Compute flight window
@@ -411,21 +411,30 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                             now = datetime.now(UTC)
                             if now < start_time:
-                                media_buy.status = "scheduled"
+                                new_status = "scheduled"
                             elif now > end_time:
-                                media_buy.status = "completed"
+                                new_status = "completed"
                             else:
-                                media_buy.status = "active"
+                                new_status = "active"
                         else:
                             # No start or end time - set to active
-                            media_buy.status = "active"
+                            new_status = "active"
                     else:
                         # Keep it in a state that shows it needs creative approval
                         # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
-                        media_buy.status = "draft"
+                        new_status = "draft"
 
-                    media_buy.approved_at = datetime.now(UTC)
-                    media_buy.approved_by = user_email
+                    # Route the transition through the repository seam so the
+                    # persisted revision bumps and approved_at/approved_by are
+                    # stamped in one place (AdCP GA revision counter + confirmed_at
+                    # confirmation instant). Direct ``.status``/``.approved_at``
+                    # writes here would skip the bump — see #1544 review.
+                    media_buy_repo.update_status(
+                        media_buy_id,
+                        new_status,
+                        approved_at=datetime.now(UTC),
+                        approved_by=user_email,
+                    )
                     db_session.commit()
 
                     # Execute adapter creation for approved media buy
@@ -467,8 +476,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         webhook_config = db_session.scalars(stmt_webhook).first()
 
                     if webhook_config and media_buy_data:
-                        approve_repo = MediaBuyRepository(db_session, tenant_id)
-                        all_packages = approve_repo.get_packages(media_buy_id)
+                        media_buy_repo = MediaBuyRepository(db_session, tenant_id)
+                        all_packages = media_buy_repo.get_packages(media_buy_id)
 
                         create_media_buy_approved_result = CreateMediaBuySuccessResponse(
                             media_buy_id=media_buy_id,
@@ -540,8 +549,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 attributes.flag_modified(step, "comments")
 
                 if media_buy and media_buy.status == "pending_approval":
-                    media_buy.status = "rejected"
-                    attributes.flag_modified(media_buy, "status")
+                    # Route through the repository seam so the persisted revision
+                    # bumps on this state change (AdCP GA revision) — see #1544.
+                    media_buy_repo.update_status(media_buy_id, "rejected")
 
                 db_session.commit()
 

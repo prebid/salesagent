@@ -654,9 +654,15 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     mb = uow2.media_buys.get_by_id(action["media_buy_id"])
                     if mb:
                         new_status = _compute_media_buy_status_from_flight_dates(mb)
-                        mb.status = new_status
-                        mb.approved_at = datetime.now(UTC)
-                        mb.approved_by = "system"
+                        # Route through the repository seam so the persisted
+                        # revision bumps and approved_at/approved_by stamp in one
+                        # place (AdCP GA revision + confirmed_at) — see #1544.
+                        uow2.media_buys.update_status(
+                            action["media_buy_id"],
+                            new_status,
+                            approved_at=datetime.now(UTC),
+                            approved_by="system",
+                        )
                     # auto-commits
 
                 logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")

@@ -572,6 +572,15 @@ def _update_media_buy_impl(
                     ctx_manager.audit_workflow_step_result(step.step_id, success_response)
                     return success_response
 
+            # Every column mutation from this update is staged here and applied
+            # with a SINGLE update_fields() call at the end of the flow, so one
+            # accepted update bumps the persisted revision exactly once (AdCP GA
+            # revision is a per-resource version token). Intra-update status
+            # transitions (draft → pending_creatives on creative assignment)
+            # stage into this dict rather than writing ``.status`` directly —
+            # see #1544 and the guard test_architecture_media_buy_status_writes.
+            pending_field_updates: dict[str, Any] = {}
+
             # Handle package-level updates
             if req.packages:
                 for pkg_update in req.packages:
@@ -841,7 +850,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            media_buy_obj.status = "pending_creatives"
+                            pending_field_updates["status"] = "pending_creatives"
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_ids: {pkg_update.creative_ids})"
@@ -1039,7 +1048,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            media_buy_obj.status = "pending_creatives"
+                            pending_field_updates["status"] = "pending_creatives"
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_assignments processed: {updated_assignments})"
@@ -1099,12 +1108,12 @@ def _update_media_buy_impl(
 
             # Package-level changes above persist directly on the session
             # (package_config writes, creative assignment rows, adapter
-            # pause/resume) without passing through the MediaBuy repository
-            # update methods — bump the buy's persisted revision once for the
-            # accepted package change set so consecutive updates always return
-            # strictly increasing revisions.
-            if req.packages and (affected_packages_list or any(pkg.paused is not None for pkg in req.packages)):
-                uow.media_buys.bump_revision(req.media_buy_id)
+            # pause/resume) and never pass through update_fields — track whether
+            # any occurred so the single bump below also covers a package-only
+            # update (pending_field_updates is staged from the top of the flow).
+            package_level_changed = bool(
+                req.packages and (affected_packages_list or any(pkg.paused is not None for pkg in req.packages))
+            )
 
             # Handle budget updates (handle both float and Budget object)
             if req.budget is not None:
@@ -1142,9 +1151,10 @@ def _update_media_buy_impl(
                 # This creates data inconsistency between our database and GAM
                 # Need to implement: adapter.orders_manager.update_order_budget(order_id, total_budget)
 
-                # Persist top-level budget update to database via repository
+                # Stage the top-level budget update; persisted with one bump below.
                 if req.budget:
-                    uow.media_buys.update_fields(req.media_buy_id, budget=total_budget, currency=budget_currency)
+                    pending_field_updates["budget"] = total_budget
+                    pending_field_updates["currency"] = budget_currency
                     logger.warning(
                         f"Updated MediaBuy {req.media_buy_id} budget to {total_budget} {budget_currency} in database ONLY"
                     )
@@ -1226,12 +1236,22 @@ def _update_media_buy_impl(
                             context=req.context,
                         )
 
-                    uow.media_buys.update_fields(req.media_buy_id, **update_values)
+                    pending_field_updates.update(update_values)
                     logger.warning(
                         f"Updated MediaBuy {req.media_buy_id} dates in database ONLY: "
                         f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
                     )
                     logger.warning("GAM sync NOT implemented - GAM still has old dates")
+
+            # Apply every accumulated column update in a single revision bump.
+            # update_fields() bumps once and covers any concurrent package-level
+            # change; if ONLY package-level changes occurred (no column updates),
+            # bump once directly. Exactly one increment per accepted update — see
+            # #1544.
+            if pending_field_updates:
+                uow.media_buys.update_fields(req.media_buy_id, **pending_field_updates)
+            elif package_level_changed:
+                uow.media_buys.bump_revision(req.media_buy_id)
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes

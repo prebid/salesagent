@@ -219,6 +219,79 @@ class TestUpdateStatus:
             assert result.approved_by is None
 
 
+class TestRevisionBumpsOnStatusTransition:
+    """Every status transition through the repository seam bumps the AdCP GA
+    ``revision`` counter, and manual approval stamps the confirmation instant.
+
+    Regression for #1544: the admin approve/reject routes, the flight-date
+    scheduler, and creative-sync assignment previously mutated ``.status``
+    directly, bypassing the bump — so ``revision`` never advanced on those
+    seller-side state changes and ``confirmed_at`` reported the buyer's request
+    time (``created_at``) instead of the approval moment.
+    """
+
+    def test_update_status_bumps_revision(self, tenant_a, principal_a):
+        """A status change through update_status advances the persisted revision."""
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_rev_status", status="pending_approval")
+            uow.media_buys.create(mb)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            result = uow.media_buys.update_status("mb_rev_status", "active")
+            # Created at revision 1; a single transition bumps to exactly 2.
+            assert result is not None
+            assert result.revision == 2
+
+    def test_apply_status_transition_bumps_revision(self, tenant_a, principal_a):
+        """The cross-tenant seam (scheduler / creative-sync) bumps revision too."""
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_rev_transition", status="pending_start")
+            uow.media_buys.create(mb)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            buy = uow.media_buys.get_by_id("mb_rev_transition")
+            assert buy is not None
+            MediaBuyRepository.apply_status_transition(buy, "active")
+            assert buy.status == "active"
+            assert buy.revision == 2
+
+    def test_manual_approval_stamps_confirmed_at_and_bumps_revision(self, tenant_a, principal_a):
+        """create (pending_approval) → approve → get: confirmed_at is the approval
+        instant (not created_at) and revision advanced past the create value."""
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from tests.factories.principal import PrincipalFactory
+
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_approve_life", status="pending_approval")
+            uow.media_buys.create(mb)
+
+        # A buy awaiting approval is not yet confirmed — get reports None.
+        identity = PrincipalFactory.make_identity(
+            tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
+        )
+        before = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=["mb_approve_life"]), identity=identity, include_snapshot=False
+        ).media_buys[0]
+        assert before.confirmed_at is None
+        assert before.revision == 1
+
+        # Seller approves — the seam stamps approved_at and bumps revision.
+        approve_time = datetime.now(UTC)
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_status(
+                "mb_approve_life", "active", approved_at=approve_time, approved_by="admin@test.com"
+            )
+
+        after = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=["mb_approve_life"]), identity=identity, include_snapshot=False
+        ).media_buys[0]
+        # confirmed_at is the approval instant, NOT the buyer's create time.
+        assert after.confirmed_at == approve_time
+        assert after.confirmed_at != after.created_at
+        assert after.revision == 2
+
+
 # ---------------------------------------------------------------------------
 # MediaBuy.update_fields — generic field update
 # ---------------------------------------------------------------------------

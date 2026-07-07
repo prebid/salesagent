@@ -87,6 +87,40 @@ class TestPersistedRevisionOnTheWire:
             # confirmed_at is stable after set — an update never moves it.
             assert item.confirmed_at == created.confirmed_at
 
+    def test_single_update_touching_budget_and_dates_bumps_once(self, integration_db):
+        """One accepted update that changes budget AND dates advances revision by
+        exactly 1 — not once per changed field group.
+
+        Regression for #1544: the update path bumped independently for the
+        package set, the budget, and the date range (3 sites), so a combined
+        update jumped the revision by 2-3. AdCP GA ``revision`` is a per-resource
+        version token, so one update must advance it by exactly one.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            created = _create_buy(env, product)
+            assert created.revision == 1
+
+            new_start = datetime.now(UTC) + timedelta(days=2)
+            new_end = new_start + timedelta(days=20)
+            req = UpdateMediaBuyRequest(
+                media_buy_id=created.media_buy_id,
+                budget=8000.0,
+                start_time=new_start.isoformat(),
+                end_time=new_end.isoformat(),
+            )
+            result = env.call_impl(req=req)
+            assert isinstance(result, UpdateMediaBuySuccess), f"update must succeed, got {result!r}"
+            # Budget + dates in one call → exactly one increment.
+            assert result.revision == 2
+
+            item = _get_buy(env, created.media_buy_id)
+            assert item.revision == 2
+
     def test_rapid_consecutive_updates_yield_strictly_increasing_revisions(self, integration_db):
         """Two back-to-back updates (same wall-clock second) must not collide.
 
