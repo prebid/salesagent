@@ -6,6 +6,7 @@ and the setup-env composite action.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,39 @@ _KNOWN_BAD_SETUP_UV_PINS = [
     (Path(".github/actions/_install-uv/action.yml"), "astral-sh/setup-uv@1111111111111111111111111111111111111111"),
     (Path(".github/workflows/ci.yml"), "astral-sh/setup-uv@2222222222222222222222222222222222222222"),
 ]
+
+_BAD_PYTHON_VERSION_WORKFLOW = """\
+jobs:
+  test:
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+"""
+
+_GOOD_PYTHON_VERSION_WORKFLOW = """\
+jobs:
+  test:
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+"""
+
+_BAD_UV_VERSION_WORKFLOW = """\
+env:
+  UV_VERSION: "0.6.0"
+"""
+
+
+def _github_yaml_repo(tmp_path: Path, rel: str, content: str) -> Path:
+    """Throwaway git repo with one tracked workflow file (detector scans via ``git ls-files``)."""
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    return tmp_path
 
 
 def _read(path_suffix: str) -> str:
@@ -160,7 +194,7 @@ def test_python_version_anchors_consistent() -> None:
     for path, version, anchor_kind in anchors:
         if path.name in {".python-version", "Dockerfile"}:
             continue
-        # ADR-008: ruff/black target-version stays py311 until a dedicated post-#1234 PR.
+        # ADR-008: ruff target-version is py312 (aligned with runtime .python-version).
         if anchor_kind == "target-version":
             continue
         if version != major_minor:
@@ -188,8 +222,8 @@ def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
 
 
 @pytest.mark.arch_guard
-def test_target_version_anchor_must_stay_py311() -> None:
-    """Mutation self-test: ADR-008 deferred target-version downgrade must fail the guard."""
+def test_target_version_anchor_must_stay_py312() -> None:
+    """Mutation self-test: ADR-008 target-version downgrade must fail the guard."""
     repo = repo_root()
     anchors = list(iter_python_version_anchors(repo))
     assert_adr008_target_version_pinned(anchors, repo)
@@ -200,8 +234,29 @@ def test_target_version_anchor_must_stay_py311() -> None:
         for version, anchor_kind in extract_python_version_anchors(bad_path, bad_text)
     ]
     assert bad_anchors, "known-bad fixture must yield a target-version anchor"
-    with pytest.raises(AssertionError, match="ADR-008 target-version must stay py311"):
+    with pytest.raises(AssertionError, match="ADR-008 target-version must stay py312"):
         assert_adr008_target_version_pinned(bad_anchors, repo)
+
+
+@pytest.mark.arch_guard
+def test_hardcoded_python_version_yaml_detector_catches_known_bad(tmp_path: Path) -> None:
+    """Full-chain self-test: a hardcoded python-version workflow must be flagged (#1497)."""
+    repo = _github_yaml_repo(tmp_path, ".github/workflows/ci.yml", _BAD_PYTHON_VERSION_WORKFLOW)
+    assert list(iter_hardcoded_python_version_yaml(repo)), "detector must flag hardcoded python-version"
+
+
+@pytest.mark.arch_guard
+def test_hardcoded_python_version_yaml_detector_skips_version_file(tmp_path: Path) -> None:
+    """python-version-file must NOT be flagged — exercises skip path and guards over-broad matching."""
+    repo = _github_yaml_repo(tmp_path, ".github/workflows/ci.yml", _GOOD_PYTHON_VERSION_WORKFLOW)
+    assert list(iter_hardcoded_python_version_yaml(repo)) == []
+
+
+@pytest.mark.arch_guard
+def test_hardcoded_uv_version_env_detector_catches_known_bad(tmp_path: Path) -> None:
+    """Full-chain self-test: a hardcoded UV_VERSION env block must be flagged (#1497)."""
+    repo = _github_yaml_repo(tmp_path, ".github/workflows/ci.yml", _BAD_UV_VERSION_WORKFLOW)
+    assert list(iter_hardcoded_uv_version_env(repo)), "detector must flag hardcoded UV_VERSION env"
 
 
 @pytest.mark.arch_guard
