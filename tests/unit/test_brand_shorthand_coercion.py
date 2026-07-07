@@ -36,3 +36,19 @@ def test_string_and_dict_shorthand_produce_identical_brand() -> None:
     assert from_string.brand is not None
     assert from_dict.brand is not None
     assert from_string.brand.domain == from_dict.brand.domain == "test.example"
+
+
+@pytest.mark.parametrize(
+    "malformed_url",
+    [
+        "https://[",
+        "http://[::1",
+    ],
+)
+def test_brand_shorthand_to_domain_malformed_url_non_raising(malformed_url: str) -> None:
+    """Malformed URL shorthands must not raise (graceful degradation)."""
+    assert brand_shorthand_to_domain(malformed_url) == ""
+
+
+def test_to_brand_reference_malformed_url_returns_none() -> None:
+    assert to_brand_reference("https://[") is None

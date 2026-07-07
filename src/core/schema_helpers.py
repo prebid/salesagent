@@ -73,14 +73,21 @@ def brand_shorthand_to_domain(value: str) -> str:
 
     Storyboard runners may send ``https://test.example``; ``BrandReference.domain``
     expects a hostname (no scheme/path) per the adcp library pattern.
+
+    Returns empty string when a URL-shaped value cannot be parsed into a hostname
+    (malformed IPv6, etc.) so callers can treat it as "no domain".
     """
     value = value.strip()
     if not value:
         return value
     if "://" in value or value.startswith("//"):
-        parsed = urlparse(value if "://" in value else f"https:{value}")
+        try:
+            parsed = urlparse(value if "://" in value else f"https:{value}")
+        except ValueError:
+            return ""
         if parsed.hostname:
             return parsed.hostname.lower()
+        return ""
     return value.lower()
 
 
@@ -98,7 +105,10 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
     if isinstance(brand, BrandReference):
         return brand
     if isinstance(brand, str):
-        return BrandReference(domain=brand_shorthand_to_domain(brand))
+        domain = brand_shorthand_to_domain(brand)
+        if not domain:
+            return None
+        return BrandReference(domain=domain)
     if isinstance(brand, dict):
         return BrandReference(**brand)
     return None  # Fallback for unexpected types

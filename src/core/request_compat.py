@@ -29,6 +29,11 @@ class NormalizationResult:
     translations_applied: list[str] = field(default_factory=list)
 
 
+def _brand_manifest_is_url(url: str) -> bool:
+    """Return True when brand_manifest value looks like a URL (legacy callers never sent bare domains)."""
+    return "://" in url or url.startswith("//")
+
+
 def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
     """Convert brand_manifest (URL string or {url: str}) to BrandReference {domain}.
 
@@ -39,14 +44,17 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
 
     url: str | None = None
     if isinstance(value, str):
-        # brand_manifest callers always sent URLs, never bare domain shorthand
-        if "://" not in value and not value.startswith("//"):
+        if not _brand_manifest_is_url(value):
             return None
         url = value
     elif isinstance(value, dict):
-        url = value.get("url")
-
-    if not url or not isinstance(url, str):
+        raw_url = value.get("url")
+        if not raw_url or not isinstance(raw_url, str):
+            return None
+        if not _brand_manifest_is_url(raw_url):
+            return None
+        url = raw_url
+    else:
         return None
 
     domain = brand_shorthand_to_domain(url)
