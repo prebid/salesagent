@@ -230,6 +230,19 @@ class TestRecoveryClassification:
         exc = AdCPAuthorizationError("forbidden")
         assert exc.recovery == "terminal"
 
+    def test_configuration_error_defaults_to_correctable(self):
+        """AdCPConfigurationError defaults to recovery='correctable'.
+
+        Operator can fix missing/broken config (env var, key rotation,
+        missing ENCRYPTION_KEY) and the service will recover — which is
+        the definition of correctable, not terminal. The buyer has no
+        lever, but the *operator* does.
+        """
+        from src.core.exceptions import AdCPConfigurationError
+
+        exc = AdCPConfigurationError("ENCRYPTION_KEY missing")
+        assert exc.recovery == "correctable"
+
     def test_not_found_error_defaults_to_terminal(self):
         """AdCPNotFoundError (the *base*) defaults to recovery='terminal'.
 
