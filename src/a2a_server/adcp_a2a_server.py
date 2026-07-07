@@ -66,6 +66,7 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
+from src.core.request_compat import strip_undeclared_envelope_fields
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.schemas import CreativeStatusEnum
@@ -175,6 +176,24 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
         message=f"{operation} failed: {exc}",
         data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
     )
+
+
+def _validate_envelope_tolerant[RequestModelT: BaseModel](
+    params: dict[str, Any], model: type[RequestModelT]
+) -> RequestModelT:
+    """``model.model_validate`` after stripping AdCP envelope fields the model doesn't declare.
+
+    A2A parity with the MCP RequestCompatMiddleware's schema-aware envelope strip
+    (Step 4): a conformant SDK client may attach standard AdCP envelope framing
+    (``ext``/``push_notification_config``/``revision``/...) to any request. A
+    handler that ``model_validate``s the full parameter dict against a strict
+    (``extra="forbid"`` in dev/CI) request model would otherwise reject the
+    undeclared framing with extra_forbidden. Strip only the envelope fields this
+    model does not declare — fields it does declare still flow through. Negotiation
+    fields are handled earlier in ``_handle_explicit_skill``. See #1512.
+    """
+    cleaned, _ = strip_undeclared_envelope_fields(params, set(model.model_fields))
+    return model.model_validate(cleaned)
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -1365,6 +1384,28 @@ class AdCPRequestHandler(RequestHandler):
         Raises:
             ValueError: For unknown skills or invalid parameters
         """
+        # Version-negotiation parity with the MCP RequestCompatMiddleware
+        # (Steps 2-3): reject an unsupported AdCP major, then strip the
+        # negotiation envelope fields (adcp_version / adcp_major_version) that
+        # every AdCP SDK client injects on each request. This runs FIRST — before
+        # the idempotency payload is captured below and before any handler's
+        # strict ``model_validate`` — for two reasons:
+        #   1. The strict request models (GetMediaBuysRequest,
+        #      UpdatePerformanceIndexRequest, ...) use extra="forbid" in dev/CI,
+        #      so an undeclared adcp_major_version would raise extra_forbidden and
+        #      make the agent uncallable by conformant SDK clients.
+        #   2. The MCP middleware strips these before the tool builds its
+        #      idempotency payload, so stripping here (pre-capture) keeps the
+        #      canonical request hash identical across transports.
+        # Raises AdCPVersionUnsupportedError, which the dispatch's
+        # ``except AdCPError`` handler renders as a VERSION_UNSUPPORTED failed-Task
+        # envelope. See #1512.
+        from src.core.adcp_version import validate_adcp_major_version
+        from src.core.request_compat import strip_negotiation_fields
+
+        validate_adcp_major_version(parameters)
+        parameters, _dropped_negotiation = strip_negotiation_fields(parameters)
+
         # The buyer's wire payload, captured BEFORE the pnc protocol-layer
         # injection, deprecated-field normalization, and any handler mutations —
         # the idempotency payload-hash input (AdCP defines equivalence over the
@@ -1388,14 +1429,6 @@ class AdCPRequestHandler(RequestHandler):
 
         compat_result = normalize_request_params(skill_name, parameters)
         parameters = compat_result.params
-
-        # Version-negotiation parity with the MCP path: reject an unsupported AdCP
-        # major before any handler runs. Raises AdCPVersionUnsupportedError, which
-        # the dispatch's ``except AdCPError`` handler renders as a
-        # VERSION_UNSUPPORTED failed-Task envelope. See #1512.
-        from src.core.adcp_version import validate_adcp_major_version
-
-        validate_adcp_major_version(parameters)
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
@@ -1579,7 +1612,7 @@ class AdCPRequestHandler(RequestHandler):
             )
 
         with adcp_validation_boundary():
-            req = CreateMediaBuyRequest.model_validate(params)
+            req = _validate_envelope_tolerant(params, CreateMediaBuyRequest)
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1927,7 +1960,7 @@ class AdCPRequestHandler(RequestHandler):
 
         params = {**parameters}
         include_snapshot = params.pop("include_snapshot", False)
-        req = GetMediaBuysRequest.model_validate(params)
+        req = _validate_envelope_tolerant(params, GetMediaBuysRequest)
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
         return response
@@ -1955,7 +1988,7 @@ class AdCPRequestHandler(RequestHandler):
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
         with adcp_validation_boundary():
-            req = GetMediaBuyDeliveryRequest.model_validate(params)
+            req = _validate_envelope_tolerant(params, GetMediaBuyDeliveryRequest)
 
         # Call core function with validated fields (all optional per AdCP spec).
         # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
@@ -1988,7 +2021,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas import UpdatePerformanceIndexRequest
 
         with adcp_validation_boundary():
-            req = UpdatePerformanceIndexRequest.model_validate(parameters)
+            req = _validate_envelope_tolerant(parameters, UpdatePerformanceIndexRequest)
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(

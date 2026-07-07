@@ -403,6 +403,49 @@ class TestA2ASkillInvocation:
             assert isinstance(artifact_data["packages"], list)
 
     @pytest.mark.asyncio
+    async def test_explicit_skill_tolerates_negotiation_envelope(
+        self, handler, sample_tenant, sample_principal, mock_identity, validator
+    ):
+        """A2A get_media_buys succeeds when a conformant SDK client attaches the
+        version-negotiation envelope (adcp_version / adcp_major_version) and undeclared
+        envelope framing (ext) to the request.
+
+        Regression for #1512: the A2A dispatch validated the AdCP major but left the
+        negotiation fields in ``parameters``; ``GetMediaBuysRequest.model_validate``
+        (which declares neither field) then ran under extra="forbid" in dev/CI and
+        rejected the request with extra_forbidden — a failed Task. The MCP middleware
+        already strips these before dispatch, so this pins the cross-transport parity
+        the PR claims. Without the fix the artifact is ``error_result``.
+        """
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+        ):
+            from tests.a2a_helpers import make_a2a_context
+
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
+
+            from src.core.adcp_version import adcp_major_version
+
+            skill_params = {
+                # SDK version-negotiation envelope (supported major) + undeclared framing.
+                "adcp_version": "3.1",
+                "adcp_major_version": adcp_major_version(),
+                "ext": {"vendor": "acme"},
+            }
+            message = create_a2a_message_with_skill("get_media_buys", skill_params)
+            params = SendMessageRequest(message=message)
+
+            result = await handler.on_message_send(params, context=ctx)
+
+            # Success artifact, not "error_result" — the negotiation + envelope fields
+            # were stripped before validation instead of tripping extra_forbidden.
+            assert isinstance(result, Task)
+            assert result.artifacts is not None
+            assert result.artifacts[0].name == "get_media_buys_result"
+
+    @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy_manual_approval(
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):

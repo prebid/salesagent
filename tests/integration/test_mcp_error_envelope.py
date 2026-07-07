@@ -5,7 +5,7 @@ Companion to tests/integration/test_a2a_error_responses.py — verifies that
 typed AdCPError raised inside an MCP-routed _impl surfaces on the wire as a
 spec two-layer envelope (``adcp_error`` + ``errors[]``) inside the
 FastMCP CallToolResult content text. The MCP boundary translator
-(src/core/tool_error_logging.py:_translate_to_tool_error) builds the envelope
+(src/core/tool_error_logging.py:translate_to_tool_error) builds the envelope
 via build_two_layer_error_envelope and wraps it in an AdCPToolError whose
 ``str(self)`` is the JSON-encoded envelope.
 
@@ -80,7 +80,7 @@ class TestMcpWireErrorEnvelope:
               → _update_media_buy_impl → MediaBuyRepository.get_by_id returns None
               → raise AdCPMediaBuyNotFoundError("Media buy 'nonexistent' not found.")
               → with_error_logging wrapper catches it
-              → _translate_to_tool_error builds envelope via build_two_layer_error_envelope
+              → translate_to_tool_error builds envelope via build_two_layer_error_envelope
               → raises AdCPToolError(envelope, status_code=404)
               → FastMCP serializes str(error) = JSON envelope into CallToolResult.content[0].text
 
@@ -158,7 +158,7 @@ class TestMcpWireErrorEnvelope:
               → _create_media_buy_impl validation: get_total_budget() == 0
               → raise AdCPBudgetTooLowError(...) (line 1758)
               → except block translates to AdCPValidationError (line 2221)
-              → with_error_logging → _translate_to_tool_error → wire envelope
+              → with_error_logging → translate_to_tool_error → wire envelope
 
         No ``_impl`` patching — exercises the actual production validator
         and the structured-error→AdCPError translation path.
@@ -239,7 +239,7 @@ class TestMcpWireErrorEnvelope:
               → MCP wrapper resolve_identity returns None
               → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Identity is required")
               → AdCPAuthRequiredError carries error_code="AUTH_TOKEN_INVALID" (passthrough STANDARD code)
-              → with_error_logging → _translate_to_tool_error → wire envelope
+              → with_error_logging → translate_to_tool_error → wire envelope
 
         AUTH_TOKEN_INVALID is a STANDARD spec code — passes through unchanged.
         """

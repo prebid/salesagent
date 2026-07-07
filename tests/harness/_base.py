@@ -174,7 +174,7 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
 
             # 4th element is a JSON-serialized extra blob that may contain
             # "details", "suggestion", and "field" as separate top-level keys
-            # (packed by tool_error_logging._translate_to_tool_error).
+            # (packed by tool_error_logging.translate_to_tool_error).
             details = None
             suggestion = None
             field = None

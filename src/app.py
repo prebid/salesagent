@@ -197,7 +197,7 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     """Cross-transport symmetry: REST wraps raw ``ValueError`` as VALIDATION_ERROR.
 
-    MCP's ``_translate_to_tool_error`` and A2A's dispatcher both catch raw
+    MCP's ``translate_to_tool_error`` and A2A's dispatcher both catch raw
     ``ValueError`` and wrap it in a synthetic ``AdCPValidationError`` envelope.
     REST mirrors that here so a buyer-facing ``ValueError`` raised by
     application code surfaces with the same wire shape and HTTP 400 status
