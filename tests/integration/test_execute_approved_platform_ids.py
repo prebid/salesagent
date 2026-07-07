@@ -7,7 +7,7 @@ The auto-approval path in _create_media_buy_impl DOES persist them (lines 3047-3
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -388,3 +388,184 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             ).first()
             assert pkg is not None
             assert "platform_line_item_id" not in pkg.package_config
+
+
+@pytest.fixture
+def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
+    """Extend the single-package pending buy with one approved creative assigned to it.
+
+    Thin extension of ``pending_media_buy_with_package`` (reuses its buy/package setup —
+    no duplication) that adds an approved creative + assignment. The creative starts with
+    NO concept and NO ``platform_creative_id`` — the writeback under test is what fills
+    them. Factories persist with ``commit``, so the rows are visible to the separate
+    session ``execute_approved_media_buy`` opens.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy as DBMediaBuy
+    from src.core.database.models import Principal as DBPrincipal
+    from src.core.database.models import Tenant as DBTenant
+    from tests.factories import CreativeAssignmentFactory, CreativeFactory, MediaBuyFactory
+
+    data = pending_media_buy_with_package
+    # The parent fixture bound every factory to its (committed) session; reuse it so the
+    # creative/assignment land in the same DB the parent's buy/package did.
+    session = MediaBuyFactory._meta.sqlalchemy_session
+
+    tenant = session.scalars(select(DBTenant).filter_by(tenant_id=data["tenant_id"])).first()
+    principal = session.scalars(
+        select(DBPrincipal).filter_by(tenant_id=data["tenant_id"], principal_id="test_principal")
+    ).first()
+    mb = session.scalars(
+        select(DBMediaBuy).filter_by(tenant_id=data["tenant_id"], media_buy_id=data["media_buy_id"])
+    ).first()
+
+    creative = CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        creative_id="cre_concept_enrichment",
+        status="approved",
+        format="display_300x250",
+        data={"assets": {"banner": {"url": "https://example.com/ad.jpg", "width": 300, "height": 250}}},
+    )
+    CreativeAssignmentFactory(creative=creative, media_buy=mb, package_id=data["package_id"])
+
+    return {**data, "principal_id": principal.principal_id, "creative_id": creative.creative_id}
+
+
+class TestExecuteApprovedEnrichesSellerConcept:
+    """execute_approved_media_buy — the manual-approval GAM push path — enriches
+    trafficked creatives with the seller-side concept + platform id (#1506), and the
+    persisted concept is findable by the #1407 list_creatives concept_ids filter.
+
+    Covers Chris's review of #1509:
+      • Finding 1 — this is the third GAM push path, previously unenriched.
+      • Finding 2 — the real producer → real writeback → DB → real reader chain: the
+        concept-bearing AssetStatus is produced by the REAL dry-run GAM adapter, folded
+        in by the REAL execute_approved_media_buy writeback, persisted, and read back
+        through the REAL CreativeRepository concept_ids filter. A key-name drift on
+        either the producer or the reader reddens here.
+    """
+
+    def _produce_gam_status(self, gam_order_id: str, creative_id: str, tenant_id: str):
+        """Emit the AssetStatus the REAL dry-run GAM producer returns for a pushed
+        creative — so a change to the GAM concept keys/values reddens this test too."""
+        from src.adapters.google_ad_manager import GoogleAdManager
+        from src.core.schemas import Principal
+
+        gam_principal = Principal(
+            principal_id="test_principal",
+            name="Test Principal",
+            platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
+        )
+        config = {
+            "network_code": "123456",
+            "service_account_key_file": "/path/to/key.json",
+            "trafficker_id": "trafficker_123",
+        }
+        with patch.object(GoogleAdManager, "_init_client"):
+            gam = GoogleAdManager(
+                config=config,
+                principal=gam_principal,
+                network_code=config["network_code"],
+                advertiser_id="123",
+                trafficker_id=config["trafficker_id"],
+                dry_run=True,
+                tenant_id=tenant_id,
+            )
+        # "test_package" is a placeholder the dry-run GAM manager knows, so the producer's
+        # size-vs-placeholder check passes (mirrors the producer unit test). This asset only
+        # drives the producer to emit the concept-bearing status — it is independent of the
+        # DB package the writeback (step 2) uses.
+        gam_asset = {
+            "creative_id": creative_id,
+            "name": "HTML5 Banner",
+            "format": "display_970x250",
+            "media_url": "https://example.com/creative.html",
+            "click_url": "https://example.com/landing",
+            "package_assignments": ["test_package"],
+        }
+        with patch.object(gam, "_validate_creative_for_gam", return_value=[]):
+            statuses = gam.add_creative_assets(gam_order_id, [gam_asset], datetime.now(UTC))
+        assert statuses[0].status == "approved"
+        assert statuses[0].concept_id == f"gam-order-{gam_order_id}"  # pins the produced key/value
+        return statuses
+
+    def test_manual_approval_enriches_concept_and_is_filterable(self, pending_media_buy_with_approved_creative):
+        """Approving a pending buy from the admin path enriches its creatives and the
+        concept is retrievable via the list_creatives concept_ids filter."""
+        from sqlalchemy import select
+
+        from src.core.database.models import Creative as DBCreative
+        from src.core.database.repositories.creative import CreativeRepository
+
+        fixture = pending_media_buy_with_approved_creative
+        media_buy_id = fixture["media_buy_id"]
+        tenant_id = fixture["tenant_id"]
+        principal_id = fixture["principal_id"]
+        creative_id = fixture["creative_id"]
+        gam_order_id = "555"
+        expected_concept = f"gam-order-{gam_order_id}"
+
+        # (1) REAL dry-run GAM producer generates the concept-bearing status...
+        produced = self._produce_gam_status(gam_order_id, creative_id, tenant_id)
+
+        # (2) ...fed through the REAL execute_approved_media_buy writeback. The adapter
+        # response carries the GAM order id; the adapter itself is a stand-in whose
+        # creatives_manager returns the real producer's output.
+        adapter_response = CreateMediaBuySuccess(media_buy_id=gam_order_id, packages=[])
+        mock_adapter = MagicMock()
+        mock_adapter.creatives_manager.add_creative_assets.return_value = produced
+        mock_adapter.orders_manager.approve_order.return_value = True
+        valid_asset = {
+            "creative_id": creative_id,
+            "package_assignments": [{"package_id": fixture["package_id"], "weight": 100}],
+            "width": 300,
+            "height": 250,
+            "url": "https://example.com/ad.jpg",
+            "click_url": None,
+            "asset_type": "image",
+            "name": "Test Creative",
+        }
+        with (
+            patch(
+                "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
+                return_value=adapter_response,
+            ),
+            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+            patch(
+                "src.core.tools.media_buy_create._build_adapter_asset_from_creative",
+                return_value=(valid_asset, None),
+            ),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+        ):
+            from src.core.tools.media_buy_create import execute_approved_media_buy
+
+            success, error = execute_approved_media_buy(media_buy_id, tenant_id)
+
+        assert success is True, f"execute_approved_media_buy failed: {error}"
+        mock_adapter.creatives_manager.add_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY)
+
+        # (3) The concept is PERSISTED to the creative's data blob (the Finding 1 fix —
+        # without the writeback wiring, these keys are absent).
+        with get_db_session() as session:
+            creative = session.scalars(
+                select(DBCreative).filter_by(tenant_id=tenant_id, creative_id=creative_id)
+            ).first()
+            assert creative is not None
+            assert creative.data.get("concept_id") == expected_concept
+            assert creative.data.get("concept_name") == f"GAM Order {gam_order_id}"
+            assert creative.data.get("concept_source") == "gam_order"
+            # The platform_creative_id half is filled on the same path.
+            assert creative.data.get("platform_creative_id") == creative_id
+            # Fill-only-when-absent preserved the pre-existing assets blob.
+            assert creative.data.get("assets") is not None
+
+        # (4) The persisted concept is findable through the REAL #1407 reader filter.
+        with get_db_session() as session:
+            repo = CreativeRepository(session, tenant_id)
+            result = repo.get_by_principal(principal_id, concept_ids=[expected_concept])
+            returned = {c.creative_id for c in result.creatives}
+            assert creative_id in returned, (
+                f"list_creatives concept_ids filter did not return the enriched creative; got {returned!r}"
+            )
