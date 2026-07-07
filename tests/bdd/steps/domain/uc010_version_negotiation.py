@@ -164,11 +164,16 @@ def when_inspect_error_details(ctx: dict) -> None:
 
 @then("the response should be a VERSION_UNSUPPORTED error")
 def then_response_is_version_unsupported(ctx: dict) -> None:
-    """Assert the REAL wire envelope carries VERSION_UNSUPPORTED (terminal)."""
+    """Assert the REAL wire envelope carries VERSION_UNSUPPORTED (correctable).
+
+    Recovery is ``correctable`` per the spec's ``enums/error-code.json``
+    enumMetadata: the buyer re-pins to a ``supported_versions`` entry and
+    retries.
+    """
     from tests.helpers.envelope_assertions import assert_envelope_shape
 
     assert ctx.get("response") is None, f"Expected an error, got a success response: {ctx.get('response')!r}"
-    assert_envelope_shape(ctx["wire_error_envelope"], "VERSION_UNSUPPORTED", recovery="terminal")
+    assert_envelope_shape(ctx["wire_error_envelope"], "VERSION_UNSUPPORTED", recovery="correctable")
 
 
 # ── Then: details payload ────────────────────────────────────────────

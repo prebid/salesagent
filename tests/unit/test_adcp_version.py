@@ -95,16 +95,50 @@ class TestValidateAdcpVersionPins:
             validate_adcp_version_pins({"adcp_major_version": 4})
         assert exc.value.details["adcp_major_version"] == 4
 
-    def test_pre_native_major_tolerated_for_compat(self):
-        """Pre-3.0 pins are honored, not rejected.
+    def test_below_native_major_rejected(self):
+        """A pin below the supported major set is rejected like one above it.
 
-        The version_compat layer (needs_v2_compat) deliberately serves pre-3.0
-        buyers with v2-compat serialization, so a pre-native pin is a version
-        this seller speaks — only majors ABOVE the native major are protocols
-        this build cannot serve.
+        get_adcp_capabilities.mdx: "the seller validates against its
+        major_versions and returns VERSION_UNSUPPORTED if not in range" — the
+        membership test is symmetric. This build serves 3.x-shaped responses
+        only (the legacy v2-compat layer covers one tool on a subset of
+        transports), so accepting a 2-pin while advertising major_versions
+        [3] would be self-inconsistent.
         """
-        validate_adcp_version_pins({"adcp_major_version": 2})
-        validate_adcp_version_pins({"adcp_version": "2.0"})
+        for pin in ({"adcp_major_version": 2}, {"adcp_version": "2.0"}):
+            with pytest.raises(AdCPVersionUnsupportedError) as exc:
+                validate_adcp_version_pins(pin)
+            assert exc.value.error_code == "VERSION_UNSUPPORTED"
+            assert exc.value.details["supported_versions"] == list(supported_adcp_versions())
+
+    def test_recovery_is_correctable(self):
+        """enums/error-code.json enumMetadata: VERSION_UNSUPPORTED is correctable
+        ("re-pin to a release in supported_versions and retry")."""
+        with pytest.raises(AdCPVersionUnsupportedError) as exc:
+            validate_adcp_version_pins({"adcp_major_version": 99})
+        assert exc.value.recovery == "correctable"
+
+    def test_request_context_echoed_on_error(self):
+        """The request's context object rides on the error so the envelope echoes it.
+
+        error-compliance storyboard (unsupported_major_version probe) grades
+        field_present: context and an unchanged context.correlation_id on the
+        error response.
+        """
+        from src.core.exceptions import build_two_layer_error_envelope
+
+        request_context = {"correlation_id": "corr-123", "conversation_id": "conv-9"}
+        with pytest.raises(AdCPVersionUnsupportedError) as exc:
+            validate_adcp_version_pins({"adcp_version": "4.0", "context": request_context})
+        envelope = build_two_layer_error_envelope(exc.value)
+        assert envelope["context"]["correlation_id"] == "corr-123"
+
+    def test_oversized_pin_echo_truncated(self):
+        """The echoed pin is buyer-controlled and unbounded — reflect at most 64 chars."""
+        huge_pin = "999." + "x" * 5000
+        with pytest.raises(AdCPVersionUnsupportedError) as exc:
+            validate_adcp_version_pins({"adcp_version": huge_pin})
+        assert len(exc.value.details["adcp_version"]) == 64
 
     def test_same_major_unknown_release_downshifts_without_error(self):
         """version-envelope.json: same-major pins downshift to the served release."""

@@ -19,11 +19,15 @@ Spec grounding (v3.1.0-beta.3):
       may carry the deprecated ``supported_majors[]`` plus the advisory
       ``build_version`` (which buyers MUST NOT use for negotiation).
 
-Pre-3.0 majors are deliberately NOT rejected: the ``src/core/version_compat``
-layer (``needs_v2_compat``) still serves pre-3.0 buyers with v2-compat
-serialization, so a pre-3.0 pin is a version this seller honors — rejecting it
-would break that deployed compat contract. Only majors ABOVE the native major
-(protocol releases this build cannot speak) trigger VERSION_UNSUPPORTED.
+A pin is validated by MEMBERSHIP in the supported major set (per
+``get_adcp_capabilities.mdx``: "the seller validates against its
+``major_versions`` and returns ``VERSION_UNSUPPORTED`` if not in range") —
+majors below the native major are rejected exactly like majors above it,
+because this build serves 3.x-shaped responses only: the legacy
+``src/core/version_compat`` layer covers a single tool on a subset of
+transports and is not a genuine cross-protocol 2.x contract, so advertising
+``major_versions: [3]`` while accepting a 2-pin would be self-inconsistent.
+Unpinned legacy clients are unaffected (no pin → nothing to validate).
 """
 
 from __future__ import annotations
@@ -78,17 +82,35 @@ def _supported_majors() -> list[int]:
     return sorted({int(v.split(".", 1)[0]) for v in supported_adcp_versions()})
 
 
-def _version_unsupported_error(echo_field: str, echo_value: Any, claimed_major: int) -> AdCPVersionUnsupportedError:
+# Cap on the echoed pin value: it is buyer-controlled and unbounded on the
+# wire, and it is reflected into the error details and boundary logs.
+_ECHO_MAX_LEN = 64
+
+
+def _version_unsupported_error(
+    echo_field: str,
+    echo_value: Any,
+    claimed_major: int,
+    *,
+    context: Any = None,
+) -> AdCPVersionUnsupportedError:
     """Build the VERSION_UNSUPPORTED error with the spec-required details payload.
 
     ``details`` follows ``error-details/version-unsupported.json``:
     ``supported_versions`` (REQUIRED), the deprecated ``supported_majors``
     (servers SHOULD emit both through 3.x per the schema), the advisory
-    ``build_version``, and the buyer's echoed pin.
+    ``build_version``, and the buyer's echoed pin (truncated — the raw value is
+    attacker-sized). The request's ``context`` object rides on the error so the
+    envelope echoes it back (error-compliance storyboard grades
+    ``field_present: context`` and an unchanged ``correlation_id`` on error
+    responses).
     """
     supported = supported_adcp_versions()
+    if isinstance(echo_value, str) and len(echo_value) > _ECHO_MAX_LEN:
+        echo_value = echo_value[:_ECHO_MAX_LEN]
     return AdCPVersionUnsupportedError(
-        f"AdCP major version {claimed_major} is not supported; this agent speaks major {max(_supported_majors())}.",
+        f"AdCP major version {claimed_major} is not supported; "
+        f"this agent speaks major(s) {', '.join(str(m) for m in _supported_majors())}.",
         details={
             echo_field: echo_value,
             "supported_versions": list(supported),
@@ -96,6 +118,7 @@ def _version_unsupported_error(echo_field: str, echo_value: Any, claimed_major: 
             "build_version": adcp_build_version(),
         },
         suggestion="Re-pin adcp_version to a supported_versions entry and retry the request.",
+        context=context if isinstance(context, dict) else None,
     )
 
 
@@ -119,25 +142,26 @@ def _claimed_major(value: Any) -> int | None:
 
 
 def validate_adcp_version_pins(params: Mapping[str, Any]) -> None:
-    """Reject a request that pins an AdCP version this build cannot speak.
+    """Reject a request that pins an AdCP major version this build does not speak.
 
     AdCP version negotiation (``core/version-envelope.json``): SDK clients pin
     ``adcp_version`` (release string, e.g. ``"4.0"``) and/or the deprecated
-    ``adcp_major_version`` (int) on every request. A pin whose major is ABOVE
-    the native major is a protocol this build cannot serve — raise
-    :class:`AdCPVersionUnsupportedError` (wire code ``VERSION_UNSUPPORTED``)
-    carrying the spec-required ``supported_versions`` details. Absent means no
-    version claim, so there is nothing to reject.
+    ``adcp_major_version`` (int) on every request. A pin whose major is NOT IN
+    the supported major set — above or below — is a protocol this build does
+    not serve: raise :class:`AdCPVersionUnsupportedError` (wire code
+    ``VERSION_UNSUPPORTED``) carrying the spec-required ``supported_versions``
+    details and echoing the request's ``context``. Absent means no version
+    claim, so there is nothing to reject.
 
-    Same-major pins downshift to the release this build serves (no error), and
-    pre-3.0 majors are honored via the version_compat layer — see the module
-    docstring for the spec grounding of both.
+    Same-major pins downshift to the release this build serves (no error) —
+    see the module docstring for the spec grounding.
     """
-    highest_supported = max(_supported_majors())
+    supported_majors = set(_supported_majors())
+    request_context = params.get("context")
     for field in ("adcp_version", "adcp_major_version"):
         claimed = params.get(field)
         if claimed is None:
             continue
         claimed_major = _claimed_major(claimed)
-        if claimed_major is not None and claimed_major > highest_supported:
-            raise _version_unsupported_error(field, claimed, claimed_major)
+        if claimed_major is not None and claimed_major not in supported_majors:
+            raise _version_unsupported_error(field, claimed, claimed_major, context=request_context)

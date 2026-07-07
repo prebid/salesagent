@@ -90,18 +90,18 @@ class TestMiddlewareRejectsUnsupportedMajor:
 
     @pytest.mark.asyncio
     async def test_unsupported_major_raises_version_unsupported_envelope(self, middleware):
-        import json
-
         from src.core.tool_error_logging import AdCPToolError
+        from tests.helpers.envelope_assertions import assert_envelope_shape
 
         ctx = _make_context("get_products", {"brief": "ads", "adcp_major_version": 99})
         call_next = AsyncMock()
 
         # Middleware translates the AdCPError to the wire envelope (VERSION_UNSUPPORTED),
-        # the same shape the tool wrapper emits — not a bare AdCPError.
+        # the same shape the tool wrapper emits — not a bare AdCPError. Pin the
+        # full two-layer wire shape per the Error Verification Policy.
         with pytest.raises(AdCPToolError) as exc:
             await middleware.on_call_tool(ctx, call_next)
-        assert "VERSION_UNSUPPORTED" in json.dumps(exc.value.envelope)
+        assert_envelope_shape(exc.value, "VERSION_UNSUPPORTED", recovery="correctable", check_mcp_tool_error=True)
         call_next.assert_not_called()
 
     @pytest.mark.asyncio

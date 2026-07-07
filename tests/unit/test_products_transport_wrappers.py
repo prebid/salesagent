@@ -36,7 +36,7 @@ Business logic is mocked via _get_products_impl.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.server.context import Context
@@ -294,7 +294,14 @@ class TestRestGetProductsWrapper:
         assert "products" in data
 
     def test_rest_applies_version_compat(self):
-        """REST endpoint applies version compat based on adcp_version in body."""
+        """REST endpoint threads the body's adcp_version into version compat.
+
+        An explicit pre-3.0 pin is now rejected at the router dependency
+        (VERSION_UNSUPPORTED — majors are validated by membership in the
+        supported set), so the compat path is exercised the way legacy
+        clients actually reach it: no pin, falling back to the *Body model's
+        "1.0.0" default.
+        """
         identity = PrincipalFactory.make_identity(protocol="rest")
 
         with (
@@ -318,12 +325,12 @@ class TestRestGetProductsWrapper:
                 client = TestClient(app)
                 response = client.post(
                     "/api/v1/products",
-                    json={"brief": "ads", "adcp_version": "2.0.0"},
+                    json={"brief": "ads"},
                 )
             finally:
                 app.dependency_overrides.clear()
 
-        mock_compat.assert_called_once()
+        mock_compat.assert_called_once_with("get_products", ANY, "1.0.0")
         assert response.status_code == 200
 
 

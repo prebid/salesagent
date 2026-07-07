@@ -660,10 +660,11 @@ class AdCPRequestHandler(RequestHandler):
                         # errors. Mirrors the SDK's _send_adcp_error reference for
                         # storyboard scenarios that exercise invalid-state
                         # transitions on an otherwise-routable skill.
-                        # NOTE: logging happens in ``_handle_explicit_skill``'s
-                        # except branch (with audit log + activity feed); duplicating
-                        # the logger call here would produce two messages for the
-                        # same failure.
+                        # NOTE: logging happens inside ``_handle_explicit_skill``
+                        # (with audit log + activity feed) — both at its
+                        # version-validation raise site and in its handler
+                        # except branch; duplicating the logger call here would
+                        # produce two messages for the same failure.
                         results.append(self._build_failed_skill_result(skill_name, e))
                     except Exception as e:
                         # Untyped fallthrough — same envelope shape as the AdCPError
@@ -1385,32 +1386,47 @@ class AdCPRequestHandler(RequestHandler):
             ValueError: For unknown skills or invalid parameters
         """
         # Version-negotiation parity with the MCP RequestCompatMiddleware
-        # (Steps 2-3): reject an unsupported AdCP major, then strip the
-        # negotiation envelope fields (adcp_version / adcp_major_version) that
-        # every AdCP SDK client injects on each request. This runs FIRST — before
-        # the idempotency payload is captured below and before any handler's
-        # strict ``model_validate`` — for two reasons:
-        #   1. The strict request models (GetMediaBuysRequest,
-        #      UpdatePerformanceIndexRequest, ...) use extra="forbid" in dev/CI,
-        #      so an undeclared adcp_major_version would raise extra_forbidden and
-        #      make the agent uncallable by conformant SDK clients.
-        #   2. The MCP middleware strips these before the tool builds its
-        #      idempotency payload, so stripping here (pre-capture) keeps the
-        #      canonical request hash identical across transports.
-        # Raises AdCPVersionUnsupportedError, which the dispatch's
-        # ``except AdCPError`` handler renders as a VERSION_UNSUPPORTED failed-Task
-        # envelope. See #1512.
+        # (Step 2): reject an AdCP major pin outside the supported set. Runs
+        # FIRST, before the idempotency payload is captured and before any
+        # handler's strict ``model_validate``. Raises
+        # AdCPVersionUnsupportedError, which the dispatch's ``except AdCPError``
+        # handler renders as a VERSION_UNSUPPORTED failed-Task envelope; it is
+        # recorded here (not in the handler try-block below, which this raise
+        # never reaches) so version rejections land on the same observability
+        # surface as every other boundary error. See #1512.
         from src.core.adcp_version import validate_adcp_version_pins
         from src.core.request_compat import strip_negotiation_fields
 
-        validate_adcp_version_pins(parameters)
-        parameters, _dropped_negotiation = strip_negotiation_fields(parameters)
+        try:
+            validate_adcp_version_pins(parameters)
+        except AdCPError as version_exc:
+            record_boundary_error(
+                "a2a",
+                skill_name,
+                version_exc,
+                tenant_id=getattr(identity, "tenant_id", None),
+                principal_id=getattr(identity, "principal_id", None) or "anonymous",
+            )
+            raise
 
-        # The buyer's wire payload, captured BEFORE the pnc protocol-layer
-        # injection, deprecated-field normalization, and any handler mutations —
-        # the idempotency payload-hash input (AdCP defines equivalence over the
-        # request as sent). Deep copy: downstream steps mutate nested dicts.
+        # The buyer's wire payload, captured BEFORE the negotiation-field strip,
+        # the pnc protocol-layer injection, deprecated-field normalization, and
+        # any handler mutations — the idempotency payload-hash input (AdCP
+        # defines equivalence over the request as sent, and the SDK
+        # canonicalizer's exclusion list is closed: adcp_version participates).
+        # MCP captures its raw_wire_payload in MCPAuthMiddleware (before the
+        # RequestCompatMiddleware strip) and REST hashes the raw body bytes, so
+        # capturing pre-strip here keeps the canonical hash identical across
+        # transports. Deep copy: downstream steps mutate nested dicts.
         raw_wire_payload = copy.deepcopy(parameters)
+
+        # Strip the negotiation envelope fields (adcp_version /
+        # adcp_major_version) that every AdCP SDK client injects on each
+        # request: the strict request models (GetMediaBuysRequest, ...) use
+        # extra="forbid" in dev/CI, so an undeclared adcp_major_version would
+        # raise extra_forbidden and make the agent uncallable by conformant
+        # SDK clients (#1512).
+        parameters, _dropped_negotiation = strip_negotiation_fields(parameters)
 
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
@@ -1533,21 +1549,21 @@ class AdCPRequestHandler(RequestHandler):
             identity=identity,
         )
 
-        # Apply v2 compat for pre-3.0 clients at the boundary
-        from src.core.version_compat import apply_version_compat
-
-        adcp_version = parameters.get("adcp_version")
+        # A2A serializes v3 responses only. The negotiation envelope is
+        # validated and stripped at dispatch (majors outside the supported set
+        # are rejected there), so no per-request pin reaches this handler to
+        # gate the legacy v2-compat serialization on — and apply_version_compat
+        # is a no-op for dict payloads regardless.
         if isinstance(response, dict):
-            response_data = response
-        else:
-            # Capture human-readable message before converting to dict
-            message = str(response)
-            response_data = response.model_dump(mode="json")
-            # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
-            # since returning a dict bypasses that logic
-            response_data["message"] = message
-            response_data.setdefault("success", True)
-        return apply_version_compat("get_products", response_data, adcp_version)
+            return response
+        # Capture human-readable message before converting to dict
+        message = str(response)
+        response_data = response.model_dump(mode="json")
+        # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
+        # since returning a dict bypasses that logic
+        response_data["message"] = message
+        response_data.setdefault("success", True)
+        return response_data
 
     async def _handle_create_media_buy_skill(
         self,

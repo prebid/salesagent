@@ -24,13 +24,14 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Portfolio,
     PublisherDomain,
     SupportedProtocol,
+    SupportedVersion,
     # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
     Targeting,
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.adcp_version import adcp_major_version
+from src.core.adcp_version import adcp_build_version, adcp_major_version, supported_adcp_versions
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
@@ -93,6 +94,8 @@ def _get_adcp_capabilities_impl(
         return GetAdcpCapabilitiesResponse(
             adcp=Adcp(
                 major_versions=[MajorVersion(root=adcp_major_version())],
+                supported_versions=[SupportedVersion(root=v) for v in supported_adcp_versions()],
+                build_version=adcp_build_version(),
                 idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
             ),
             supported_protocols=[SupportedProtocol.media_buy],
@@ -265,6 +268,8 @@ def _get_adcp_capabilities_impl(
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=adcp_major_version())],
+            supported_versions=[SupportedVersion(root=v) for v in supported_adcp_versions()],
+            build_version=adcp_build_version(),
             idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
         ),
         supported_protocols=[SupportedProtocol.media_buy],

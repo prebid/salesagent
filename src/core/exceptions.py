@@ -409,13 +409,15 @@ class AdCPVersionUnsupportedError(AdCPError):
     seller that cannot speak it MUST reject with ``VERSION_UNSUPPORTED`` and name
     its supported set (spec: error-compliance storyboard, unsupported-major
     probe). ``VERSION_UNSUPPORTED`` is a spec code not yet in the SDK's
-    ``STANDARD_ERROR_CODES`` — see ``SPEC_CODES``. Recovery is ``terminal``
-    (the codebase-internal equivalent of the spec's ``fatal``).
+    ``STANDARD_ERROR_CODES`` — see ``SPEC_CODES``. Recovery is ``correctable``
+    per the spec's ``enums/error-code.json`` enumMetadata ("re-pin to a
+    release in supported_versions and retry"): the buyer fixes the pin and
+    resends — it does not escalate to a human.
     """
 
     _default_status_code: ClassVar[int] = 400
     _default_error_code: ClassVar[str] = "VERSION_UNSUPPORTED"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPInvalidRequestError(AdCPValidationError):

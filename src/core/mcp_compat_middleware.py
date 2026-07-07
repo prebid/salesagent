@@ -23,7 +23,7 @@ from src.core.request_compat import (
     strip_undeclared_envelope_fields,
     strip_unknown_params,
 )
-from src.core.tool_error_logging import translate_to_tool_error
+from src.core.tool_error_logging import record_boundary_error, translate_to_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,9 @@ class RequestCompatMiddleware(Middleware):
        adcp_major_version) via strip_negotiation_fields() — all environments,
        since no tool wrapper declares them (issue #1512).
     4. Drop standard AdCP envelope fields the tool doesn't declare
-       (context, ext, push_notification_config) via
-       strip_undeclared_envelope_fields() — all environments (issue #1512).
+       (ADCP_ENVELOPE_FIELDS: context, ext, push_notification_config,
+       idempotency_key, revision) via strip_undeclared_envelope_fields() —
+       all environments (issue #1512).
     5. Strip fields not in the tool's JSON Schema via strip_unknown_params()
        (production only).
     6. (Production only) If TypeAdapter rejects the arguments with a structural
@@ -75,12 +76,28 @@ class RequestCompatMiddleware(Middleware):
         # (string adcp_version or deprecated int adcp_major_version). Runs
         # before the negotiation-field strip below, while the claim is still
         # present. validate_* raises a transport-agnostic AdCPError; a
-        # middleware raise bypasses the tool wrapper's error handler, so we
-        # translate to the AdCPToolError wire envelope here (VERSION_UNSUPPORTED),
-        # the same conversion with_error_logging applies to tool exceptions.
+        # middleware raise bypasses the tool wrapper's with_error_logging
+        # entirely (the tool is never dispatched), so BOTH halves of
+        # _handle_tool_exception are applied here: record_boundary_error
+        # (audit log + activity feed, best-effort identity from the auth
+        # middleware's context state) and the AdCPToolError wire translation
+        # (VERSION_UNSUPPORTED).
         try:
             validate_adcp_version_pins(normalized)
         except AdCPError as exc:
+            identity = None
+            try:
+                if context.fastmcp_context is not None:
+                    identity = await context.fastmcp_context.get_state("identity")
+            except Exception:  # best-effort — never mask the version error
+                identity = None
+            record_boundary_error(
+                "mcp",
+                tool_name,
+                exc,
+                tenant_id=getattr(identity, "tenant_id", None),
+                principal_id=getattr(identity, "principal_id", None) or "anonymous",
+            )
             translate_to_tool_error(exc)
 
         # Step 3: Drop AdCP version-negotiation envelope fields (all environments).
@@ -99,10 +116,11 @@ class RequestCompatMiddleware(Middleware):
         known_params = await self._get_known_params(context, tool_name)
 
         # Step 4: Drop standard AdCP envelope fields the tool doesn't declare
-        # (context / ext / push_notification_config), all environments. SDK
-        # clients send these on any request; a tool that declares one receives
-        # it, a tool that doesn't would otherwise reject it (#1512). Protocol
-        # envelope, not business data — unlike Step 5's general unknown strip.
+        # (ADCP_ENVELOPE_FIELDS — context / ext / push_notification_config /
+        # idempotency_key / revision), all environments. SDK clients send
+        # these on any request; a tool that declares one receives it, a tool
+        # that doesn't would otherwise reject it (#1512). Protocol envelope,
+        # not business data — unlike Step 5's general unknown strip.
         normalized, dropped_env = strip_undeclared_envelope_fields(normalized, known_params)
         if dropped_env:
             modified = True

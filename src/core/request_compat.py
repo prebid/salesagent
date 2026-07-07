@@ -22,10 +22,11 @@ _BRAND_TOOLS: frozenset[str] = frozenset({"get_products", "create_media_buy"})
 
 # AdCP version-negotiation envelope fields. Every AdCP SDK client injects these
 # on each request (Stripe-style API-version pinning); they are protocol envelope,
-# not tool parameters, so no tool wrapper declares them. Stripped before MCP
+# not tool parameters, so no tool wrapper declares them. Consumed for
+# negotiation first (src/core/adcp_version.validate_adcp_version_pins raises
+# VERSION_UNSUPPORTED on an unsupported major), then stripped before MCP
 # arg-validation so strict per-tool validation does not reject conformant SDK
-# clients. Consuming them for negotiation (VERSION_UNSUPPORTED, version echo) is
-# a follow-up — see https://github.com/prebid/salesagent/issues/1512.
+# clients. See https://github.com/prebid/salesagent/issues/1512.
 ADCP_NEGOTIATION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
 
@@ -177,9 +178,14 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
         "context",
         "ext",
         "push_notification_config",
-        # Concurrency/idempotency framing — spec "always permitted" request fields:
-        # tools that declare them (e.g. create_media_buy's idempotency_key) still
-        # receive them; tools that don't must tolerate them.
+        # Concurrency/idempotency framing. Tolerance grounding (3.1.0-beta.3):
+        # every AdCP request schema carries additionalProperties: true, and
+        # building/by-layer/L1/security.mdx § Idempotency requires sellers to
+        # accept requests carrying idempotency_key ("no rejecting on undeclared
+        # envelope fields"). revision/push_notification_config are per-task
+        # request fields (not universal envelope), tolerated on the same basis.
+        # Tools that declare these (e.g. create_media_buy's idempotency_key)
+        # still receive them.
         "idempotency_key",
         "revision",
     }
@@ -191,12 +197,13 @@ def strip_undeclared_envelope_fields(
 ) -> tuple[dict[str, Any], list[str]]:
     """Strip standard AdCP envelope fields the target tool does not declare.
 
-    ``context``/``ext``/``push_notification_config`` are protocol envelope that
-    AdCP SDK clients may send on any request. A tool that declares one receives
-    it; a tool that does not would otherwise reject it under FastMCP's strict
-    per-tool arg-validation. Strip only the undeclared ones, in all
-    environments. When ``known_params`` is None (schema lookup failed) strip
-    nothing — the production fallback handles it. See #1512.
+    The ``ADCP_ENVELOPE_FIELDS`` (context / ext / push_notification_config /
+    idempotency_key / revision) are envelope framing that AdCP SDK clients may
+    send on any request. A tool that declares one receives it; a tool that
+    does not would otherwise reject it under FastMCP's strict per-tool
+    arg-validation. Strip only the undeclared ones, in all environments. When
+    ``known_params`` is None (schema lookup failed) strip nothing — the
+    production fallback handles it. See #1512.
 
     Returns:
         Tuple of (params without the undeclared envelope fields, sorted removed
