@@ -224,60 +224,13 @@ def then_operation_fails(ctx: dict) -> None:
     )
 
 
-@then("the entire sync operation fails")
-def then_entire_sync_operation_fails(ctx: dict) -> None:
-    """Assert the sync operation failed entirely -- no partial successes.
-
-    Stronger than "the operation should fail": this step additionally verifies
-    that the failure is total.  When a sync runs in strict validation mode
-    (BR-RULE-172 INV-5), a single invalid catalog must cause the entire
-    operation to be rejected -- the response must NOT contain any successfully
-    processed items alongside the error.
-
-    Asserts:
-    1. An error was recorded with meaningful error information.
-    2. If a response exists with a results/catalogs collection, NONE of the
-       items were processed successfully (no partial success).
-    """
-    # ── Resolve the error object ────────────────────────────────────
-    error = ctx.get("error")
-    resp = ctx.get("response")
-
-    # Promote response.errors if no top-level error was captured
-    if error is None and resp is not None and hasattr(resp, "errors") and resp.errors:
-        first_error = resp.errors[0]
-        assert first_error is not None, "response.errors[0] is None -- expected a concrete error"
-        ctx["error"] = first_error
-        error = first_error
-
-    assert error is not None, (
-        "Expected the entire sync operation to fail but no error was recorded. "
-        f"ctx keys: {list(ctx.keys())}, response: {resp!r}"
-    )
-
-    # ── Verify it carries meaningful error information ──────────────
-    _assert_meaningful_error(error)
-
-    # ── Verify NO partial successes ─────────────────────────────────
-    # "Entire sync fails" means the operation was rejected wholesale.
-    # If a response exists with item-level results, none may have succeeded.
-    if resp is not None:
-        for attr in ("catalogs", "results", "items"):
-            items = getattr(resp, attr, None)
-            if items is None:
-                continue
-            successful = [
-                item
-                for item in items
-                if getattr(item, "action", None) not in (None, "failed", "error", "rejected")
-                or getattr(item, "status", None) == "success"
-            ]
-            assert not successful, (
-                f"Expected entire sync to fail but found {len(successful)} "
-                f"successfully processed item(s) in response.{attr} -- "
-                f"this indicates partial success, not total failure. "
-                f"BR-RULE-172 INV-5 requires the ENTIRE operation to fail."
-            )
+# NOTE: a "the entire sync operation fails" step (BR-RULE-172 INV-5, no
+# partial successes) briefly lived here, but its consumer feature
+# (BR-UC-023) is not wired via ``scenarios()`` and the strict-mode failure
+# it targets raises before a response exists, so the no-partial-success
+# check could never execute. Add it together with the UC-023 wiring —
+# with a ``resp is None`` branch and enum-normalized item actions
+# (``enum_value``) — rather than shipping a step that grades nothing.
 
 
 # ── Error code ───────────────────────────────────────────────────────
@@ -297,6 +250,24 @@ def then_error_code(ctx: dict, code: str) -> None:
         assert error is not None, "No error recorded in ctx"
         actual = _get_error_code(error)
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
+
+
+@then(parsers.parse('the wire error code should be "{code}"'))
+def then_wire_error_code(ctx: dict, code: str) -> None:
+    """Assert the error code ON THE WIRE equals the expected value.
+
+    The load-bearing variant of ``then_error_code`` for error-path grading:
+    per the Error Verification Policy (tests/CLAUDE.md), the code the buyer
+    actually receives must be asserted on the captured two-layer envelope
+    (real wire bytes on A2A/MCP/REST; the production builder's output on
+    IMPL) — never on the lossy reconstructed exception. Also pins the
+    two-layer invariant: ``adcp_error.code`` and ``errors[0].code`` agree.
+    """
+    from tests.helpers import assert_envelope_shape
+
+    envelope = _resolve_wire_envelope(ctx)
+    recovery = envelope["errors"][0].get("recovery")
+    assert_envelope_shape(envelope, code, recovery=recovery)
 
 
 # ── Error message content (generic) ───────────────────────────────────
@@ -514,16 +485,21 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
         # Pydantic ValidationErrors carry the fix guidance inline in each field
         # error's ``msg`` (e.g. "Input should be 'operator', 'agent' or 'advertiser'")
-        # rather than a separate ``suggestion`` field. That inline message IS the
-        # actionable guidance, so accept it without the verb check below.
+        # rather than a separate ``suggestion`` field. That inline message counts
+        # as the actionable guidance only when it states an EXPECTATION the caller
+        # can act on — a bare non-empty msg is true by construction and would make
+        # this step tautological for every ValidationError.
         from pydantic import ValidationError
 
         if isinstance(error, ValidationError):
             details = error.errors()
             assert details, "ValidationError has no field-level details to guide a fix"
+            guidance_markers = ("should", "must", "required", "expected", "valid", "ensure", "at least", "at most")
             for detail in details:
-                msg = detail.get("msg", "")
-                assert isinstance(msg, str) and msg.strip(), f"ValidationError detail lacks fix guidance: {detail}"
+                msg = str(detail.get("msg", ""))
+                assert any(marker in msg.lower() for marker in guidance_markers), (
+                    f"ValidationError detail states a failure but no expectation the caller can act on: {detail}"
+                )
             return
 
         suggestion = _get_error_dict(error).get("suggestion")

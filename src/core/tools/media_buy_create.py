@@ -3667,7 +3667,13 @@ async def _create_media_buy_impl(
                 # FIXME(salesagent-9f2): package creation should use repository methods
                 assert auto_pkg_uow.session is not None
                 session = auto_pkg_uow.session
-                # Use response packages if available (has package_ids), otherwise generate from request
+                # Persist the adapter-reported packages (they carry the
+                # seller-assigned package_ids). When response.packages is
+                # empty NO rows are written — there is no request-derived
+                # fallback here, because package_ids are adapter-assigned and
+                # cannot be invented from the request. Package lookups on the
+                # update path tolerate this via the raw_request fallback in
+                # MediaBuyRepository.package_exists_or_raise.
                 packages_to_save = response.packages if response.packages else []
                 logger.info(f"[DEBUG] Saving {len(packages_to_save)} packages to media_packages table")
 

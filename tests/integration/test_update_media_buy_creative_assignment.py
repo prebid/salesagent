@@ -11,13 +11,31 @@ from src.core.exceptions import AdCPCreativeRejectedError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import MediaPackageFactory
+
+
+def _seed_package(session, media_buy, package_id: str = "pkg_default") -> None:
+    """Seed the canonical MediaPackage row for a media buy via the factory.
+
+    create_media_buy dual-writes MediaPackage rows alongside raw_request, and
+    the package-existence guard resolves against those rows — so tests seed
+    the canonical row through the one factory idiom (tests/CLAUDE.md Pattern
+    #8) instead of hand-rolled ``session.add`` blocks. This legacy module
+    seeds with raw ORM sessions rather than ``IntegrationEnv`` (which would
+    normally bind the factories), so bind the factory to the caller's open
+    session: the FK to the not-yet-committed media buy then resolves inside
+    the same transaction. ``package_config={}`` preserves these tests' seeded
+    shape.
+    """
+    MediaPackageFactory._meta.sqlalchemy_session = session
+    MediaPackageFactory(media_buy=media_buy, package_id=package_id, package_config={})
 
 
 @pytest.mark.requires_db
 def test_update_media_buy_assigns_creatives_to_package(integration_db):
     """Test that update_media_buy can assign creatives to a package."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, MediaPackage, Principal, Product, PropertyTag, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         # Create tenant
@@ -77,15 +95,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             },
         )
         session.add(media_buy)
-        # create_media_buy dual-writes MediaPackage rows alongside raw_request;
-        # seed the canonical row so the package-existence guard resolves it.
-        session.add(
-            MediaPackage(
-                media_buy_id=media_buy.media_buy_id,
-                package_id="pkg_default",
-                package_config={},
-            )
-        )
+        _seed_package(session, media_buy)
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -184,7 +194,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 def test_update_media_buy_replaces_creatives(integration_db):
     """Test that update_media_buy can replace existing creative assignments."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, MediaPackage, Principal, Product, PropertyTag, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         # Create tenant
@@ -244,15 +254,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
             },
         )
         session.add(media_buy)
-        # create_media_buy dual-writes MediaPackage rows alongside raw_request;
-        # seed the canonical row so the package-existence guard resolves it.
-        session.add(
-            MediaPackage(
-                media_buy_id=media_buy.media_buy_id,
-                package_id="pkg_default",
-                package_config={},
-            )
-        )
+        _seed_package(session, media_buy)
         session.flush()  # Ensure media_buy exists before creating assignments
 
         # Create creatives (FK to principal now satisfied)
@@ -368,7 +370,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
 def test_update_media_buy_rejects_missing_creatives(integration_db):
     """Test that update_media_buy rejects requests with non-existent creative IDs."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, MediaPackage, Principal, Product, PropertyTag, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         # Create tenant
@@ -428,15 +430,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
             },
         )
         session.add(media_buy)
-        # create_media_buy dual-writes MediaPackage rows alongside raw_request;
-        # seed the canonical row so the package-existence guard resolves it.
-        session.add(
-            MediaPackage(
-                media_buy_id=media_buy.media_buy_id,
-                package_id="pkg_default",
-                package_config={},
-            )
-        )
+        _seed_package(session, media_buy)
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
@@ -486,7 +480,7 @@ def test_creative_assignments_with_weights(integration_db):
     (as opposed to creative_ids) with weight values per AdCP spec.
     """
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, MediaPackage, Principal, Product, PropertyTag, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         # Create tenant
@@ -546,15 +540,7 @@ def test_creative_assignments_with_weights(integration_db):
             },
         )
         session.add(media_buy)
-        # create_media_buy dual-writes MediaPackage rows alongside raw_request;
-        # seed the canonical row so the package-existence guard resolves it.
-        session.add(
-            MediaPackage(
-                media_buy_id=media_buy.media_buy_id,
-                package_id="pkg_default",
-                package_config={},
-            )
-        )
+        _seed_package(session, media_buy)
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -649,7 +635,7 @@ def test_creative_assignments_replaces_all(integration_db):
     and we send creative_assignments=[c2, c3], the result should be only c2 and c3.
     """
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, MediaPackage, Principal, Product, PropertyTag, Tenant
+    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
 
     with get_db_session() as session:
         tenant = Tenant(tenant_id="test_tenant", name="Test Org", subdomain="test")
@@ -700,15 +686,7 @@ def test_creative_assignments_replaces_all(integration_db):
             },
         )
         session.add(media_buy)
-        # create_media_buy dual-writes MediaPackage rows alongside raw_request;
-        # seed the canonical row so the package-existence guard resolves it.
-        session.add(
-            MediaPackage(
-                media_buy_id=media_buy.media_buy_id,
-                package_id="pkg_default",
-                package_config={},
-            )
-        )
+        _seed_package(session, media_buy)
 
         # Create three creatives
         for cid in ["c1", "c2", "c3"]:

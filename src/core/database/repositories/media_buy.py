@@ -209,6 +209,35 @@ class MediaBuyRepository:
             )
         return package
 
+    def package_exists_or_raise(
+        self, media_buy_id: str, package_id: str, *, context: ContextObject | dict[str, Any] | None = None
+    ) -> None:
+        """Assert a referenced package belongs to the media buy, else raise
+        ``AdCPPackageNotFoundError``.
+
+        Existence guard for the update path. Unlike ``get_package_or_raise``
+        (which returns the ORM row for callers that need it), this tolerates
+        packages that exist only in ``MediaBuy.raw_request``: media buys
+        created before the ``media_packages`` dual-write landed (8367e0a1f,
+        no backfill migration), or by adapters that return an empty
+        ``response.packages``, have no canonical row — and a valid package
+        reference on such a buy must not surface a spurious buyer-facing
+        ``PACKAGE_NOT_FOUND``.
+        """
+        if self.get_package(media_buy_id, package_id) is not None:
+            return
+        media_buy = self.get_by_id(media_buy_id)
+        raw_packages = (media_buy.raw_request or {}).get("packages") if media_buy is not None else None
+        if raw_packages:
+            for raw_pkg in raw_packages:
+                if isinstance(raw_pkg, dict) and raw_pkg.get("package_id") == package_id:
+                    return
+        from src.core.exceptions import AdCPPackageNotFoundError
+
+        raise AdCPPackageNotFoundError(
+            f"Package '{package_id}' not found for media buy '{media_buy_id}'", context=context
+        )
+
     def get_packages_for_ids(self, media_buy_ids: list[str]) -> dict[str, list[MediaPackage]]:
         """Get packages for multiple media buys, grouped by media_buy_id.
 
