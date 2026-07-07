@@ -2670,10 +2670,13 @@ class TestPartialFailureTolerance:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            # Both actively serving so the circuit-breaker check (scoped to
+            # status == "active") is reached for each buy — the injection point.
             buy_1 = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_ok",
+                status="active",
                 start_date=date(2026, 1, 1),
                 end_date=date(2026, 12, 31),
             )
@@ -2681,6 +2684,7 @@ class TestPartialFailureTolerance:
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_fail",
+                status="active",
                 start_date=date(2026, 1, 1),
                 end_date=date(2026, 12, 31),
             )
@@ -2688,8 +2692,8 @@ class TestPartialFailureTolerance:
             env.set_adapter_response("mb_fail", impressions=3000, spend=150.0)
 
             # Patch _is_circuit_breaker_open to raise on the second call,
-            # triggering the outer except handler (lines 485-487) for buy_2
-            # while buy_1 processes normally.
+            # triggering the outer except handler for buy_2 while buy_1
+            # processes normally.
             call_count = {"n": 0}
 
             def circuit_breaker_side_effect(tenant_id):
@@ -2708,8 +2712,11 @@ class TestPartialFailureTolerance:
             # buy_1 should be present in the response
             returned_ids = {d.media_buy_id for d in response.media_buy_deliveries}
             assert "mb_ok" in returned_ids, f"Expected mb_ok in deliveries, got: {returned_ids}"
-            # buy_2 should be absent (skipped due to outer exception)
+            # buy_2 should be absent from deliveries (skipped due to outer exception)
             assert "mb_fail" not in returned_ids, f"Expected mb_fail to be absent from deliveries, got: {returned_ids}"
+            # ...but it must NOT vanish silently — an advisory surfaces it (#1545 K2).
+            assert response.errors is not None
+            assert any(e.code == "INTERNAL_ERROR" and "mb_fail" in e.message for e in response.errors)
 
 
 # ---------------------------------------------------------------------------
