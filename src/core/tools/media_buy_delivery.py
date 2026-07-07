@@ -111,19 +111,8 @@ from src.core.tools._media_buy_status import (
     NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
+from src.core.utils import utc_flight_start
 from src.core.validation_helpers import format_validation_error
-
-
-def _combine_utc(d: date) -> datetime:
-    """Combine a date with midnight into a UTC-aware datetime.
-
-    All flight-window datetimes derived from a media buy's ``start_date`` /
-    ``end_date`` must be timezone-aware: they are compared against the
-    (aware) simulated clock in ``apply_testing_hooks`` / ``TimeSimulator``,
-    and a naive value raises ``TypeError: can't compare offset-naive and
-    offset-aware datetimes``.
-    """
-    return datetime.combine(d, datetime.min.time(), tzinfo=UTC)
 
 
 def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
@@ -141,8 +130,8 @@ def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt:
     if testing_ctx.jump_to_event:
         simulated = TimeSimulator.jump_to_event_time(
             testing_ctx.jump_to_event,
-            _combine_utc(cast(date, buy.start_date)),
-            _combine_utc(cast(date, buy.end_date)),
+            utc_flight_start(cast(date, buy.start_date)),
+            utc_flight_start(cast(date, buy.end_date)),
         )
         return simulated, True
     return default_dt, False
@@ -250,6 +239,12 @@ def _get_media_buy_delivery_impl(
             pricing_option_ids, tenant_id=tenant["tenant_id"], product_repo=product_repo
         )
 
+        # Per-request invariants, hoisted out of the per-buy loop:
+        # - the circuit breaker is tenant-scoped, so one check covers every buy;
+        # - packages are fetched in one batch query instead of one per buy.
+        reporting_circuit_open = _is_circuit_breaker_open(tenant["tenant_id"])
+        packages_by_buy = repo.get_packages_for_ids([buy_id for buy_id, _ in target_media_buys])
+
         # Collect delivery data for each media buy
         deliveries = []
         total_spend = 0.0
@@ -283,7 +278,7 @@ def _get_media_buy_delivery_impl(
                 # pending buy (pending_creatives / pending_start) has never served
                 # — marking either "reporting_delayed" would promise a report that
                 # will never come and contradict the status_filter that selected it.
-                if status == "active" and _is_circuit_breaker_open(tenant["tenant_id"]):
+                if status == "active" and reporting_circuit_open:
                     status = "reporting_delayed"
 
                 # Get delivery metrics from adapter
@@ -356,8 +351,8 @@ def _get_media_buy_delivery_impl(
                     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
                     buy_start_date_sim = cast(date, buy.start_date)
                     buy_end_date_sim = cast(date, buy.end_date)
-                    start_dt = _combine_utc(buy_start_date_sim)
-                    end_dt_campaign = _combine_utc(buy_end_date_sim)
+                    start_dt = utc_flight_start(buy_start_date_sim)
+                    end_dt_campaign = utc_flight_start(buy_end_date_sim)
                     progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
 
                     simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
@@ -370,9 +365,9 @@ def _get_media_buy_delivery_impl(
                 # Create package delivery data
                 package_deliveries = []
 
-                # Get pricing info from MediaPackage.package_config via repository
+                # Get pricing info from MediaPackage.package_config (batch-fetched above)
                 package_pricing_map = {}
-                media_packages = repo.get_packages(media_buy_id)
+                media_packages = packages_by_buy.get(media_buy_id, [])
                 for media_pkg in media_packages:
                     package_config = media_pkg.package_config or {}
                     pricing_info = package_config.get("pricing_info")
@@ -623,8 +618,8 @@ def _get_media_buy_delivery_impl(
                 first_buy_start = cast(date, first_buy.start_date)
                 first_buy_end = cast(date, first_buy.end_date)
                 campaign_info = {
-                    "start_date": _combine_utc(first_buy_start),
-                    "end_date": _combine_utc(first_buy_end),
+                    "start_date": utc_flight_start(first_buy_start),
+                    "end_date": utc_flight_start(first_buy_end),
                     "total_budget": float(first_buy.budget) if first_buy.budget else 0.0,
                 }
 
@@ -786,8 +781,11 @@ def _resolve_delivery_status_filter(
     if isinstance(status_filter, list):
         result: list[str] = []
         for s in status_filter:
-            internal = enum_value(s)
-            if internal is not None and internal in valid_internal_statuses:
+            # The list holds non-None enum/str values, so enum_value never
+            # returns None here (its None overload matches only a None
+            # argument) — cast for mypy rather than a dead runtime guard.
+            internal = cast(str, enum_value(s))
+            if internal in valid_internal_statuses:
                 result.append(internal)
         return result
 
@@ -841,7 +839,7 @@ def _get_target_media_buys(
     # SAME clock the reported status uses (_simulation_clock) so a time-simulation
     # query cannot filter out a buy the display path would report as matching.
     ctx = testing_ctx or AdCPTestContext()
-    default_dt = _combine_utc(reference_date)
+    default_dt = utc_flight_start(reference_date)
 
     def _matches(buy: MediaBuy) -> bool:
         clock, simulate = _simulation_clock(buy, ctx, default_dt)
