@@ -15,7 +15,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -100,6 +100,83 @@ class TestWebhookNotificationTypeFinal:
             dumped = response.model_dump(mode="json")
             assert dumped["notification_type"] == "final"
             assert dumped["next_expected_at"] is None
+
+
+@pytest.mark.requires_db
+class TestSimulationReachesFinalThroughRealHook:
+    """A time-simulation client advancing the clock past flight end reaches 'final'.
+
+    Exercises the FULL mock_time path through the real apply_testing_hooks — the
+    branch that previously built naive campaign_info datetimes and raised
+    TypeError against the aware simulated clock (#1545 K1), and the status-filter
+    path that must agree with the reported status (#1545 O2). A pending_creatives
+    buy under mock_time past flight end must report 'completed' + 'final'.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    def test_mock_time_past_flight_reaches_completed_and_final(self, integration_db):
+        from src.core.testing_hooks import AdCPTestContext
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                # Never served (no creatives) — only the simulated clock advances it.
+                status="pending_creatives",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 3, 31),
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            # Aware simulated clock strictly past the flight window.
+            identity = PrincipalFactory.make_identity(
+                principal_id="p1",
+                tenant_id="t1",
+                testing_context=AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC)),
+            )
+
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id], identity=identity)
+
+            dumped = response.model_dump(mode="json")
+            assert dumped["media_buy_deliveries"][0]["status"] == "completed"
+            assert dumped["notification_type"] == "final"
+            assert dumped["next_expected_at"] is None
+
+    def test_mock_time_in_flight_reports_active_and_scheduled(self, integration_db):
+        """The in-flight companion: simulated clock inside the window -> active/scheduled."""
+        from src.core.testing_hooks import AdCPTestContext
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="pending_creatives",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 12, 31),
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            identity = PrincipalFactory.make_identity(
+                principal_id="p1",
+                tenant_id="t1",
+                testing_context=AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC)),
+            )
+
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id], identity=identity)
+
+            dumped = response.model_dump(mode="json")
+            assert dumped["media_buy_deliveries"][0]["status"] == "active"
+            assert dumped["notification_type"] == "scheduled"
+            assert dumped["next_expected_at"] is not None
 
 
 # ---------------------------------------------------------------------------
