@@ -108,6 +108,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
+    NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
 from src.core.validation_helpers import format_validation_error
@@ -535,8 +536,15 @@ def _get_media_buy_delivery_impl(
 
         # --- Compute response-level webhook metadata (u5hf, uelj, 8g9e) ---
 
-        # notification_type: "final" when all deliveries are completed, "scheduled" otherwise
-        if deliveries and all(d.status == "completed" for d in deliveries):
+        # notification_type: "final" when every returned buy is in a state that
+        # will never produce more data (completed, rejected, canceled, failed —
+        # NOT paused, which may resume), "scheduled" otherwise. Deriving from
+        # NO_MORE_DATA_STATUSES instead of a hardcoded "completed" keeps a
+        # rejected/canceled/failed buy from being promised a next report that
+        # will never come (#1552; next_expected_at is "only present ... when
+        # notification_type is not 'final'" per
+        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+        if deliveries and all(enum_value(d.status) in NO_MORE_DATA_STATUSES for d in deliveries):
             notification_type = "final"
         elif deliveries:
             notification_type = "scheduled"

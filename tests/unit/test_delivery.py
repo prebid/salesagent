@@ -2343,6 +2343,113 @@ class TestCircuitBreakerDoesNotMaskTerminalStatus:
         assert response.media_buy_deliveries[0].status == "pending_creatives"
 
 
+class TestNotificationTypeTerminality:
+    """notification_type derives from NO_MORE_DATA_STATUSES, not just "completed".
+
+    Regression (#1552, made blocking in the #1545 follow-up review): terminal
+    statuses are returned verbatim since #1545, but notification_type was
+    "final" only for all-completed — so a rejected/canceled/failed buy reported
+    "scheduled" with a next_expected_at 24h out, forever, telling the buyer to
+    keep polling a buy that will never report again (and persisting that
+    phantom schedule to the webhook log). Spec: next_expected_at is "only
+    present ... when notification_type is not 'final'"
+    (get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
+    """
+
+    @staticmethod
+    def _poll_single(status: str) -> GetMediaBuyDeliveryResponse:
+        buy = _make_mock_media_buy(
+            media_buy_id=f"mb_{status}",
+            status=status,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id=f"mb_{status}")
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=[f"mb_{status}"])
+        return _run_impl_with_patches(req, adapter=mock_adapter, target_buys=[(f"mb_{status}", buy)])
+
+    @pytest.mark.parametrize("status", ["rejected", "canceled", "failed", "completed"])
+    def test_no_more_data_status_is_final_with_no_next_expected_at(self, status):
+        response = self._poll_single(status)
+
+        assert enum_value(response.media_buy_deliveries[0].status) == status
+        assert enum_value(response.notification_type) == "final"
+        assert response.next_expected_at is None
+
+    def test_paused_buy_still_schedules_a_next_report(self):
+        """paused is terminal for date-refinement but NOT for notifications —
+        a paused buy may resume, so the next scheduled report is a truthful
+        promise."""
+        response = self._poll_single("paused")
+
+        assert enum_value(response.media_buy_deliveries[0].status) == "paused"
+        assert enum_value(response.notification_type) == "scheduled"
+        assert response.next_expected_at is not None
+
+    def test_mixed_terminal_and_active_is_scheduled(self):
+        """One buy that will still report keeps the response non-final."""
+        buy_done = _make_mock_media_buy(
+            media_buy_id="mb_done",
+            status="canceled",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        buy_live = _make_mock_media_buy(
+            media_buy_id="mb_live",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2027, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = [
+            _make_adapter_response(media_buy_id="mb_done"),
+            _make_adapter_response(media_buy_id="mb_live"),
+        ]
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_done", "mb_live"])
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_done", buy_done), ("mb_live", buy_live)],
+        )
+
+        assert enum_value(response.notification_type) == "scheduled"
+        assert response.next_expected_at is not None
+
+    def test_all_terminal_mix_is_final(self):
+        """completed + canceled together: nothing will report again -> final."""
+        buy_a = _make_mock_media_buy(
+            media_buy_id="mb_a",
+            status="completed",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        buy_b = _make_mock_media_buy(
+            media_buy_id="mb_b",
+            status="canceled",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = [
+            _make_adapter_response(media_buy_id="mb_a"),
+            _make_adapter_response(media_buy_id="mb_b"),
+        ]
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_a", "mb_b"])
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_a", buy_a), ("mb_b", buy_b)],
+        )
+
+        assert enum_value(response.notification_type) == "final"
+        assert response.next_expected_at is None
+
+
 class TestTimeSimulationReachesFinalNotification:
     """A time-simulation client can advance a non-serving buy to completed/final.
 

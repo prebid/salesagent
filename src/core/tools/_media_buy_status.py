@@ -55,6 +55,17 @@ CANONICAL_SERVING = "active"
 # explicit decision, not a date-derived state.
 TERMINAL_STATUSES: frozenset[str] = frozenset({"paused", "completed", "rejected", "canceled", "failed"})
 
+# Statuses after which no further delivery data will ever arrive. A buy in one
+# of these states gets its LAST notification: ``notification_type = "final"``
+# and no ``next_expected_at`` (the spec pins next_expected_at as "only present
+# ... when notification_type is not 'final'" — get-media-buy-delivery-response.json
+# @ v3.1-04f59d2d5 — and promises "one final notification when the campaign
+# completes" — optimization-reporting.mdx §Publisher Commitment). Derived from
+# TERMINAL_STATUSES minus ``paused``: pausing is an explicit decision but the
+# buy may resume and report again, so a next scheduled report is still a
+# truthful promise for it. Resolves #1552 (option 1).
+NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
+
 # Persisted ``MediaBuy.status`` -> canonical status. Written by
 # media_buy_create.py, the lifecycle transitions, the status scheduler, and the
 # admin blueprints. Includes the legacy aliases still resident in production
