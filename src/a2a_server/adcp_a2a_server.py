@@ -473,30 +473,27 @@ class AdCPRequestHandler(RequestHandler):
                 UpdateMediaBuyError,
                 UpdateMediaBuySubmitted,
                 UpdateMediaBuySuccess,
+                classify_media_buy_response_payload,
             )
 
             # For union types (CreateMediaBuyResponse, UpdateMediaBuyResponse),
-            # determine which concrete class based on data content
-            if skill_name == "create_media_buy":
-                # Discriminate on shape: the submitted variant carries task-status
-                # "submitted" and no media_buy_id; success carries media_buy_id
-                # (and may carry advisory message/ext); everything else is the
-                # error variant. (The create-replay path in media_buy_create
-                # discriminates on stored task_id/media_buy_id — keep the two in sync.)
-                if data.get("status") == "submitted":
-                    return CreateMediaBuySubmitted(**data)
-                if "media_buy_id" in data:
-                    return CreateMediaBuySuccess(**data)
-                return CreateMediaBuyError(**data)
-            elif skill_name == "update_media_buy":
-                # Discriminate on shape, mirroring create: the submitted variant
-                # carries task-status "submitted" and no media_buy_id; success
-                # carries media_buy_id; everything else is the error variant.
-                if data.get("status") == "submitted":
-                    return UpdateMediaBuySubmitted(**data)
-                if "media_buy_id" in data:
-                    return UpdateMediaBuySuccess(**data)
-                return UpdateMediaBuyError(**data)
+            # pick the concrete variant with the shared shape classifier — the
+            # same decision the idempotency replay path consumes.
+            media_buy_variants: dict[str, dict[str, type]] = {
+                "create_media_buy": {
+                    "success": CreateMediaBuySuccess,
+                    "submitted": CreateMediaBuySubmitted,
+                    "error": CreateMediaBuyError,
+                },
+                "update_media_buy": {
+                    "success": UpdateMediaBuySuccess,
+                    "submitted": UpdateMediaBuySubmitted,
+                    "error": UpdateMediaBuyError,
+                },
+            }
+            if skill_name in media_buy_variants:
+                variant = classify_media_buy_response_payload(data)
+                return media_buy_variants[skill_name][variant](**data)
 
             # Non-union response types - use the concrete class directly
             response_map: dict[str, type] = {

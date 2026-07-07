@@ -143,6 +143,7 @@ from src.core.schemas import (
     Principal,
     Product,
     Targeting,
+    classify_media_buy_response_payload,
 )
 from src.core.schemas import (
     url as make_url,
@@ -1812,13 +1813,15 @@ def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | N
         protocol_status = envelope["status"]
         raw = envelope["response"]
         response: CreateMediaBuySuccess | CreateMediaBuySubmitted
-        # NB: discriminates on STORED shape (task_id + no media_buy_id). The A2A
-        # reconstructor (adcp_a2a_server._reconstruct_response_object) encodes the same
-        # "is this submitted?" decision on the LIVE status field — keep the two in sync.
-        if isinstance(raw, dict) and raw.get("task_id") and not raw.get("media_buy_id"):
+        variant = classify_media_buy_response_payload(raw) if isinstance(raw, dict) else "error"
+        if variant == "submitted":
             response = CreateMediaBuySubmitted.model_validate(raw)
-        else:
+        elif variant == "success":
             response = CreateMediaBuySuccess.model_validate(raw)
+        else:
+            # Error variants are never cached; a stored body with neither shape is drift.
+            logger.warning("Cached idempotency envelope has neither success nor submitted shape — treating as a miss")
+            return None
     except (KeyError, TypeError, ValidationError):
         logger.warning("Cached idempotency envelope failed validation — treating as a miss", exc_info=True)
         return None

@@ -5,6 +5,7 @@
 #   overrides (required -> optional). Architectural; permanent.
 
 import warnings
+from collections.abc import Mapping
 from datetime import date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
@@ -434,6 +435,28 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
 # envelope layer (CreateMediaBuyResult.response), produced by _impl's
 # approval paths, never by an ad server.
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
+
+
+def classify_media_buy_response_payload(payload: Mapping[str, Any]) -> Literal["success", "submitted", "error"]:
+    """Name the create/update media-buy oneOf variant a payload's shape matches.
+
+    The single home for the submitted/success/error decision: the A2A
+    reconstructor (live wire artifacts) and the idempotency replay path
+    (stored response bodies) both consume it. It discriminates on the
+    variants' required-field shape rather than the protocol ``status`` key
+    because stored bodies never carry the envelope status —
+    ``CreateMediaBuyResult`` injects it at serialization time. ``media_buy_id``
+    is required on the success variants and not a field of the others;
+    ``task_id`` is required on the submitted variants and not a field of the
+    others. Shape discrimination also replays a stored payload as its original
+    variant even across a deploy that changes which variant the approval path
+    emits.
+    """
+    if payload.get("media_buy_id"):
+        return "success"
+    if payload.get("task_id"):
+        return "submitted"
+    return "error"
 
 
 class CreateMediaBuyResult(SalesAgentBaseModel):
