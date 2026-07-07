@@ -22,6 +22,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
+from src.core.adcp_version import validate_adcp_version_pins
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.tools import accounts as accounts_module
@@ -39,7 +40,29 @@ from src.core.version_compat import apply_version_compat
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1", tags=["api-v1"])
+
+async def _validate_version_pins(request: Request) -> None:
+    """AdCP version negotiation on the REST boundary (parity with MCP/A2A).
+
+    Checks the buyer's raw pin (``adcp_version`` / ``adcp_major_version``) in
+    query params and, for body-carrying methods, the raw JSON body — BEFORE
+    Pydantic parsing, so the *Body models' local ``adcp_version`` defaults
+    (client-absent values) never trigger a rejection. Raises
+    AdCPVersionUnsupportedError, rendered by the app-level AdCPError handler
+    as the two-layer VERSION_UNSUPPORTED envelope. Starlette caches the body,
+    so the endpoint's own body parsing is unaffected.
+    """
+    validate_adcp_version_pins(request.query_params)
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            body = await request.json()
+        except ValueError:
+            return  # malformed/empty JSON is reported by the endpoint's body parsing
+        if isinstance(body, dict):
+            validate_adcp_version_pins(body)
+
+
+router = APIRouter(prefix="/api/v1", tags=["api-v1"], dependencies=[Depends(_validate_version_pins)])
 
 
 # Note: ToolError handling lives entirely in the global ``@app.exception_handler``

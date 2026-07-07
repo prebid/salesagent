@@ -1400,10 +1400,10 @@ class AdCPRequestHandler(RequestHandler):
         # Raises AdCPVersionUnsupportedError, which the dispatch's
         # ``except AdCPError`` handler renders as a VERSION_UNSUPPORTED failed-Task
         # envelope. See #1512.
-        from src.core.adcp_version import validate_adcp_major_version
+        from src.core.adcp_version import validate_adcp_version_pins
         from src.core.request_compat import strip_negotiation_fields
 
-        validate_adcp_major_version(parameters)
+        validate_adcp_version_pins(parameters)
         parameters, _dropped_negotiation = strip_negotiation_fields(parameters)
 
         # The buyer's wire payload, captured BEFORE the pnc protocol-layer

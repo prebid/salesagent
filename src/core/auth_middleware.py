@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import Any
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
-from src.core.http_utils import normalize_adcp_auth_token
+from src.core.http_utils import extract_auth_token
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +44,10 @@ class UnifiedAuthMiddleware:
             value = raw_value.decode("latin-1")
             headers[name] = value
 
-        # Token extraction: x-adcp-auth takes priority (AdCP convention),
-        # then Authorization: Bearer (case-insensitive per RFC 7235 §2.1).
-        token: str | None = None
-        # Tolerate "Bearer <token>" and padding inside x-adcp-auth.
-        x_adcp = normalize_adcp_auth_token(headers.get("x-adcp-auth", ""))
-        if x_adcp:
-            token = x_adcp
-        else:
-            auth_header = headers.get("authorization", "").strip()
-            if auth_header.lower().startswith("bearer "):
-                potential = auth_header[7:].strip()
-                token = potential or None
+        # Token extraction via the shared primitive: x-adcp-auth takes
+        # priority (AdCP convention), then Authorization: Bearer
+        # (case-insensitive per RFC 7235 §2.1).
+        token, _source = extract_auth_token(headers)
 
         auth_ctx = AuthContext(auth_token=token, headers=MappingProxyType(headers))
 

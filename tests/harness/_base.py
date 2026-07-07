@@ -329,6 +329,7 @@ class BaseTestEnv:
     ASYNC_PATCHES: set[str] = set()  # Names that need AsyncMock (for async functions)
     MODULE: str = ""  # Convenience for unit envs building patch paths
     REST_ENDPOINT: str = ""  # Override in subclass for REST dispatch
+    REST_METHOD: str = "post"  # "get" for query-param endpoints (e.g. /capabilities)
     use_real_db: bool = False
 
     def __init__(
@@ -818,6 +819,10 @@ class BaseTestEnv:
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
         body = self.build_rest_body(**kwargs)
+        if self.REST_METHOD == "get":
+            # Query-param endpoint (e.g. GET /capabilities): the body dict
+            # becomes the query string.
+            return client.get(endpoint, params=body)
         return client.post(endpoint, json=body)
 
     def call_rest(self, **kwargs: Any) -> Any:

@@ -3,7 +3,12 @@
 import adcp
 import pytest
 
-from src.core.adcp_version import adcp_major_version, validate_adcp_major_version
+from src.core.adcp_version import (
+    adcp_build_version,
+    adcp_major_version,
+    supported_adcp_versions,
+    validate_adcp_version_pins,
+)
 from src.core.exceptions import AdCPVersionUnsupportedError
 
 
@@ -18,33 +23,136 @@ def test_major_version_is_current_pinned_major():
     assert adcp_major_version() == 3
 
 
-class TestValidateAdcpMajorVersion:
-    """adcp_major_version negotiation — reject unsupported majors (#1512 Tier 2)."""
+def test_supported_versions_derived_from_sdk_spec_pin():
+    """supported_versions is the release-precision (MAJOR.MINOR) form of the SDK pin."""
+    major, minor = adcp.get_adcp_spec_version().split(".", 2)[:2]
+    assert supported_adcp_versions() == (f"{major}.{minor}",)
+
+
+def test_build_version_is_full_sdk_semver():
+    """build_version is the advisory full-semver spec pin (version-unsupported.json)."""
+    assert adcp_build_version() == adcp.get_adcp_spec_version()
+
+
+class TestValidateAdcpVersionPins:
+    """Version negotiation per core/version-envelope.json (v3.1.0-beta.3, #1512 Tier 2)."""
 
     def test_supported_major_passes(self):
-        validate_adcp_major_version({"adcp_major_version": adcp_major_version(), "brief": "ads"})
+        validate_adcp_version_pins({"adcp_major_version": adcp_major_version(), "brief": "ads"})
+
+    def test_supported_release_string_passes(self):
+        validate_adcp_version_pins({"adcp_version": supported_adcp_versions()[0], "brief": "ads"})
 
     def test_absent_claim_passes(self):
-        validate_adcp_major_version({"brief": "ads"})
+        validate_adcp_version_pins({"brief": "ads"})
 
     def test_unsupported_major_raises_version_unsupported(self):
         with pytest.raises(AdCPVersionUnsupportedError) as exc:
-            validate_adcp_major_version({"adcp_major_version": 99})
+            validate_adcp_version_pins({"adcp_major_version": 99})
         assert exc.value.error_code == "VERSION_UNSUPPORTED"
         assert "99" in str(exc.value)
         assert str(adcp_major_version()) in str(exc.value)
 
-    def test_older_major_raises(self):
-        with pytest.raises(AdCPVersionUnsupportedError):
-            validate_adcp_major_version({"adcp_major_version": 2})
+    def test_unsupported_release_string_raises_version_unsupported(self):
+        """A string adcp_version pin with a future major triggers the same rejection.
 
-    def test_non_integer_claim_deferred_to_schema_validation(self):
-        # A malformed value is not our job to reject-as-unsupported; let schema catch it.
-        validate_adcp_major_version({"adcp_major_version": "not-a-number"})
+        version-envelope.json: the release-precision string is the primary pin;
+        the seller "returns VERSION_UNSUPPORTED on cross-major mismatch".
+        """
+        with pytest.raises(AdCPVersionUnsupportedError) as exc:
+            validate_adcp_version_pins({"adcp_version": "4.0"})
+        assert exc.value.error_code == "VERSION_UNSUPPORTED"
+
+    def test_details_payload_matches_version_unsupported_schema(self):
+        """Details carry the REQUIRED supported_versions plus the schema's optional fields.
+
+        error-details/version-unsupported.json: supported_versions REQUIRED
+        (minItems 1); supported_majors deprecated-but-emitted through 3.x;
+        build_version advisory; the buyer's pin echoed via the version envelope.
+        """
+        with pytest.raises(AdCPVersionUnsupportedError) as exc:
+            validate_adcp_version_pins({"adcp_version": "4.0"})
+        details = exc.value.details
+        assert details["supported_versions"] == list(supported_adcp_versions())
+        assert len(details["supported_versions"]) >= 1
+        assert details["supported_majors"] == [adcp_major_version()]
+        assert details["build_version"] == adcp_build_version()
+        assert details["adcp_version"] == "4.0"
+        assert exc.value.suggestion is not None
+        assert "supported_versions" in exc.value.suggestion
+
+    def test_details_payload_validates_against_sdk_details_model(self):
+        """Cross-check: the emitted details parse as the SDK's VersionUnsupportedDetails."""
+        from adcp.types.generated_poc.error_details.version_unsupported import VersionUnsupportedDetails
+
+        with pytest.raises(AdCPVersionUnsupportedError) as exc:
+            validate_adcp_version_pins({"adcp_major_version": 4})
+        parsed = VersionUnsupportedDetails.model_validate(exc.value.details)
+        assert [v.root for v in parsed.supported_versions] == list(supported_adcp_versions())
+
+    def test_major_pin_echoed_in_details(self):
+        with pytest.raises(AdCPVersionUnsupportedError) as exc:
+            validate_adcp_version_pins({"adcp_major_version": 4})
+        assert exc.value.details["adcp_major_version"] == 4
+
+    def test_pre_native_major_tolerated_for_compat(self):
+        """Pre-3.0 pins are honored, not rejected.
+
+        The version_compat layer (needs_v2_compat) deliberately serves pre-3.0
+        buyers with v2-compat serialization, so a pre-native pin is a version
+        this seller speaks — only majors ABOVE the native major are protocols
+        this build cannot serve.
+        """
+        validate_adcp_version_pins({"adcp_major_version": 2})
+        validate_adcp_version_pins({"adcp_version": "2.0"})
+
+    def test_same_major_unknown_release_downshifts_without_error(self):
+        """version-envelope.json: same-major pins downshift to the served release."""
+        validate_adcp_version_pins({"adcp_version": f"{adcp_major_version()}.99"})
+
+    def test_unparseable_claim_tolerated(self):
+        # A malformed pin carries no negotiable major; it is stripped with the
+        # negotiation envelope rather than misreported as VERSION_UNSUPPORTED.
+        validate_adcp_version_pins({"adcp_major_version": "not-a-number"})
+        validate_adcp_version_pins({"adcp_version": "not-a-version"})
+
+
+class TestRESTVersionNegotiation:
+    """REST boundary rejects unsupported pins with parity to MCP/A2A (#1512).
+
+    The router-level dependency reads the RAW body/query pin, so the *Body
+    models' local ``adcp_version`` defaults never trigger a rejection.
+    """
+
+    @staticmethod
+    def _client():
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        return TestClient(app, raise_server_exceptions=False)
+
+    def _assert_version_unsupported(self, response):
+        assert response.status_code == 400
+        envelope = response.json()
+        assert envelope["adcp_error"]["code"] == "VERSION_UNSUPPORTED"
+        assert envelope["errors"][0]["details"]["supported_versions"] == list(supported_adcp_versions())
+
+    def test_rest_body_pin_rejected(self):
+        response = self._client().post("/api/v1/products", json={"brief": "ads", "adcp_version": "4.0"})
+        self._assert_version_unsupported(response)
+
+    def test_rest_body_major_pin_rejected(self):
+        response = self._client().post("/api/v1/products", json={"brief": "ads", "adcp_major_version": 4})
+        self._assert_version_unsupported(response)
+
+    def test_rest_query_pin_rejected_on_get(self):
+        response = self._client().get("/api/v1/capabilities", params={"adcp_version": "4.0"})
+        self._assert_version_unsupported(response)
 
 
 class TestA2ADispatchMajorValidation:
-    """A2A dispatch rejects an unsupported major with parity to the MCP path (#1512)."""
+    """A2A dispatch rejects an unsupported pin with parity to the MCP path (#1512)."""
 
     @pytest.mark.asyncio
     async def test_a2a_dispatch_rejects_unsupported_major(self):
@@ -55,6 +163,14 @@ class TestA2ADispatchMajorValidation:
         # version check runs before dispatch, so it raises regardless of handler.
         with pytest.raises(AdCPVersionUnsupportedError):
             await handler._handle_explicit_skill("get_adcp_capabilities", {"adcp_major_version": 99}, None)
+
+    @pytest.mark.asyncio
+    async def test_a2a_dispatch_rejects_unsupported_release_string(self):
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+        with pytest.raises(AdCPVersionUnsupportedError):
+            await handler._handle_explicit_skill("get_adcp_capabilities", {"adcp_version": "4.0"}, None)
 
 
 class TestA2ADispatchStripsEnvelope:

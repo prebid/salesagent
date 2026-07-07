@@ -63,6 +63,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.compat_normalization",
+    "tests.bdd.steps.domain.uc010_version_negotiation",
 ]
 
 # ---------------------------------------------------------------------------
@@ -2567,6 +2568,16 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-missing",
 }
 
+# UC-010 scenarios wired to CapabilitiesEnv — the VERSION_UNSUPPORTED
+# version-negotiation set derived from error-details/version-unsupported.json
+# (#1546). Everything else in BR-UC-010 xfails at the fixture until wired.
+_UC010_VERSION_NEGOTIATION_WIRED: set[str] = {
+    "T-UC-010-v31-version-unsupported",
+    "T-UC-010-v31-version-unsupported-major-fallback",
+    "T-UC-010-v31-version-unsupported-build-version-advisory",
+    "T-UC-010-v31-version-unsupported-details-bounds",
+}
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -2729,6 +2740,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith("T-UC-018") for t in marker_names):
         return "UC-018"
+    if any(t.startswith("T-UC-010") for t in marker_names):
+        return "UC-010"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names:
@@ -2866,6 +2879,24 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail(
                 "UC-018 harness wired only for the @list-after-sync (#1405) and @concept-id (#1407) storyboard scenarios"
             )
+
+    elif uc == "UC-010":
+        # Wired: the four VERSION_UNSUPPORTED version-negotiation scenarios
+        # (#1546). CapabilitiesEnv carries the negotiation envelope through
+        # each transport's boundary validation. The remaining UC-010 scenarios
+        # (capabilities payload shape, signing/idempotency bounds, ...) xfail
+        # fast here until their steps + harness support land.
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if marker_names & _UC010_VERSION_NEGOTIATION_WIRED:
+            request.getfixturevalue("integration_db")
+            from tests.harness.capabilities import CapabilitiesEnv
+
+            with CapabilitiesEnv(e2e_config=ctx.get("e2e_config")) as env:
+                env.setup_default_data()
+                ctx["env"] = env
+                yield
+        else:
+            pytest.xfail("UC-010 harness wired only for the VERSION_UNSUPPORTED version-negotiation scenarios (#1546)")
 
     elif uc == "UC-011":
         marker_names = {m.name for m in request.node.iter_markers()}

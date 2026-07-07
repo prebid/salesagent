@@ -14,7 +14,7 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
 
-from src.core.adcp_version import validate_adcp_major_version
+from src.core.adcp_version import validate_adcp_version_pins
 from src.core.exceptions import AdCPError
 from src.core.request_compat import (
     deep_strip_to_schema,
@@ -33,7 +33,7 @@ class RequestCompatMiddleware(Middleware):
 
     Pipeline:
     1. Translate deprecated field names via normalize_request_params()
-    2. Reject an unsupported AdCP major version via validate_adcp_major_version()
+    2. Reject an unsupported AdCP version pin via validate_adcp_version_pins()
        (VERSION_UNSUPPORTED) — before the fields are stripped below.
     3. Drop AdCP version-negotiation envelope fields (adcp_version,
        adcp_major_version) via strip_negotiation_fields() — all environments,
@@ -71,14 +71,15 @@ class RequestCompatMiddleware(Middleware):
         if compat_result.translations_applied:
             modified = True
 
-        # Step 2: Version negotiation — reject an unsupported AdCP major.
-        # Runs before the negotiation-field strip below, while the claim is
-        # still present. validate_* raises a transport-agnostic AdCPError; a
+        # Step 2: Version negotiation — reject an unsupported AdCP version pin
+        # (string adcp_version or deprecated int adcp_major_version). Runs
+        # before the negotiation-field strip below, while the claim is still
+        # present. validate_* raises a transport-agnostic AdCPError; a
         # middleware raise bypasses the tool wrapper's error handler, so we
         # translate to the AdCPToolError wire envelope here (VERSION_UNSUPPORTED),
         # the same conversion with_error_logging applies to tool exceptions.
         try:
-            validate_adcp_major_version(normalized)
+            validate_adcp_version_pins(normalized)
         except AdCPError as exc:
             translate_to_tool_error(exc)
 

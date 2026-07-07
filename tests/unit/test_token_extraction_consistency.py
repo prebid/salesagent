@@ -160,6 +160,80 @@ class TestMiddlewareBearerCaseInsensitive:
         assert auth_ctx.auth_token is None, "Empty Bearer token must yield None, not ''"
 
 
+class TestPaddedAuthorizationConsistency:
+    """A padded ``Authorization`` value must extract the same token on every path.
+
+    Regression (#1546 review): the Bearer parse was hand-rolled in four places
+    and had already diverged — UnifiedAuthMiddleware stripped the value before
+    the prefix check while auth.py / resolved_identity did not, so
+    ``"  Bearer <token>"`` authenticated on one transport and failed on
+    another. All paths now route through http_utils.extract_auth_token.
+    """
+
+    PADDED = "  Bearer my-token  "
+
+    def test_primitive_strips_padding(self):
+        from src.core.http_utils import parse_bearer_authorization
+
+        assert parse_bearer_authorization(self.PADDED) == "my-token"
+
+    def test_extract_auth_token_strips_padding(self):
+        from src.core.http_utils import extract_auth_token
+
+        assert extract_auth_token({"authorization": self.PADDED}) == ("my-token", "Authorization: Bearer")
+
+    def test_resolved_identity_extraction_strips_padding(self):
+        from src.core.resolved_identity import _extract_auth_token
+
+        assert _extract_auth_token({"authorization": self.PADDED}) == ("my-token", "Authorization: Bearer")
+
+    @pytest.mark.asyncio
+    async def test_middleware_strips_padding(self):
+        from src.core.auth_middleware import UnifiedAuthMiddleware
+
+        captured_state = {}
+
+        async def mock_app(scope, receive, send):
+            captured_state.update(scope.get("state", {}))
+
+        middleware = UnifiedAuthMiddleware(mock_app)
+        scope = {
+            "type": "http",
+            "headers": [
+                (b"authorization", self.PADDED.encode("latin-1")),
+                (b"host", b"test.example.com"),
+            ],
+        }
+
+        await middleware(scope, None, None)
+        assert captured_state["auth_context"].auth_token == "my-token"
+
+
+class TestNormalizeAdcpAuthTokenContract:
+    """Documented semantics of normalize_adcp_auth_token (x-adcp-auth values)."""
+
+    def test_bearer_credential_normalized_to_bare_token(self):
+        from src.core.http_utils import normalize_adcp_auth_token
+
+        assert normalize_adcp_auth_token(" Bearer my-token ") == "my-token"
+
+    def test_schemeless_token_passes_through(self):
+        from src.core.http_utils import normalize_adcp_auth_token
+
+        assert normalize_adcp_auth_token(" my-token\n") == "my-token"
+
+    def test_credential_less_bearer_returns_literal_scheme_word(self):
+        """Docstring regression: "Bearer " returns "Bearer" (loud auth failure), not ""."""
+        from src.core.http_utils import normalize_adcp_auth_token
+
+        assert normalize_adcp_auth_token("Bearer ") == "Bearer"
+
+    def test_all_whitespace_returns_empty(self):
+        from src.core.http_utils import normalize_adcp_auth_token
+
+        assert normalize_adcp_auth_token("   ") == ""
+
+
 class TestMiddlewareAndResolveIdentityAgree:
     """Middleware extraction and resolve_identity must produce identical results."""
 
