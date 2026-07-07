@@ -558,19 +558,13 @@ class AdCPConfigurationError(AdCPError):
     """Server-side configuration is broken (500).
 
     Raised when encrypted secrets cannot be decrypted (key rotation,
-    corruption, missing ENCRYPTION_KEY), or when a required environment
-    variable (e.g. ``TMP_DISCOVERY_API_KEYS``) is absent or empty.
-
-    Recovery is ``correctable``: an operator can fix the configuration
-    (set the env var, rotate the key, etc.) and the service will recover.
-    This is distinct from ``terminal`` (no recovery possible) — the
-    configuration *can* be corrected; it just requires operator action
-    rather than buyer action.
+    corruption, missing ENCRYPTION_KEY). Callers should NOT silently
+    fall back — the configuration needs admin intervention, so recovery is
+    ``terminal`` (inherited): the buyer has no lever to fix server config.
     """
 
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPServiceUnavailableError(AdCPError):

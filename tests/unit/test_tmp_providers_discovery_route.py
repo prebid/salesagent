@@ -253,6 +253,10 @@ class TestDiscoveryApiKeyAuth:
 
         AdCPConfigurationError (500, correctable) is the right error here: the operator
         has to configure the env var; the buyer cannot recover this themselves.
+
+        NOTE: recovery is currently "terminal" (AdCPConfigurationError class default) because
+        the global default flip (terminal → correctable) is split into its own PR #1550.
+        Once #1550 merges and this branch rebases, update to recovery="correctable".
         """
         import os
 
@@ -261,20 +265,26 @@ class TestDiscoveryApiKeyAuth:
             response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 500
-        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire; recovery=correctable (operator must act)
-        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="correctable")
+        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire.
+        # TODO(#1550): update to recovery="correctable" once PR #1550 merges.
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
 
     def test_returns_500_when_tmp_discovery_api_keys_is_empty_string(self, client):
         """When TMP_DISCOVERY_API_KEYS is set to empty string the endpoint returns 500 (fail-closed).
 
-        Same as unset: AdCPConfigurationError (500, correctable) — operator must act.
+        Same as unset: AdCPConfigurationError (500) — operator must act.
+
+        NOTE: recovery is currently "terminal" (AdCPConfigurationError class default) because
+        the global default flip (terminal → correctable) is split into its own PR #1550.
+        Once #1550 merges and this branch rebases, update to recovery="correctable".
         """
         with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": ""}):
             response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 500
-        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire; recovery=correctable (operator must act)
-        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="correctable")
+        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire.
+        # TODO(#1550): update to recovery="correctable" once PR #1550 merges.
+        assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
 
     def test_open_when_tmp_discovery_api_keys_is_open(self, client):
         """When TMP_DISCOVERY_API_KEYS=OPEN the endpoint is accessible without a key."""
