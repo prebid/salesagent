@@ -161,7 +161,7 @@ Source: BR-UC-005-main-mcp.md
 **Given** the creative agent registry includes referral information for additional agents
 **When** the Buyer calls `list_creative_formats`
 **Then** the response includes `creative_agents` referrals with capability information
-**And** each referral includes agent URL and capabilities (validation, assembly, generation, preview, delivery)
+**And** each referral includes agent URL and exactly the backed capabilities (validation, assembly, preview) — capabilities are commitments; unbacked values (e.g. delivery, generation) must not be advertised
 **Business Rule** POST-S4
 **Priority** P2 -- referral completeness
 

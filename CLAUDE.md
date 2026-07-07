@@ -19,9 +19,9 @@ This guide helps you work effectively with the Prebid Sales Agent codebase maint
 - **Database changes**: Use SQLAlchemy 2.0 `select()` → Use `JSONType` for JSON → Create migration with `alembic revision`
 
 ### Key Files to Know
-- `src/core/main.py` - MCP tools and `_impl()` functions
-- `src/core/tools.py` - A2A raw functions
-- `src/core/schemas.py` - Pydantic models (AdCP-compliant)
+- `src/core/main.py` - MCP server and tool registration
+- `src/core/tools/` - tool `_impl()` business logic, MCP wrappers, and A2A raw functions (package)
+- `src/core/schemas/` - Pydantic models, AdCP-compliant (package)
 - `src/adapters/base.py` - Adapter interface
 - `src/adapters/gam/` - GAM implementation
 - `tests/unit/test_adcp_contract.py` - Schema compliance tests
@@ -80,7 +80,9 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately.
+
+**The table below is a representative subset, not the full set.** There are over 70 guard tests (73 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py` and `test_impl_resolved_identity.py`); the always-current list is `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -427,7 +429,7 @@ Install: `uv tool install tox --with tox-uv`
 make quality              # Format + lint + typecheck + unit tests (before every commit)
 tox -e unit               # Unit tests only (fast, no Docker)
 
-# ─── Full suite (Docker + all 5 suites in parallel via tox) ───
+# ─── Full suite (Docker + all 6 suites in parallel via tox) ───
 ./run_all_tests.sh        # One command: starts Docker, runs tox -p, tears down
 ./run_all_tests.sh quick  # No Docker: unit + integration
 
@@ -475,6 +477,7 @@ Tenant → CurrencyLimit (USD required for budget validation)
 - **tests/e2e/**: Full system tests
 - **tests/admin/**: Admin UI tests
 - **tests/bdd/**: BDD behavioral tests (pytest-bdd)
+- **tests/ui/**: UI smoke tests (Playwright/chromium; needs full Docker stack)
 
 ### Error Verification
 **New error-path tests must assert on the wire envelope, not reconstructed exceptions.**
@@ -563,7 +566,7 @@ uv run python -c "from src.core.tools import your_import"  # Verify imports
 tox -e integration                     # Real PostgreSQL integration tests
 
 # Critical changes (protocol, schema updates)
-./run_all_tests.sh                     # Full suite: Docker + all 5 suites via tox
+./run_all_tests.sh                     # Full suite: Docker + all 6 suites via tox
 ```
 
 **Pre-commit hooks can't catch import errors** - You must run tests for refactorings!
@@ -606,12 +609,17 @@ APPROXIMATED_API_KEY=your-approximated-api-key
 
 ### Database Schema
 - **Core**: tenants, principals, products, media_buys, creatives, audit_logs
-- **Workflow**: workflow_steps, object_workflow_mappings
-- **Deprecated**: tasks, human_tasks (DO NOT USE)
+- **Workflow**: workflow_steps, object_workflow_mapping (human-in-the-loop approvals)
+- **Note**: the legacy `tasks` and `human_tasks` tables no longer exist in the schema — don't reference them
 
 ---
 
 ## Adapter Support
+
+Adapters are registered in `src/adapters/__init__.py` and selected per tenant.
+Registry keys: `gam`/`google_ad_manager`, `broadstreet`, `kevel`, `triton`/`triton_digital`, `mock`.
+Maturity varies — GAM is by far the most complete. (`creative_engine` in the
+registry is a creative-processing base class, not an ad-server adapter.)
 
 ### GAM Adapter
 **Supported Pricing**: CPM, VCPM, CPC, FLAT_RATE
@@ -620,6 +628,9 @@ APPROXIMATED_API_KEY=your-approximated-api-key
 - FLAT_RATE → SPONSORSHIP with CPD translation
 - VCPM → STANDARD only (GAM requirement)
 - See `docs/adapters/` for compatibility matrix
+
+### Broadstreet Adapter
+Broadstreet ad server integration (`src/adapters/broadstreet/`). Registered in the adapter factory (`src/adapters/__init__.py`).
 
 ### Mock Adapter
 **Supported**: All AdCP pricing models (CPM, VCPM, CPCV, CPP, CPC, CPV, FLAT_RATE)
