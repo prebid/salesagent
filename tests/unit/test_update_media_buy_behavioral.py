@@ -2924,8 +2924,11 @@ class TestUC003StateMachine:
             post_action_mb = _make_mock_media_buy("mb_post_action", status="pending_creatives")
             env.mock["uow"].return_value.media_buys.get_by_id.side_effect = [
                 active_mb,  # state-machine precondition
-                post_action_mb,  # post-action status lookup (the line-421 fix)
             ]
+            # A successful pause now reads the post-action buy via bump_revision
+            # (bump + return in one FOR UPDATE round trip); the derived status
+            # comes from that returned row.
+            env.mock["uow"].return_value.media_buys.bump_revision.return_value = post_action_mb
 
             env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
                 media_buy_id="mb_post_action",
@@ -2942,3 +2945,31 @@ class TestUC003StateMachine:
                 "valid_actions must reflect the DB-derived post-action status "
                 f"('pending_creatives'), not the hardcoded ('paused'). Got: {action_values}"
             )
+
+    def test_pause_bumps_revision(self):
+        """A successful campaign-level pause bumps the persisted revision.
+
+        Regression: the pause/resume early-return path returned success while
+        echoing the current (un-bumped) revision, so a buyer using the token
+        could not detect the pause — while the package-level pause path already
+        bumped. The post-action read now routes through ``bump_revision`` (bump
+        + return in one FOR UPDATE round trip).
+        """
+        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
+            active_mb = _make_mock_media_buy("mb_pause_rev", status="active")
+            bumped_mb = _make_mock_media_buy("mb_pause_rev", status="paused")
+            bumped_mb.revision = 7  # the post-bump value the response must echo
+            env.mock["uow"].return_value.media_buys.get_by_id.side_effect = [active_mb]
+            env.mock["uow"].return_value.media_buys.bump_revision.return_value = bumped_mb
+
+            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
+                media_buy_id="mb_pause_rev",
+                affected_packages=[],
+            )
+
+            req = UpdateMediaBuyRequest(media_buy_id="mb_pause_rev", paused=True)
+            result = _update_media_buy_impl(req=req, identity=env.identity)
+
+            assert isinstance(result, UpdateMediaBuySuccess)
+            env.mock["uow"].return_value.media_buys.bump_revision.assert_called_once_with("mb_pause_rev")
+            assert result.revision == 7

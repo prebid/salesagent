@@ -15,7 +15,12 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import (
+    column_exists,
+    run_alembic_downgrade,
+    run_alembic_upgrade,
+    seed_tenant,
+)
 
 # Migration under test and its parent
 REVISION_REV = "1497aa06013c"
@@ -26,13 +31,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 def _seed_pre_migration_media_buy(engine) -> None:
     """Insert tenant → principal → media buy on the PRE-migration schema."""
+    seed_tenant(engine, "t_rev", subdomain="rev-mig-test")
     with engine.connect() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO tenants (tenant_id, name, subdomain, created_at, updated_at) "
-                "VALUES ('t_rev', 'Revision Tenant', 'rev-mig-test', NOW(), NOW())"
-            )
-        )
         conn.execute(
             text(
                 "INSERT INTO principals (tenant_id, principal_id, name, platform_mappings, access_token) "
@@ -50,21 +50,12 @@ def _seed_pre_migration_media_buy(engine) -> None:
         conn.commit()
 
 
-def _column_exists(engine, table: str, column: str) -> bool:
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :column"),
-            {"table": table, "column": column},
-        ).first()
-    return row is not None
-
-
 def test_upgrade_backfills_existing_rows_to_1_and_downgrade_drops_column(migration_db):
     engine, db_url = migration_db
 
     # Schema up to the parent revision — no revision column yet.
     run_alembic_upgrade(db_url, PRE_REV)
-    assert not _column_exists(engine, "media_buys", "revision")
+    assert not column_exists(engine, "media_buys", "revision")
 
     _seed_pre_migration_media_buy(engine)
 
@@ -99,7 +90,7 @@ def test_upgrade_backfills_existing_rows_to_1_and_downgrade_drops_column(migrati
 
     # Downgrade drops the column; rows survive.
     run_alembic_downgrade(db_url, PRE_REV)
-    assert not _column_exists(engine, "media_buys", "revision")
+    assert not column_exists(engine, "media_buys", "revision")
     with engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(*) FROM media_buys")).scalar_one()
     assert count == 2

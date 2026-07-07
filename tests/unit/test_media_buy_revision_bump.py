@@ -106,3 +106,32 @@ class TestMutationPathsBump:
             repo.update_fields("mb-rev-1", revision=99)
 
         assert mb.revision == 5  # untouched
+
+
+class TestMutationLoadsAreRowLocked:
+    """The revision bump is a read-modify-write; the mutation load MUST lock the
+    row (SELECT ... FOR UPDATE) so two concurrent updates to the same buy
+    serialize and produce distinct revisions instead of both writing the same
+    number (the exact concurrent-write case the counter exists for)."""
+
+    @staticmethod
+    def _first_stmt_for(call):
+        mb = _transient_media_buy(revision=1)
+        session = MagicMock()
+        session.scalars.return_value.first.return_value = mb
+        repo = MediaBuyRepository(session, "tenant-1")
+        call(repo)
+        return str(session.scalars.call_args_list[0].args[0])
+
+    def test_update_status_load_is_for_update(self):
+        assert "FOR UPDATE" in self._first_stmt_for(lambda r: r.update_status("mb-rev-1", "paused"))
+
+    def test_update_fields_load_is_for_update(self):
+        assert "FOR UPDATE" in self._first_stmt_for(lambda r: r.update_fields("mb-rev-1", status="paused"))
+
+    def test_bump_revision_load_is_for_update(self):
+        assert "FOR UPDATE" in self._first_stmt_for(lambda r: r.bump_revision("mb-rev-1"))
+
+    def test_plain_get_by_id_is_not_locked(self):
+        # A read-only lookup must NOT hold a row lock.
+        assert "FOR UPDATE" not in self._first_stmt_for(lambda r: r.get_by_id("mb-rev-1"))

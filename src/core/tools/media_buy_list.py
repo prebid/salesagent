@@ -285,11 +285,13 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                # AdCP 3.1.1 GA required item fields. confirmed_at is the
-                # persisted created_at (same source create_media_buy returns);
+                # AdCP 3.1.1 GA item fields. confirmed_at is the persisted
+                # created_at but ONLY once the seller has committed to the buy
+                # (unconfirmed/pending_approval buys report None — the field
+                # means "seller committed", and get must agree with create);
                 # revision is the persisted monotonic counter bumped by
                 # MediaBuyRepository on every successful mutation.
-                confirmed_at=buy.created_at,
+                confirmed_at=_seller_confirmed_at(buy),
                 revision=buy.revision,
             )
         )
@@ -478,6 +480,21 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
     "pending_creatives": MediaBuyStatus.pending_creatives,
     "pending_start": MediaBuyStatus.pending_start,
 }
+
+
+# Statuses in which the seller has NOT committed to running the buy, so
+# confirmed_at (AdCP GA: "when the seller committed to this media buy") must be
+# absent — matching create_media_buy, which omits confirmed_at on the submitted
+# (manual-approval) arm and only sets it on the synchronous success arm.
+_UNCONFIRMED_STATUSES: frozenset[str] = frozenset({"draft", "pending", "pending_approval", "rejected", "failed"})
+
+
+def _seller_confirmed_at(buy: _MediaBuyData) -> datetime | None:
+    """confirmed_at for a listed buy: created_at once the seller has committed,
+    else None (the buy is still pending approval / was never confirmed)."""
+    if (buy.status or "").lower() in _UNCONFIRMED_STATUSES:
+        return None
+    return buy.created_at
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:

@@ -15,6 +15,8 @@ from __future__ import annotations
 import os
 import re
 
+from sqlalchemy import text
+
 
 def parse_postgres_url() -> tuple[str, str, str, int] | None:
     """Parse DATABASE_URL into connection components.
@@ -62,3 +64,48 @@ def run_alembic_downgrade(db_url: str, target_revision: str) -> None:
     from alembic import command
 
     _run_alembic_command(db_url, command.downgrade, target_revision)
+
+
+def column_exists(engine, table: str, column: str) -> bool:
+    """Whether ``table.column`` exists (information_schema probe).
+
+    Shared by migration tests that assert a column is added/dropped, replacing
+    per-test hand-rolled copies of the same query.
+    """
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT 1 FROM information_schema.columns WHERE table_name = :t AND column_name = :c"),
+            {"t": table, "c": column},
+        ).first()
+    return row is not None
+
+
+def get_column_info(engine, table: str, column: str) -> tuple[str, str | None] | None:
+    """``(is_nullable, column_default)`` for ``table.column``, or None if absent."""
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT is_nullable, column_default FROM information_schema.columns "
+                "WHERE table_name = :t AND column_name = :c"
+            ),
+            {"t": table, "c": column},
+        ).first()
+    return (row[0], row[1]) if row else None
+
+
+def seed_tenant(engine, tenant_id: str, *, subdomain: str) -> None:
+    """Insert a minimal tenant row on a migration-managed schema.
+
+    The tenant INSERT is identical across migration tests; centralizing it here
+    keeps new migration tests from re-copying it (each test still seeds its own
+    domain-specific child rows).
+    """
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO tenants (tenant_id, name, subdomain, created_at, updated_at) "
+                "VALUES (:tid, :name, :sub, NOW(), NOW())"
+            ),
+            {"tid": tenant_id, "name": f"{tenant_id} tenant", "sub": subdomain},
+        )
+        conn.commit()

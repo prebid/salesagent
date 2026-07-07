@@ -63,6 +63,7 @@ from src.core.database.models import (
     CreativeAssignment as DBAssignment,
 )
 from src.core.database.models import (
+    MediaBuy,
     ObjectWorkflowMapping,
 )
 from src.core.database.models import (
@@ -96,6 +97,17 @@ from src.services.targeting_capabilities import (
     validate_property_targeting_allowed,
     validate_unknown_targeting_fields,
 )
+
+
+def _current_revision(mb: MediaBuy | None) -> int:
+    """Persisted revision to echo on an update response.
+
+    ``mb`` is the post-mutation buy re-read from the DB. The fallback of 1 is
+    defensive only: every response site here runs after ``_verify_principal``
+    has already raised MEDIA_BUY_NOT_FOUND for a missing buy, so ``mb`` is
+    effectively always present.
+    """
+    return mb.revision if mb is not None else 1
 
 
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
@@ -358,7 +370,7 @@ def _update_media_buy_impl(
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
                     # dry-run: nothing persisted — echo the current revision
-                    revision=_dry_run_mb.revision if _dry_run_mb else 1,
+                    revision=_current_revision(_dry_run_mb),
                     affected_packages=simulated_affected,
                     valid_actions=valid_actions_for_status(_dry_run_status),
                     context=req.context,
@@ -384,7 +396,7 @@ def _update_media_buy_impl(
                 approval_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
                     # Nothing applied yet (pending approval) — current persisted revision.
-                    revision=_approval_mb.revision if _approval_mb else 1,
+                    revision=_current_revision(_approval_mb),
                     affected_packages=[],  # Not yet applied — pending approval
                     valid_actions=valid_actions_for_status(_approval_status),
                     context=req.context,
@@ -522,11 +534,14 @@ def _update_media_buy_impl(
                     media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                     affected_pkgs = getattr(result, "affected_packages", [])
 
-                    # Derive post-action status from the DB rather than hardcoding,
-                    # so valid_actions reflects what the buyer can actually do next.
-                    # Fall back to the current state-machine target only if the DB
-                    # row is missing (e.g., adapter deleted it under us).
-                    _post_action_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                    # A successful pause/resume is a mutation — bump the
+                    # persisted revision so the token advances (parity with the
+                    # package-level pause path, which already bumps). bump_revision
+                    # loads FOR UPDATE, bumps, and returns the buy; derive the
+                    # post-action status from that same row so valid_actions
+                    # reflects what the buyer can do next. Fall back to the
+                    # state-machine target only if the row is missing.
+                    _post_action_mb = uow.media_buys.bump_revision(req.media_buy_id)
                     _post_action_status = (
                         _post_action_mb.status
                         if _post_action_mb and _post_action_mb.status
@@ -535,7 +550,7 @@ def _update_media_buy_impl(
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
                         # Current persisted revision for this buy.
-                        revision=_post_action_mb.revision if _post_action_mb else 1,
+                        revision=_current_revision(_post_action_mb),
                         affected_packages=affected_pkgs,
                         valid_actions=valid_actions_for_status(_post_action_status),
                         errors=property_list_unsupported_advisories(req.packages, adapter),
@@ -1242,7 +1257,7 @@ def _update_media_buy_impl(
                 media_buy_id=req.media_buy_id or "",
                 # Persisted revision after this update's mutations (bumped by
                 # update_fields / bump_revision above).
-                revision=_final_mb.revision if _final_mb else 1,
+                revision=_current_revision(_final_mb),
                 affected_packages=affected_packages_list,
                 valid_actions=valid_actions_for_status(_final_status),
                 context=req.context,

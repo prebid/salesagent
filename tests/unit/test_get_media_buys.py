@@ -747,3 +747,33 @@ class TestGetMediaBuysRequestRejectsInternalFlags:
         """Even include_snapshot=False must be rejected — the field doesn't belong here."""
         with pytest.raises(ValidationError):
             GetMediaBuysRequest(include_snapshot=False)
+
+
+class TestConfirmedAtGating:
+    """get_media_buys must only report confirmed_at once the seller has
+    committed to the buy. The AdCP field means "when the seller committed to
+    this media buy", so a still-pending_approval buy (which create_media_buy
+    returns via the submitted arm WITHOUT confirmed_at) must report None here —
+    otherwise get contradicts create for the same buy."""
+
+    def test_unconfirmed_statuses_report_no_confirmed_at(self):
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from src.core.tools.media_buy_list import _seller_confirmed_at
+
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        for status in ("draft", "pending", "pending_approval", "rejected", "failed"):
+            buy = SimpleNamespace(status=status, created_at=created)
+            assert _seller_confirmed_at(buy) is None, f"{status} must not report confirmed_at"
+
+    def test_confirmed_statuses_report_created_at(self):
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from src.core.tools.media_buy_list import _seller_confirmed_at
+
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved", "canceled"):
+            buy = SimpleNamespace(status=status, created_at=created)
+            assert _seller_confirmed_at(buy) == created, f"{status} must report confirmed_at=created_at"

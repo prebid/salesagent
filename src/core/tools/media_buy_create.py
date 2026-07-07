@@ -3442,6 +3442,12 @@ async def _create_media_buy_impl(
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
+                # Dry-run persists nothing, but the success arm still carries
+                # the GA fields so a strict client's oneOf resolves: a simulated
+                # commit timestamp and the initial revision (1). Parity with the
+                # update dry-run path, which echoes the current revision.
+                confirmed_at=datetime.now(UTC),
+                revision=1,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 

@@ -56,14 +56,22 @@ class MediaBuyRepository:
     # Single MediaBuy lookups
     # ------------------------------------------------------------------
 
-    def get_by_id(self, media_buy_id: str) -> MediaBuy | None:
-        """Get a media buy by its ID within the tenant."""
-        return self._session.scalars(
-            select(MediaBuy).where(
-                MediaBuy.tenant_id == self._tenant_id,
-                MediaBuy.media_buy_id == media_buy_id,
-            )
-        ).first()
+    def get_by_id(self, media_buy_id: str, *, for_update: bool = False) -> MediaBuy | None:
+        """Get a media buy by its ID within the tenant.
+
+        ``for_update=True`` acquires a row lock (``SELECT ... FOR UPDATE``) so a
+        read-modify-write on the row (notably the revision bump) serializes
+        against concurrent mutations of the same buy under READ COMMITTED: the
+        second transaction blocks on the lock and re-reads the committed value,
+        so two racing updates produce distinct revisions.
+        """
+        stmt = select(MediaBuy).where(
+            MediaBuy.tenant_id == self._tenant_id,
+            MediaBuy.media_buy_id == media_buy_id,
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        return self._session.scalars(stmt).first()
 
     def get_by_id_or_raise(
         self, media_buy_id: str, *, context: ContextObject | dict[str, Any] | None = None
@@ -435,6 +443,11 @@ class MediaBuyRepository:
         ``revision`` optimistic-concurrency token: it starts at 1 on create
         and MUST strictly increase on every successful mutation — never
         derived from timestamps.
+
+        Callers MUST load ``media_buy`` via ``get_by_id(..., for_update=True)``
+        so this read-modify-write is serialized by the row lock; otherwise two
+        concurrent updates both read the same value and write the same
+        revision, defeating the counter.
         """
         media_buy.revision = (media_buy.revision or 0) + 1
 
@@ -446,7 +459,7 @@ class MediaBuyRepository:
         therefore never pass through ``update_status``/``update_fields``.
         Returns the updated MediaBuy, or None if not found in this tenant.
         """
-        media_buy = self.get_by_id(media_buy_id)
+        media_buy = self.get_by_id(media_buy_id, for_update=True)
         if media_buy is None:
             return None
         self._bump_revision(media_buy)
@@ -466,7 +479,7 @@ class MediaBuyRepository:
         Bumps the persisted revision counter (successful mutation).
         Returns the updated MediaBuy, or None if not found in this tenant.
         """
-        media_buy = self.get_by_id(media_buy_id)
+        media_buy = self.get_by_id(media_buy_id, for_update=True)
         if media_buy is None:
             return None
         media_buy.status = status
@@ -491,7 +504,7 @@ class MediaBuyRepository:
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
             raise ValueError(f"Cannot update immutable field(s): {', '.join(sorted(blocked))}")
-        media_buy = self.get_by_id(media_buy_id)
+        media_buy = self.get_by_id(media_buy_id, for_update=True)
         if media_buy is None:
             return None
         for key, value in kwargs.items():
