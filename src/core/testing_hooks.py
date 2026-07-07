@@ -29,6 +29,11 @@ if TYPE_CHECKING:
     from src.core.tool_context import ToolContext
 
 
+def _ensure_aware(dt: datetime) -> datetime:
+    """Return *dt* as a UTC-aware datetime, assuming UTC when it is naive."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 class CampaignEvent(StrEnum):
     """Campaign lifecycle and error events that can be jumped to."""
 
@@ -346,6 +351,13 @@ class TimeSimulator:
         """Calculate campaign progress as percentage (0.0 to 1.0)."""
         if current_time is None:
             current_time = datetime.now(UTC)
+
+        # Callers may pass flight datetimes built from a naive date.combine();
+        # the simulated clock is always UTC-aware. Coerce naive inputs to UTC so
+        # the comparisons below never raise TypeError (offset-naive vs -aware).
+        start_date = _ensure_aware(start_date)
+        end_date = _ensure_aware(end_date)
+        current_time = _ensure_aware(current_time)
 
         if current_time <= start_date:
             return 0.0

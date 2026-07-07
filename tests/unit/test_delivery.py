@@ -1625,6 +1625,41 @@ class TestDeliveryAdapterError:
         assert any("mb_err2" in e.message for e in result.errors)
         assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
+    def test_non_adapter_processing_failure_surfaces_advisory(self):
+        """A per-buy failure OUTSIDE the adapter call must not drop the buy silently.
+
+        Regression (#1545 K2): the outer per-buy handler logged and continued with
+        no errors[] advisory, so a failure in the status/model-construction path made
+        the buy vanish from the response with no signal. It must now append an
+        INTERNAL_ERROR advisory, mirroring the adapter handler.
+        """
+        good = _make_mock_media_buy(media_buy_id="mb_good")
+        bad = _make_mock_media_buy(media_buy_id="mb_bad")
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_good")
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_good", "mb_bad"])
+
+        def _resolve(buy, *args, **kwargs):
+            if buy.media_buy_id == "mb_bad":
+                raise RuntimeError("status resolution blew up")
+            return "active"
+
+        with patch(f"{_PATCH_PREFIX}.resolve_canonical_status", side_effect=_resolve):
+            result = _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_good", good), ("mb_bad", bad)],
+            )
+
+        # Surviving buy is still reported.
+        assert [d.media_buy_id for d in result.media_buy_deliveries] == ["mb_good"]
+        # Failed buy surfaces an advisory instead of vanishing.
+        assert result.errors is not None
+        internal_errors = [e for e in result.errors if e.code == "INTERNAL_ERROR"]
+        assert len(internal_errors) == 1
+        assert "mb_bad" in internal_errors[0].message
+
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
 
@@ -2244,19 +2279,44 @@ class TestTimeSimulationReachesFinalNotification:
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_sim"])
 
-        # apply_testing_hooks has a pre-existing naive/aware datetime bug in its
-        # campaign-progress branch (campaign_info dates are built naive, the
-        # simulated clock is aware) that is orthogonal to status derivation.
-        # Stub it so this test isolates the simulate wiring under test.
-        with patch(f"{_PATCH_PREFIX}.apply_testing_hooks"):
-            response = _run_impl_with_patches(
-                req,
-                identity=identity,
-                target_buys=[("mb_sim", buy)],
-            )
+        # Runs through the real apply_testing_hooks — the campaign-progress branch
+        # builds flight datetimes via _combine_utc, so the aware simulated clock no
+        # longer raises TypeError against them.
+        response = _run_impl_with_patches(
+            req,
+            identity=identity,
+            target_buys=[("mb_sim", buy)],
+        )
 
         assert response.media_buy_deliveries[0].status == "completed"
         assert enum_value(response.notification_type) == "final"
+
+    def test_jump_to_event_only_does_not_raise(self):
+        """jump_to_event with no mock_time hits the real hook without a TypeError.
+
+        Regression (#1545 K1): the fallback simulated clock is always UTC-aware,
+        while campaign_info flight dates were built naive — the comparison in
+        TimeSimulator.calculate_campaign_progress raised
+        'can't compare offset-naive and offset-aware datetimes' and failed the
+        whole request. Reachable in production via an X-Jump-To-Event header alone.
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_jump",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        identity = _make_identity(testing_context=AdCPTestContext(jump_to_event="campaign-complete"))
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_jump"])
+
+        response = _run_impl_with_patches(
+            req,
+            identity=identity,
+            target_buys=[("mb_jump", buy)],
+        )
+
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_jump"
 
     def test_without_simulation_persisted_pending_status_is_authoritative(self):
         """The same buy, queried normally, keeps its persisted pending status."""

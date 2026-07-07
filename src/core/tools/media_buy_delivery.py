@@ -114,6 +114,18 @@ from src.core.tools._media_buy_status import (
 from src.core.validation_helpers import format_validation_error
 
 
+def _combine_utc(d: date) -> datetime:
+    """Combine a date with midnight into a UTC-aware datetime.
+
+    All flight-window datetimes derived from a media buy's ``start_date`` /
+    ``end_date`` must be timezone-aware: they are compared against the
+    (aware) simulated clock in ``apply_testing_hooks`` / ``TimeSimulator``,
+    and a naive value raises ``TypeError: can't compare offset-naive and
+    offset-aware datetimes``.
+    """
+    return datetime.combine(d, datetime.min.time(), tzinfo=UTC)
+
+
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
     """Check if any circuit breaker is OPEN for the given tenant.
 
@@ -242,8 +254,8 @@ def _get_media_buy_delivery_impl(
                     buy_end_date = cast(date, buy.end_date)
                     simulation_datetime = TimeSimulator.jump_to_event_time(
                         testing_ctx.jump_to_event,
-                        datetime.combine(buy_start_date, datetime.min.time()),
-                        datetime.combine(buy_end_date, datetime.min.time()),
+                        _combine_utc(buy_start_date),
+                        _combine_utc(buy_end_date),
                     )
 
                 # Determine status from the persisted lifecycle column,
@@ -332,8 +344,8 @@ def _get_media_buy_delivery_impl(
                     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
                     buy_start_date_sim = cast(date, buy.start_date)
                     buy_end_date_sim = cast(date, buy.end_date)
-                    start_dt = datetime.combine(buy_start_date_sim, datetime.min.time(), tzinfo=UTC)
-                    end_dt_campaign = datetime.combine(buy_end_date_sim, datetime.min.time(), tzinfo=UTC)
+                    start_dt = _combine_utc(buy_start_date_sim)
+                    end_dt_campaign = _combine_utc(buy_end_date_sim)
                     progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
 
                     simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
@@ -495,7 +507,16 @@ def _get_media_buy_delivery_impl(
                 # translator for a spec-compliant envelope.
                 raise
             except Exception as e:
-                logger.error(f"Error getting delivery for {media_buy_id}: {e}")
+                # Surface the per-buy failure as an advisory (mirrors the adapter
+                # handler above) so the buy does not silently vanish from the
+                # response — the caller sees an errors[] entry, not a shorter list.
+                logger.error("Error processing delivery for %s: %s", media_buy_id, e)
+                adapter_errors.append(
+                    Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                        code="INTERNAL_ERROR",
+                        message=f"Error processing delivery for {media_buy_id}",
+                    )
+                )
                 # Skip this media buy and continue with others
 
         # --- Compute response-level webhook metadata (u5hf, uelj, 8g9e) ---
@@ -580,8 +601,8 @@ def _get_media_buy_delivery_impl(
                 first_buy_start = cast(date, first_buy.start_date)
                 first_buy_end = cast(date, first_buy.end_date)
                 campaign_info = {
-                    "start_date": datetime.combine(first_buy_start, datetime.min.time()),
-                    "end_date": datetime.combine(first_buy_end, datetime.min.time()),
+                    "start_date": _combine_utc(first_buy_start),
+                    "end_date": _combine_utc(first_buy_end),
                     "total_budget": float(first_buy.budget) if first_buy.budget else 0.0,
                 }
 
