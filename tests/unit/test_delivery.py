@@ -775,6 +775,64 @@ class TestDeliveryStatusFilter:
 
         assert len(result) == 0
 
+    def test_simulated_clock_filter_matches_reported_status(self):
+        """status_filter resolves against the simulated clock, not the real one.
+
+        Regression (#1545 O2): the filter path used the real reference_date while
+        the display path used mock_time, so a buy the tool would report as
+        "completed" under mock_time was excluded by a status_filter=["completed"]
+        query (and emitted a spurious MEDIA_BUY_NOT_FOUND). Filter and report must
+        agree.
+        """
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 2, 15)  # real clock: inside the flight window
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_sim",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = ["mb_sim"]
+        mock_req.buyer_refs = None
+        mock_req.status_filter = [MediaBuyStatus.completed]
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+
+        # Simulated clock strictly past the flight window -> resolves "completed".
+        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
+        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
+
+        assert [buy_id for buy_id, _ in result] == ["mb_sim"]
+
+    def test_simulated_clock_filter_excludes_non_matching_status(self):
+        """The simulated clock also excludes buys whose simulated status differs.
+
+        Same buy as above under mock_time past flight end resolves to "completed",
+        so a status_filter=["active"] query must NOT return it.
+        """
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 2, 15)
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_sim",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = ["mb_sim"]
+        mock_req.buyer_refs = None
+        mock_req.status_filter = [MediaBuyStatus.active]
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+
+        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
+        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
+
+        assert result == []
+
     def test_valid_status_enum_values_accepted(self):
         """UC-004-FILT-07: valid MediaBuyStatus enum values accepted by schema.
 

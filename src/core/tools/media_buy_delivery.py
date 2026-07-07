@@ -126,6 +126,28 @@ def _combine_utc(d: date) -> datetime:
     return datetime.combine(d, datetime.min.time(), tzinfo=UTC)
 
 
+def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
+    """Resolve the (clock, simulate) pair a buy's status is evaluated against.
+
+    The status-filter path (``_get_target_media_buys``) and the per-buy display
+    path MUST use the same clock and simulate flag; otherwise, under
+    ``mock_time`` / ``jump_to_event`` the tool reports a status its own filter
+    excluded (and emits a spurious ``MEDIA_BUY_NOT_FOUND`` for a buy it can see).
+    ``default_dt`` is the real reference datetime used when no simulation is
+    active.
+    """
+    if testing_ctx.mock_time:
+        return testing_ctx.mock_time, True
+    if testing_ctx.jump_to_event:
+        simulated = TimeSimulator.jump_to_event_time(
+            testing_ctx.jump_to_event,
+            _combine_utc(cast(date, buy.start_date)),
+            _combine_utc(cast(date, buy.end_date)),
+        )
+        return simulated, True
+    return default_dt, False
+
+
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
     """Check if any circuit breaker is OPEN for the given tenant.
 
@@ -196,7 +218,7 @@ def _get_media_buy_delivery_impl(
         assert uow.media_buys is not None
         repo = uow.media_buys
 
-        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date)
+        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date, testing_ctx)
 
         # Diff requested IDs vs found IDs to report missing ones (salesagent-mexj)
         not_found_errors: list[Error] = []
@@ -235,28 +257,15 @@ def _get_media_buy_delivery_impl(
         media_buy_count = 0
         total_clicks = 0
 
-        # Time-simulation mode (mock_time / jump_to_event): the buyer is
-        # modeling delivery at a hypothetical clock, so non-terminal buys must
-        # follow the simulated flight window to reach "completed"/final — see
-        # resolve_canonical_status(simulate=...).
-        simulate_time = bool(testing_ctx.mock_time or testing_ctx.jump_to_event)
-
         for media_buy_id, buy in target_media_buys:
             try:
-                # Apply time simulation from testing context
-                simulation_datetime = end_dt
-                if testing_ctx.mock_time:
-                    simulation_datetime = testing_ctx.mock_time
-                elif testing_ctx.jump_to_event:
-                    # Calculate time based on event
-                    # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                    buy_start_date = cast(date, buy.start_date)
-                    buy_end_date = cast(date, buy.end_date)
-                    simulation_datetime = TimeSimulator.jump_to_event_time(
-                        testing_ctx.jump_to_event,
-                        _combine_utc(buy_start_date),
-                        _combine_utc(buy_end_date),
-                    )
+                # Time-simulation mode (mock_time / jump_to_event): the buyer is
+                # modeling delivery at a hypothetical clock, so non-terminal buys
+                # follow the simulated flight window to reach "completed"/final.
+                # _simulation_clock is the SAME (clock, simulate) source the
+                # status_filter path uses, so the reported status can never
+                # contradict the filter that selected the buy.
+                simulation_datetime, simulate_time = _simulation_clock(buy, testing_ctx, end_dt)
 
                 # Determine status from the persisted lifecycle column,
                 # date-refined only for serving states — the same single
@@ -791,6 +800,7 @@ def _get_target_media_buys(
     principal_id: str,
     repo: MediaBuyRepository,
     reference_date: date,
+    testing_ctx: "AdCPTestContext | None" = None,
 ) -> list[tuple[str, MediaBuy]]:
     # The internal delivery filter vocabulary is exactly the canonical status
     # set (pending_creatives, pending_start, active, paused, completed,
@@ -816,12 +826,17 @@ def _get_target_media_buys(
     else:
         fetched_buys = repo.get_by_principal(principal_id)
 
-    # Filter on the persisted status (authoritative), not date-derivation.
-    return [
-        (buy.media_buy_id, buy)
-        for buy in fetched_buys
-        if resolve_canonical_status(buy, reference_date) in filter_statuses
-    ]
+    # Filter on the persisted status (authoritative), date-refined against the
+    # SAME clock the reported status uses (_simulation_clock) so a time-simulation
+    # query cannot filter out a buy the display path would report as matching.
+    ctx = testing_ctx or AdCPTestContext()
+    default_dt = _combine_utc(reference_date)
+
+    def _matches(buy: MediaBuy) -> bool:
+        clock, simulate = _simulation_clock(buy, ctx, default_dt)
+        return resolve_canonical_status(buy, clock.date(), simulate=simulate) in filter_statuses
+
+    return [(buy.media_buy_id, buy) for buy in fetched_buys if _matches(buy)]
 
 
 def _resolve_attribution_window(
