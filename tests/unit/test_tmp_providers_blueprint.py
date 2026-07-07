@@ -120,7 +120,20 @@ class TestTMPProviderAddSSRF:
         assert "add" not in response.headers.get("Location", "")
         # create_from_fields is called (not create) — the blueprint uses the
         # factory method symmetric with update_fields on the edit path.
-        mock_uow.tmp_providers.create_from_fields.assert_called_once()
+        mock_uow.tmp_providers.create_from_fields.assert_called_once_with(
+            name="Safe Provider",
+            endpoint="https://provider.example.com/tmp",
+            context_match=True,
+            identity_match=True,
+            countries=["US", "GB"],
+            uid_types=["uid2", "id5"],
+            properties=None,
+            timeout_ms=50,
+            priority=0,
+            status="active",
+            auth_type=None,
+            auth_credentials=None,
+        )
 
 
 class TestTMPProviderEditSSRF:
