@@ -286,6 +286,7 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from mcp.types import ToolAnnotations
 
 from src.core.tool_error_logging import with_error_logging
+from src.core.tool_surface import is_advertised, unadvertised_tools
 from src.core.tools.accounts import list_accounts, sync_accounts
 from src.core.tools.capabilities import get_adcp_capabilities
 from src.core.tools.creative_formats import list_creative_formats
@@ -314,19 +315,27 @@ def _register_tool(fn: Any) -> None:
     mcp.tool(**kwargs)(with_error_logging(fn))
 
 
-_register_tool(list_accounts)
-_register_tool(sync_accounts)
-_register_tool(get_adcp_capabilities)
-_register_tool(get_products)
-_register_tool(list_creative_formats)
-_register_tool(sync_creatives)
-_register_tool(list_creatives)
-_register_tool(list_authorized_properties)
-_register_tool(create_media_buy)
-_register_tool(update_media_buy)
-_register_tool(get_media_buy_delivery)
-_register_tool(get_media_buys)
-_register_tool(update_performance_index)
-_register_tool(list_tasks)
-_register_tool(get_task)
-_register_tool(complete_task)
+# Advertise every implemented tool by default. A deployment may narrow the
+# advertised MCP surface via ADCP_UNADVERTISED_TOOLS (src/core/tool_surface.py);
+# a withheld tool keeps its implementation/handler but is not registered here.
+_withheld_tools = unadvertised_tools()
+for _tool in (
+    list_accounts,
+    sync_accounts,
+    get_adcp_capabilities,
+    get_products,
+    list_creative_formats,
+    sync_creatives,
+    list_creatives,
+    list_authorized_properties,
+    create_media_buy,
+    update_media_buy,
+    get_media_buy_delivery,
+    get_media_buys,
+    update_performance_index,
+    list_tasks,
+    get_task,
+    complete_task,
+):
+    if is_advertised(_tool.__name__, _withheld_tools):
+        _register_tool(_tool)

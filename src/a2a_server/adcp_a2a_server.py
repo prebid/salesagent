@@ -2235,6 +2235,15 @@ def create_agent_card() -> AgentCard:
         documentation_url="https://github.com/your-org/adcp-sales-agent",
     )
 
+    # Narrow the advertised skills to this deployment's surface
+    # (ADCP_UNADVERTISED_TOOLS; default keeps all). AgentCard.skills is a
+    # protobuf repeated field, so clear and re-extend rather than reassign.
+    from src.core.tool_surface import advertised_skills
+
+    _advertised = advertised_skills(list(agent_card.skills))
+    del agent_card.skills[:]
+    agent_card.skills.extend(_advertised)
+
     return agent_card
 
 
