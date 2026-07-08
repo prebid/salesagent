@@ -1,4 +1,4 @@
-"""Guard: REST routes build strict request models only inside adcp_validation_boundary.
+"""Guard: transport boundaries build strict request models only inside adcp_validation_boundary.
 
 Regression guard for the salesagent-0pry family (#1417): REST routes in
 ``src/routes/`` constructed strict ``*Request`` models from the loose wire body
@@ -6,15 +6,16 @@ OUTSIDE ``adcp_validation_boundary``, so buyer-invalid input surfaced as a
 suggestion-less VALIDATION_ERROR envelope carrying the raw pydantic dump instead
 of the boundary's buyer message + field + top-level suggestion (error.json).
 
-This guard AST-scans ``src/routes/`` and fails on any request construction —
+This guard AST-scans the boundary layers and fails on any request construction —
 ``XxxRequest(...)``, ``XxxRequest.model_validate(...)``, or a request-builder
 call (``create_*_request(...)`` / ``build_*_request(...)``) — that is not
 lexically inside a ``with adcp_validation_boundary(...)`` block.
 
-Scope is ``src/routes/`` (the REST boundary layer). The A2A handler instances of
-the same disease are tracked in salesagent-klkg; extend SCAN_ROOTS when that
-lands. Ships with ZERO violations; no allowlist (repo hard rule: allowlists
-never grow).
+Scope is ``src/routes/`` (the REST boundary layer) and ``src/a2a_server/``
+(the A2A skill-handler boundary layer, added by salesagent-klkg after five
+skill handlers were found constructing requests bare — the exact disease this
+guard exists to catch). Ships with ZERO violations; no allowlist (repo hard
+rule: allowlists never grow).
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import ast
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCAN_ROOTS = [REPO_ROOT / "src" / "routes"]
+SCAN_ROOTS = [REPO_ROOT / "src" / "routes", REPO_ROOT / "src" / "a2a_server"]
 
 
 def _boundary_with(node: ast.With) -> bool:
@@ -94,7 +95,7 @@ def find_unbounded_request_constructions(tree: ast.AST) -> list[tuple[int, str]]
     return finder.offenders
 
 
-def test_no_unbounded_request_construction_in_routes():
+def test_no_unbounded_request_construction_at_transport_boundaries():
     violations: list[str] = []
     for root in SCAN_ROOTS:
         for path in sorted(root.rglob("*.py")):
@@ -103,8 +104,9 @@ def test_no_unbounded_request_construction_in_routes():
                 violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {name}")
     assert not violations, (
         "Strict request construction outside `with adcp_validation_boundary(context=...)` "
-        "in a REST route — buyer-invalid input would surface as a suggestion-less envelope "
-        "with the raw pydantic message (salesagent-0pry, #1417). Wrap the construction. "
+        "at a transport boundary (REST route / A2A skill handler) — buyer-invalid input "
+        "would surface as a suggestion-less envelope with the raw pydantic message "
+        "(salesagent-0pry / salesagent-klkg, #1417). Wrap the construction. "
         "Violations:\n  " + "\n  ".join(violations)
     )
 

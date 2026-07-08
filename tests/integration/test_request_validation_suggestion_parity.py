@@ -28,9 +28,10 @@ skipped, xfailed, or weakened — they ARE the red step.
 Wire-first per tests/CLAUDE.md § Error Verification Policy:
 ``TransportResult.assert_wire_error(..., require_suggestion=True)`` reads the
 STRICT top-level suggestion (``extract_wire_suggestion``) from the captured
-two-layer envelope. The get_media_buys raw-wrapper test is a no-wire path
-(direct raw call, no REST route exists), so it asserts the typed exception's
-top-level attributes — the one place the policy allows exception assertions.
+two-layer envelope. Every A2A case drives the REAL wire — ``on_message_send``
+→ skill handler — via the harness A2A dispatch (salesagent-klkg closed the
+dead-path hole where the get_media_buys case drove ``get_media_buys_raw``,
+which has zero production callers).
 """
 
 import pytest
@@ -75,28 +76,28 @@ class TestGetMediaBuyDeliveryRestSuggestionParity:
 
 
 @pytest.mark.requires_db
-class TestGetMediaBuysRawWrapperSuggestionParity:
-    """get_media_buys_raw must reject invalid requests with a typed, suggestion-carrying error.
+class TestGetMediaBuysA2ASuggestionParity:
+    """A2A get_media_buys request-validation must carry a top-level suggestion.
 
-    No wire on this path: get_media_buys has no REST route, and the harness A2A
-    dispatch calls the raw wrapper directly. Per the Error Verification Policy,
-    a no-wire path asserts the typed exception's top-level attributes — which is
-    exactly the contract ``adcp_validation_boundary`` produces (message + field
-    + suggestion) and the boundary translators serialize verbatim.
+    Drives the REAL A2A wire (``on_message_send`` →
+    ``_handle_get_media_buys_skill``) via the harness A2A dispatch. The
+    previous version of this test drove ``get_media_buys_raw`` — a wrapper
+    with ZERO production callers — so its green was false confidence
+    (salesagent-klkg): the real skill handler builds ``GetMediaBuysRequest``
+    with no ``adcp_validation_boundary`` and leaks a bare ValidationError
+    that ``normalize_to_adcp_error`` flattens into a suggestion-less envelope.
     """
 
-    def test_malformed_media_buy_ids_raises_typed_error_with_suggestion(self, integration_db):
-        """RED today: the raw wrapper builds ``GetMediaBuysRequest`` with no
-        boundary, so a raw ``pydantic.ValidationError`` leaks instead of an
-        ``AdCPValidationError`` with a top-level suggestion.
+    def test_malformed_media_buy_ids_a2a_envelope_carries_suggestion(self, integration_db):
+        """A wrong-typed ``media_buy_ids`` (string instead of array) rejected
+        on the A2A wire must produce the AdCP two-layer VALIDATION_ERROR
+        envelope WITH a top-level ``suggestion`` (error.json
+        @v3.1-04f59d2d5), matching what REST emits for the same input.
 
-        Uses a wrong-typed ``media_buy_ids`` (string instead of array) because
-        that is a request-validation failure ``GetMediaBuysRequest`` actually
-        raises. (``status_filter`` is typed ``Any`` on this request and is
-        silently accepted — a separate gap, tracked with the
-        T-UC-019-partition-status-filter-invalid xfail.)
+        RED today (salesagent-klkg): ``_handle_get_media_buys_skill`` calls
+        ``GetMediaBuysRequest.model_validate(params)`` bare, so the envelope
+        has code+recovery but NO suggestion.
         """
-        from src.core.exceptions import AdCPValidationError
         from tests.factories import PrincipalFactory, TenantFactory
         from tests.harness.media_buy_list import MediaBuyListEnv
         from tests.harness.transport import Transport
@@ -108,20 +109,141 @@ class TestGetMediaBuysRawWrapperSuggestionParity:
             result = env.call_via(Transport.A2A, media_buy_ids="not-a-list")
 
             assert result.is_error, (
-                "Malformed media_buy_ids must be rejected by get_media_buys_raw, "
+                f"Malformed media_buy_ids must be rejected on the A2A wire, got success payload: {result.payload!r}"
+            )
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+                message_substr="media_buy_ids",
+            )
+
+
+@pytest.mark.requires_db
+class TestListAccountsA2ASuggestionParity:
+    """A2A list_accounts request-validation must carry a top-level suggestion."""
+
+    def test_invalid_status_a2a_envelope_carries_suggestion(self, integration_db):
+        """An invalid ``status`` rejected on the A2A wire must produce the AdCP
+        two-layer VALIDATION_ERROR envelope WITH a top-level ``suggestion`` —
+        the same enriched envelope REST emits for the same input
+        (``/api/v1/accounts`` wraps construction in ``adcp_validation_boundary``).
+
+        RED today (salesagent-klkg): ``_handle_list_accounts_skill`` constructs
+        ``ListAccountsRequest`` bare, so the bare ValidationError reaches
+        ``normalize_to_adcp_error`` and the envelope has NO suggestion.
+        """
+        from tests.harness.account_list import AccountListEnv
+        from tests.harness.transport import Transport
+
+        with AccountListEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(Transport.A2A, status="not_a_status")
+
+            assert result.is_error, (
+                f"Invalid status must be rejected on the A2A wire, got success payload: {result.payload!r}"
+            )
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+                message_substr="status",
+            )
+
+
+@pytest.mark.requires_db
+class TestSyncAccountsA2ASuggestionParity:
+    """A2A sync_accounts request-validation must carry a top-level suggestion."""
+
+    def test_account_missing_brand_a2a_envelope_carries_suggestion(self, integration_db):
+        """An account entry missing the required ``brand`` rejected on the A2A
+        wire must produce the AdCP two-layer VALIDATION_ERROR envelope WITH a
+        top-level ``suggestion`` — parity with ``/api/v1/accounts/sync``.
+
+        RED today (salesagent-klkg): ``_handle_sync_accounts_skill`` constructs
+        ``SyncAccountsRequest`` bare.
+        """
+        from tests.harness.account_sync import AccountSyncEnv
+        from tests.harness.transport import Transport
+
+        with AccountSyncEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(Transport.A2A, accounts=[{"operator": "no-brand.example"}])
+
+            assert result.is_error, (
+                "An account entry missing brand must be rejected on the A2A wire, "
                 f"got success payload: {result.payload!r}"
             )
-            error = result.error
-            assert isinstance(error, AdCPValidationError), (
-                "get_media_buys_raw must translate request-validation failures through "
-                "the shared adcp_validation_boundary (typed AdCPValidationError), got "
-                f"leaked {type(error).__name__}: {error}"
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+                message_substr="brand",
             )
-            assert error.error_code == "VALIDATION_ERROR"
-            # STRICT error.json conformance: suggestion is a TOP-LEVEL attribute
-            # of the error object, not a details entry (salesagent-9val).
-            assert error.suggestion, (
-                f"Expected a non-empty top-level suggestion on the validation error, got: {error.to_dict()}"
+
+
+@pytest.mark.requires_db
+class TestListAuthorizedPropertiesA2ASuggestionParity:
+    """A2A list_authorized_properties request-validation must carry a top-level suggestion."""
+
+    def test_invalid_context_a2a_envelope_carries_suggestion(self, integration_db):
+        """A wrong-typed ``context`` rejected on the A2A wire must produce the
+        AdCP two-layer VALIDATION_ERROR envelope WITH a top-level
+        ``suggestion`` — parity with ``/api/v1/authorized-properties``.
+
+        RED before the klkg fix: ``_handle_list_authorized_properties_skill``
+        constructed ``ListAuthorizedPropertiesRequest`` bare (the fifth bare
+        handler, found by the disease scan; missed by the original finding).
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness.authorized_properties import AuthorizedPropertiesEnv
+        from tests.harness.transport import Transport
+
+        with AuthorizedPropertiesEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            PrincipalFactory(tenant=tenant, principal_id="p1")
+
+            result = env.call_via(Transport.A2A, context="not-a-context-object")
+
+            assert result.is_error, (
+                f"Wrong-typed context must be rejected on the A2A wire, got success payload: {result.payload!r}"
+            )
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+                message_substr="context",
+            )
+
+
+@pytest.mark.requires_db
+class TestListCreativeFormatsA2ASuggestionParity:
+    """A2A list_creative_formats request-validation must carry a top-level suggestion."""
+
+    def test_invalid_asset_types_a2a_envelope_carries_suggestion(self, integration_db):
+        """An invalid ``asset_types`` member rejected on the A2A wire must
+        produce the AdCP two-layer VALIDATION_ERROR envelope WITH a top-level
+        ``suggestion`` — parity with ``/api/v1/creative-formats``.
+
+        RED today (salesagent-klkg): ``_handle_list_creative_formats_skill``
+        calls ``build_list_creative_formats_request`` bare.
+        """
+        from tests.harness import CreativeFormatsEnv
+        from tests.harness.transport import Transport
+
+        with CreativeFormatsEnv(tenant_id="t1", principal_id="p1") as env:
+            result = env.call_via(Transport.A2A, asset_types=INVALID_ASSET_TYPES)
+
+            assert result.is_error, (
+                f"Invalid asset_types must be rejected on the A2A wire, got success payload: {result.payload!r}"
+            )
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+                message_substr="asset_types",
             )
 
 
