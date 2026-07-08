@@ -66,19 +66,33 @@ def resolve_account(
 def _check_account_status(account_id: str, status: str | None) -> None:
     """Raise if account status blocks operations."""
     if status == "pending_approval":
+        # BR-UC-002 ext-s grades BOTH the top-level suggestion (POST-F3) and a
+        # details payload carrying the setup instructions (POST-F2).
+        setup_instructions = "Complete billing configuration before use."
         raise AdCPAccountSetupRequiredError(
             f"Account '{account_id}' requires setup.",
-            details={"suggestion": "Complete billing configuration before use."},
+            suggestion=setup_instructions,
+            details={"setup_instructions": setup_instructions},
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(
             f"Account '{account_id}' is suspended.",
-            details={"suggestion": "Contact your account manager."},
+            suggestion="Contact your account manager.",
         )
     if status == "payment_required":
         raise AdCPAccountPaymentRequiredError(
             f"Account '{account_id}' has outstanding payment.",
-            details={"suggestion": "Resolve payment before use."},
+            suggestion="Resolve payment before use.",
+        )
+
+
+def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: AccountRepository) -> None:
+    """Raise if the agent's principal lacks access to the account."""
+    principal_id = identity.principal_id
+    if principal_id and not repo.has_access(principal_id, account_id):
+        raise AdCPAuthorizationError(
+            f"Agent '{principal_id}' does not have access to account '{account_id}'.",
+            suggestion="Use list_accounts to find accounts accessible to this agent.",
         )
 
 
@@ -92,15 +106,10 @@ def _resolve_by_id(
     if account is None:
         raise AdCPAccountNotFoundError(
             f"Account '{account_id}' not found.",
-            details={"suggestion": "Use list_accounts to find valid account IDs."},
+            suggestion="Use list_accounts to find valid account IDs.",
         )
 
-    principal_id = identity.principal_id
-    if principal_id and not repo.has_access(principal_id, account_id):
-        raise AdCPAuthorizationError(
-            f"Agent '{principal_id}' does not have access to account '{account_id}'.",
-            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
-        )
+    _require_account_access(identity, account_id, repo)
 
     _check_account_status(account_id, account.status)
 
@@ -144,23 +153,17 @@ def _resolve_by_natural_key(
         )
         raise AdCPAccountAmbiguousError(
             f"Natural key matches {total} accounts for brand '{brand_domain}', operator '{ref.operator}'.",
-            details={"suggestion": "Use explicit account_id instead of brand+operator to avoid ambiguity."},
+            suggestion="Use explicit account_id instead of brand+operator to avoid ambiguity.",
         )
 
     account = matches[0] if matches else None
     if account is None:
         raise AdCPAccountNotFoundError(
             f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
-            details={"suggestion": "Use list_accounts to find valid accounts."},
+            suggestion="Use list_accounts to find valid accounts.",
         )
 
-    # Access check — parity with _resolve_by_id (lines 100-102)
-    principal_id = identity.principal_id
-    if principal_id and not repo.has_access(principal_id, account.account_id):
-        raise AdCPAuthorizationError(
-            f"Agent '{principal_id}' does not have access to account '{account.account_id}'.",
-            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
-        )
+    _require_account_access(identity, account.account_id, repo)
 
     _check_account_status(account.account_id, account.status)
 

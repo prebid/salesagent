@@ -10,9 +10,7 @@ from typing import Any
 from adcp.types import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -24,7 +22,7 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
 from src.core.tools.media_buy_update import _verify_principal
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _build_update_performance_index_request(
@@ -40,13 +38,11 @@ def _build_update_performance_index_request(
     """
     from src.core.schemas import ProductPerformance
 
-    try:
+    with adcp_validation_boundary(context="update_performance_index request"):
         performance_objects = [ProductPerformance(**perf) for perf in performance_data]
         return UpdatePerformanceIndexRequest(
             media_buy_id=media_buy_id, performance_data=performance_objects, context=context
         )
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
 
 def _update_performance_index_impl(

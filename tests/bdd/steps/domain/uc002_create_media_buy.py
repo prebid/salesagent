@@ -101,8 +101,17 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
 
 @given("a valid create_media_buy request")
 def given_valid_request(ctx: dict) -> None:
-    """Set up a generic valid create_media_buy request (account populated separately)."""
+    """Set up a generic valid create_media_buy request (account populated separately).
+
+    Populates ctx['request_kwargs'] with the shared valid defaults so the step
+    text's claim ("a VALID request") holds for full-create dispatch — without
+    this, dispatch fails request validation before ever reaching the gate the
+    scenario targets (e.g. the transport auth gates, salesagent-b0kx).
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
     ctx.setdefault("account_ref", None)
+    _ensure_request_defaults(ctx)
 
 
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
@@ -1292,8 +1301,9 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
-        assert error.details is not None, "Expected error details with suggestion, got None"
-        assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+        # STRICT error.json conformance: suggestion is a top-level error
+        # attribute; a copy buried in details does not count (salesagent-9val).
+        assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
         return
 
     # Check if first word is a structured error code (UPPER_CASE with _).
@@ -1320,8 +1330,8 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         if recovery is not None:
             assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
         if require_suggestion:
-            assert error.details is not None, "Expected error details with suggestion, got None"
-            assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+            # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+            assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
     else:
         # Descriptive: "error unknown sort field"
         description = remainder
@@ -1658,13 +1668,13 @@ def then_dual_emit_media_buy_status(ctx: dict) -> None:
     """AdCP 3.1 create/update-media-buy-response status fields, asserted on the REAL
     wire (``ctx['wire_response']``) — not the reconstructed typed payload.
 
-    Grounded to the target GA behavior graded by the 3.1.0-rc.12 storyboard
-    ``pending_creatives_to_start.yaml`` (latest published compliance; no GA
-    ``3.1.0`` dir exists yet). rc.12 grades the two fields as SEPARATE namespaces:
+    Grounded to the GA behavior graded by the published 3.1.0 storyboard
+    ``pending_creatives_to_start.yaml`` (3.1.1 is byte-identical for this
+    storyboard). GA grades the two fields as SEPARATE namespaces:
       - ``media_buy_status`` => ``field_value`` (REQUIRED): the DOMAIN status, a
-        ``MediaBuyStatus`` enum value (rc.12 L147-149).
+        ``MediaBuyStatus`` enum value (GA 3.1.0 L146-149).
       - ``status`` => ``field_value`` ``'completed'``: the PROTOCOL ``TaskStatus``
-        on the flattened envelope (rc.12 L150-152, "protocol-envelope task-status").
+        on the flattened envelope (GA 3.1.0 L150-153, "protocol-envelope task-status").
 
     This DIVERGES from the pinned SDK's 3.1.0-beta.3 storyboard, which graded
     ``status`` as ``field_value_or_absent`` that MUST equal ``media_buy_status``

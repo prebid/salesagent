@@ -108,7 +108,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     from src.core.exceptions import AdCPAuthRequiredError
 
     if not auth_ctx.auth_token:
-        raise AdCPAuthRequiredError("Authentication required", details={"suggestion": AUTH_REQUIRED_SUGGESTION})
+        raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
 
     from src.core.resolved_identity import resolve_identity
 
@@ -120,7 +120,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     )
 
     if not identity.principal_id:
-        raise AdCPAuthRequiredError("Authentication required", details={"suggestion": AUTH_REQUIRED_SUGGESTION})
+        raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
 
     # Set tenant ContextVar at the REST transport boundary
     if identity.tenant:

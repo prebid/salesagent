@@ -38,12 +38,13 @@ def _wire_suggestion(ctx: dict) -> str | None:
     Mirrors ``_wire_code``: when the scenario dispatched through a wire transport
     (REST/A2A/MCP), the ``suggestion`` is the buyer-facing contract and must be
     read from the real envelope, not the lossy reconstructed ``ctx['error']``.
-    AdCP carries the suggestion either directly on the error object or nested
-    under ``details.suggestion`` (account/auth errors use the latter), in either
-    the ``errors[0]`` or the envelope-level ``adcp_error`` layer — the same
-    canonical lookup as ``TransportResult.assert_wire_error``. Returns ``None``
-    on IMPL / no-wire scenarios so callers fall back to the reconstructed
-    exception (salesagent-ztl6.6).
+    STRICT error.json conformance: only the top-level ``suggestion`` on the
+    error object (``errors[0]`` or ``adcp_error`` layer) counts — a suggestion
+    buried in ``details`` is a conformance bug the harness surfaces, not masks
+    (salesagent-9val). Same canonical lookup as
+    ``TransportResult.assert_wire_error``. Returns ``None`` on IMPL / no-wire
+    scenarios so callers fall back to the reconstructed exception
+    (salesagent-ztl6.6).
     """
     from tests.harness.transport import extract_wire_suggestion
 
@@ -116,10 +117,11 @@ def _get_error_dict(error: object) -> dict:
     if isinstance(error, AdCPError):
         d = error.to_dict()
         # AdCPError.to_dict() has: error_code, message, recovery, details
-        # Map to the assertion vocabulary used in feature files
+        # Map to the assertion vocabulary used in feature files.
+        # Deliberately NO promotion of details["suggestion"]: error.json places
+        # suggestion at the top level, and to_dict() already carries it there
+        # when the emitter is conformant (salesagent-9val).
         d["code"] = d.get("error_code", "")
-        if error.details and "suggestion" in error.details:
-            d["suggestion"] = error.details["suggestion"]
         return d
     # adcp.types.Error model (from partial success response.errors) — has code,
     # message, suggestion, recovery, field as direct attributes.
@@ -684,6 +686,15 @@ def then_real_validation_error(ctx: dict) -> None:
 # ── Generic field presence / value ──────────────────────────────────
 
 
+# Fields defined at the TOP LEVEL of the error.json protocol schema. Presence of
+# these MUST be asserted at the top level of the wire error object — a copy buried
+# in the free-form ``details`` dict does NOT satisfy the protocol contract (same
+# burial disease removed from extract_wire_suggestion, salesagent-9val/ioni).
+_ERROR_JSON_TOP_LEVEL_FIELDS = frozenset(
+    {"code", "message", "field", "suggestion", "retry_after", "issues", "details", "recovery"}
+)
+
+
 @then(parsers.parse('the error should include "{field}" field'))
 def then_error_includes_field(ctx: dict, field: str) -> None:
     """Assert the error includes a named field with a non-empty value — wire-first.
@@ -691,16 +702,23 @@ def then_error_includes_field(ctx: dict, field: str) -> None:
     When the scenario dispatched through a wire transport, read the field from
     the real wire envelope's error object (the buyer-facing contract); otherwise
     fall back to the reconstructed ``ctx['error']`` for IMPL/no-wire scenarios.
-    Works with AdCPError (checks .details, direct attributes, and the top-level
-    to_dict() representation) and adcp.types.Error models (ztl6.8).
+
+    For fields defined at the top level of error.json (see
+    ``_ERROR_JSON_TOP_LEVEL_FIELDS``) the assertion requires the TOP-LEVEL position
+    only — a value buried in ``details`` is a protocol-conformance violation, not a
+    pass. The ``details`` alternative is kept only for genuinely detail-scoped keys.
     """
+    protocol_top_level = field in _ERROR_JSON_TOP_LEVEL_FIELDS
     wire = _wire_error_object(ctx)
     if wire is not None:
         wire_details = wire.get("details") or {}
-        has_field = (field in wire and wire[field]) or (field in wire_details and wire_details[field])
+        has_top = bool(field in wire and wire[field])
+        has_detail = bool(field in wire_details and wire_details[field])
+        has_field = has_top if protocol_top_level else (has_top or has_detail)
         assert has_field, (
-            f"Expected wire error to include non-empty '{field}' field. "
-            f"Wire error keys: {list(wire.keys())}, details keys: {list(wire_details.keys())}"
+            f"Expected wire error to include non-empty '{field}' field"
+            + (" at the protocol top level (not in details)" if protocol_top_level else "")
+            + f". Wire error keys: {list(wire.keys())}, details keys: {list(wire_details.keys())}"
         )
         return
     error = ctx.get("error")
@@ -708,14 +726,13 @@ def then_error_includes_field(ctx: dict, field: str) -> None:
     d = _get_error_dict(error)
     # Also check details sub-dict and direct attributes
     details = getattr(error, "details", None) or {}
-    has_field = (
-        (field in d and d[field])
-        or (field in details and details[field])
-        or (hasattr(error, field) and getattr(error, field))
-    )
+    has_top = bool((field in d and d[field]) or (hasattr(error, field) and getattr(error, field)))
+    has_detail = bool(field in details and details[field])
+    has_field = has_top if protocol_top_level else (has_top or has_detail)
     assert has_field, (
-        f"Expected error to include non-empty '{field}' field. "
-        f"Error dict keys: {list(d.keys())}, details keys: {list(details.keys())}"
+        f"Expected error to include non-empty '{field}' field"
+        + (" at the protocol top level (not in details)" if protocol_top_level else "")
+        + f". Error dict keys: {list(d.keys())}, details keys: {list(details.keys())}"
     )
 
 

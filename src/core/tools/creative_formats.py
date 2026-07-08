@@ -14,7 +14,7 @@ import concurrent.futures
 import logging
 import time
 from collections.abc import Sequence
-from typing import Annotated, TypeVar
+from typing import Annotated
 
 # FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
@@ -22,6 +22,7 @@ from adcp.types import (
     AssetContentType,
     AudioFormatAsset,
     ContextObject,
+    CreativeAgentCapability,
     HtmlFormatAsset,
     ImageFormatAsset,
     TextFormatAsset,
@@ -33,22 +34,45 @@ from adcp.types import Format as AdcpFormat
 from adcp.types.generated_poc.enums.disclosure_persistence import DisclosurePersistence
 from adcp.types.generated_poc.enums.disclosure_position import DisclosurePosition
 from adcp.utils.format_assets import get_format_assets
-from pydantic import Field
 
-# TypeVar for Format to preserve subclass type through backward compatibility function
-FormatT = TypeVar("FormatT", bound=AdcpFormat)
+# Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
+from pydantic import Field
 
-from src.core.exceptions import AdCPError, AdCPServiceUnavailableError, AdCPValidationError
+from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+# Capabilities advertised for every creative agent referral in
+# list_creative_formats. AdCP design principle: capabilities are commitments —
+# the conformance runner probes each advertised capability, so only declare
+# what the registry integration actually backs:
+#   - validation/preview: backed by the agent's `preview_creative` tool
+#     (CreativeAgentRegistry.preview_creative, used by sync_creatives for
+#     validation + preview generation).
+#   - assembly: backed by the agent's `build_creative` tool
+#     (CreativeAgentRegistry.build_creative, used by sync_creatives refinement).
+#   - delivery is deliberately NOT advertised: it commits to variant-level
+#     delivery reporting via a `get_creative_delivery` task, which this agent
+#     does not implement.
+# All configured agents (default + tenant DB agents) are called through the
+# registry's uniform client surface, and agent config carries no per-agent
+# capability metadata yet, so a single static set is the best truthful
+# declaration available today. Caveat: the registry does not verify a remote
+# agent's tool surface up front — a tenant-registered agent that lacks one of
+# these tools fails at call time. Per-agent capability tracking is the
+# follow-up that would close that gap.
+ADVERTISED_CREATIVE_AGENT_CAPABILITIES: tuple[CreativeAgentCapability, ...] = (
+    CreativeAgentCapability.validation,
+    CreativeAgentCapability.assembly,
+    CreativeAgentCapability.preview,
+)
 
-def _ensure_backward_compatible_format(f: FormatT) -> FormatT:
+
+def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> FormatT:
     """Pass-through function for backward compatibility.
 
     Note: adcp 3.2.0 removed the deprecated `assets_required` field from Format.
@@ -69,7 +93,7 @@ from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _infer_asset_type(asset_id: str) -> str:
@@ -440,7 +464,6 @@ def _list_creative_formats_impl(
     )
 
     # Build creative_agents referrals from registry (POST-S4)
-    from adcp.types import CreativeAgentCapability
     from adcp.types.generated_poc.media_buy.list_creative_formats_response import (
         CreativeAgent as AdcpCreativeAgent,
     )
@@ -455,12 +478,7 @@ def _list_creative_formats_impl(
                     AdcpCreativeAgent(
                         agent_url=agent.agent_url,
                         agent_name=agent.name,
-                        capabilities=[
-                            CreativeAgentCapability.validation,
-                            CreativeAgentCapability.assembly,
-                            CreativeAgentCapability.preview,
-                            CreativeAgentCapability.delivery,
-                        ],
+                        capabilities=list(ADVERTISED_CREATIVE_AGENT_CAPABILITIES),
                     )
                 )
     except Exception:
@@ -550,7 +568,7 @@ async def list_creative_formats(
     Returns:
         ToolResult with ListCreativeFormatsResponse data
     """
-    try:
+    with adcp_validation_boundary(context="list_creative_formats request"):
         req = build_list_creative_formats_request(
             format_ids=format_ids,
             output_format_ids=output_format_ids,
@@ -567,8 +585,6 @@ async def list_creative_formats(
             disclosure_persistence=disclosure_persistence,
             context=context,
         )
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="list_creative_formats request")) from e
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_creative_formats_impl(req, identity)

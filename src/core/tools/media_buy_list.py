@@ -15,7 +15,7 @@ from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, RootModel, ValidationError
+from pydantic import Field, RootModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -61,10 +61,7 @@ from adcp.types import ContextObject, MediaBuyStatus
 from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import (
-    AdCPCapabilityNotSupportedError,
-    AdCPValidationError,
-)
+from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -78,7 +75,7 @@ from src.core.schemas import (
     SnapshotUnavailableReason,
     Targeting,
 )
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _get_media_buys_impl(
@@ -291,6 +288,28 @@ def _get_media_buys_impl(
     )
 
 
+def _build_get_media_buys_request(
+    media_buy_ids: list[str] | None,
+    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
+    account: LibraryAccountReference | None,
+    context: ContextObject | None,
+) -> GetMediaBuysRequest:
+    """Build a GetMediaBuysRequest from individual wire params.
+
+    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
+    construction runs inside the ONE validation boundary — previously the raw
+    wrapper built the request unprotected and REST leaked a raw pydantic
+    ``ValidationError`` with no top-level suggestion (salesagent-ah98).
+    """
+    with adcp_validation_boundary(context="get_media_buys request"):
+        return GetMediaBuysRequest(
+            media_buy_ids=media_buy_ids,
+            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+            account=account,
+            context=cast(ContextObject | None, context),
+        )
+
+
 async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -316,22 +335,11 @@ async def get_media_buys(
     Returns:
         ToolResult with GetMediaBuysResponse data
     """
-    try:
-        req = GetMediaBuysRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            account=account,
-            context=cast(ContextObject | None, context),
-        )
-        # Read identity pre-resolved by MCPAuthMiddleware
-        identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-        response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
-        return ToolResult(content=str(response), structured_content=response)
-    except ValidationError as e:
-        # Raise AdCPValidationError so the MCP boundary translator runs the
-        # envelope builder; the prior ToolError raise bypassed it and produced
-        # a tuple-stringified wire response with no adcp_error/errors layers.
-        raise AdCPValidationError(format_validation_error(e, context="get_media_buys request")) from e
+    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
+    # Read identity pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def get_media_buys_raw(
@@ -362,12 +370,7 @@ def get_media_buys_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True, protocol="a2a")
 
-    req = GetMediaBuysRequest(
-        media_buy_ids=media_buy_ids,
-        status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-        account=account,
-        context=cast(ContextObject | None, context),
-    )
+    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
     return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
 
@@ -439,8 +442,8 @@ def _resolve_status_filter(
 
 # Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
 # transitions) maps onto the AdCP MediaBuyStatus wire vocabulary below.
-# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL (the
-# salesagent-18h.1 fix) but targets the AdCP enum used by list_media_buys
+# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL but targets
+# the AdCP enum used by list_media_buys
 # instead of the internal delivery filter vocabulary — the two output
 # vocabularies are genuinely different (AdCP has no "failed"/"ready"/"draft"),
 # so per the CLAUDE.md DRY guidance ("not about collapsing two genuinely
@@ -465,7 +468,7 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
     "pending": MediaBuyStatus.pending_start,
     "pending_approval": MediaBuyStatus.pending_start,
     # "scheduled" is set by admin approval pre-flight (operations.py / workflows.py);
-    # like the other pre-serving states it maps to pending_start (salesagent-3ec1).
+    # like the other pre-serving states it maps to pending_start.
     "scheduled": MediaBuyStatus.pending_start,
     "pending_creatives": MediaBuyStatus.pending_creatives,
     "pending_start": MediaBuyStatus.pending_start,
@@ -490,7 +493,8 @@ def _compute_status(buy: MediaBuy | _MediaBuyData) -> MediaBuyStatus:
     """Resolve a media buy's AdCP status from its PERSISTED status column.
 
     Persisted-status-authoritative, per the AdCP lifecycle requirement "persist
-    status, never recompute from dates" (dist/docs media-buys: status "MUST be
+    status, never recompute from dates" (dist/docs/<version>/media-buy/media-buys/
+    index.mdx: status "MUST be
     stored as an explicit field and mutated only by protocol events ... date
     comparison sets the INITIAL status at create_media_buy time; after that, the
     state machine owns the field"). The ``media_buy_status_scheduler`` owns the

@@ -1510,11 +1510,11 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    assert isinstance(error, AdCPError), f"Expected AdCPError with details, got {type(error).__name__}: {error}"
-    assert error.details is not None, "Expected error.details to contain a suggestion, got None"
-    suggestion = str(error.details.get("suggestion", "")).lower()
+    assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
+    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    suggestion = str(error.suggestion or "").lower()
     assert text1.lower() in suggestion or text2.lower() in suggestion, (
-        f"Expected '{text1}' or '{text2}' in suggestion: {error.details.get('suggestion')}"
+        f"Expected '{text1}' or '{text2}' in suggestion: {error.suggestion}"
     )
 
 
@@ -1526,10 +1526,10 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    assert error.details is not None, "Expected error.details with suggestion"
-    suggestion = str(error.details.get("suggestion", "")).lower()
+    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    suggestion = str(error.suggestion or "").lower()
     assert any(t.lower() in suggestion for t in [text1, text2, text3]), (
-        f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.details.get('suggestion')}"
+        f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.suggestion}"
     )
 
 
@@ -1624,13 +1624,10 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
     )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain 'suggestion' field"
-    )
-    assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    suggestion = error.details["suggestion"]
+    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    suggestion = error.suggestion
     assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty suggestion string, got {suggestion!r}"
+        f"Expected non-empty top-level suggestion string, got {suggestion!r}"
     )
 
 
@@ -2125,12 +2122,10 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
     )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain suggestion"
-    )
-    suggestion = error.details.get("suggestion")
+    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    suggestion = error.suggestion
     assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
-        f"Expected actionable suggestion string (>= 5 chars) in error details, "
+        f"Expected actionable top-level suggestion string (>= 5 chars), "
         f"got {suggestion!r}. Step claims 'how to fix the issue' — suggestion "
         f"must contain meaningful guidance."
     )
@@ -2223,12 +2218,11 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
 
     assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
     assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
-    # Step text promises "with suggestion" — details dict must exist and contain it
-    assert error.details is not None, f"AdCPError(error_code={code!r}) has no details dict — cannot contain suggestion"
-    assert "suggestion" in error.details, f"Expected 'suggestion' in error details for '{code}', got: {error.details}"
-    suggestion = error.details["suggestion"]
+    # STRICT error.json conformance: suggestion is a top-level error attribute,
+    # never read from the free-form details dict (salesagent-9val).
+    suggestion = error.suggestion
     assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty suggestion string for error code '{code}', got {suggestion!r}"
+        f"Expected non-empty top-level suggestion string for error code '{code}', got {suggestion!r}"
     )
 
 

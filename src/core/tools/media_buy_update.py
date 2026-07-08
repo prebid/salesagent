@@ -34,7 +34,6 @@ from adcp.types import ContextObject, ReportingWebhook, TargetingOverlay
 from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
 from sqlalchemy import select
 
 from src.core.exceptions import (
@@ -91,7 +90,7 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error, package_field_path, suggest_validation_fix
+from src.core.validation_helpers import adcp_validation_boundary, package_field_path
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -109,9 +108,11 @@ def _adcp_status_and_actions(persisted_status: str | None) -> tuple[MediaBuyStat
     persisted string — otherwise a persisted status whose name differs from its
     AdCP value (``scheduled``/``approved``/``pending_approval``/``failed``/``draft``)
     feeds a non-AdCP token to ``valid_actions_for_status`` and yields ``[]`` (and a
-    null ``media_buy_status``), diverging from ``get_media_buys``' date-aware
-    ``_compute_status``. Single source of truth for the update-response status pair
-    so the four ``UpdateMediaBuySuccess`` sites cannot drift (salesagent-3ec1).
+    null ``media_buy_status``), diverging from ``get_media_buys``'
+    persisted-status-authoritative ``_compute_status``, which reads the same
+    column (date-driven transitions live in the status scheduler, #1417).
+    Single source of truth for the update-response status pair so the four
+    ``UpdateMediaBuySuccess`` sites cannot drift.
     """
     media_buy_status = normalize_persisted_media_buy_status(persisted_status)
     valid_actions = valid_actions_for_status(media_buy_status.value) if media_buy_status else []
@@ -1444,20 +1445,24 @@ def _build_update_request(
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
 
-    try:
+    with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
-    except ValidationError as e:
-        raise AdCPValidationError(
-            format_validation_error(e, context="update_media_buy request"),
-            suggestion=suggest_validation_fix(e),
-        ) from e
 
-    # BR-RULE-022: reject empty updates (no updatable fields beyond identifier)
+    # BR-RULE-022: reject empty updates (no updatable fields beyond identifier).
+    # This is a SEMANTIC rejection of a schema-valid request (update fields are all
+    # optional per AdCP 3.1 GA update-media-buy-request.json), so the canonical code
+    # is INVALID_REQUEST — NOT VALIDATION_ERROR (which GA L3 error-handling reserves
+    # for schema-validation failures: missing required fields / bad types / range).
     if not req.has_updatable_fields():
-        raise AdCPValidationError(
+        raise AdCPInvalidRequestError(
             "Update request must include at least one updatable field "
             "(paused, start_time, end_time, packages, budget, "
-            "push_notification_config, reporting_webhook, context, ext)"
+            "push_notification_config, reporting_webhook, context, ext)",
+            suggestion=(
+                "Include at least one updatable field in the request: paused, "
+                "start_time, end_time, packages, budget, push_notification_config, "
+                "reporting_webhook, context, or ext."
+            ),
         )
 
     return req

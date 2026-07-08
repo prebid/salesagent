@@ -329,18 +329,25 @@ class MockAdServer(AdServerAdapter):
         AdapterConfig test_behavior so the Docker-hosted adapter reproduces
         the same fault the in-process mock raises via side_effect. No-op when
         the flag is absent.
+
+        The buyer suggestion rides the first-class ``suggestion=`` param —
+        error.json places it at the top level of the error object, so a copy
+        buried in ``details`` never reaches the protocol position
+        (salesagent-wwyx, same disease as cx41/58hl). ``error_details`` from
+        test behavior stays in ``details`` for any other injected keys.
         """
         test_behavior = self._read_test_behavior()
         if not test_behavior.get(flag):
             return
         from src.core.exceptions import AdCPAdapterError
 
+        details = test_behavior.get("error_details")
+        suggestion = (details or {}).pop("suggestion", None) if isinstance(details, dict) else None
         raise AdCPAdapterError(
             test_behavior.get("error_message", "Test adapter failure"),
             recovery=test_behavior.get("recovery", "transient"),
-            details=test_behavior.get(
-                "error_details", {"suggestion": "Retry the operation or contact ad server support"}
-            ),
+            suggestion=suggestion or "Retry the operation or contact ad server support",
+            details=details or None,
         )
 
     def _validate_targeting(self, targeting_overlay):

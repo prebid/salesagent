@@ -203,6 +203,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: creative agent partition/boundary tests (salesagent-7fqx)
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(beads-dul): suggestion field not in production error model
+    # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable as-is — the
+    # When step no-ops (type filter removed in adcp 3.12), so the scenario
+    # fails on "operation should fail", not on the missing suggestion.
+    # Suggestion parity for list_creative_formats is pinned instead by
+    # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # FIXME(beads-dul): disclosure validation errors not implemented
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
@@ -592,16 +597,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-9vgz.18): UC-003 empty update — production does not reject
-        # requests with no updatable fields. Instead returns completed with empty
-        # affected_packages. BR-RULE-022 INV-3 says: "No updatable fields → rejected".
-        if "T-UC-003-empty-update" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="empty update not rejected by production (BR-RULE-022 INV-3 spec-production gap)",
-                    strict=True,
-                )
-            )
+        # GRADUATED (#1417/nzjx): UC-003 empty update now rejected. Production raises
+        # AdCPInvalidRequestError (INVALID_REQUEST + buyer suggestion) per BR-RULE-022
+        # INV-3. Grounded against AdCP 3.1 GA: update fields are all optional in
+        # update-media-buy-request.json, so an empty update passes schema validation and
+        # is a SEMANTIC rejection → INVALID_REQUEST, not the schema-level VALIDATION_ERROR
+        # (GA L3 error-handling). The two Scenario-Outline rows that asserted
+        # VALIDATION_ERROR were corrected to INVALID_REQUEST in the same change.
 
         # FIXME(salesagent-9vgz.14): UC-003 keyword_targets_add — production applies the
         # keyword additions but returns empty affected_packages. All transports pass the When
@@ -692,7 +694,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Production has NO privilege gate on update, and the AdCP buyer protocol has
         # no principal-role concept (roles live on the admin-UI User model, not
         # Principal). The fields-less ext-n request also short-circuits through the
-        # empty-update VALIDATION_ERROR path before any adapter call. The step now
+        # empty-update INVALID_REQUEST path before any adapter call. The step now
         # arms the real update adapter with a canonical PERMISSION_DENIED rejection,
         # so this strict xfail flips to a wire-asserted pass the moment production
         # gates admin-only update actions. Strict: fails loudly when that lands.
@@ -701,7 +703,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 pytest.mark.xfail(
                     reason="production gap: no admin-only privilege gate on update_media_buy; "
                     "AdCP buyers have no principal-role concept and the fields-less request "
-                    "short-circuits via empty-update VALIDATION_ERROR before any adapter call "
+                    "short-circuits via empty-update INVALID_REQUEST before any adapter call "
                     "(canonical target: PERMISSION_DENIED) — salesagent-gh8p.11",
                     strict=True,
                 )
@@ -711,7 +713,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # refused. canceled IS a valid UpdateMediaBuyRequest field but production
         # never reads it, has no state-based NOT_CANCELLABLE check, and
         # has_updatable_fields() omits canceled — so a media_buy_id+canceled
-        # request trips the empty-update VALIDATION_ERROR path instead of
+        # request trips the empty-update INVALID_REQUEST path instead of
         # NOT_CANCELLABLE. The step arms the update adapter with the canonical
         # NOT_CANCELLABLE refusal and dispatches the real cancel on the wire, so
         # this strict xfail flips to a pass when production wires the cancel path.
@@ -720,7 +722,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 pytest.mark.xfail(
                     reason="production gap: update_media_buy never reads canceled and has no state-based "
                     "cancellation gate; has_updatable_fields() omits canceled so the request short-circuits "
-                    "via empty-update VALIDATION_ERROR (canonical target: NOT_CANCELLABLE) — salesagent-gh8p.13",
+                    "via empty-update INVALID_REQUEST (canonical target: NOT_CANCELLABLE) — salesagent-gh8p.13",
                     strict=True,
                 )
             )
@@ -1115,8 +1117,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
                 True,
             ),
-            # Invalid status filter: production doesn't validate enum values
-            "T-UC-004-filter-invalid": ("invalid status_filter values not rejected", True),
+            # Invalid status filter: NOT a production gap — the generic
+            # 'with {request_params}' When step shadows the specific
+            # status_filter step and parses 'status_filter "X"' (no '=') to {},
+            # so the request dispatches with NO params and succeeds (ah98
+            # red-step inspection, 2026-07-06). GetMediaBuyDeliveryRequest DOES
+            # reject invalid values; the REST wire already returns 400.
+            # Suggestion parity for this path is pinned by
+            # tests/integration/test_request_validation_suggestion_parity.py.
+            "T-UC-004-filter-invalid": ("step shadowing: generic request_params step drops status_filter", True),
             # Date range validation: production doesn't validate start>end
             "T-UC-004-daterange-invalid": ("date range validation (start>end) not implemented", True),
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
@@ -2037,7 +2046,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # inv-151-1, inv-152-1/2/3/5, inv-154-tenant, sandbox-production,
         # snapshot available variants, principal_scoping valid variants.
         _UC019_XFAIL_TAGS: set[str] = {
-            # Status filter invalid — all parametrizations still fail
+            # Status filter invalid — all parametrizations still fail.
+            # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable —
+            # with this entry removed the scenario still xfails at the fixture
+            # ("No harness wired for None": not env-wired), and its examples
+            # assert non-canonical codes (STATUS_FILTER_INVALID_VALUE /
+            # STATUS_FILTER_EMPTY — absent from the pinned error-code enum),
+            # which the shared-boundary fix will not emit. Reconcile upstream.
+            # Suggestion parity for get_media_buys is pinned by
+            # tests/integration/test_request_validation_suggestion_parity.py.
             "T-UC-019-partition-status-filter-invalid",
             # Creative approval mapping — not implemented
             "T-UC-019-partition-approval",
@@ -3074,9 +3091,17 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
                 yield
-        elif any(t.startswith("T-UC-002-ext-") for t in marker_names) or "nfr-highvalue" in marker_names:
+        elif (
+            any(t.startswith("T-UC-002-ext-") for t in marker_names)
+            or "nfr-highvalue" in marker_names
+            or "T-UC-002-nfr-001-enforcement" in marker_names
+        ):
             # Extension/error scenarios: budget validation, pricing errors, etc.
             # Plus the nfr-highvalue >$10k Seller-alert scenario (salesagent-wvry),
+            # and the nfr-001 no-auth rejection scenario (salesagent-b0kx), which
+            # needs the same full create dispatch so each transport's REAL auth
+            # gate (A2A on_message_send no-token gate, REST _require_auth_dep,
+            # MCP boundary) produces the wire rejection.
             # which needs the same full create_media_buy flow to reach the
             # pending-approval audit feed.
             # Use MediaBuyCreateEnv which calls _create_media_buy_impl with real DB.
@@ -3287,12 +3312,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
-    elif uc == "UC-003":
-        from tests.harness.media_buy_update import MediaBuyUpdateEnv
-
-        with MediaBuyUpdateEnv() as env:
-            ctx["env"] = env
-            yield
     elif uc == "UC-GET-PRODUCTS":
         from tests.harness.product import ProductEnv
 

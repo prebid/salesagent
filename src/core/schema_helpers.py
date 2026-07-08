@@ -22,13 +22,12 @@ from adcp.types import (
     ContextObject,
     ProductFilters,
     PropertyListReference,
+    PushNotificationConfig,
     ReportingWebhook,
 )
-from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -64,6 +63,26 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
         return webhook
     if isinstance(webhook, dict):
         return ReportingWebhook(**webhook)
+    return None  # Fallback for unexpected types
+
+
+def to_push_notification_config(
+    config: dict[str, Any] | PushNotificationConfig | None,
+) -> PushNotificationConfig | None:
+    """Convert dict to PushNotificationConfig for adcp type compatibility.
+
+    Args:
+        config: Push notification config as dict or PushNotificationConfig or None
+
+    Returns:
+        PushNotificationConfig or None
+    """
+    if config is None:
+        return None
+    if isinstance(config, PushNotificationConfig):
+        return config
+    if isinstance(config, dict):
+        return PushNotificationConfig(**config)
     return None  # Fallback for unexpected types
 
 
@@ -152,13 +171,8 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     """
     if filters is None or isinstance(filters, CreativeFilters):
         return filters
-    try:
+    with adcp_validation_boundary(context="list_creatives filters"):
         return CreativeFilters.model_validate(filters)
-    except ValidationError as e:
-        raise AdCPValidationError(
-            format_validation_error(e, context="list_creatives filters"),
-            suggestion="Fix the filters object — e.g. concept_ids must contain at least 1 concept id.",
-        ) from e
 
 
 def create_get_products_request(

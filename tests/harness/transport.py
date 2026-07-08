@@ -41,23 +41,21 @@ def _pinned_error_metadata() -> dict[str, dict[str, str]]:
 def extract_wire_suggestion(envelope: dict | None) -> str | None:
     """The buyer-facing ``suggestion`` from a two-layer AdCP wire error envelope.
 
-    AdCP carries the suggestion either directly on the error object or nested
-    under ``details.suggestion`` (account/auth errors use the latter), in either
-    the ``errors[0]`` or the envelope-level ``adcp_error`` layer. Single source
-    of truth for both ``TransportResult.assert_wire_error`` and the BDD
-    ``_wire_suggestion`` step (salesagent-hm3r). Returns ``None`` when there is
-    no envelope (IMPL / no-wire).
+    STRICT error.json conformance: ``suggestion`` is a top-level sibling of
+    code/message/field/retry_after/recovery on the error object (in either the
+    ``errors[0]`` or the envelope-level ``adcp_error`` layer). A suggestion
+    buried in the free-form ``details`` dict is NOT at the protocol position
+    and deliberately does not satisfy this lookup — emitters that bury it are
+    conformance bugs the harness must surface, not mask (salesagent-9val).
+    Single source of truth for both ``TransportResult.assert_wire_error`` and
+    the BDD ``_wire_suggestion`` step (salesagent-hm3r). Returns ``None`` when
+    there is no envelope (IMPL / no-wire).
     """
     if not envelope:
         return None
     errors = envelope.get("errors") or [{}]
     adcp_error = envelope.get("adcp_error") or {}
-    return (
-        errors[0].get("suggestion")
-        or adcp_error.get("suggestion")
-        or (errors[0].get("details") or {}).get("suggestion")
-        or (adcp_error.get("details") or {}).get("suggestion")
-    )
+    return errors[0].get("suggestion") or adcp_error.get("suggestion")
 
 
 class Transport(StrEnum):

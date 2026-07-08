@@ -1,6 +1,16 @@
 # Prebid Sales Agent
 
-A reference implementation of the [Ad Context Protocol (AdCP)](https://adcontextprotocol.org) sales agent, enabling AI agents to buy advertising inventory through a standardized MCP interface. This codebase is maintained under Prebid.org as the Prebid Sales Agent reference implementation.
+An open-source implementation of the [Ad Context Protocol (AdCP)](https://adcontextprotocol.org)
+sales-agent role, maintained under Prebid.org. It lets AI agents discover and buy advertising
+inventory through standardized MCP and A2A interfaces.
+
+> **Status: alpha.** A pre-1.0 implementation of a pre-release protocol
+> (AdCP 3.1.0-beta.3), under active development. APIs still change between
+> releases — `v2.0.0` introduced breaking changes — so pin a version and expect
+> to adapt on upgrade. It is one of several AdCP sales-agent implementations,
+> not a sole or canonical reference. The codebase is substantial and functional
+> (Google Ad Manager integration, multi-tenant isolation, 16 AdCP tools,
+> extensive tests), but treat it as alpha and validate before relying on it.
 
 ## What is this?
 
@@ -12,9 +22,12 @@ The Prebid Sales Agent is a server that:
 
 ## AdCP Compatibility
 
-This implementation targets **AdCP spec version 3.0.1** via the `adcp==4.3.0`
-Python SDK. See [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the
-SDK-to-spec mapping and bump procedure.
+This implementation targets **AdCP spec version 3.1.0-beta.3** via the `adcp==5.7.0`
+Python SDK. That spec version is a **beta** — request/response shapes are not yet
+frozen, and SDK bumps can change them. See
+[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the SDK-to-spec mapping
+and bump procedure. The pin is enforced by a CI guard
+(`tests/unit/test_adcp_spec_version.py`), which fails on drift.
 
 ## Choose Your Path
 
@@ -61,6 +74,9 @@ Publishers deploy their own sales agent. Choose based on your needs:
 | **Google Cloud Run** | 15-20 min | Medium | [gcp.md](docs/deployment/walkthroughs/gcp.md) |
 
 **Docker is the fastest** - it bundles PostgreSQL and just works. Cloud platforms require separate database setup.
+
+Because this is alpha software tracking a beta protocol, pin the version you deploy
+and re-test after every upgrade — minor releases can carry breaking changes.
 
 ### After Deployment
 
@@ -150,47 +166,73 @@ docker compose logs adcp-server | head -50
 - **[Architecture](docs/development/architecture.md)** - System design and database schema
 - **[Troubleshooting Guide](docs/development/troubleshooting.md)** - Monitoring and debugging
 
-## Key Features
+## AdCP Tools
 
-### For AI Agents
-- **Product Discovery** - Natural language search for advertising products
-- **Campaign Creation** - Automated media buying with targeting
-- **Creative Management** - Upload and approval workflows
-- **Performance Monitoring** - Real-time campaign metrics
+The MCP server exposes 16 AdCP tools (registered in
+[`src/core/main.py`](src/core/main.py)). The server also exposes AdCP operations over A2A as JSON-RPC skills; the exact set differs slightly from the MCP tool list.
 
-### For Publishers
-- **Multi-Tenant System** - Isolated data per publisher
-- **Adapter Pattern** - Support for multiple ad servers
-- **Real-time Dashboard** - Live activity feed with Server-Sent Events (SSE)
-- **Workflow Management** - Unified system for human-in-the-loop approvals
-- **Operations Monitoring** - Track all media buys, workflows, and system activities
-- **Admin Interface** - Web UI with Google OAuth
-- **Audit Logging** - Complete operational history
+| Area | Tools |
+|------|-------|
+| **Discovery** | `get_products`, `list_creative_formats`, `list_authorized_properties`, `get_adcp_capabilities` |
+| **Media buys** | `create_media_buy`, `update_media_buy`, `get_media_buys`, `get_media_buy_delivery`, `update_performance_index` |
+| **Creatives** | `sync_creatives`, `list_creatives` |
+| **Tasks / workflow** | `list_tasks`, `get_task`, `complete_task` |
+| **Accounts** | `list_accounts`, `sync_accounts` |
 
-### For Developers
-- **MCP Protocol** - Standard interface for AI agents
-- **A2A Protocol** - Agent-to-Agent communication via JSON-RPC 2.0
-- **REST API** - Programmatic tenant management
-- **Docker Deployment** - Easy local and production setup
-- **Comprehensive Testing** - Unit, integration, and E2E tests
+## Ad Server Adapters
+
+Adapters live in [`src/adapters/`](src/adapters/), are registered in
+`src/adapters/__init__.py`, and are selected per tenant. The adapter interface is
+defined in `src/adapters/base.py`. Maturity varies — GAM is the most complete;
+the others are at earlier stages.
+
+| Adapter | Key(s) | Notes |
+|---------|--------|-------|
+| **Google Ad Manager** | `gam`, `google_ad_manager` | The most developed adapter (`src/adapters/gam/`). Supports CPM, VCPM, CPC, and FLAT_RATE pricing with automatic line-item-type selection. See [docs/adapters/](docs/adapters/). |
+| **Broadstreet** | `broadstreet` | Broadstreet integration (`src/adapters/broadstreet/`), with Admin UI configuration. |
+| **Kevel** | `kevel` | Kevel integration (`src/adapters/kevel.py`). |
+| **Triton Digital** | `triton`, `triton_digital` | Triton Digital integration (`src/adapters/triton_digital.py`). |
+| **Mock** | `mock` | Simulated ad server for testing and local development (`src/adapters/mock_ad_server.py`). Supports all AdCP pricing models; zero real spend. |
+
+## Capabilities
+
+**For AI agents**
+- Natural-language product discovery
+- Media-buy creation, updates, and delivery reporting
+- Creative sync and listing with approval workflows
+
+**For publishers**
+- Multi-tenant isolation (data scoped per publisher)
+- Adapter pattern for multiple ad servers
+- Real-time activity dashboard (Server-Sent Events)
+- Human-in-the-loop workflow/approval system
+- Audit logging of operations
+- Admin web UI with Google OAuth
+
+**For developers**
+- MCP interface (FastMCP, HTTP/SSE transport)
+- A2A interface (JSON-RPC 2.0)
+- REST API for tenant management
+- Docker-based local and production deployment
+- Unit, integration, e2e, admin, BDD, and UI test suites
 
 ## Protocol Support
 
 ### MCP (Model Context Protocol)
-The primary interface for AI agents to interact with the Prebid Sales Agent. Uses FastMCP with HTTP/SSE transport.
+The primary interface for AI agents. Built with FastMCP over HTTP/SSE transport.
 
 ### A2A (Agent-to-Agent Protocol)
-JSON-RPC 2.0 compliant server for agent-to-agent communication:
-- **Endpoint**: `/a2a` (also available at port 8091)
-- **Discovery**: `/.well-known/agent.json`
+JSON-RPC 2.0 server for agent-to-agent communication:
+- **Endpoint**: `/a2a` (also served on port 8091)
+- **Discovery**: `/.well-known/agent.json` (also `/.well-known/agent-card.json`, `/agent.json`)
 - **Authentication**: Bearer tokens via Authorization header
-- **Library**: Built with standard `python-a2a` library
+- **Library**: Built with `a2a-sdk[http-server]`
 
 ## Testing Backend
 
-The mock server provides comprehensive AdCP testing capabilities for developers:
+The mock server provides AdCP testing capabilities for developers, driven by request headers:
 
-### Testing Headers Support
+### Request Headers
 - **X-Dry-Run**: Test operations without real execution
 - **X-Mock-Time**: Control time for deterministic testing
 - **X-Jump-To-Event**: Skip to specific campaign events
@@ -204,19 +246,19 @@ The mock server provides comprehensive AdCP testing capabilities for developers:
 - **X-Simulated-Spend**: Current campaign spend simulation
 
 ### Testing Features
-- **Campaign Lifecycle Simulation**: Complete event progression (creation → completion)
+- **Campaign Lifecycle Simulation**: Event progression (creation → completion)
 - **Error Scenario Testing**: Budget exceeded, delivery issues, platform errors
 - **Time Simulation**: Fast-forward campaigns for testing
 - **Session Isolation**: Parallel test execution without conflicts
-- **Production Safety**: Zero real spend during testing
+- **Zero real spend during testing**
 
 ```python
 # Example: Test with time simulation
 headers = {
     "x-adcp-auth": "your_token",
     "X-Dry-Run": "true",
-    "X-Mock-Time": "2025-02-15T12:00:00Z",
-    "X-Test-Session-ID": "test-123"
+    "X-Mock-Time": "2026-02-15T12:00:00Z",
+    "X-Test-Session-ID": "test-123",
 }
 
 # Use with any MCP client for safe testing
@@ -230,26 +272,32 @@ See `examples/mock_server_testing_demo.py` for complete testing examples.
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-# Connect to server
-headers = {"x-adcp-auth": "your_token"}
+# Connect to the server
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
-    headers=headers
+    headers={"x-adcp-auth": "your_token"},
 )
 client = Client(transport=transport)
 
-# Discover products
 async with client:
-    products = await client.tools.get_products(
-        brief="video ads for sports content"
-    )
+    # 1. Discover products. Each product carries one or more `pricing_options`.
+    products = await client.tools.get_products(brief="video ads for sports content")
 
-    # Create media buy
+    # 2. Book a media buy. Each package references a product and one of its
+    #    pricing options. `idempotency_key` is REQUIRED (16-255 chars) — reusing
+    #    the same key makes retries safe (returns the original buy, no duplicate).
     result = await client.tools.create_media_buy(
-        product_ids=["ctv_sports"],
-        total_budget=50000,
-        flight_start_date="2025-02-01",
-        flight_end_date="2025-02-28"
+        brand="acme.com",                     # domain shorthand for a BrandReference
+        start_time="2026-08-01T00:00:00Z",    # ISO 8601, or "asap"
+        end_time="2026-08-31T23:59:59Z",
+        packages=[
+            {
+                "product_id": "ctv_sports",
+                "pricing_option_id": "cpm_usd",  # from product.pricing_options
+                "budget": 50000,                 # amount in the pricing option's currency
+            }
+        ],
+        idempotency_key="acme-ctv-2026-08-0001",
     )
 ```
 
@@ -257,47 +305,29 @@ async with client:
 
 ```
 salesagent/
-├── src/                    # Source code
-│   ├── core/              # Core MCP server components
-│   │   ├── main.py        # MCP server implementation
-│   │   ├── schemas.py     # API schemas and data models
-│   │   ├── config_loader.py  # Configuration management
-│   │   ├── audit_logger.py   # Security and audit logging
-│   │   └── database/      # Database layer
-│   │       ├── models.py  # SQLAlchemy models
-│   │       ├── database.py # Database initialization
-│   │       └── database_session.py # Session management
-│   ├── services/          # Business logic services
-│   │   ├── ai_product_service.py # AI product management
-│   │   ├── targeting_capabilities.py # Targeting system
-│   │   └── gam_inventory_service.py # GAM integration
-│   ├── adapters/          # Ad server integrations
-│   │   ├── base.py        # Base adapter interface
-│   │   ├── google_ad_manager.py # GAM adapter
-│   │   └── mock_ad_server.py # Mock adapter
-│   └── admin/             # Admin UI (Flask)
-│       ├── app.py         # Flask application
-│       ├── blueprints/    # Flask blueprints
-│       │   ├── tenants.py # Tenant dashboard
-│       │   ├── tasks.py   # Task management (DEPRECATED - see workflow system)
-│       │   └── activity_stream.py # Real-time activity feed
-│       └── server.py      # Admin server
-├── scripts/               # Utility scripts
-│   ├── setup/            # Setup and initialization
-│   ├── dev/              # Development tools
-│   ├── ops/              # Operations scripts
-│   └── deploy/           # Deployment scripts
-├── tests/                # Test suite
-│   ├── unit/            # Unit tests
-│   ├── integration/     # Integration tests
-│   └── e2e/             # End-to-end tests
-├── docs/                 # Documentation
-├── examples/             # Example code
-├── tools/                # Demo and simulation tools
-├── alembic/             # Database migrations
-├── templates/           # Jinja2 templates
-└── config/              # Configuration files
-    └── nginx/           # Nginx configuration files
+├── src/                       # Source code
+│   ├── core/                  # Core MCP server components
+│   │   ├── main.py            # MCP server + tool registration
+│   │   ├── schemas/           # Pydantic models (AdCP-compliant; package)
+│   │   ├── tools/             # Tool _impl functions + wrappers (package)
+│   │   ├── database/          # SQLAlchemy models, session, repositories
+│   │   ├── config_loader.py   # Configuration management
+│   │   └── audit_logger.py    # Security and audit logging
+│   ├── services/              # Business logic services
+│   ├── adapters/              # Ad server integrations
+│   │   ├── base.py            # Base adapter interface
+│   │   ├── gam/               # Google Ad Manager adapter
+│   │   ├── broadstreet/       # Broadstreet adapter
+│   │   └── mock_ad_server.py  # Mock adapter
+│   ├── a2a_server/            # A2A (agent-to-agent) server
+│   └── admin/                 # Admin UI (Flask)
+├── scripts/                   # Setup, dev, ops, and deploy scripts
+├── tests/                     # unit / integration / e2e / admin / bdd
+├── docs/                      # Documentation
+├── examples/                  # Example code
+├── alembic/                   # Database migrations
+├── templates/                 # Jinja2 templates
+└── config/                    # Configuration files (incl. nginx/)
 ```
 
 ## Requirements
@@ -306,7 +336,7 @@ salesagent/
 - Docker and Docker Compose (for easy deployment)
 - PostgreSQL (Docker Compose handles this automatically)
 - Google OAuth credentials (for Admin UI)
-- Gemini API key (for AI features)
+- Gemini API key (for AI-powered product discovery)
 
 ## Contributing
 
@@ -318,20 +348,17 @@ We welcome contributions! Please see our [Development Guide](docs/development/RE
 
 ### Important: Database Access Patterns
 
-When contributing, please follow our standardized database patterns:
+When contributing, follow the standardized database patterns. All data access goes
+through SQLAlchemy 2.0 ORM via repository classes — see
+[Contributing Guide](docs/development/contributing.md) and `CLAUDE.md` for details.
+
 ```python
-# ✅ CORRECT - Use context manager
-from database_session import get_db_session
+# Use a context-managed session
+from src.core.database.database_session import get_db_session
 with get_db_session() as session:
     # Your database operations
     session.commit()
-
-# ❌ WRONG - Manual management
-conn = get_db_connection()
-# operations
-conn.close()  # Prone to leaks
 ```
-See [Contributing Guide](docs/development/contributing.md) for details.
 
 ## Admin Features
 
@@ -339,35 +366,20 @@ See [Contributing Guide](docs/development/contributing.md) for details.
 Users can belong to multiple tenants with the same email address (like GitHub, Slack, etc.):
 - Sign up for multiple publisher accounts with one Google login
 - Different roles per tenant (admin in one, viewer in another)
-- No "email already exists" errors - users are tenant-scoped
-
-**Migration**: Database schema updated with composite unique constraint `(tenant_id, email)`. See `alembic/versions/aff9ca8baa9c_allow_users_multi_tenant_access.py`
+- Users are tenant-scoped via a composite unique constraint `(tenant_id, email)`
 
 ### Tenant Deactivation (Soft Delete)
 Deactivate test or unused tenants without losing data:
-
-**How to deactivate:**
-1. Go to Settings → Danger Zone
-2. Type tenant name exactly to confirm
-3. Click "Deactivate Sales Agent"
-
-**What happens:**
-- ✅ All data preserved (media buys, creatives, principals)
-- ❌ Hidden from login and tenant selection
-- ❌ API access blocked
-- ℹ️ Can be reactivated by super admin
-
-**Reactivation** (super admin only):
-```bash
-POST /admin/tenant/{tenant_id}/reactivate
-```
+- All data preserved (media buys, creatives, principals)
+- Hidden from login and tenant selection; API access blocked
+- Reactivatable by a super admin
 
 ### Self-Signup
 New users can self-provision tenants:
 - Google OAuth authentication
 - GAM-only for self-signup (other adapters via support)
 - Auto-creates tenant, user, and default principal
-- Available at `/signup` on main domain
+- Available at `/signup` on the main domain
 
 ## Support
 
@@ -381,6 +393,6 @@ Apache 2.0 License - see [LICENSE](LICENSE) file for details.
 
 ## Related Projects
 
-- [AdCP Specification](https://github.com/adcontextprotocol/adcp-spec) - Protocol specification
-- [MCP SDK](https://github.com/modelcontextprotocol) - Model Context Protocol tools
+- [AdCP Specification](https://github.com/adcontextprotocol/adcp) - Protocol specification
+- [Model Context Protocol](https://github.com/modelcontextprotocol) - MCP tools and SDKs
 - [FastMCP](https://github.com/jlowin/fastmcp) - MCP server framework

@@ -62,8 +62,8 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
 
-# For backward compatibility, alias AdCPPackage as LibraryPackage (TypeAlias for mypy)
-LibraryPackage: TypeAlias = AdCPPackage
+# For backward compatibility, alias AdCPPackage as LibraryPackage
+LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export used as base class
 # Simple types that match library exactly
 # V3: Structured geo targeting types
 from adcp.types import ActivateSignalRequest as LibraryActivateSignalRequest
@@ -264,7 +264,7 @@ def _mirror_media_buy_status(model: Any) -> Any:
     ``TaskResultEnvelope._serialize`` OVERWRITES the top-level ``status`` with the
     PROTOCOL ``TaskStatus`` (``submitted`` / ``completed``), so on the wire the
     top-level ``status`` and ``media_buy_status`` are DIFFERENT namespaces and are
-    NOT identical. This is the target GA model graded by the 3.1.0-rc.12 storyboard
+    NOT identical. This is the GA model graded by the published 3.1.0 storyboard
     ``pending_creatives_to_start.yaml`` (status=field_value 'completed'), which
     diverges from the pinned SDK's beta.3 storyboard (status=field_value_or_absent,
     MUST-equal media_buy_status; #4908). See docs/adcp-spec-version.md
@@ -333,7 +333,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
-        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
         NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
@@ -520,7 +520,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
-        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
         NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
@@ -1742,6 +1742,16 @@ class AssetStatus(SalesAgentBaseModel):
     status: str  # Status: draft, active, submitted, failed, etc.
     message: str | None = None  # Status message
     workflow_step_id: str | None = None  # HITL workflow step ID for manual approval
+    # Seller-side concept enrichment (#1506). AdCP exposes read-only
+    # concept_id/concept_name on list_creatives but carries no concept on
+    # sync_creatives, so there is no protocol writer. An adapter may derive a
+    # fallback concept from its native creative grouping (e.g. the GAM Order)
+    # and surface it here. This is explicitly NOT the authoritative buyer-side
+    # concept: concept_source records the provenance so a future
+    # buyer-supplied concept can be distinguished and take precedence.
+    concept_id: str | None = None  # Seller-derived concept grouping id
+    concept_name: str | None = None  # Human-readable concept name
+    concept_source: str | None = None  # Provenance marker, e.g. "gam_order"
 
 
 # Unified update models
@@ -2457,8 +2467,8 @@ from adcp.types.generated_poc.core.property import (
     Identifier as PropertySpecificIdentifier,
 )  # TODO: no stable alias in adcp.types (different from adcp.types.Identifier)
 
-PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # Property-specific identifier
-Property: TypeAlias = LibraryProperty
+PropertyIdentifier: TypeAlias = PropertySpecificIdentifier  # noqa: UP040 — runtime re-export
+Property: TypeAlias = LibraryProperty  # noqa: UP040 — runtime re-export
 
 
 class PropertyTagMetadata(SalesAgentBaseModel):

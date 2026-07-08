@@ -51,14 +51,12 @@ create-/update-media-buy responses.
 - **beta.3 storyboard** (`dist/compliance/3.1.0-beta.3/.../pending_creatives_to_start.yaml`,
   ~L131-134) grades the body `status` as `field_value_or_absent` that MUST equal
   `media_buy_status` — the deprecated "both identical" model (#4908).
-- **Target GA** — graded by the latest published compliance, **3.1.0-rc.12**
-  (`.../3.1.0-rc.12/.../pending_creatives_to_start.yaml`, ~L147-152) — grades
-  `media_buy_status` as `field_value` (the DOMAIN status) and the top-level
-  `status` as `field_value` `'completed'` (the PROTOCOL `TaskStatus`, protocol
-  envelope). The two are DIFFERENT namespaces and are NOT identical.
-
-No GA `3.1.0` docs/compliance directory exists yet; rc.12 is the nearest
-published grading of the divergent model, so citations use rc.12.
+- **Target GA** — graded by the published **3.1.0** compliance
+  (`dist/compliance/3.1.0/.../pending_creatives_to_start.yaml`, ~L146-153;
+  `3.1.1` is byte-identical for this storyboard) — grades `media_buy_status`
+  as `field_value` (the DOMAIN status) and the top-level `status` as
+  `field_value` `'completed'` (the PROTOCOL `TaskStatus`, protocol envelope).
+  The two are DIFFERENT namespaces and are NOT identical.
 
 Our wire already implements the divergent (target GA) model:
 `TaskResultEnvelope._serialize` sets the top-level `status` to the protocol

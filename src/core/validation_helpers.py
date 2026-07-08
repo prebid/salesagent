@@ -19,22 +19,28 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def adcp_validation_boundary() -> Iterator[None]:
+def adcp_validation_boundary(context: str = "parameters") -> Iterator[None]:
     """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
 
-    A2A skill handlers validate buyer parameters at the transport boundary. A raw
-    ``ValidationError`` leaking from ``model_validate`` (or a typed-model constructor)
-    would surface as an untyped error — and the outer dispatcher only builds the
-    two-layer error envelope for ``AdCPError`` subclasses, so the buyer would lose
-    the real code/recovery. Wrapping the construction in this boundary gives every
-    handler the same ``Invalid parameters: ...`` message plus a structured ``field``
-    path, instead of a hand-copied try/except per handler.
+    Transport wrappers and skill handlers validate buyer parameters at the
+    boundary. A raw ``ValidationError`` leaking from ``model_validate`` (or a
+    typed-model constructor) would surface as an untyped error — and the outer
+    dispatcher only builds the two-layer error envelope for ``AdCPError``
+    subclasses, so the buyer would lose the real code/recovery. This boundary is
+    the SINGLE translation point (salesagent-ah98): every rejection carries the
+    buyer-friendly ``format_validation_error`` message, the structured ``field``
+    path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
+    try/except copy.
+
+    ``context`` names what was invalid in the message (e.g. ``"get_products
+    request"``); the default renders the ``Invalid parameters`` prefix existing
+    wire assertions rely on.
     """
     try:
         yield
     except ValidationError as e:
         raise AdCPValidationError(
-            f"Invalid parameters: {e}",
+            format_validation_error(e, context=context),
             field=first_validation_error_field(e),
             suggestion=suggest_validation_fix(e),
         ) from e
