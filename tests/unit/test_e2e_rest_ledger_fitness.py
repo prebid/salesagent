@@ -26,11 +26,13 @@ _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 # ceiling to the new count). The single exception is a MERGED-UPSTREAM scenario that
 # lands in an already-known mechanism: it is a new item on the #1423 retirement
 # work-list, not branch-introduced e2e_rest debt, so it is ledgered with its siblings
-# rather than papered over in a step. 308 -> 309: main #1481 added
-# test_format_id_roundtrip (a formats-mechanism scenario whose in-process ProductFactory
-# format the live server can't see); it graduates when the formats fixture surface (#1430)
-# lands. Do NOT raise this for branch-authored failures — fix or graduate those.
-_LEDGER_CEILING = 309
+# rather than papered over in a step. Do NOT raise this for branch-authored
+# failures — fix or graduate those. Pinned to the exact-set lock (EXPECTED_LEDGER)
+# so the ratchet actually binds at the current count instead of trailing hundreds
+# behind it (PR #1430 review: it sat at 309 while the ledger held 11).
+from tests.unit.test_e2e_rest_ledger_state import EXPECTED_LEDGER
+
+_LEDGER_CEILING = len(EXPECTED_LEDGER)
 
 
 def _ledger_entries() -> list[str]:

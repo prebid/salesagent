@@ -11,6 +11,12 @@
 #
 # Loaded by tests/bdd/conftest.py to xfail(strict=False) exactly these nodeids.
 # Locked by tests/unit/test_e2e_rest_ledger_state.py — keep that test in sync.
+#
+# GRADUATION IS MANUAL-GATE-VERIFIED, NOT CI-ENFORCED: no GitHub workflow sets
+# BDD_E2E_ENABLED, so the e2e_rest transport never runs in CI — every removal
+# below is backed by a manual in-network ./run_all_tests.sh gate (the innet_*
+# report ids cited in the section comments), and reviewers must ask for that
+# evidence. Adding a required in-network CI job would make this self-enforcing.
 # Design + execution plan + per-mechanism breakdown:
 #   docs/test-redesign/e2e-rest-ledger-retirement.md
 #
