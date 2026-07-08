@@ -556,7 +556,7 @@ class MockAdServer(AdServerAdapter):
                 # For question-asking scenario, return success with pending media_buy_id
                 # The media buy hasn't been created yet - we need input first
                 # The workflow_step_id will track this pending operation
-                return CreateMediaBuySuccess(  # type: ignore[call-arg]  # status/confirmed_at/revision default on subclass (mypy pydantic-plugin misses the override)
+                return CreateMediaBuySuccess.sync_success(
                     media_buy_id="pending",  # Placeholder for pending manual approval
                     creative_deadline=None,
                     packages=[],  # No packages yet - operation not complete
@@ -677,7 +677,7 @@ class MockAdServer(AdServerAdapter):
         # The media buy hasn't been created yet - it's being processed asynchronously
         # The workflow_step_id (from step['step_id']) will track this pending operation
         # Client can poll the step or wait for webhook notification when complete
-        return CreateMediaBuySuccess(  # type: ignore[call-arg]  # status/confirmed_at/revision default on subclass (mypy pydantic-plugin misses the override)
+        return CreateMediaBuySuccess.sync_success(
             media_buy_id="pending",  # Placeholder for async processing in progress
             creative_deadline=None,
             packages=[],  # No packages yet - operation not complete

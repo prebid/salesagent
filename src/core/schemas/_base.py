@@ -280,6 +280,18 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     confirmed_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     revision: int = 1
 
+    @classmethod
+    def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
+        """Construct a synchronous create_media_buy success, defaulting the spec-3.1.1 envelope
+        invariants (status/confirmed_at/revision) in one place instead of repeating them at every
+        call site. mypy's pydantic plugin does not treat the subclass defaults above as satisfying
+        the required parent fields (spurious ``call-arg``), so callers route through this factory.
+        """
+        kwargs.setdefault("status", "completed")
+        kwargs.setdefault("confirmed_at", datetime.now(UTC))
+        kwargs.setdefault("revision", 1)
+        return cls(**kwargs)
+
     # SDK 5.7 removed these from parent — declare locally
     account: Any | None = None
     sandbox: bool | None = None

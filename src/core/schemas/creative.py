@@ -10,7 +10,6 @@ from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject as LibraryContextObject
 from adcp.types import CreativeStatus
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
@@ -362,23 +361,9 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 6.6 re-typed the parent's action as the StrEnum CreativeAction (values:
-    # created/updated/unchanged/failed/deleted). We intentionally WIDEN to str because
-    # production also emits non-spec workflow values (e.g. "approval_required" in
-    # _workflow.py). Widening a StrEnum field to str is a Liskov violation mypy flags,
-    # so suppress [assignment] — same pattern as the geo_*_exclude overrides below.
-    action: str = Field(description="Action taken for this creative")  # type: ignore[assignment]
-
-    @field_validator("action", mode="before")
-    @classmethod
-    def _normalize_action_to_str(cls, v: Any) -> str | None:
-        """Normalize CreativeAction enum to its string value.
-
-        Returns ``None`` only when ``v`` is ``None`` (delegated to ``enum_value``);
-        the required ``action: str`` field type then rejects it. Annotated
-        ``str | None`` to match ``enum_value``'s real return.
-        """
-        return enum_value(v)
+    # action is inherited from the adcp 6.6 parent as the StrEnum CreativeAction. Every value
+    # production emits (created/updated/unchanged/failed/deleted — as strings or enum members) is
+    # a valid CreativeAction, and StrEnum coerces the strings, so no override or normalizer is needed.
 
     # adcp 6.6 (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
     # warnings to the library parent — we now INHERIT all six (salesagent-qj0p, shrinking the
@@ -467,12 +452,10 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Design decision (salesagent-g3c): error variant never constructed.
     """
 
-    # SDK 5.7 removed these from the parent — declare locally.
-    # adcp 6.6 re-added context (ContextObject|None) and ext (ExtensionObject|None) on the
-    # parent; we keep the dict-accepting unions because production assigns raw dicts here.
+    # SDK 5.7 removed dry_run from the parent — declare locally. context (ContextObject|None) and
+    # ext (ExtensionObject|None) were re-added by adcp 6.6 and are now inherited: production may
+    # assign raw dicts, which Pydantic coerces to the typed models on validation.
     dry_run: bool | None = None
-    context: LibraryContextObject | dict[str, Any] | None = None  # type: ignore[assignment]
-    ext: dict[str, Any] | None = None  # type: ignore[assignment]
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.

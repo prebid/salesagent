@@ -3008,7 +3008,7 @@ async def _create_media_buy_impl(
             # Return success response with packages awaiting approval
             # The workflow_step_id in packages indicates approval is required
             _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(  # type: ignore[call-arg]  # status/confirmed_at/revision default on subclass (mypy pydantic-plugin misses the override)
+                response=CreateMediaBuySuccess.sync_success(
                     media_buy_id=media_buy_id,
                     creative_deadline=None,
                     packages=pending_packages,
@@ -3163,7 +3163,7 @@ async def _create_media_buy_impl(
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
             _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(  # type: ignore[call-arg]  # status/confirmed_at/revision default on subclass (mypy pydantic-plugin misses the override)
+                response=CreateMediaBuySuccess.sync_success(
                     media_buy_id=media_buy_id,
                     packages=response_packages,
                     valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
@@ -3500,7 +3500,7 @@ async def _create_media_buy_impl(
                 )
                 for pkg in packages
             ]
-            simulated_response = CreateMediaBuySuccess(  # type: ignore[call-arg]  # status/confirmed_at/revision default on subclass (mypy pydantic-plugin misses the override)
+            simulated_response = CreateMediaBuySuccess.sync_success(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
@@ -3990,7 +3990,7 @@ async def _create_media_buy_impl(
             )
 
         # Create AdCP response with typed Package objects
-        adcp_response = CreateMediaBuySuccess(  # type: ignore[call-arg]  # status/confirmed_at/revision default on subclass (mypy pydantic-plugin misses the override)
+        adcp_response = CreateMediaBuySuccess.sync_success(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
             valid_actions=valid_actions_for_status(media_buy_status),
