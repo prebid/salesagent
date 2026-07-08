@@ -3,29 +3,32 @@
 # Both ./run_all_tests.sh and .github/workflows/ci.yml call this script, so
 # the list cannot drift between local and CI.
 #
-# Ignored advisories (each documented with rationale):
+# Active suppressions: none (see scripts/security-ignored-vulns.sh).
+#
+# Previously ignored, now resolved (kept here as a record):
 #
 # - PYSEC-2026-89 / CVE-2025-69534 / GHSA-5wmx-573v-2qwq: Python-Markdown
 #     unhandled AssertionError on malformed HTML-like sequences. The
 #     advisory body says "fixed in version 3.8.1"; the OSV record's
-#     affected-range events array is malformed (missing the
-#     ``{"fixed": "3.8.1"}`` event), so uv-secure flags every version. We
-#     are on Markdown >= 3.8.1 (currently 3.10.2) — past the fix.
+#     affected-range events array was malformed (missing the
+#     ``{"fixed": "3.8.1"}`` event), so uv-secure flagged every version. We
+#     were on Markdown >= 3.8.1 — past the fix. Suppression removed 2026-07
+#     (#1557) when uv-secure clean without ignore.
 #
 # - PYSEC-2025-183 / CVE-2025-45768: PyJWT alleged weak signing key —
 #     explicitly DISPUTED by the supplier per the advisory body ("the key
 #     length is chosen by the application that uses the library"). No fix
-#     version exists because the maintainer rejects the framing. OSV record
-#     has the same malformed empty-fixed-event pattern as PYSEC-2026-89.
-#     Inapplicable here regardless: this codebase only invokes PyJWT via
+#     version exists because the maintainer rejects the framing. Inapplicable
+#     here regardless: this codebase only invokes PyJWT via
 #     ``jwt.decode(id_token, options={"verify_signature": False})`` to parse
 #     Google-issued OIDC ID tokens (src/admin/auth_utils.py), so no PyJWT
-#     signing keys are configured by this application at all.
-#     uv-secure's advisory database has shown it flip between flagged and
-#     unflagged across runs as the upstream record gets re-curated, hence
-#     ``--allow-unused-ignores`` below.
+#     signing keys are configured by this application at all. Suppression
+#     removed 2026-07 (#1558) when uv-secure clean without ignore.
 #
-# Previously ignored, now resolved by real dep bumps (kept here as a record):
+# - MAL-2026-4750: fastapi 'fastar' dep — OSV advisory withdrawn 2026-05-26
+#     (internal tooling artefact). Suppression removed 2026-07 (#1559) when
+#     uv-secure and pip-audit clean without ignore.
+#
 # - GHSA-7gcm-g887-7qv7 (protobuf DoS) — resolved by bumping protobuf to 6.33.6.
 # - GHSA-5239-wwwm-4pmq (Pygments AdlLexer ReDoS) — resolved by bumping
 #   Pygments to 2.20.0.
