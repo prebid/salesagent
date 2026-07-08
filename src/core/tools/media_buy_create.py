@@ -329,6 +329,13 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
 
     try:
         return run_async_in_sync_context(registry.get_format(agent_url, format_id))
+    except AdCPError:
+        # Typed errors from the registry (rate limit, timeout, connect failure)
+        # carry their own recovery semantics — propagate so a TRANSIENT agent
+        # failure reaches the buyer as SERVICE_UNAVAILABLE instead of being
+        # swallowed into None, which downstream validation converts to a
+        # terminal CREATIVE_REJECTED (PR #1430 review).
+        raise
     except Exception as e:
         logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
         return None
