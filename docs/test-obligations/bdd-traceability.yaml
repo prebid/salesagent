@@ -4072,6 +4072,12 @@ mappings:
       upstream_refs: ["BR-UC-006-main-sync"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-006-local-xp-assignment"
+      adcp_feature: "local-uc006-cross-principal-assignment.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-sync"]
+      business_rules: ["BR-RULE-034"]
+      status: new
     - adcp_scenario_id: "T-UC-006-ext-a-empty"
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null

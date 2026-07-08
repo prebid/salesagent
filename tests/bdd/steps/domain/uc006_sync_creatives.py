@@ -5622,6 +5622,54 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     dispatch_request(ctx, creatives=ctx["creatives"])
 
 
+@when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
+def when_sync_cross_principal_assignment(ctx: dict) -> None:
+    """Dispatch sync_creatives with ONLY an assignment referencing another
+    principal's creative (no creatives array) — the cross-principal FK-500
+    surface (local feature, salesagent-t4or).
+    """
+    from src.core.database.models import Principal
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
+    from tests.factories.core import get_or_create
+
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    authenticated = get_or_create(
+        env,
+        Principal,
+        {"principal_id": env._principal_id, "tenant_id": tenant.tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=env._principal_id),
+    )
+    media_buy = MediaBuyFactory(tenant=tenant, principal=authenticated)
+    pkg = MediaPackageFactory(media_buy=media_buy)
+    env._commit_factory_data()
+    ctx["xp_package_id"] = pkg.package_id
+    dispatch_request(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+
+
+@then("the sync operation should not fail")
+def then_sync_did_not_fail(ctx: dict) -> None:
+    """The cross-principal reference must be skipped — never a raw FK 500."""
+    error = ctx.get("error")
+    assert error is None, f"sync_creatives failed on a cross-principal assignment reference: {error!r}"
+    assert ctx.get("response") is not None, "Expected a sync_creatives response"
+
+
+@then('no assignment should exist for creative "creative-xp" in the tenant')
+def then_no_assignment_for_xp_creative(ctx: dict) -> None:
+    """DB read-back: the cross-principal reference must not create a row."""
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment as DBAssignment
+
+    tenant = ctx["tenant"]
+    with db_session(ctx) as session:
+        rows = session.scalars(
+            select(DBAssignment).filter_by(tenant_id=tenant.tenant_id, creative_id="creative-xp")
+        ).all()
+    assert len(rows) == 0, f"Cross-principal assignment reference created {len(rows)} row(s) — must be 0"
+
+
 @then(parsers.parse('a new creative should be created for principal "{principal_id}"'))
 def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> None:
     """Assert a new creative was created for the given principal (BR-RULE-034 INV-2).
