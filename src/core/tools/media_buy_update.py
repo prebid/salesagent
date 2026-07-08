@@ -1557,7 +1557,9 @@ def update_media_buy_raw(
     end_time: str = None,
     pacing: str = None,
     daily_budget: float = None,
-    packages: list[UpdatePackage] | None = None,
+    # A2A/REST send wire dicts; UpdateMediaBuyRequest validates them as the
+    # request's packages[] field.
+    packages: list[UpdatePackage] | list[dict[str, Any]] | None = None,
     creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context

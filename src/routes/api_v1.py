@@ -315,7 +315,7 @@ async def create_media_buy(
         brand=body.brand,
         # packages stay wire dicts: CreateMediaBuyRequest validates them as the
         # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,  # type: ignore[arg-type]
+        packages=body.packages,
         start_time=body.start_time,
         end_time=body.end_time,
         po_number=body.po_number,
@@ -353,7 +353,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         daily_budget=body.daily_budget,
         # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
         # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,  # type: ignore[arg-type]
+        packages=body.packages,
         push_notification_config=push_notification_config,
         context=context,
         reporting_webhook=reporting_webhook,
@@ -404,7 +404,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     response = creatives_sync_module.sync_creatives_raw(
         # creatives stay wire dicts: _sync_creatives_impl validates each entry
         # individually (partial-success semantics with per-creative results).
-        creatives=body.creatives,  # type: ignore[arg-type]
+        creatives=body.creatives,
         assignments=body.assignments,
         creative_ids=body.creative_ids,
         delete_missing=body.delete_missing,

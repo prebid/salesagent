@@ -2656,7 +2656,7 @@ async def _create_media_buy_impl(
                 slack_notifier = get_slack_notifier(notifier_config)
 
                 # Create notification details
-                notification_details = {
+                notification_details: dict[str, Any] = {
                     "total_budget": total_budget,
                     "po_number": req.po_number,
                     "start_time": start_time.isoformat(),  # Resolved from 'asap' if needed
@@ -3164,7 +3164,7 @@ async def _create_media_buy_impl(
                     "workflow_step_id": step.step_id,
                     "context_id": persistent_ctx.context_id,
                     "auto_create_enabled": auto_create_enabled,
-                    "product_auto_create": product_auto_create,  # type: ignore[dict-item]
+                    "product_auto_create": product_auto_create,
                 }
 
                 slack_notifier.notify_media_buy_event(
@@ -4264,8 +4264,9 @@ def _build_create_media_buy_request(
     *,
     brand: BrandReference | str | None,
     # The MCP wrapper receives the internal PackageRequest subtype; the raw
-    # wrapper the library type — CreateMediaBuyRequest validates either.
-    packages: list[AdcpPackageRequest] | list[PackageRequest] | None,
+    # wrapper the library type or wire dicts (A2A/REST) — CreateMediaBuyRequest
+    # validates any of them.
+    packages: list[AdcpPackageRequest] | list[PackageRequest] | list[dict[str, Any]] | None,
     start_time: str | None,
     end_time: str | None,
     po_number: str | None,
@@ -4415,7 +4416,9 @@ async def create_media_buy(
 
 async def create_media_buy_raw(
     brand: BrandReference | str | None = None,
-    packages: list[AdcpPackageRequest] | None = None,  # REQUIRED per AdCP spec
+    # A2A/REST send wire dicts; CreateMediaBuyRequest validates them as the
+    # request's packages[] field. REQUIRED per AdCP spec.
+    packages: list[AdcpPackageRequest] | list[dict[str, Any]] | None = None,
     start_time: str | None = None,  # ISO 8601 or 'asap' - REQUIRED per AdCP spec
     end_time: str | None = None,  # ISO 8601 - REQUIRED per AdCP spec
     po_number: str | None = None,
