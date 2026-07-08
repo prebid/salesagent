@@ -126,6 +126,146 @@ class TestGetMediaBuysRawWrapperSuggestionParity:
 
 
 @pytest.mark.requires_db
+class TestGetProductsRestSuggestionParity:
+    """REST get_products request-validation must carry a top-level suggestion."""
+
+    def test_invalid_filters_rest_envelope_carries_suggestion(self, integration_db):
+        """An invalid ``filters.delivery_type`` rejected on the REST wire must
+        produce the AdCP two-layer VALIDATION_ERROR envelope WITH a top-level
+        ``suggestion`` (error.json @v3.1-04f59d2d5).
+
+        The invalid value passes ``GetProductsBody`` (``filters: dict``) and
+        fails inside ``ProductFilters`` (delivery_type enum) built by
+        ``create_get_products_request`` — the tool-level request-validation
+        boundary this invariant governs. The MCP wrapper wraps this helper in
+        ``adcp_validation_boundary`` (products.py); the REST route must match.
+
+        RED today (#1417 gap): the ``/api/v1/products`` route calls the helper
+        with no boundary; the raw ValidationError reaches the generic
+        ``ValueError`` handler and the envelope has NO suggestion.
+        """
+        from tests.harness import ProductEnv
+        from tests.harness.transport import extract_wire_suggestion
+        from tests.helpers import assert_envelope_shape
+
+        with ProductEnv(tenant_id="t1", principal_id="p1") as env:
+            client = env.get_rest_client()
+
+            response = client.post(
+                "/api/v1/products",
+                json={"brief": "video ads", "filters": {"delivery_type": "not_a_delivery_type"}},
+            )
+
+            assert response.status_code == 400, (
+                "Invalid filters.delivery_type must be rejected on the REST wire, got "
+                f"{response.status_code}: {response.text[:500]}"
+            )
+            envelope = response.json()
+            assert_envelope_shape(
+                envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                message_substr="delivery_type",
+            )
+            suggestion = extract_wire_suggestion(envelope)
+            assert suggestion, (
+                "Expected a non-empty TOP-LEVEL suggestion in the VALIDATION_ERROR "
+                f"wire envelope (error.json @v3.1-04f59d2d5), got: {envelope}"
+            )
+
+
+@pytest.mark.requires_db
+class TestListAccountsRestSuggestionParity:
+    """REST list_accounts request-validation must carry a top-level suggestion."""
+
+    def test_invalid_status_rest_envelope_carries_suggestion(self, integration_db):
+        """An invalid ``status`` rejected on the REST wire must produce the
+        AdCP two-layer VALIDATION_ERROR envelope WITH a top-level
+        ``suggestion`` (error.json @v3.1-04f59d2d5).
+
+        The invalid value passes ``ListAccountsBody`` (``str``) and fails
+        inside ``ListAccountsRequest`` (AccountStatus enum) — the tool-level
+        request-validation boundary this invariant governs.
+
+        RED today (#1417 gap): the ``/api/v1/accounts`` route builds the
+        request with no boundary; the raw ValidationError reaches the generic
+        ``ValueError`` handler and the envelope has NO suggestion.
+        """
+        from tests.harness.account_list import AccountListEnv
+        from tests.harness.transport import extract_wire_suggestion
+        from tests.helpers import assert_envelope_shape
+
+        with AccountListEnv() as env:
+            env.setup_default_data()
+            client = env.get_rest_client()
+
+            response = client.post("/api/v1/accounts", json={"status": "not_a_status"})
+
+            assert response.status_code == 400, (
+                f"Invalid status must be rejected on the REST wire, got {response.status_code}: {response.text[:500]}"
+            )
+            envelope = response.json()
+            assert_envelope_shape(
+                envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                message_substr="status",
+            )
+            suggestion = extract_wire_suggestion(envelope)
+            assert suggestion, (
+                "Expected a non-empty TOP-LEVEL suggestion in the VALIDATION_ERROR "
+                f"wire envelope (error.json @v3.1-04f59d2d5), got: {envelope}"
+            )
+
+
+@pytest.mark.requires_db
+class TestSyncAccountsRestSuggestionParity:
+    """REST sync_accounts request-validation must carry a top-level suggestion."""
+
+    def test_account_missing_brand_rest_envelope_carries_suggestion(self, integration_db):
+        """An account entry missing the required ``brand`` rejected on the
+        REST wire must produce the AdCP two-layer VALIDATION_ERROR envelope
+        WITH a top-level ``suggestion``.
+
+        The invalid entry passes ``SyncAccountsBody`` (``list[dict]``) and
+        fails inside ``SyncAccountsRequest`` (Accounts requires brand).
+
+        RED today (#1417 gap): the ``/api/v1/accounts/sync`` route builds the
+        request with no boundary; the raw ValidationError reaches the generic
+        ``ValueError`` handler and the envelope has NO suggestion.
+        """
+        from tests.harness.account_sync import AccountSyncEnv
+        from tests.harness.transport import extract_wire_suggestion
+        from tests.helpers import assert_envelope_shape
+
+        with AccountSyncEnv() as env:
+            env.setup_default_data()
+            client = env.get_rest_client()
+
+            response = client.post(
+                "/api/v1/accounts/sync",
+                json={"accounts": [{"operator": "no-brand.example"}]},
+            )
+
+            assert response.status_code == 400, (
+                "An account entry missing brand must be rejected on the REST wire, got "
+                f"{response.status_code}: {response.text[:500]}"
+            )
+            envelope = response.json()
+            assert_envelope_shape(
+                envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                message_substr="brand",
+            )
+            suggestion = extract_wire_suggestion(envelope)
+            assert suggestion, (
+                "Expected a non-empty TOP-LEVEL suggestion in the VALIDATION_ERROR "
+                f"wire envelope (error.json @v3.1-04f59d2d5), got: {envelope}"
+            )
+
+
+@pytest.mark.requires_db
 class TestListCreativeFormatsRestSuggestionParity:
     """REST list_creative_formats request-validation must carry a top-level suggestion."""
 

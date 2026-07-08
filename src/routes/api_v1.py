@@ -214,11 +214,12 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
-    req = products_module.create_get_products_request(
-        brief=body.brief,
-        brand=body.brand,
-        filters=body.filters,
-    )
+    with adcp_validation_boundary(context="get_products request"):
+        req = products_module.create_get_products_request(
+            brief=body.brief,
+            brand=body.brand,
+            filters=body.filters,
+        )
     response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")
     return apply_version_compat("get_products", result, body.adcp_version)
@@ -252,7 +253,8 @@ async def list_authorized_properties(
     from src.core.schemas import ListAuthorizedPropertiesRequest
 
     body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
-    req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
+    with adcp_validation_boundary(context="list_authorized_properties request"):
+        req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
 
     response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -435,7 +437,8 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
     """List accounts accessible to the authenticated agent (auth required)."""
     from src.core.schemas.account import ListAccountsRequest
 
-    req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    with adcp_validation_boundary(context="list_accounts request"):
+        req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
     response = accounts_module.list_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -445,6 +448,7 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
-    req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    with adcp_validation_boundary(context="sync_accounts request"):
+        req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
