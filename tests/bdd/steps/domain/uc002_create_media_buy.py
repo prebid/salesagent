@@ -1725,9 +1725,39 @@ def _require_success_response(ctx: dict) -> object:
     return resp
 
 
+def _serialized_success_body(ctx: dict) -> dict:
+    """The success response as the buyer sees it on the serialized wire.
+
+    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
+    (stashed by the dispatch helper); IMPL has no wire, so serialize the typed
+    payload through the production serializer — the same path that produces the
+    wire bytes for the other transports. Mirrors ``uc005_format_id_shape``.
+
+    Asserting on this (not the already type-coerced ``ctx["response"]`` payload)
+    is what makes a *serialization* claim — confirmed_at as an ISO 8601 string,
+    revision as an integer — actually observe the wire.
+    """
+    from tests.harness.transport import Transport
+
+    wire = ctx.get("wire_response")
+    transport = ctx.get("transport")
+    # Loud guard: a real-wire transport that didn't stash wire_response would
+    # otherwise fall through to model_dump and assert nothing on the wire.
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if wire is not None:
+        return wire
+    return _require_success_response(ctx).model_dump(mode="json")  # type: ignore[attr-defined]
+
+
 @then(parsers.parse('the response should include "confirmed_at" as an ISO 8601 timestamp'))
 def then_response_confirmed_at_is_iso(ctx: dict) -> None:
-    """confirmed_at is stamped on the sync success arm and parses as ISO 8601.
+    """confirmed_at is present on the SERIALIZED wire body and is an ISO 8601 string.
+
+    The claim here is specifically about serialization, so it is asserted on the
+    serialized body (``wire_response`` for REST/A2A/MCP; the production serializer
+    for IMPL) rather than the type-coerced payload — otherwise the ISO-string
+    parse never runs (the payload's confirmed_at is already a ``datetime``).
 
     AdCP 3.1.0-beta.3 media-buy/specification.mdx: a successful synchronous
     create_media_buy response constitutes order confirmation (prose-MUST;
@@ -1736,15 +1766,42 @@ def then_response_confirmed_at_is_iso(ctx: dict) -> None:
     """
     from datetime import datetime
 
-    resp = _require_success_response(ctx)
-    confirmed_at = _get_response_field(resp, "confirmed_at")
-    assert confirmed_at is not None, "sync success response is missing confirmed_at"
-    parsed = (
-        confirmed_at
-        if isinstance(confirmed_at, datetime)
-        else datetime.fromisoformat(str(confirmed_at).replace("Z", "+00:00"))
+    body = _serialized_success_body(ctx)
+    confirmed_at = body.get("confirmed_at")
+    assert confirmed_at is not None, f"serialized response is missing confirmed_at: {body!r}"
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be an ISO 8601 STRING on the wire, got {type(confirmed_at).__name__}: {confirmed_at!r}"
     )
+    parsed = datetime.fromisoformat(confirmed_at.replace("Z", "+00:00"))
     assert parsed.tzinfo is not None, f"confirmed_at must carry a timezone designator, got {confirmed_at!r}"
+
+
+@then(parsers.parse('the serialized wire body should carry "revision" as an integer'))
+def then_response_revision_is_integer_on_wire(ctx: dict) -> None:
+    """revision is an integer-VALUED number on the serialized wire (not a string/None).
+
+    Transport nuance this wire check surfaced (invisible to the type-coerced
+    payload): JSON-native transports (REST/MCP) and the IMPL serializer carry
+    revision as a genuine ``int``, but A2A serializes the DataPart through a
+    protobuf ``Struct`` whose only numeric type is ``double`` — so an integer
+    arrives as a whole-number float (e.g. ``1.0``). Both are the same integer
+    value. We therefore require a true ``int`` wherever the wire can represent
+    one, and accept a whole-number float on A2A, while still rejecting a string,
+    null, bool, or fractional revision. See #1544 round-3.
+    """
+    from tests.harness.transport import Transport
+
+    body = _serialized_success_body(ctx)
+    revision = body.get("revision")
+    if ctx.get("transport") == Transport.A2A:
+        assert isinstance(revision, (int, float)) and not isinstance(revision, bool), (
+            f"revision must be a number on the A2A wire, got {type(revision).__name__}: {revision!r}"
+        )
+        assert float(revision).is_integer(), f"revision must be a whole number on the wire, got {revision!r}"
+    else:
+        assert isinstance(revision, int) and not isinstance(revision, bool), (
+            f"revision must be a JSON integer on the wire, got {type(revision).__name__}: {revision!r}"
+        )
 
 
 @then(parsers.parse('the response should include "revision" with an integer value of 1'))

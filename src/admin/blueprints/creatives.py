@@ -22,7 +22,7 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
-from src.core.media_buy_flight import resolve_flight_window_utc
+from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -82,15 +82,14 @@ def _cleanup_completed_tasks():
 
 
 def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
-    """Compute status based on flight dates: 'active' if within window, else 'scheduled'."""
-    now = datetime.now(UTC)
-    start_time, end_time = resolve_flight_window_utc(media_buy)
+    """Lifecycle status from the buy's flight window.
 
-    # If start time passed and end time not passed, set to active
-    if start_time and end_time and start_time <= now <= end_time:
-        return "active"
-
-    return "scheduled"
+    Delegates to the shared business-layer decision (media_buy_flight) rather
+    than re-expressing the window→status rule in the Admin UI layer — the same
+    mapping the admin approve route uses. See #1544. (This also corrects a
+    past-end buy to ``completed`` instead of the prior ``scheduled``.)
+    """
+    return lifecycle_status_for_window(datetime.now(UTC), *resolve_flight_window_utc(media_buy))
 
 
 async def _call_webhook_for_creative_status(

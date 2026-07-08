@@ -14,7 +14,7 @@ from sqlalchemy import select
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.media_buy_flight import resolve_flight_window_utc
+from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -393,23 +393,13 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         all_creatives_approved = False
 
                     # Compute the target status based on creative approval state.
+                    # The window→status decision lives in the business layer
+                    # (media_buy_flight); the route only orchestrates resolve →
+                    # decide → persist. See #1544.
                     if all_creatives_approved:
-                        if media_buy.start_time and media_buy.end_time:
-                            # Resolve the effective UTC flight window (shared with
-                            # the scheduler and creative-review path — see
-                            # resolve_flight_window_utc / #1544). Both bounds are
-                            # present here, so no date fallback is exercised.
-                            start_time, end_time = resolve_flight_window_utc(media_buy)
-                            now = datetime.now(UTC)
-                            if now < start_time:
-                                new_status = "scheduled"
-                            elif now > end_time:
-                                new_status = "completed"
-                            else:
-                                new_status = "active"
-                        else:
-                            # No start or end time - set to active
-                            new_status = "active"
+                        new_status = lifecycle_status_for_window(
+                            datetime.now(UTC), *resolve_flight_window_utc(media_buy)
+                        )
                     else:
                         # Keep it in a state that shows it needs creative approval
                         # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service

@@ -3436,18 +3436,21 @@ async def _create_media_buy_impl(
                 )
                 for pkg in packages
             ]
+            simulated_status = MediaBuyStatus.pending_start.value
             simulated_response = CreateMediaBuySuccess(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
-                valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
+                valid_actions=valid_actions_for_status(simulated_status),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
-                # Dry-run persists nothing, but the success arm still carries
-                # the AdCP 3.1.0-beta.3 confirmed_at/revision fields so a strict
+                # Dry-run persists nothing, but the success arm still carries the
+                # AdCP 3.1.0-beta.3 confirmed_at/revision fields so a strict
                 # client's oneOf resolves: a simulated commit timestamp and the
-                # initial revision (1). Parity with the update dry-run path,
-                # which echoes the current revision.
-                confirmed_at=datetime.now(UTC),
+                # initial revision (1). confirmed_at is gated by the SAME shared
+                # classifier the real arm and get_media_buys use, keyed on the
+                # simulated status — so dry-run cannot silently diverge from the
+                # real path if that status ever changes. See #1544.
+                confirmed_at=datetime.now(UTC) if is_media_buy_seller_confirmed(simulated_status) else None,
                 revision=1,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)

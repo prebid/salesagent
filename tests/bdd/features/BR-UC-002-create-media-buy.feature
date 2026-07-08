@@ -828,6 +828,7 @@ Feature: BR-UC-002 Create Media Buy
     And no database records should be created
     And the response should include "confirmed_at" as an ISO 8601 timestamp
     And the response should include "revision" with an integer value of 1
+    And the serialized wire body should carry "revision" as an integer
     # BR-RULE-020 INV-5 (v3.1): dry-run validates fully but never calls the adapter or persists
     # v3.1 dry-run parity (#1544): the simulated success arm still carries confirmed_at + revision=1
     # --- BR-RULE-026: Creative Assignment Validation ---
@@ -1998,6 +1999,7 @@ Feature: BR-UC-002 Create Media Buy
     And the response should include a "media_buy_id"
     And the response should include "confirmed_at" as an ISO 8601 timestamp
     And the response should include "revision" with an integer value of 1
+    And the serialized wire body should carry "revision" as an integer
     And the response should include a "valid_actions" array
     And every value in valid_actions should be a member of the media-buy-valid-action enum
     # v3.1: confirmed_at — order confirmation timestamp

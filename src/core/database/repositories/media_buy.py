@@ -13,6 +13,7 @@ beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (ad
 from __future__ import annotations
 
 import datetime
+from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -461,6 +462,24 @@ class MediaBuyRepository:
         """
         media_buy.revision = func.coalesce(MediaBuy.revision, 0) + 1
 
+    def _locked_mutate_and_bump(self, media_buy_id: str, mutate: Callable[[MediaBuy], None]) -> MediaBuy | None:
+        """Shared single-row mutation skeleton: load-under-lock → mutate → bump → flush.
+
+        Loads the buy with a row write-lock, applies ``mutate`` in place, bumps
+        the persisted revision counter, and flushes. Returns the mutated row, or
+        None if the buy is not found in this tenant (no bump/flush). Every
+        single-row mutator (``bump_revision``, ``update_status``,
+        ``update_fields``) routes through here so the load-guard, the bump, and
+        the flush live in exactly one place.
+        """
+        media_buy = self.get_by_id(media_buy_id, for_update=True)
+        if media_buy is None:
+            return None
+        mutate(media_buy)
+        self._bump_revision(media_buy)
+        self._session.flush()
+        return media_buy
+
     def bump_revision(self, media_buy_id: str) -> MediaBuy | None:
         """Bump the revision of a media buy that was mutated outside this repository.
 
@@ -469,12 +488,8 @@ class MediaBuyRepository:
         therefore never pass through ``update_status``/``update_fields``.
         Returns the updated MediaBuy, or None if not found in this tenant.
         """
-        media_buy = self.get_by_id(media_buy_id, for_update=True)
-        if media_buy is None:
-            return None
-        self._bump_revision(media_buy)
-        self._session.flush()
-        return media_buy
+        # No column change of its own — the shared skeleton does the bump/flush.
+        return self._locked_mutate_and_bump(media_buy_id, lambda _media_buy: None)
 
     def update_status(
         self,
@@ -489,17 +504,15 @@ class MediaBuyRepository:
         Bumps the persisted revision counter (successful mutation).
         Returns the updated MediaBuy, or None if not found in this tenant.
         """
-        media_buy = self.get_by_id(media_buy_id, for_update=True)
-        if media_buy is None:
-            return None
-        media_buy.status = status
-        if approved_at is not None:
-            media_buy.approved_at = approved_at
-        if approved_by is not None:
-            media_buy.approved_by = approved_by
-        self._bump_revision(media_buy)
-        self._session.flush()
-        return media_buy
+
+        def _apply(media_buy: MediaBuy) -> None:
+            media_buy.status = status
+            if approved_at is not None:
+                media_buy.approved_at = approved_at
+            if approved_by is not None:
+                media_buy.approved_by = approved_by
+
+        return self._locked_mutate_and_bump(media_buy_id, _apply)
 
     def update_fields(self, media_buy_id: str, **kwargs: Any) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.
@@ -514,16 +527,14 @@ class MediaBuyRepository:
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
             raise ValueError(f"Cannot update immutable field(s): {', '.join(sorted(blocked))}")
-        media_buy = self.get_by_id(media_buy_id, for_update=True)
-        if media_buy is None:
-            return None
-        for key, value in kwargs.items():
-            if not hasattr(media_buy, key):
-                raise ValueError(f"MediaBuy has no attribute {key!r}")
-            setattr(media_buy, key, value)
-        self._bump_revision(media_buy)
-        self._session.flush()
-        return media_buy
+
+        def _apply(media_buy: MediaBuy) -> None:
+            for key, value in kwargs.items():
+                if not hasattr(media_buy, key):
+                    raise ValueError(f"MediaBuy has no attribute {key!r}")
+                setattr(media_buy, key, value)
+
+        return self._locked_mutate_and_bump(media_buy_id, _apply)
 
     # ------------------------------------------------------------------
     # MediaPackage writes

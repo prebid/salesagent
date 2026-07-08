@@ -201,13 +201,11 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         self._commit_factory_data()
         client = self.get_rest_client()
 
+        # Reuse the shared wire-header builder so REST stamps x-dry-run in
+        # dry-run mode exactly like the A2A/MCP paths (was dropped here). See #1544.
         headers: dict[str, str] = {}
-        if identity is not None:
-            auth_token = identity.auth_token
-            if auth_token:
-                headers["x-adcp-auth"] = auth_token
-            if identity.tenant_id:
-                headers["x-adcp-tenant"] = identity.tenant_id
+        if identity is not None and identity.auth_token:
+            headers = self._wire_auth_headers(identity.auth_token, identity.tenant_id)
 
         body = self._build_update_rest_body(**kwargs)
         req = kwargs.get("req")

@@ -58,6 +58,11 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
                 ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
             else:
                 ctx["response"] = result.payload
+                # Serialized success-path body (real wire on REST/A2A/MCP; None
+                # on IMPL). Lets Then steps assert the on-the-wire shape — e.g.
+                # confirmed_at as an ISO 8601 STRING — rather than the already
+                # type-coerced payload. See tests/CLAUDE.md § wire_response.
+                ctx["wire_response"] = result.wire_response
         except Exception as exc:
             ctx["error"] = exc
     else:
