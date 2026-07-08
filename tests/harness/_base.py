@@ -1124,6 +1124,17 @@ class BaseTestEnv:
             except Exception as e:
                 errors.append(e)
 
+            # Dispose the per-scenario e2e engine — closing the session alone
+            # leaves its pool's connections open, and with the ledger retirement
+            # ~300 more scenarios build e2e envs per run, accumulating toward
+            # the server's max_connections (PR #1430 review).
+            try:
+                if self._e2e_engine is not None:
+                    self._e2e_engine.dispose()
+                    self._e2e_engine = None
+            except Exception as e:
+                errors.append(e)
+
         # 3. Stop patches — each in its own try block
         for patcher in reversed(self._patchers):
             try:
