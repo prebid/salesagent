@@ -1553,9 +1553,11 @@ class AdCPRequestHandler(RequestHandler):
         # the manual-approval gate (gh-#1299).
         push_notification_config = params.pop("push_notification_config", None)
 
-        # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
-        if isinstance(params.get("brand"), str):
-            params["brand"] = {"domain": params["brand"]}
+        # Normalize explicit brand through the shared coercion funnel (#1324).
+        if params.get("brand") is not None:
+            from src.core.schema_helpers import to_brand_reference
+
+            params["brand"] = to_brand_reference(params["brand"])
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).
         # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch

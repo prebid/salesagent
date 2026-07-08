@@ -125,7 +125,7 @@ from src.core.helpers.creative_helpers import (
     process_and_upload_package_creatives,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_context_object, to_reporting_webhook
+from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -4222,7 +4222,7 @@ async def _create_media_buy_impl(
 
 def _build_create_media_buy_request(
     *,
-    brand: BrandReference | str | None,
+    brand: BrandReference | dict[str, Any] | str | None,
     # The MCP wrapper receives the internal PackageRequest subtype; the raw
     # wrapper the library type — CreateMediaBuyRequest validates either.
     packages: list[AdcpPackageRequest] | list[PackageRequest] | None,
@@ -4244,12 +4244,9 @@ def _build_create_media_buy_request(
     ``to_context_object``) happen at the call site; this builder receives
     already-typed values.
     """
-    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
-    if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
     try:
         return CreateMediaBuyRequest(
-            brand=brand,
+            brand=to_brand_reference(brand),
             packages=packages,
             start_time=start_time,
             end_time=end_time,
@@ -4270,8 +4267,13 @@ def _build_create_media_buy_request(
 
 async def create_media_buy(
     brand: Annotated[
-        BrandReference | str | None,
-        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+        BrandReference | dict[str, Any] | str | None,
+        Field(
+            description=(
+                "Brand reference (object with domain), domain/URL string shorthand "
+                "(e.g. 'acme.com' / 'https://acme.com'), or equivalent dict"
+            )
+        ),
     ] = None,
     packages: list[PackageRequest] | None = None,
     start_time: Annotated[
@@ -4315,7 +4317,7 @@ async def create_media_buy(
 
     Args:
         brand: Brand reference with domain field per AdCP v3 spec.
-            String shorthand accepted: "acme.com" is coerced to BrandReference(domain="acme.com").
+            String or dict shorthand accepted and normalized via ``to_brand_reference``.
         packages: Array of packages with products, budgets, targeting_overlay, and
             creatives (REQUIRED per AdCP spec)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)

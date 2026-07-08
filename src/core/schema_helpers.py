@@ -68,6 +68,11 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
     return None  # Fallback for unexpected types
 
 
+def is_url_shorthand(value: str) -> bool:
+    """Return True when a string looks like a URL (scheme or protocol-relative)."""
+    return "://" in value or value.startswith("//")
+
+
 def brand_shorthand_to_domain(value: str) -> str:
     """Normalize AdCP v3 brand string shorthand to a domain hostname.
 
@@ -75,12 +80,15 @@ def brand_shorthand_to_domain(value: str) -> str:
     expects a hostname (no scheme/path) per the adcp library pattern.
 
     Returns empty string when a URL-shaped value cannot be parsed into a hostname
-    (malformed IPv6, etc.) so callers can treat it as "no domain".
+    (malformed IPv6, etc.) so legacy ``brand_manifest`` middleware can silently
+    strip the field. Callers on the explicit ``brand`` path must use
+    ``to_brand_reference`` / ``_coerce_domain_or_raise`` instead — those raise
+    ``AdCPValidationError(field="brand")`` rather than dropping the brand.
     """
     value = value.strip()
     if not value:
         return value
-    if "://" in value or value.startswith("//"):
+    if is_url_shorthand(value):
         try:
             parsed = urlparse(value if "://" in value else f"https:{value}")
         except ValueError:
@@ -93,6 +101,10 @@ def brand_shorthand_to_domain(value: str) -> str:
 
 def _coerce_domain_or_raise(raw: str) -> str:
     """Normalize brand shorthand and validate against BrandReference.domain pattern.
+
+    Used for explicit ``brand`` on tool boundaries — malformed input must surface
+    as ``VALIDATION_ERROR / field="brand"``, not be coerced to missing brand
+    (which would mis-route ``require_brand`` policy to an authorization error).
 
     Raises:
         AdCPValidationError: when the value cannot be normalized to a valid hostname
@@ -276,6 +288,7 @@ def create_get_products_request(
 
 # Re-export commonly used generated types for convenience
 __all__ = [
+    "is_url_shorthand",
     "to_account_reference",
     "to_brand_reference",
     "to_context_object",

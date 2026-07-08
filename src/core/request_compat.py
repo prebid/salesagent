@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.core.schema_helpers import brand_shorthand_to_domain
+from src.core.schema_helpers import brand_shorthand_to_domain, is_url_shorthand
 
 logger = logging.getLogger(__name__)
 V25_SIGNALS: frozenset[str] = frozenset({"brand_manifest", "promoted_offerings", "campaign_ref"})
@@ -29,13 +29,12 @@ class NormalizationResult:
     translations_applied: list[str] = field(default_factory=list)
 
 
-def _brand_manifest_is_url(url: str) -> bool:
-    """Return True when brand_manifest value looks like a URL (legacy callers never sent bare domains)."""
-    return "://" in url or url.startswith("//")
-
-
 def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
     """Convert brand_manifest (URL string or {url: str}) to BrandReference {domain}.
+
+    Legacy v2.5 compat: silently strip unparseable values (return None). Explicit
+    ``brand`` on tool boundaries uses ``to_brand_reference`` instead, which raises
+    ``AdCPValidationError(field="brand")`` for the same malformed inputs.
 
     Returns None if the value cannot be parsed into a valid domain.
     """
@@ -44,14 +43,14 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
 
     url: str | None = None
     if isinstance(value, str):
-        if not _brand_manifest_is_url(value):
+        if not is_url_shorthand(value):
             return None
         url = value
     elif isinstance(value, dict):
         raw_url = value.get("url")
         if not raw_url or not isinstance(raw_url, str):
             return None
-        if not _brand_manifest_is_url(raw_url):
+        if not is_url_shorthand(raw_url):
             return None
         url = raw_url
     else:

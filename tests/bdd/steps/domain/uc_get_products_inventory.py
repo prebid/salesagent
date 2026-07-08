@@ -191,11 +191,16 @@ def then_has_products(ctx: dict) -> None:
 
 @then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
 def then_rejected_validation_field(ctx: dict, field: str) -> None:
-    """Assert the wire envelope is VALIDATION_ERROR and names the field."""
+    """Assert the wire envelope is VALIDATION_ERROR and names the field structurally."""
     envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
     assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
     assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
-    assert field in json.dumps(envelope), f"envelope does not name field {field!r}: {envelope}"
+    assert envelope["errors"][0].get("field") == field, (
+        f"errors[0].field={envelope['errors'][0].get('field')!r}, expected {field!r}"
+    )
+    assert envelope["adcp_error"].get("field") == field, (
+        f"adcp_error.field={envelope['adcp_error'].get('field')!r}, expected {field!r}"
+    )
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))
