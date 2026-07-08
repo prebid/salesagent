@@ -447,12 +447,21 @@ class CreativeAssignmentRepository:
         mb_repo = MediaBuyRepository(self._session, self._tenant_id)
         return mb_repo.find_package_with_media_buy(package_id)
 
-    def get_creative_by_id(self, creative_id: str) -> Creative | None:
-        """Get a creative by tenant + creative_id (no principal filter)."""
+    def get_creative_by_id(self, creative_id: str, principal_id: str | None) -> Creative | None:
+        """Get a creative by its full composite key (tenant + principal + creative_id).
+
+        The creatives PK is (creative_id, tenant_id, principal_id) — a tenant-only
+        lookup would match ANOTHER principal's row, letting a cross-principal
+        reference pass the assignment existence gate and crash on the FK insert
+        (and leak the other principal's fields into the requester's errors).
+        Principal-scoped for the same reason as the sync lookup in _sync.py
+        (SECURITY comment there).
+        """
         return self._session.scalars(
             select(Creative).where(
                 Creative.tenant_id == self._tenant_id,
                 Creative.creative_id == creative_id,
+                Creative.principal_id == principal_id,
             )
         ).first()
 

@@ -685,6 +685,58 @@ class TestAssignmentProcessing:
             ).all()
             assert len(assignments) == 1
 
+    def test_cross_principal_creative_reference_does_not_500_or_leak(self, integration_db):
+        """A principal referencing ANOTHER principal's creative_id in assignments
+        must get a clean response — not a raw FK IntegrityError 500 — and no
+        assignment row may be inserted.
+
+        creatives has a composite PK (creative_id, tenant_id, principal_id); the
+        existence gate must be principal-scoped like the parallel lookup in
+        _sync.py (SECURITY comment), so a cross-principal reference resolves to
+        "not found" instead of passing the gate on the other principal's row and
+        crashing on the FK insert (salesagent-hpjq / PR #1430 review).
+        """
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import CreativeAssignment as DBAssignment
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            requester = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            owner = PrincipalFactory(tenant=tenant, principal_id="other_principal")
+            # The creative exists ONLY under the other principal.
+            CreativeFactory(
+                tenant=tenant,
+                principal=owner,
+                creative_id="c_owned_by_other",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+            )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=requester)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[],
+                assignments={"c_owned_by_other": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            assert not result.is_error, (
+                f"Cross-principal creative reference must not fail the request "
+                f"(was a raw FK 500): {result.wire_error_envelope}"
+            )
+
+        with get_db_session() as session:
+            rows = session.scalars(
+                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_owned_by_other")
+            ).all()
+            assert rows == [], f"No assignment may be created from a cross-principal reference, got {len(rows)}"
+
     def test_none_assignments_produces_no_records(self, integration_db):
         """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01 — None assignments = no assignment records."""
         from sqlalchemy import select

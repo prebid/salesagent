@@ -92,9 +92,13 @@ def _process_assignments(
 
                 # A creative_id absent from the creative library never existed —
                 # inserting its assignment would also violate the creatives FK (#1418).
+                # Principal-scoped: the composite PK is (creative_id, tenant_id,
+                # principal_id), so another principal's creative must resolve to
+                # "not found" here — never pass the gate on their row (which the
+                # FK insert below would then violate) or read their fields.
                 # Resolve the creative once up front and report the skipped packages
                 # via assignment_errors (same convention as package-not-found below).
-                creative_row = assignment_repo.get_creative_by_id(creative_id)
+                creative_row = assignment_repo.get_creative_by_id(creative_id, principal_id)
                 if creative_row is None:
                     error_msg = f"Creative not found: {creative_id}"
                     for package_id in package_ids:
