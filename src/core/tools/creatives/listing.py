@@ -166,18 +166,6 @@ def _list_creatives_impl(
     # Enforce max limit
     effective_limit = min(limit, 1000)
 
-    # Enforce max filter-list length (defense-in-depth). Reject an over-long
-    # list filter with a clean VALIDATION_ERROR rather than running a huge
-    # IN (...) query. Mirrors the effective_limit cap above.
-    if filters is not None:
-        for _field in _CAPPED_FILTER_FIELDS:
-            _values = getattr(filters, _field, None)
-            if _values is not None and len(_values) > _MAX_FILTER_LIST_LEN:
-                raise AdCPValidationError(
-                    f"filters.{_field} has {len(_values)} entries; the maximum is {_MAX_FILTER_LIST_LEN}.",
-                    suggestion=f"Send at most {_MAX_FILTER_LIST_LEN} values in filters.{_field}, or narrow the query.",
-                )
-
     # Build spec-compliant filters from flat parameters
     # Library CreativeFilters uses plural field names (statuses, formats)
     filters_dict: dict[str, Any] = {}
@@ -207,6 +195,22 @@ def _list_creatives_impl(
 
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
+
+    # Enforce max filter-list length (defense-in-depth) on the MERGED filters —
+    # the object the query actually runs off. Checking the pre-merge `filters`
+    # argument alone would let the flat params (tags, media_buy_ids) bypass the
+    # cap entirely. Rejects with a clean VALIDATION_ERROR (`correctable`)
+    # instead of expanding into a very large SQL IN (...) query; unlike the
+    # effective_limit clamp above, this REJECTS rather than truncates.
+    if structured_filters is not None:
+        for _field in _CAPPED_FILTER_FIELDS:
+            _values = getattr(structured_filters, _field, None)
+            if _values is not None and len(_values) > _MAX_FILTER_LIST_LEN:
+                raise AdCPValidationError(
+                    f"The {_field} filter has {len(_values)} entries; the maximum is {_MAX_FILTER_LIST_LEN}.",
+                    field=f"filters.{_field}",
+                    suggestion=f"Send at most {_MAX_FILTER_LIST_LEN} values in {_field}, or narrow the query.",
+                )
 
     # v3.1 concept_ids filter has no flat equivalent — it arrives only via the
     # structured filters object and must be threaded into the DB query (not merely
