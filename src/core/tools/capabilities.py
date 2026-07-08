@@ -11,13 +11,15 @@ from datetime import UTC, datetime
 
 from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
+from adcp.types.generated_poc.core.postal_area_support import (
+    PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
+)
 from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
     GeoMetros,
-    GeoPostalAreas,
     Idempotency,
     MajorVersion,
     MediaBuy,
@@ -219,7 +221,7 @@ def _get_adcp_capabilities_impl(
             targeting_caps.au_postcode,
         ]
     ):
-        geo_postal_areas = GeoPostalAreas(
+        geo_postal_areas = PostalAreaSupport(
             us_zip=targeting_caps.us_zip or None,
             us_zip_plus_four=targeting_caps.us_zip_plus_four or None,
             ca_fsa=targeting_caps.ca_fsa or None,

@@ -5,7 +5,7 @@
 #   overrides (required -> optional). Architectural; permanent.
 
 import warnings
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
@@ -74,7 +74,6 @@ from adcp.types import (
     FlatRatePricingOption,
     GeoCountry,
     GeoMetro,
-    GeoPostalArea,
     GeoRegion,
     TargetingOverlay,
     VcpmPricingOption,  # V3: consolidated from VcpmAuctionPricingOption/VcpmFixedRatePricingOption
@@ -87,6 +86,9 @@ from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
+from adcp.types import (
+    PostalArea as GeoPostalArea,  # adcp 6.6 renamed GeoPostalArea → PostalArea (spec 3.1.1 postal-area.json title)
+)
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
@@ -103,6 +105,7 @@ from adcp.types.generated_poc.core.collection_list_ref import (
 )
 from pydantic import (
     AnyUrl,
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -264,6 +267,19 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     ``SyncAccountsResponse``.
     """
 
+    # adcp 6.6 (spec 3.1.1) made these required on the success envelope. They are
+    # invariant for a synchronous committed success, so declare spec-correct defaults
+    # here rather than threading identical literals through every constructor:
+    #   status      — protocol-envelope TaskStatus; a sync create_media_buy that
+    #                 returns this type has, by definition, completed.
+    #   confirmed_at — seller commitment timestamp (stable after set).
+    #   revision     — initial revision number (schema minimum: 1).
+    # NOTE (SDK divergence): spec allows confirmed_at=null for provisional/manual-approval
+    # buys, but adcp 6.6 types it non-nullable AwareDatetime; that branch can't be modeled.
+    status: Literal["completed"] = "completed"
+    confirmed_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+    revision: int = 1
+
     # SDK 5.7 removed these from parent — declare locally
     account: Any | None = None
     sandbox: bool | None = None
@@ -424,6 +440,14 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
     not yet compiled by the adapter.
     """
+
+    # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
+    # Invariant for a synchronous applied update, so declare spec-correct defaults here
+    # rather than threading identical literals through every constructor (see the twin
+    # note on CreateMediaBuySuccess). revision defaults to 1; real per-buy revision
+    # tracking is separate media-buy lifecycle work.
+    status: Literal["completed"] = "completed"
+    revision: int = 1
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
@@ -975,7 +999,7 @@ class Targeting(TargetingOverlay):
     geo_countries_exclude: list[GeoCountry] | None = None  # type: ignore[assignment]
     geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
     geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
-    geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
+    geo_postal_areas_exclude: list[GeoPostalArea] | None = None
 
     # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
     # TargetingOverlay (added natively in adcp 4.3). CollectionListReference is re-exported

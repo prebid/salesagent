@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import os
 import re
 import subprocess
 from collections.abc import Callable, Iterable, Iterator
@@ -215,18 +216,65 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
     yield from sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")])
 
 
+# Dirs the filesystem fallback prunes — VCS internals plus build/cache artifacts
+# that ``git ls-files`` never reports. In a clean checkout this mirrors the ignored
+# set closely enough that the fallback matches the tracked set.
+_FALLBACK_PRUNE_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        ".tox",
+        "__pycache__",
+        "node_modules",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "htmlcov",
+        "test-results",
+        ".agent-index",
+        ".beads",
+        "build",
+        "dist",
+        ".idea",
+        ".vscode",
+    }
+)
+
+
 def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
-    """Yield git-tracked files that exist on disk (hermetic; ignores untracked local files)."""
+    """Yield git-tracked files that exist on disk (hermetic; ignores untracked local files).
+
+    Falls back to a filesystem walk when ``git ls-files`` cannot run — notably when a
+    git worktree is bind-mounted into a container at a path that breaks the worktree's
+    absolute ``.git`` back-references (``run_all_tests.sh`` mounts ``.:/app``, so
+    ``/app/.git`` is a pointer to an unreachable host gitdir). The source files are all
+    present in the bind mount; only git's metadata is unreachable. The fallback prunes
+    the usual VCS/build/cache dirs so, in a clean checkout, it matches the tracked set.
+    On any host with a working git the fallback never triggers — hermetic behavior there
+    is unchanged.
+    """
     try:
-        output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True)
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        raise RuntimeError(f"git ls-files failed in {repo}") from exc
+        output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True, stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        yield from _iter_files_fallback(repo)
+        return
     for line in output.splitlines():
         if not line.strip():
             continue
         path = repo / line
         if path.is_file():
             yield path
+
+
+def _iter_files_fallback(repo: Path) -> Iterator[Path]:
+    """Deterministic filesystem walk mirroring git-tracked enumeration when git is unavailable."""
+    for dirpath, dirnames, filenames in os.walk(repo):
+        dirnames[:] = sorted(d for d in dirnames if d not in _FALLBACK_PRUNE_DIRS)
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            if path.is_file():
+                yield path
 
 
 # ---------------------------------------------------------------------------

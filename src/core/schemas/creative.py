@@ -365,11 +365,12 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # SDK 5.7 (adcontextprotocol/adcp-client-python#913): parent declares action
-    # as CreativeAction|str and stores raw strings. CreativeAction is plain Enum
-    # (not StrEnum), so "created" == CreativeAction.created is False.
-    # Store as string; compare with strings everywhere until upstream ships StrEnum.
-    action: str = Field(description="Action taken for this creative")
+    # adcp 6.6 re-typed the parent's action as the StrEnum CreativeAction (values:
+    # created/updated/unchanged/failed/deleted). We intentionally WIDEN to str because
+    # production also emits non-spec workflow values (e.g. "approval_required" in
+    # _workflow.py). Widening a StrEnum field to str is a Liskov violation mypy flags,
+    # so suppress [assignment] — same pattern as the geo_*_exclude overrides below.
+    action: str = Field(description="Action taken for this creative")  # type: ignore[assignment]
 
     @field_validator("action", mode="before")
     @classmethod
@@ -382,13 +383,18 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         """
         return enum_value(v)
 
-    # --- Fields removed from SDK 5.7 that we own locally ---
+    # --- Fields re-added to the adcp 6.6 parent (sync_creatives_response Creative) ---
+    # 6.6 re-added assigned_to/assignment_errors/platform_id/status/changes/warnings to the
+    # library parent. We keep local declarations because our contract differs from the parent's:
+    # status is internal (exclude=True) tracking, and changes/warnings default to [] (writers
+    # append). FIXME(#TBD): reconcile with the schema-inheritance guard — either adopt the spec
+    # status field and rename internal tracking, or move these to KNOWN_OVERRIDES with sign-off.
     assigned_to: list[str] | None = Field(None, description="Package IDs this creative was assigned to during sync")
     assignment_errors: dict[str, str] | None = Field(
         None, description="Per-package assignment errors {package_id: error_message}"
     )
     platform_id: str | None = Field(None, description="Platform-assigned creative identifier")
-    status: str | None = Field(None, exclude=True, description="Internal creative status")
+    status: str | None = Field(None, exclude=True, description="Internal creative status")  # type: ignore[assignment]
 
     # Internal-only fields (not in AdCP spec)
     review_feedback: str | None = Field(
@@ -470,10 +476,12 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Design decision (salesagent-g3c): error variant never constructed.
     """
 
-    # SDK 5.7 removed these from the parent — declare locally
+    # SDK 5.7 removed these from the parent — declare locally.
+    # adcp 6.6 re-added context (ContextObject|None) and ext (ExtensionObject|None) on the
+    # parent; we keep the dict-accepting unions because production assigns raw dicts here.
     dry_run: bool | None = None
-    context: LibraryContextObject | dict[str, Any] | None = None
-    ext: dict[str, Any] | None = None
+    context: LibraryContextObject | dict[str, Any] | None = None  # type: ignore[assignment]
+    ext: dict[str, Any] | None = None  # type: ignore[assignment]
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.

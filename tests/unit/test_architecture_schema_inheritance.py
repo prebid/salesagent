@@ -202,7 +202,19 @@ class TestSchemaInheritance:
             ("Signal", "signal_type"),
             ("Signal", "deployments"),
             ("SyncCreativeResult", "action"),  # Coerce str→CreativeAction (adcontextprotocol/adcp-client-python#913)
-            ("SyncCreativeResult", "errors"),  # SDK 5.7 still has errors; warnings/changes removed
+            ("SyncCreativeResult", "errors"),  # SDK 5.7 still has errors
+            # FIXME(#TBD): adcp 6.6 (spec 3.1.1) re-added these fields to the library
+            # sync_creatives_response Creative. Reconcile deliberately — adopt the spec
+            # `status` (CreativeStatus, reported per-item) and move internal tracking off
+            # the name; drop the []-default warnings/changes overrides in favor of inherited
+            # None + append guards. Allowlisted (not inherited) to avoid a wire-contract change
+            # mid-bump; must shrink once reconciled. File a tracking issue and replace #TBD.
+            ("SyncCreativeResult", "status"),
+            ("SyncCreativeResult", "changes"),
+            ("SyncCreativeResult", "warnings"),
+            ("SyncCreativeResult", "platform_id"),
+            ("SyncCreativeResult", "assignment_errors"),
+            ("SyncCreativeResult", "assigned_to"),
             ("SyncCreativesRequest", "creatives"),
             ("SyncCreativesRequest", "push_notification_config"),
             # Creative overrides — listing base requires these fields, but we add

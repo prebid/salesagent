@@ -327,7 +327,7 @@ class AdServerAdapter(ABC):
         creative_deadline = (
             datetime.now(UTC) + timedelta(days=creative_deadline_days) if creative_deadline_days is not None else None
         )
-        return CreateMediaBuySuccess(
+        return CreateMediaBuySuccess(  # type: ignore[call-arg]  # status/confirmed_at/revision default on subclass (mypy pydantic-plugin misses the override)
             media_buy_id=media_buy_id,
             creative_deadline=creative_deadline,
             packages=package_responses,

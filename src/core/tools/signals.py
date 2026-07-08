@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 from adcp.types import ContextObject
 from adcp.types.generated_poc.core.signal_id import (
     SignalId,
-    SignalId5,
-)  # SDK 5.7: SignalId18 → SignalId5 (same fields: agent_url, id, source)
+)  # adcp 6.6: agent-source variant renumbered SignalId5 → SignalId54 (same fields: agent_url, id, source). Suffix is codegen-ordinal; expect churn.
+from adcp.types.generated_poc.core.signal_id import (
+    SignalId54 as SignalId5,
+)
 from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
@@ -175,10 +177,11 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             if req.filters.max_cpm is not None and signal.pricing and signal.pricing.cpm > req.filters.max_cpm:
                 continue
 
-            # Filter by min_coverage_percentage
-            if (
-                req.filters.min_coverage_percentage is not None
-                and signal.coverage_percentage < req.filters.min_coverage_percentage
+            # Filter by min_coverage_percentage. adcp 6.6 made coverage_percentage
+            # Optional; a signal with unknown coverage cannot be shown to meet the
+            # minimum, so exclude it when the filter is set.
+            if req.filters.min_coverage_percentage is not None and (
+                signal.coverage_percentage is None or signal.coverage_percentage < req.filters.min_coverage_percentage
             ):
                 continue
 

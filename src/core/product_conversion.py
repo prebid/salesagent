@@ -449,7 +449,13 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     if product_model.product_card_detailed:
         product_data["product_card_detailed"] = product_model.product_card_detailed
     if product_model.placements:
-        product_data["placements"] = product_model.placements
+        # adcp 6.6 (spec 3.1.1) makes Placement.kind and Placement.mode required. Placements
+        # stored before these fields existed are publisher-defined, targetable references, so
+        # default kind="publisher_ref" and mode="targetable".
+        _placement_defaults = {"kind": "publisher_ref", "mode": "targetable"}
+        product_data["placements"] = [
+            {**_placement_defaults, **p} if isinstance(p, dict) else p for p in product_model.placements
+        ]
     if product_model.reporting_capabilities:
         product_data["reporting_capabilities"] = product_model.reporting_capabilities
     else:
