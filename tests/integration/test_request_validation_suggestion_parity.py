@@ -175,6 +175,57 @@ class TestGetProductsRestSuggestionParity:
 
 
 @pytest.mark.requires_db
+class TestCreateMediaBuyRestWebhookSuggestionParity:
+    """REST create_media_buy object-param coercion must carry a top-level suggestion."""
+
+    def test_invalid_reporting_webhook_rest_envelope_carries_suggestion(self, integration_db):
+        """A malformed ``reporting_webhook`` rejected on the REST wire must
+        produce the AdCP two-layer VALIDATION_ERROR envelope WITH a top-level
+        ``suggestion`` (error.json @v3.1-04f59d2d5).
+
+        The invalid value passes ``CreateMediaBuyBody`` (``dict``) and fails
+        ``to_reporting_webhook`` coercion (ReportingWebhook requires url /
+        authentication / reporting_frequency) — coerced at the route inside
+        ``adcp_validation_boundary`` so the rejection is typed instead of the
+        raw-ValidationError leak the un-coerced pass-through produced.
+        """
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import extract_wire_suggestion
+        from tests.helpers import assert_envelope_shape
+
+        with MediaBuyCreateEnv() as env:
+            env.setup_media_buy_data()
+            client = env.get_rest_client()
+
+            response = client.post(
+                "/api/v1/media-buys",
+                json={
+                    "brand": {"domain": "acme.example"},
+                    "packages": [],
+                    "start_time": "asap",
+                    "end_time": "2099-12-31T23:59:59Z",
+                    "reporting_webhook": {"not_a_webhook_field": True},
+                },
+            )
+
+            assert response.status_code == 400, (
+                "A malformed reporting_webhook must be rejected on the REST wire, got "
+                f"{response.status_code}: {response.text[:500]}"
+            )
+            envelope = response.json()
+            assert_envelope_shape(
+                envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+            )
+            suggestion = extract_wire_suggestion(envelope)
+            assert suggestion, (
+                "Expected a non-empty TOP-LEVEL suggestion in the VALIDATION_ERROR "
+                f"wire envelope (error.json @v3.1-04f59d2d5), got: {envelope}"
+            )
+
+
+@pytest.mark.requires_db
 class TestListAccountsRestSuggestionParity:
     """REST list_accounts request-validation must carry a top-level suggestion."""
 

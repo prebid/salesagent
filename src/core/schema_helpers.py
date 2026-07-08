@@ -22,6 +22,7 @@ from adcp.types import (
     ContextObject,
     ProductFilters,
     PropertyListReference,
+    PushNotificationConfig,
     ReportingWebhook,
 )
 
@@ -62,6 +63,26 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
         return webhook
     if isinstance(webhook, dict):
         return ReportingWebhook(**webhook)
+    return None  # Fallback for unexpected types
+
+
+def to_push_notification_config(
+    config: dict[str, Any] | PushNotificationConfig | None,
+) -> PushNotificationConfig | None:
+    """Convert dict to PushNotificationConfig for adcp type compatibility.
+
+    Args:
+        config: Push notification config as dict or PushNotificationConfig or None
+
+    Returns:
+        PushNotificationConfig or None
+    """
+    if config is None:
+        return None
+    if isinstance(config, PushNotificationConfig):
+        return config
+    if isinstance(config, dict):
+        return PushNotificationConfig(**config)
     return None  # Fallback for unexpected types
 
 

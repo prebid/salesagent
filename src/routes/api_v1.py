@@ -22,7 +22,13 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
 from fastapi import APIRouter, Depends, Request
 
 from src.core.auth_context import require_auth, resolve_auth
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference
+from src.core.schema_helpers import (
+    coerce_creative_filters,
+    to_account_reference,
+    to_context_object,
+    to_push_notification_config,
+    to_reporting_webhook,
+)
 from src.core.schemas import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
@@ -297,17 +303,26 @@ async def create_media_buy(
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    account_ref = to_account_reference(body.account)
+    # Coerce wire dicts to the SDK types the raw wrapper declares, inside the
+    # shared boundary so a malformed object rejects with the two-layer envelope
+    # (top-level suggestion + field) instead of a raw-ValidationError leak.
+    with adcp_validation_boundary(context="create_media_buy request"):
+        account_ref = to_account_reference(body.account)
+        reporting_webhook = to_reporting_webhook(body.reporting_webhook)
+        push_notification_config = to_push_notification_config(body.push_notification_config)
+        context = to_context_object(body.context)
     response = await media_buy_create_module.create_media_buy_raw(
         brand=body.brand,
-        packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
+        # packages stay wire dicts: CreateMediaBuyRequest validates them as the
+        # request's packages[] field, preserving full-request error field paths.
+        packages=body.packages,  # type: ignore[arg-type]
         start_time=body.start_time,
         end_time=body.end_time,
         po_number=body.po_number,
         account=account_ref,
-        reporting_webhook=body.reporting_webhook,  # type: ignore[arg-type]  # raw dict; coerced by CreateMediaBuyRequest
-        push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
-        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        reporting_webhook=reporting_webhook,
+        push_notification_config=push_notification_config,
+        context=context,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
         identity=identity,
@@ -319,6 +334,12 @@ async def create_media_buy(
 @router.put("/media-buys/{media_buy_id}")
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
+    # Same context string as _build_update_request's boundary, so a malformed
+    # object rejects with an identical message prefix wherever it validates.
+    with adcp_validation_boundary(context="update_media_buy request"):
+        push_notification_config = to_push_notification_config(body.push_notification_config)
+        context = to_context_object(body.context)
+        reporting_webhook = to_reporting_webhook(body.reporting_webhook)
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
         paused=body.paused,
@@ -330,10 +351,12 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         end_time=body.end_time,
         pacing=body.pacing,
         daily_budget=body.daily_budget,
-        packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by UpdateMediaBuyRequest
-        push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
-        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
-        reporting_webhook=body.reporting_webhook,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
+        # request's packages[] field, preserving full-request error field paths.
+        packages=body.packages,  # type: ignore[arg-type]
+        push_notification_config=push_notification_config,
+        context=context,
+        reporting_webhook=reporting_webhook,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
         identity=identity,
@@ -347,7 +370,8 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
     if body.account is not None:
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = to_account_reference(body.account)
+        with adcp_validation_boundary(context="get_media_buy_delivery request"):
+            account_ref = to_account_reference(body.account)
         enriched = enrich_identity_with_account(identity, account_ref)
         assert enriched is not None  # identity is non-None (from require_auth)
         identity = enriched
@@ -360,7 +384,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
         reporting_dimensions=body.reporting_dimensions,
         attribution_window=body.attribution_window,
         include_package_daily_breakdown=body.include_package_daily_breakdown,
-        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -372,17 +396,22 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     # Coerce the raw account dict into an AccountReference so sync_creatives_raw
     # resolves it at the transport boundary (mirror create_media_buy / the sibling
     # handlers above — salesagent-hseb).
-    account_ref = to_account_reference(body.account)
+    with adcp_validation_boundary(context="sync_creatives request"):
+        account_ref = to_account_reference(body.account)
+        push_notification_config = to_push_notification_config(body.push_notification_config)
+        context = to_context_object(body.context)
 
     response = creatives_sync_module.sync_creatives_raw(
-        creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
+        # creatives stay wire dicts: _sync_creatives_impl validates each entry
+        # individually (partial-success semantics with per-creative results).
+        creatives=body.creatives,  # type: ignore[arg-type]
         assignments=body.assignments,
         creative_ids=body.creative_ids,
         delete_missing=body.delete_missing,
         dry_run=body.dry_run,
         validation_mode=body.validation_mode,
-        push_notification_config=body.push_notification_config,  # type: ignore[arg-type]  # raw dict; coerced downstream
-        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        push_notification_config=push_notification_config,
+        context=context,
         account=account_ref,
         identity=identity,
     )
@@ -414,7 +443,7 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
         limit=body.limit,
         sort_by=body.sort_by,
         sort_order=body.sort_order,
-        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -426,7 +455,7 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
     response = performance_module.update_performance_index_raw(
         media_buy_id=body.media_buy_id,
         performance_data=body.performance_data,
-        context=body.context,  # type: ignore[arg-type]  # raw dict; coerced downstream
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")

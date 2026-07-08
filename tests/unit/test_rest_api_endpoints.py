@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
+from adcp.types import ContextObject, PushNotificationConfig, ReportingWebhook
 from starlette.testclient import TestClient
 
 from src.app import app
@@ -60,11 +61,21 @@ class TestCreateMediaBuyEndpoint:
 # value the buyer sent reaches the wrapper — one test per non-echoed scalar.
 # ---------------------------------------------------------------------------
 
+# field -> (wire value, value the route must forward to the raw wrapper).
+# Object params are coerced to SDK types at the route (salesagent-1hcg), so the
+# forwarded value is the typed model, not the wire dict; ext stays a raw dict.
+_CREATE_WEBHOOK_WIRE = {
+    "url": "https://example.com/hook",
+    "authentication": {"schemes": ["Bearer"], "credentials": "e9kw-credential-value-of-32-chars"},
+    "reporting_frequency": "daily",
+}
+_CREATE_PNC_WIRE = {"url": "https://example.com/push"}
+_CREATE_CONTEXT_WIRE = {"conversation_id": "conv-e9kw"}
 _CREATE_FORWARDED_SCALARS = {
-    "reporting_webhook": {"url": "https://example.com/hook", "auth_type": "none"},
-    "push_notification_config": {"url": "https://example.com/push", "authentication_type": "none"},
-    "context": {"conversation_id": "conv-e9kw"},
-    "ext": {"e9kw_marker": "create-value"},
+    "reporting_webhook": (_CREATE_WEBHOOK_WIRE, ReportingWebhook.model_validate(_CREATE_WEBHOOK_WIRE)),
+    "push_notification_config": (_CREATE_PNC_WIRE, PushNotificationConfig.model_validate(_CREATE_PNC_WIRE)),
+    "context": (_CREATE_CONTEXT_WIRE, ContextObject.model_validate(_CREATE_CONTEXT_WIRE)),
+    "ext": ({"e9kw_marker": "create-value"}, {"e9kw_marker": "create-value"}),
 }
 
 _UPDATE_FORWARDED_SCALARS = {
@@ -77,22 +88,24 @@ class TestCreateMediaBuyScalarForwarding:
     """Each non-echoed create scalar reaches create_media_buy_raw at runtime."""
 
     @pytest.mark.parametrize(
-        ("field", "value"), list(_CREATE_FORWARDED_SCALARS.items()), ids=list(_CREATE_FORWARDED_SCALARS)
+        ("field", "wire_value", "expected"),
+        [(f, w, e) for f, (w, e) in _CREATE_FORWARDED_SCALARS.items()],
+        ids=list(_CREATE_FORWARDED_SCALARS),
     )
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.media_buy_create.create_media_buy_raw", new_callable=AsyncMock)
-    def test_scalar_forwards_to_raw(self, mock_raw, mock_resolve, field, value):
+    def test_scalar_forwards_to_raw(self, mock_raw, mock_resolve, field, wire_value, expected):
         mock_raw.return_value = MagicMock(model_dump=lambda **kw: {})
         body = {
             "packages": [],
             "start_time": "2026-01-01T00:00:00Z",
             "end_time": "2026-02-01T00:00:00Z",
-            field: value,
+            field: wire_value,
         }
         response = client.post("/api/v1/media-buys", json=body, headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 200, response.text
-        assert mock_raw.call_args.kwargs[field] == value, (
+        assert mock_raw.call_args.kwargs[field] == expected, (
             f"REST create route did not forward {field!r} to create_media_buy_raw"
         )
 
