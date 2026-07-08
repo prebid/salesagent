@@ -775,8 +775,13 @@ async def _get_products_impl(
 
 async def get_products(
     brand: Annotated[
-        BrandReference | str | None,
-        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+        BrandReference | dict[str, Any] | str | None,
+        Field(
+            description=(
+                "Brand reference (object with domain), domain/URL string shorthand "
+                "(e.g. 'acme.com' / 'https://acme.com'), or equivalent dict"
+            )
+        ),
     ] = None,
     brief: Annotated[str, Field(description="Natural language description of campaign goals and requirements")] = "",
     filters: ProductFilters | None = None,
@@ -828,7 +833,7 @@ async def get_products(
 
 async def get_products_raw(
     brief: str = "",
-    brand: BrandReference | str | None = None,
+    brand: BrandReference | dict[str, Any] | str | None = None,
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec

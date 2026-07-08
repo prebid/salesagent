@@ -52,5 +52,33 @@ def test_brand_shorthand_to_domain_malformed_url_non_raising(malformed_url: str)
 
 
 def test_to_brand_reference_malformed_url_raises_validation_error() -> None:
-    with pytest.raises(AdCPValidationError, match="Invalid brand"):
+    with pytest.raises(AdCPValidationError, match="Invalid brand") as exc_info:
         to_brand_reference("https://[")
+    assert exc_info.value.field == "brand"
+
+
+@pytest.mark.parametrize(
+    "invalid_brand",
+    [
+        "acme.com/products",
+        "my_brand.com",
+        "https://münchen.de",
+    ],
+)
+def test_to_brand_reference_invalid_domain_raises_typed_error(invalid_brand: str) -> None:
+    with pytest.raises(AdCPValidationError) as exc_info:
+        to_brand_reference(invalid_brand)
+    assert exc_info.value.field == "brand"
+
+
+def test_dict_uppercase_domain_normalized_like_string() -> None:
+    ref = to_brand_reference({"domain": "ACME.COM"})
+    assert ref is not None
+    assert ref.domain == "acme.com"
+
+
+def test_dict_url_domain_normalized_like_string() -> None:
+    from_dict = to_brand_reference({"domain": "https://acme.com"})
+    from_string = to_brand_reference("https://acme.com")
+    assert from_dict is not None and from_string is not None
+    assert from_dict.domain == from_string.domain == "acme.com"

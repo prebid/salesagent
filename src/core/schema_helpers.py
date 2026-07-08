@@ -91,29 +91,64 @@ def brand_shorthand_to_domain(value: str) -> str:
     return value.lower()
 
 
+def _coerce_domain_or_raise(raw: str) -> str:
+    """Normalize brand shorthand and validate against BrandReference.domain pattern.
+
+    Raises:
+        AdCPValidationError: when the value cannot be normalized to a valid hostname
+            (empty parse, path/underscore/IDN/pattern mismatch). Always tagged
+            ``field="brand"`` so wire envelopes name the request field.
+    """
+    domain = brand_shorthand_to_domain(raw)
+    if not domain:
+        raise AdCPValidationError(
+            f"Invalid brand: could not derive domain from brand shorthand {raw!r}",
+            field="brand",
+        )
+    try:
+        BrandReference(domain=domain)
+    except ValidationError as e:
+        raise AdCPValidationError(
+            f"Invalid brand domain {domain!r}",
+            field="brand",
+        ) from e
+    return domain
+
+
 def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> BrandReference | None:
     """Convert dict/string brand to BrandReference for adcp 3.6.0 compatibility.
+
+    String and dict ``domain`` values share one normalize-then-validate funnel so
+    ``"ACME.COM"`` / ``{"domain":"ACME.COM"}`` / URL-in-domain are equivalent.
 
     Args:
         brand: Brand as dict, string domain shorthand, BrandReference, or None
 
     Returns:
         BrandReference or None
+
+    Raises:
+        AdCPValidationError: when an explicit brand cannot be coerced to a valid
+            ``BrandReference`` (tagged ``field="brand"``).
     """
     if brand is None:
         return None
     if isinstance(brand, BrandReference):
         return brand
     if isinstance(brand, str):
-        domain = brand_shorthand_to_domain(brand)
-        if not domain:
-            raise AdCPValidationError(
-                f"Invalid brand: could not derive domain from brand shorthand {brand!r}",
-                field="brand",
-            )
-        return BrandReference(domain=domain)
+        return BrandReference(domain=_coerce_domain_or_raise(brand))
     if isinstance(brand, dict):
-        return BrandReference(**brand)
+        data = dict(brand)
+        domain_raw = data.get("domain")
+        if isinstance(domain_raw, str):
+            data["domain"] = _coerce_domain_or_raise(domain_raw)
+        try:
+            return BrandReference(**data)
+        except ValidationError as e:
+            raise AdCPValidationError(
+                format_validation_error(e, context="brand"),
+                field="brand",
+            ) from e
     return None  # Fallback for unexpected types
 
 

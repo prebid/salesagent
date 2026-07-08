@@ -63,7 +63,8 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 class GetProductsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     brief: str = ""
-    brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
+    # dict BrandReference or string domain/URL shorthand (#1324)
+    brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
