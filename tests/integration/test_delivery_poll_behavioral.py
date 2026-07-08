@@ -1184,8 +1184,15 @@ class TestLegacyPersistedStatusNotStranded:
     Covers: UC-004-MAIN-10
     """
 
-    @pytest.mark.parametrize("legacy_status", ["ready", "scheduled", "pending_activation"])
-    def test_legacy_status_buy_returned_by_fetch_by_id(self, integration_db, legacy_status):
+    # "ready"/"scheduled" are purely date-gated serving aliases -> mid-flight
+    # they refine to "active". "pending_activation" is scheduler-held until
+    # creative approval (like pending_start), so it maps to "pending_start"
+    # regardless of the window — but it is still returned, never stranded.
+    @pytest.mark.parametrize(
+        ("legacy_status", "expected_status"),
+        [("ready", "active"), ("scheduled", "active"), ("pending_activation", "pending_start")],
+    )
+    def test_legacy_status_buy_returned_by_fetch_by_id(self, integration_db, legacy_status, expected_status):
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -1208,9 +1215,9 @@ class TestLegacyPersistedStatusNotStranded:
                 end_date="2025-06-15",
             )
 
-            # The buy is returned (not stranded) with a valid, date-refined status ...
+            # The buy is returned (not stranded) with a valid resolved status ...
             assert [d.media_buy_id for d in resp.media_buy_deliveries] == ["mb_legacy"]
-            assert resp.media_buy_deliveries[0].status == "active"
+            assert resp.media_buy_deliveries[0].status == expected_status
             # ... and no MEDIA_BUY_NOT_FOUND advisory was emitted for it.
             error_codes = {e.code for e in (resp.errors or [])}
             assert "MEDIA_BUY_NOT_FOUND" not in error_codes
@@ -2741,14 +2748,13 @@ class TestPartialFailureTolerance:
         """
         from unittest.mock import patch
 
+        from src.core.schemas import MediaBuyDeliveryData
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            # Both actively serving so the circuit-breaker check (scoped to
-            # status == "active") is reached for each buy — the injection point.
             buy_1 = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
@@ -2768,20 +2774,18 @@ class TestPartialFailureTolerance:
             env.set_adapter_response("mb_ok", impressions=5000, spend=250.0)
             env.set_adapter_response("mb_fail", impressions=3000, spend=150.0)
 
-            # Patch _is_circuit_breaker_open to raise on the second call,
-            # triggering the outer except handler for buy_2 while buy_1
-            # processes normally.
-            call_count = {"n": 0}
-
-            def circuit_breaker_side_effect(tenant_id):
-                call_count["n"] += 1
-                if call_count["n"] == 2:
+            # Inject a failure at a genuinely per-buy step inside the outer
+            # try: the response-model construction for mb_fail. (The previous
+            # injection point, _is_circuit_breaker_open, is now hoisted out of
+            # the loop and runs once per request.)
+            def delivery_data_side_effect(**kwargs):
+                if kwargs.get("media_buy_id") == "mb_fail":
                     raise RuntimeError("Simulated processing error for buy_2")
-                return False
+                return MediaBuyDeliveryData(**kwargs)
 
             with patch(
-                "src.core.tools.media_buy_delivery._is_circuit_breaker_open",
-                side_effect=circuit_breaker_side_effect,
+                "src.core.tools.media_buy_delivery.MediaBuyDeliveryData",
+                side_effect=delivery_data_side_effect,
             ):
                 response = env.call_impl(media_buy_ids=["mb_ok", "mb_fail"])
 
@@ -2792,8 +2796,12 @@ class TestPartialFailureTolerance:
             # buy_2 should be absent from deliveries (skipped due to outer exception)
             assert "mb_fail" not in returned_ids, f"Expected mb_fail to be absent from deliveries, got: {returned_ids}"
             # ...but it must NOT vanish silently — an advisory surfaces it (#1545 K2).
+            # The advisory carries SERVICE_UNAVAILABLE, not the internal-only
+            # INTERNAL_ERROR: hand-built errors[] entries serialize verbatim, so
+            # the code must already be wire-compliant (normalized through
+            # translate_error_code at response assembly).
             assert response.errors is not None
-            assert any(e.code == "INTERNAL_ERROR" and "mb_fail" in e.message for e in response.errors)
+            assert any(e.code == "SERVICE_UNAVAILABLE" and "mb_fail" in e.message for e in response.errors)
 
 
 # ---------------------------------------------------------------------------

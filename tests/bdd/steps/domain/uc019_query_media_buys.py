@@ -228,6 +228,85 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     ctx.setdefault("_patchers", []).append(patcher)
 
 
+# Pre-flight window (far future) for persisted-status seeds that carry no
+# explicit dates: keeps the persisted value stable regardless of the real clock.
+# INV-8/9/10 assert the raw persisted→canonical mapping with no flight
+# refinement, so a pre-flight window is invisible to the resolver (those statuses
+# are terminal or non-serving, never date-refined) while making the seed
+# self-consistent (a pending buy is legitimately pre-flight).
+_UC019_PERSISTED_SEED_WINDOW = (date(2099, 1, 1), date(2099, 12, 31))
+
+
+def _seed_media_buy_with_persisted_status(
+    ctx: dict,
+    principal_id: str,
+    mb_id: str,
+    persisted: str,
+    *,
+    is_paused: bool = False,
+) -> None:
+    """Seed a media buy carrying a specific persisted (internal) status column.
+
+    Mirrors given_multiple_buys_various_statuses in uc004 (the reviewer's
+    template): the persisted status is written verbatim so get_media_buys
+    exercises the real PERSISTED_STATUS_TO_CANONICAL mapping. Dates default to a
+    pre-flight window; scenarios that need a specific flight phase override them
+    via the "has start_date/end_date" modifier step.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    start, end = _UC019_PERSISTED_SEED_WINDOW
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=persisted,
+        is_paused=is_paused,
+        start_date=start,
+        end_date=end,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with persisted status "{persisted}"'))
+def given_owns_media_buy_persisted_status(ctx: dict, principal_id: str, mb_id: str, persisted: str) -> None:
+    """Seed a buy with a persisted status (INV-7/8/9/10 taxonomy mapping)."""
+    _seed_media_buy_with_persisted_status(ctx, principal_id, mb_id, persisted)
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" '
+        'with persisted status "{persisted}" and is_paused {flag}'
+    )
+)
+def given_owns_media_buy_persisted_status_paused(
+    ctx: dict, principal_id: str, mb_id: str, persisted: str, flag: str
+) -> None:
+    """Seed a buy with a persisted status and explicit is_paused (INV-6/INV-11)."""
+    _seed_media_buy_with_persisted_status(
+        ctx, principal_id, mb_id, persisted, is_paused=(flag.strip().lower() == "true")
+    )
+
+
+@given(parsers.parse('media buy "{mb_id}" has start_date "{start}" and end_date "{end}"'))
+def given_media_buy_has_dates(ctx: dict, mb_id: str, start: str, end: str) -> None:
+    """Override the flight window on an already-seeded buy (INV-6/7/11 modifier)."""
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy as DBMediaBuy
+
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    env = ctx["env"]
+    row = env._session.scalars(select(DBMediaBuy).filter_by(media_buy_id=real_id)).first()
+    assert row is not None, f"Media buy '{mb_id}' (real_id={real_id}) not seeded before setting its dates"
+    row.start_date = date.fromisoformat(start)
+    row.end_date = date.fromisoformat(end)
+    env._session.commit()
+
+
 @given(parsers.parse('the principal "{principal_id}" owns media buys "{mb1}", "{mb2}", and "{mb3}"'))
 def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: str, mb3: str) -> None:
     """Create 3 media buys, verifying principal_id consistency."""

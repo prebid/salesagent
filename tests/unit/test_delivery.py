@@ -1688,8 +1688,11 @@ class TestDeliveryAdapterError:
 
         Regression (#1545 K2): the outer per-buy handler logged and continued with
         no errors[] advisory, so a failure in the status/model-construction path made
-        the buy vanish from the response with no signal. It must now append an
-        INTERNAL_ERROR advisory, mirroring the adapter handler.
+        the buy vanish from the response with no signal. It must now append a
+        SERVICE_UNAVAILABLE advisory, mirroring the adapter handler. The code is the
+        wire-compliant SERVICE_UNAVAILABLE (not the internal-only INTERNAL_ERROR):
+        advisory errors[] entries serialize verbatim and are normalized through
+        translate_error_code at response assembly.
         """
         good = _make_mock_media_buy(media_buy_id="mb_good")
         bad = _make_mock_media_buy(media_buy_id="mb_bad")
@@ -1714,9 +1717,9 @@ class TestDeliveryAdapterError:
         assert [d.media_buy_id for d in result.media_buy_deliveries] == ["mb_good"]
         # Failed buy surfaces an advisory instead of vanishing.
         assert result.errors is not None
-        internal_errors = [e for e in result.errors if e.code == "INTERNAL_ERROR"]
-        assert len(internal_errors) == 1
-        assert "mb_bad" in internal_errors[0].message
+        advisory_errors = [e for e in result.errors if e.code == "SERVICE_UNAVAILABLE"]
+        assert len(advisory_errors) == 1
+        assert "mb_bad" in advisory_errors[0].message
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).

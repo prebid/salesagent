@@ -21,6 +21,7 @@ from rich.console import Console
 from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
+    translate_error_code,
 )
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
@@ -111,7 +112,7 @@ from src.core.tools._media_buy_status import (
     NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
-from src.core.utils import utc_flight_start
+from src.core.utils import utc_flight_end, utc_flight_start
 from src.core.validation_helpers import format_validation_error
 
 
@@ -131,7 +132,12 @@ def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt:
         simulated = TimeSimulator.jump_to_event_time(
             testing_ctx.jump_to_event,
             utc_flight_start(cast(date, buy.start_date)),
-            utc_flight_start(cast(date, buy.end_date)),
+            # Flight END is end-of-day UTC (utc_flight_end), not midnight: the
+            # last flight day is still serving, so CAMPAIGN_COMPLETE lands at the
+            # last instant of end_date. Mirrors the status scheduler
+            # (media_buy_status_scheduler.py: completed only when now >
+            # utc_flight_end) and resolve_canonical_status's inclusive end.
+            utc_flight_end(cast(date, buy.end_date)),
         )
         return simulated, True
     return default_dt, False
@@ -352,7 +358,11 @@ def _get_media_buy_delivery_impl(
                     buy_start_date_sim = cast(date, buy.start_date)
                     buy_end_date_sim = cast(date, buy.end_date)
                     start_dt = utc_flight_start(buy_start_date_sim)
-                    end_dt_campaign = utc_flight_start(buy_end_date_sim)
+                    # End-of-day (utc_flight_end): the flight runs THROUGH the end
+                    # date, so progress reaches 1.0 only after the last flight day,
+                    # matching the scheduler and resolve_canonical_status. Midnight
+                    # would complete the campaign a day early.
+                    end_dt_campaign = utc_flight_end(buy_end_date_sim)
                     progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
 
                     simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
@@ -523,7 +533,14 @@ def _get_media_buy_delivery_impl(
                 logger.error("Error processing delivery for %s: %s", media_buy_id, e)
                 adapter_errors.append(
                     Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                        code="INTERNAL_ERROR",
+                        # SERVICE_UNAVAILABLE (not INTERNAL_ERROR) — advisory
+                        # errors[] entries serialize verbatim (they never pass
+                        # through translate_error_code), and INTERNAL_ERROR is an
+                        # internal-only code (exceptions.INTERNAL_CODES) that must
+                        # not reach the buyer. Matches the sibling adapter handler
+                        # above. The assembly-time normalization below is the
+                        # backstop that keeps any hand-built code on the wire.
+                        code="SERVICE_UNAVAILABLE",
                         message=f"Error processing delivery for {media_buy_id}",
                     )
                 )
@@ -539,6 +556,13 @@ def _get_media_buy_delivery_impl(
         # will never come (#1552; next_expected_at is "only present ... when
         # notification_type is not 'final'" per
         # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+        #
+        # UNGRADED: the schema/storyboard describe "final" narrowly as "the
+        # campaign completes" (optimization-reporting.mdx §Publisher Commitment).
+        # Extending "final" to the other no-more-data terminals (rejected /
+        # canceled / failed) is our reading of the same "no next_expected_at when
+        # no more data" invariant, not a directly graded conformance step — no
+        # storyboard exercises a rejected/canceled/failed buy's notification_type.
         if deliveries and all(enum_value(d.status) in NO_MORE_DATA_STATUSES for d in deliveries):
             notification_type = "final"
         elif deliveries:
@@ -587,6 +611,20 @@ def _get_media_buy_delivery_impl(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
+        # Normalize advisory error codes to their wire-compliant form. Unlike a
+        # raised AdCPError (translated by the boundary), hand-built errors[]
+        # advisories serialize verbatim, so an internal-only code (e.g.
+        # INTERNAL_ERROR) would otherwise leak to the buyer. Running every
+        # advisory through translate_error_code() at assembly makes that class
+        # of leak structurally impossible.
+        advisory_errors = [
+            Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                code=translate_error_code(e.code),
+                message=e.message,
+            )
+            for e in (not_found_errors + adapter_errors)
+        ]
+
         # Create AdCP-compliant response
         context_val = req.context
         response = GetMediaBuyDeliveryResponse(
@@ -601,7 +639,7 @@ def _get_media_buy_delivery_impl(
             ),
             media_buy_deliveries=deliveries,
             attribution_window=attribution_window,
-            errors=(not_found_errors + adapter_errors) or None,
+            errors=advisory_errors or None,
             context=context_val,
             notification_type=notification_type,
             sequence_number=sequence_number,
@@ -619,7 +657,10 @@ def _get_media_buy_delivery_impl(
                 first_buy_end = cast(date, first_buy.end_date)
                 campaign_info = {
                     "start_date": utc_flight_start(first_buy_start),
-                    "end_date": utc_flight_start(first_buy_end),
+                    # End-of-day (utc_flight_end) so the testing-hook progress math
+                    # treats the last flight day as still serving — consistent with
+                    # the simulation path above and the scheduler.
+                    "end_date": utc_flight_end(first_buy_end),
                     "total_budget": float(first_buy.budget) if first_buy.budget else 0.0,
                 }
 

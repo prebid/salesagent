@@ -429,13 +429,31 @@ def _resolve_status_filter(
         # Default: active only
         return {MediaBuyStatus.active}
 
+    # Normalize every element to a MediaBuyStatus enum. On the wire the filter
+    # arrives as bare strings (GetMediaBuysRequest.status_filter is not coerced
+    # to the enum), while _compute_status returns MediaBuyStatus members — so a
+    # raw ``set(status_filter)`` of strings never matches the enum membership
+    # test at the call site, silently dropping every buy. ``MediaBuyStatus(x)``
+    # is idempotent for enum members and coerces valid strings.
     if isinstance(status_filter, RootModel):
-        return set(status_filter.root)
+        raw = status_filter.root
+    elif isinstance(status_filter, list):
+        raw = status_filter
+    else:
+        raw = [status_filter]
 
-    if isinstance(status_filter, list):
-        return set(status_filter)
-
-    return {status_filter}
+    try:
+        return {MediaBuyStatus(s) for s in raw}
+    except ValueError as e:
+        # An unknown status string is a bad request, not a server fault — surface
+        # a clean VALIDATION_ERROR instead of letting the ValueError escape as a
+        # 500. (A dedicated STATUS_FILTER_INVALID_VALUE code is a separate,
+        # unimplemented gap; see the xfailed boundary-status-filter rows.)
+        raise AdCPValidationError(
+            f"Invalid status_filter value: {e}",
+            field="status_filter",
+            suggestion="status_filter values must be valid media-buy statuses",
+        ) from e
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:

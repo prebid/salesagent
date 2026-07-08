@@ -407,6 +407,10 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-inv-151-1 @invariant @BR-RULE-151
   Scenario: INV-1 holds - default filter returns only active media buys
     Given the principal "buyer-001" owns active media buy "mb-001" and completed media buy "mb-002"
+    # Pin the clock: the seed builds mb-001/mb-002 flight windows around this same
+    # "today" (mock_today), so the query MUST evaluate status against it too, else
+    # mb-001's window is in the past under the real clock and it reads as completed.
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no status_filter
     Then the response should include media buy "mb-001"
     And the response should not include media buy "mb-002"
@@ -543,7 +547,10 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-150-11 @invariant @BR-RULE-150 @schema-v3.1
   Scenario: INV-11 holds - unknown persisted status defaults to active then flight-refines
-    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "some_unmapped_internal_state" and is_paused false
+    # Unmapped status must fit the status column (varchar(20)); the exact
+    # string is irrelevant — any value absent from PERSISTED_STATUS_TO_CANONICAL
+    # exercises the defensive default-to-active path.
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "unmapped_state" and is_paused false
     And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]

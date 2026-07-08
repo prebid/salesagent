@@ -45,9 +45,9 @@ SCAN_DIRS = [REPO_ROOT / "src/core/tools"]
 # Pre-existing violations, keyed (repo-relative file, enclosing function).
 # Each has a FIXME(#gh-issue) comment at the source. Shrink-only.
 SILENT_LOOP_HANDLER_ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(#1545): unparseable Broadstreet template dropped from formats silently
+    # FIXME(#1566): unparseable Broadstreet template dropped from formats silently
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl"),
-    # FIXME(#1545): creative-association failure logged only, absent from response
+    # FIXME(#1566): creative-association failure logged only, absent from response
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
 }
 

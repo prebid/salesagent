@@ -22,8 +22,17 @@ Multi-transport support (subclasses may also override):
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
+
+# The MCP transport boots the real FastMCP app lifespan, which starts the
+# background schedulers. Those run a batch immediately on the *real* wall clock
+# and rewrite media-buy status rows — silently mutating data a test just seeded
+# (e.g. promoting a seeded pending_start buy to active). Suppress them for all
+# harness-driven tests; setdefault so an explicit override still wins.
+# (src.core.main._background_schedulers_enabled reads this at lifespan runtime.)
+os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
