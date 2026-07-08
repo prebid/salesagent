@@ -24,9 +24,13 @@ SCAN_ROOT = REPO_ROOT / "src"
 
 
 def _dict_has_suggestion_key(node: ast.AST) -> bool:
-    return isinstance(node, ast.Dict) and any(
-        isinstance(k, ast.Constant) and k.value == "suggestion" for k in node.keys
-    )
+    if isinstance(node, ast.Dict):
+        return any(isinstance(k, ast.Constant) and k.value == "suggestion" for k in node.keys)
+    # dict(suggestion=...) builds the same buried payload as a {"suggestion": ...}
+    # literal — a Dict-only matcher would miss the Call form.
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict":
+        return any(kw.arg == "suggestion" for kw in node.keywords)
+    return False
 
 
 def find_buried_suggestion_emits(tree: ast.AST) -> list[str]:
@@ -72,8 +76,16 @@ class TestGuardDetector:
         # a detector comparing the whole dict to {"suggestion": ...} would miss it.
         assert _detect('err("x", details={"minimum_budget": 500, "suggestion": "raise budget"})')
 
+    def test_positive_dict_call_form(self):
+        # dict(suggestion=...) is the same disease as the {"suggestion": ...}
+        # literal — an ast.Dict-only matcher would miss the Call form.
+        assert _detect('raise AdCPAccountNotFoundError("x", details=dict(suggestion="use list_accounts"))')
+
     def test_negative_details_without_suggestion(self):
         assert not _detect('raise AdCPValidationError("x", details={"minimum_budget": 500})')
+
+    def test_negative_dict_call_without_suggestion(self):
+        assert not _detect('raise AdCPValidationError("x", details=dict(minimum_budget=500))')
 
     def test_negative_first_class_suggestion_kwarg(self):
         assert not _detect('raise AdCPAuthRequiredError("x", suggestion=AUTH_REQUIRED_SUGGESTION)')

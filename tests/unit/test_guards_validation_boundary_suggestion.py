@@ -25,6 +25,24 @@ SCAN_ROOT = REPO_ROOT / "src"
 SANCTIONED = SCAN_ROOT / "core" / "validation_helpers.py"
 
 
+def _validation_error_class_names() -> frozenset[str]:
+    """AdCPValidationError and every subclass — hand-rolling the boundary with a
+    SUBCLASS (e.g. AdCPInvalidRequestError) is the same disease, and a matcher
+    keyed on the one literal name would miss it."""
+    import src.core.exceptions as exceptions_module
+    from src.core.exceptions import AdCPValidationError
+
+    return frozenset(
+        name
+        for name in dir(exceptions_module)
+        if isinstance(getattr(exceptions_module, name), type)
+        and issubclass(getattr(exceptions_module, name), AdCPValidationError)
+    )
+
+
+VALIDATION_ERROR_NAMES = _validation_error_class_names()
+
+
 def _contains_format_validation_error_call(node: ast.AST) -> bool:
     for sub in ast.walk(node):
         if isinstance(sub, ast.Call):
@@ -36,14 +54,14 @@ def _contains_format_validation_error_call(node: ast.AST) -> bool:
 
 
 def find_handrolled_boundaries(tree: ast.AST) -> list[str]:
-    """Unparsed source for AdCPValidationError(...) wrapping format_validation_error(...)."""
+    """Unparsed source for AdCPValidationError(-subclass)(...) wrapping format_validation_error(...)."""
     offenders: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
         name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", None)
-        if name != "AdCPValidationError":
+        if name not in VALIDATION_ERROR_NAMES:
             continue
         args_and_kwargs: list[ast.AST] = [*node.args, *[kw.value for kw in node.keywords]]
         if any(_contains_format_validation_error_call(a) for a in args_and_kwargs):
@@ -85,8 +103,20 @@ class TestGuardDetector:
             "raise AdCPValidationError(format_validation_error(e), suggestion=suggest_validation_fix(e)) from e"
         )
 
+    def test_positive_subclass_still_handrolled(self):
+        # A SUBCLASS wrapping the formatter is the same disease — a matcher
+        # keyed on the literal 'AdCPValidationError' name would miss it.
+        assert "AdCPInvalidRequestError" in VALIDATION_ERROR_NAMES
+        assert _detect('raise AdCPInvalidRequestError(format_validation_error(e, context="x request")) from e')
+
     def test_negative_semantic_error_without_formatter(self):
         assert not _detect('raise AdCPValidationError("Start date must be before end date", suggestion="fix it")')
+
+    def test_negative_unrelated_error_class_with_formatter(self):
+        # Non-validation AdCP errors legitimately embed formatter output in
+        # messages (e.g. reconstruction logging) — only the validation family
+        # constitutes a hand-rolled boundary.
+        assert not _detect('raise AdCPAdapterError(f"reconstruct failed: {format_validation_error(ve)}")')
 
     def test_negative_non_raise_message_reconstruction(self):
         assert not _detect("msg = f'Failed to reconstruct: {format_validation_error(ve)}'")

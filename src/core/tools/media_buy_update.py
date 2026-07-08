@@ -112,7 +112,7 @@ def _adcp_status_and_actions(persisted_status: str | None) -> tuple[MediaBuyStat
     persisted-status-authoritative ``_compute_status``, which reads the same
     column (date-driven transitions live in the status scheduler, #1417).
     Single source of truth for the update-response status pair so the four
-    ``UpdateMediaBuySuccess`` sites cannot drift (salesagent-3ec1).
+    ``UpdateMediaBuySuccess`` sites cannot drift.
     """
     media_buy_status = normalize_persisted_media_buy_status(persisted_status)
     valid_actions = valid_actions_for_status(media_buy_status.value) if media_buy_status else []

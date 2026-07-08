@@ -442,8 +442,8 @@ def _resolve_status_filter(
 
 # Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
 # transitions) maps onto the AdCP MediaBuyStatus wire vocabulary below.
-# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL (the
-# salesagent-18h.1 fix) but targets the AdCP enum used by list_media_buys
+# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL but targets
+# the AdCP enum used by list_media_buys
 # instead of the internal delivery filter vocabulary — the two output
 # vocabularies are genuinely different (AdCP has no "failed"/"ready"/"draft"),
 # so per the CLAUDE.md DRY guidance ("not about collapsing two genuinely
@@ -468,7 +468,7 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
     "pending": MediaBuyStatus.pending_start,
     "pending_approval": MediaBuyStatus.pending_start,
     # "scheduled" is set by admin approval pre-flight (operations.py / workflows.py);
-    # like the other pre-serving states it maps to pending_start (salesagent-3ec1).
+    # like the other pre-serving states it maps to pending_start.
     "scheduled": MediaBuyStatus.pending_start,
     "pending_creatives": MediaBuyStatus.pending_creatives,
     "pending_start": MediaBuyStatus.pending_start,
