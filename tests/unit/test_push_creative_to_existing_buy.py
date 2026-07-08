@@ -7,6 +7,8 @@ time due to pending_review status (prebid#1038).
 
 from unittest.mock import ANY, MagicMock, patch
 
+from src.core.schemas import AssetStatus
+
 # Patch targets
 _MODULE = "src.core.tools.media_buy_create"
 _UOW_PATCH = "src.core.database.repositories.uow.AdminCreativeUoW"
@@ -77,10 +79,13 @@ def _make_package(
 
 
 def _make_adapter(*, status: str = "success") -> MagicMock:
-    asset_status = MagicMock()
-    asset_status.creative_id = "cre_1"
-    asset_status.status = status
-    asset_status.message = "Adapter error" if status == "failed" else None
+    # Real AssetStatus (not a bare MagicMock) so concept enrichment fields default
+    # to None — faithfully representing an adapter that derives no seller concept.
+    asset_status = AssetStatus(
+        creative_id="cre_1",
+        status=status,
+        message="Adapter error" if status == "failed" else None,
+    )
 
     adapter = MagicMock()
     adapter.creatives_manager.add_creative_assets.return_value = [asset_status]
@@ -138,6 +143,53 @@ class TestPushCreativeToExistingBuy:
         uow.creatives.update_data.assert_called_once_with(
             creative,
             {"platform_creative_id": "cre_1"},
+        )
+
+    def test_happy_path_persists_seller_concept_when_adapter_returns_one(self):
+        """A concept-bearing AssetStatus (the GAM-order fallback, #1506) is folded into
+        the data blob and persisted via update_data — exercises the concept branch of
+        this writeback, which the concept-free happy path above does not."""
+        creative = _make_creative()
+        uow = _make_uow(
+            tenant=_make_tenant(),
+            creative=creative,
+            assignments=[_make_assignment()],
+            package=_make_package(),
+        )
+        concept_status = AssetStatus(
+            creative_id="cre_1",
+            status="success",
+            concept_id="gam-order-99",
+            concept_name="GAM Order 99",
+            concept_source="gam_order",
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.creatives_manager.add_creative_assets.return_value = [concept_status]
+
+        with (
+            patch(_UOW_PATCH, return_value=uow),
+            patch("src.core.config_loader.get_tenant_by_id", return_value=None),
+            patch("src.core.config_loader.set_current_tenant"),
+            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
+            patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),
+            patch(
+                f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
+            ),
+            patch(f"{_MODULE}.extract_click_url", return_value=None),
+            patch(f"{_MODULE}.extract_impression_tracker_url", return_value=None),
+        ):
+            success, err = _call()
+
+        assert success is True
+        assert err is None
+        uow.creatives.update_data.assert_called_once_with(
+            creative,
+            {
+                "platform_creative_id": "cre_1",
+                "concept_id": "gam-order-99",
+                "concept_name": "GAM Order 99",
+                "concept_source": "gam_order",
+            },
         )
 
     def test_happy_path_skips_adapter_when_platform_creative_id_already_set(self):

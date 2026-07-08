@@ -148,3 +148,62 @@ class TestNonScalarConceptValueDropped:
             assert "Dropping non-scalar concept value" in warnings_logged, (
                 f"expected the non-scalar drop warning; logger.warning calls: {mock_logger.warning.call_args_list}"
             )
+
+
+class TestSellerConceptEnrichmentIsFilterable:
+    """The concept the #1506 merge helper writes is findable by the #1407 concept_ids
+    filter and surfaced on the wire. This chains the merge helper's output → data blob
+    → filter, so a key-name drift between the helper and the reader (e.g. writing
+    ``concept`` while the filter reads ``concept_id``) reddens here. The full
+    producer → real writeback → DB → reader chain (which this does NOT exercise — it
+    calls the merge helper directly, not a writeback site) is pinned separately by
+    ``test_execute_approved_platform_ids.py``."""
+
+    def _enriched_data(self, order_id: str):
+        from src.core.schemas import AssetStatus
+        from src.core.tools.media_buy_create import _merge_creative_enrichment
+
+        # The AssetStatus the GAM producer surfaces for a creative pushed into an order,
+        # run through the real merge helper directly (the production writeback sites are
+        # covered by test_execute_approved_platform_ids.py).
+        status = AssetStatus(
+            creative_id=f"gam_{order_id}",
+            status="approved",
+            concept_id=f"gam-order-{order_id}",
+            concept_name=f"GAM Order {order_id}",
+            concept_source="gam_order",
+        )
+        return _merge_creative_enrichment({"assets": {}}, status)
+
+    def test_gam_order_concept_is_filterable_end_to_end(self, integration_db):
+        from tests.factories import CreativeFactory
+
+        with CreativeListEnv() as env:
+            tenant, principal = _seed_authenticated_principal(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data=self._enriched_data("789"),
+            )
+            # A creative enriched from a different order must NOT match the filter.
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data=self._enriched_data("000"),
+            )
+
+            result = env.call_via(Transport.REST, filters={"concept_ids": ["gam-order-789"]})
+
+            assert not result.is_error, f"concept filter errored: {result.error!r}"
+            creatives = result.wire_response["creatives"]
+            assert len(creatives) == 1, f"expected only the order-789 creative, got {creatives!r}"
+            assert creatives[0]["concept_id"] == "gam-order-789"
+            assert creatives[0]["concept_name"] == "GAM Order 789"
+            # The internal provenance marker must never reach the wire. Today it can't
+            # (the reader projects explicit kwargs + the subclass extra="ignore" policy),
+            # but nothing else pins it — a future schema change that echoed data must redden.
+            assert "concept_source" not in creatives[0]
