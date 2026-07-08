@@ -60,12 +60,7 @@ def _statement_lists(tree: ast.AST):
             stmts = getattr(parent, field, None)
             if not isinstance(stmts, list) or not stmts:
                 continue
-            if (
-                field == "orelse"
-                and isinstance(parent, ast.If)
-                and len(stmts) == 1
-                and isinstance(stmts[0], ast.If)
-            ):
+            if field == "orelse" and isinstance(parent, ast.If) and len(stmts) == 1 and isinstance(stmts[0], ast.If):
                 continue
             yield stmts
 
@@ -168,22 +163,15 @@ class TestGuardDetector:
 
     def test_positive_raise_counts_as_terminal(self):
         assert _detect(
-            "def f():\n"
-            "    if x == 1:\n        raise ValueError('x')\n"
-            "    if x == 1:\n        return 'dead'\n"
+            "def f():\n    if x == 1:\n        raise ValueError('x')\n    if x == 1:\n        return 'dead'\n"
         )
 
     def test_negative_non_terminal_first_branch_falls_through(self):
         # First branch mutates and falls through — the second IS reachable.
-        assert not _detect(
-            "def f():\n"
-            "    if x == 1:\n        y = 2\n"
-            "    if x == 1:\n        return y\n"
-        )
+        assert not _detect("def f():\n    if x == 1:\n        y = 2\n    if x == 1:\n        return y\n")
 
     def test_negative_same_test_in_sibling_blocks(self):
         # Same test in two different statement lists (two functions) is fine.
         assert not _detect(
-            "def f():\n    if x == 1:\n        return 'a'\n\n"
-            "def g():\n    if x == 1:\n        return 'a'\n"
+            "def f():\n    if x == 1:\n        return 'a'\n\ndef g():\n    if x == 1:\n        return 'a'\n"
         )

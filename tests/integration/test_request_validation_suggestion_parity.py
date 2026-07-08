@@ -348,6 +348,51 @@ class TestCreateMediaBuyRestWebhookSuggestionParity:
 
 
 @pytest.mark.requires_db
+class TestCreateMediaBuyA2AWebhookSuggestionParity:
+    """A2A create_media_buy object-param rejection must carry a top-level suggestion.
+
+    The A2A twin of ``TestCreateMediaBuyRestWebhookSuggestionParity``. The A2A
+    skill handler full-request-validates inside ``adcp_validation_boundary``
+    BEFORE ``create_media_buy_raw`` runs, which is the only thing standing
+    between a malformed ``reporting_webhook`` and the raw wrapper's
+    boundary-less ``to_reporting_webhook`` call (salesagent-oygh: the
+    raise-capable ``to_*`` coercions depend on every caller pre-validating).
+    This test pins that pre-validation: remove the handler's boundary or its
+    full-request validation and the envelope loses its suggestion.
+    """
+
+    def test_invalid_reporting_webhook_a2a_envelope_carries_suggestion(self, integration_db):
+        """A malformed ``reporting_webhook`` rejected on the A2A wire must
+        produce the AdCP two-layer VALIDATION_ERROR envelope WITH a top-level
+        ``suggestion`` (error.json @v3.1-04f59d2d5) — identical to REST.
+        """
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import Transport
+
+        with MediaBuyCreateEnv() as env:
+            env.setup_media_buy_data()
+
+            result = env.call_via(
+                Transport.A2A,
+                brand={"domain": "acme.example"},
+                packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+                start_time="asap",
+                end_time="2099-12-31T23:59:59Z",
+                reporting_webhook={"not_a_webhook_field": True},
+            )
+
+            assert result.is_error, (
+                "A malformed reporting_webhook must be rejected on the A2A wire, "
+                f"got success payload: {result.payload!r}"
+            )
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+            )
+
+
+@pytest.mark.requires_db
 class TestListAccountsRestSuggestionParity:
     """REST list_accounts request-validation must carry a top-level suggestion."""
 

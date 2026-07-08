@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
-from pydantic import ValidationError
 
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_account_reference
 
@@ -35,9 +35,17 @@ def test_to_account_reference_handles_supported_inputs():
 
 
 def test_to_account_reference_rejects_invalid_account_payload():
-    """Malformed oneOf account payloads fail validation at the shared helper."""
-    with pytest.raises(ValidationError):
+    """Malformed oneOf account payloads fail as a TYPED error at the shared helper.
+
+    Updated for salesagent-oygh: the to_* coercions carry an internal
+    ``adcp_validation_boundary`` (the coerce_creative_filters pattern), so the
+    rejection is an ``AdCPValidationError`` with a top-level suggestion — the
+    previous raw ``pydantic.ValidationError`` leak WAS the disease this test
+    now guards against.
+    """
+    with pytest.raises(AdCPValidationError) as excinfo:
         to_account_reference({})
+    assert excinfo.value.suggestion, "typed rejection must carry a top-level suggestion"
 
 
 class TestSyncCreativesAccountCoercion:
