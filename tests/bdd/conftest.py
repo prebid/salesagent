@@ -63,6 +63,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.compat_normalization",
+    "tests.bdd.steps.domain.uc019_query_media_buys",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1865,6 +1866,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # --- UC-019: REST transport has no query route — blanket gap ---
+        # src/routes/api_v1.py registers POST /media-buys (create), PUT
+        # /media-buys/{id} (update), and POST /media-buys/delivery (metrics) —
+        # but no query route for get_media_buys. MediaBuyListEnv.REST_ENDPOINT
+        # ("/api/v1/media-buys/query") targets a route that was never built
+        # server-side, so every REST-transport UC-019 scenario 405s
+        # (Method Not Allowed) regardless of what it's otherwise testing. #1555.
+        #
+        # Excluded: T-UC-019-partition-status-invalid. Its Given step
+        # (missing start_date/end_date) hits a DB NOT NULL constraint and sets
+        # ctx["error"] directly during setup — _dispatch_query short-circuits
+        # before any transport call, so these never reach the network layer
+        # and pass on REST regardless of the missing route (empirically
+        # verified: xpassed under strict=False before this exclusion). #1555.
+        _UC019_REST_ROUTE_INDEPENDENT_TAGS = {"T-UC-019-partition-status-invalid"}
+        if (
+            is_rest
+            and any(t.startswith("T-UC-019") for t in marker_names)
+            and not (marker_names & _UC019_REST_ROUTE_INDEPENDENT_TAGS)
+        ):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="UC-019: REST transport has no get_media_buys query route "
+                    "(405 Method Not Allowed) — spec-production gap",
+                    strict=False,
+                )
+            )
+
         # --- UC-019: xfails for spec-production gaps ---
         # Graduated (k31s): status_computation active variants, default_status_filter
         # simple variants, status_filter boundary simple variants, inv-150-2/4,
@@ -1885,12 +1914,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-inv-153-3",
             "T-UC-019-inv-153-4",
             "T-UC-019-inv-153-5",
+            # Unmapped persisted status: the feature's literal test value
+            # "some_unmapped_internal_state" (29 chars) exceeds
+            # media_buys.status VARCHAR(20) — DataError on insert, all
+            # transports. Not fixable without a schema migration (no
+            # intentional production changes in this PR). #1555.
+            "T-UC-019-inv-150-11",
             # Sandbox mode — not implemented
             "T-UC-019-sandbox-happy",
             "T-UC-019-sandbox-validation",
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
-            # Graduated: T-UC-019-ext-a (impl/a2a/mcp pass) — moved to selective block below.
+            # T-UC-019-ext-a: REST/e2e_rest xfailed below (suggestion wording).
+            # a2a/mcp xfailed separately below (AUTH_TOKEN_INVALID vs AUTH_REQUIRED,
+            # empirically verified — #1555; the prior "Graduated (impl/a2a/mcp pass)"
+            # comment here predated the harness ever being wired and was never
+            # actually run against this module).
             # Extension errors — error code mismatches / not implemented
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
@@ -1934,12 +1973,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
 
         # --- UC-019: HTTP transport xfails for auth suggestion mismatch ---
-        # impl/a2a/mcp graduated (kb7y); REST/e2e_rest suggestion string differs
-        # from spec ("authenticate" vs "authentication").
+        # REST/e2e_rest suggestion string differs from spec ("authenticate" vs
+        # "authentication"). a2a/mcp are xfailed separately below for a
+        # different, empirically-verified reason (AUTH_TOKEN_INVALID vs
+        # AUTH_REQUIRED) — #1555.
         if (is_rest or is_e2e_rest) and "T-UC-019-ext-a" in marker_names:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
+                    strict=False,
+                )
+            )
+
+        # --- UC-019: a2a/mcp raise the wrong error code for missing credentials ---
+        # T-UC-019-ext-a expects AUTH_REQUIRED; a2a/mcp actually raise
+        # AUTH_TOKEN_INVALID for a no-credentials get_media_buys request.
+        # Empirically verified — #1555.
+        if (is_a2a or is_mcp) and "T-UC-019-ext-a" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="UC-019: a2a/mcp raise AUTH_TOKEN_INVALID instead of AUTH_REQUIRED "
+                    "for a missing-credentials get_media_buys request — spec-production gap",
                     strict=False,
                 )
             )
@@ -1966,11 +2020,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"multiple_statuses", "all_statuses"},
                 "UC-019: multi-status filter not implemented",
             ),
-            # Status filter boundary: complex filter variants fail
+            # Status filter boundary: complex filter variants fail. "removed enum
+            # value" (pending_activation) added #1555 — empirically verified: no
+            # error is raised (STATUS_FILTER_INVALID_VALUE/STATUS_FILTER_EMPTY
+            # don't exist anywhere in src/), same production gap as the sibling
+            # T-UC-019-partition-status-filter-invalid tag.
             (
                 "T-UC-019-boundary-status-filter",
-                {"all six", "empty array", "unknown enum", "mix of valid"},
+                {"all six", "empty array", "unknown enum", "mix of valid", "removed enum value"},
                 "UC-019: complex status filter boundary not implemented",
+            ),
+            # Sandbox boundary: "sandbox: true" variant fails — sandbox mode is
+            # not implemented in production (same gap as T-UC-019-sandbox-happy).
+            # The "sandbox absent" variant passes trivially on a2a/mcp (no
+            # sandbox field is ever present) and is covered on REST by the
+            # blanket REST-not-implemented xfail above. #1555.
+            (
+                "T-UC-019-boundary-sandbox",
+                {"sandbox: true in response"},
+                "UC-019: sandbox mode not implemented in production — spec-production gap",
             ),
             # Snapshot: not-requested variant fails (include_snapshot=false path)
             (
@@ -2729,6 +2797,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith("T-UC-018") for t in marker_names):
         return "UC-018"
+    if any(t.startswith("T-UC-019") for t in marker_names):
+        return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names:
@@ -2866,6 +2936,24 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail(
                 "UC-018 harness wired only for the @list-after-sync (#1405) and @concept-id (#1407) storyboard scenarios"
             )
+
+    elif uc == "UC-019":
+        request.getfixturevalue("integration_db")
+        from tests.harness.media_buy_list import MediaBuyListEnv
+
+        # "buyer-001" matches the Background's principal_id across all UC-019
+        # scenarios (mirrors the UC-004 DeliveryPollEnv convention above).
+        with MediaBuyListEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+            tenant, principal = env.setup_default_data()
+            ctx["env"] = env
+            ctx["tenant"] = tenant
+            ctx["principal"] = principal
+            try:
+                yield
+            finally:
+                for patcher in ctx.get("_patchers", []):
+                    patcher.stop()
+                ctx.pop("_patchers", None)
 
     elif uc == "UC-011":
         marker_names = {m.name for m in request.node.iter_markers()}

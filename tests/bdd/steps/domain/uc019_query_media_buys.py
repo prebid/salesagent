@@ -204,6 +204,87 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
     _register_media_buy(ctx, mb_id, mb)
 
 
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with persisted status "{status}"'))
+def given_principal_owns_media_buy_with_persisted_status(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
+    """Create a media buy with a specific raw persisted MediaBuy.status column value.
+
+    Exercises _PERSISTED_STATUS_TO_ADCP mapping (BR-RULE-150 INV-6..INV-11) directly —
+    the raw DB string, not the AdCP wire status.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=status,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" with persisted status "{status}" and is_paused true'
+    )
+)
+def given_principal_owns_media_buy_with_persisted_status_paused(
+    ctx: dict, principal_id: str, mb_id: str, status: str
+) -> None:
+    """Create a media buy with a persisted status and is_paused=True (BR-RULE-150 INV-6)."""
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=status,
+        is_paused=True,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" with persisted status "{status}" and is_paused false'
+    )
+)
+def given_principal_owns_media_buy_with_persisted_status_not_paused(
+    ctx: dict, principal_id: str, mb_id: str, status: str
+) -> None:
+    """Create a media buy with a persisted status and is_paused=False (BR-RULE-150 INV-11)."""
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=status,
+        is_paused=False,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
+@given(parsers.parse('media buy "{mb_id}" has start_date "{start}" and end_date "{end}"'))
+def given_media_buy_has_dates(ctx: dict, mb_id: str, start: str, end: str) -> None:
+    """Set flight dates on an already-seeded media buy (follow-up to a persisted-status Given)."""
+    seeded = ctx.get("seeded_media_buys", {})
+    mb = seeded.get(mb_id)
+    assert mb is not None, (
+        f"Media buy '{mb_id}' not found in seeded_media_buys — a prior Given step must create it first. "
+        f"Known: {list(seeded)}"
+    )
+    env = ctx["env"]
+    mb.start_date = date.fromisoformat(start)
+    mb.end_date = date.fromisoformat(end)
+    env._commit_factory_data()
+
+
 @given(parsers.parse('today is "{today_str}"'))
 def given_today_is(ctx: dict, today_str: str) -> None:
     """Override 'today' for status computation.
@@ -389,11 +470,20 @@ def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
 
 @given(parsers.parse('the principal "{principal_id}" owns active media buy "{mb1}" and completed media buy "{mb2}"'))
 def given_principal_owns_active_and_completed(ctx: dict, principal_id: str, mb1: str, mb2: str) -> None:
-    """Create one active and one completed media buy (INV-151-1)."""
+    """Create one active and one completed media buy (INV-151-1).
+
+    This scenario has no preceding "today is ..." step, so no datetime patch
+    is installed on src.core.tools.media_buy_list — production evaluates
+    status against the real wall clock. Flight dates must therefore be seeded
+    relative to that same real clock (datetime.now(UTC).date()), not a
+    hardcoded fallback, or the "active" buy can drift out of its window and
+    the default {active} filter silently excludes it.
+    """
     _register_principal(ctx, principal_id)
     env = ctx["env"]
-    today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
-    from datetime import timedelta
+    from datetime import UTC, datetime, timedelta
+
+    today = date.fromisoformat(ctx["mock_today"]) if "mock_today" in ctx else datetime.now(UTC).date()
 
     # Active: today is within flight dates
     real_id1 = _generate_unique_id(mb1)
@@ -899,16 +989,9 @@ def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> 
     _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=False, null_end=True)
 
 
-@given(parsers.parse("the request targets a sandbox account"))
-def given_sandbox_account(ctx: dict) -> None:
-    """Mark request as targeting a sandbox account."""
-    ctx["sandbox"] = True
-
-
-@given(parsers.parse("the request targets a production account"))
-def given_production_account(ctx: dict) -> None:
-    """Mark request as targeting a production (non-sandbox) account."""
-    ctx["sandbox"] = False
+# "the request targets a sandbox/production account" — no domain-specific
+# implementation. Uses tests.bdd.steps.generic.given_auth (sets ctx["sandbox"]);
+# equivalent effect, and shared across UCs. See #1555 collision resolution.
 
 
 @given("an authenticated identity with no principal_id")
@@ -1638,30 +1721,9 @@ def then_error_recovery_correctable(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the error should include a "suggestion" field'))
-def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion field with actionable content.
-
-    Step text: 'the error should include a "suggestion" field'.
-    The error must be an AdCPError with a details dict containing a non-empty
-    suggestion string. No xfail escape — if production omits the suggestion,
-    the test must fail.
-    """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain 'suggestion' field"
-    )
-    assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    suggestion = error.details["suggestion"]
-    assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty suggestion string, got {suggestion!r}"
-    )
+# 'the error should include a "suggestion" field' — no domain-specific
+# implementation. Uses tests.bdd.steps.generic.then_error (same object path:
+# error.details["suggestion"]); equivalent, and shared across UCs. See #1555.
 
 
 @then(parsers.parse('the error message should contain "{fragment}"'))
@@ -2063,107 +2125,22 @@ def then_response_has_media_buys_array(ctx: dict) -> None:
     assert isinstance(buys, list), f"Expected media_buys to be a list (array), got {type(buys).__name__}"
 
 
-@then("the response should include sandbox equals true")
-def then_sandbox_true(ctx: dict) -> None:
-    """Assert response includes sandbox=true.
-
-    Scenario-level xfail (T-UC-019-sandbox-happy) handles the expected failure
-    when sandbox mode is not yet implemented in production.
-    """
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
-    sandbox = getattr(resp, "sandbox", None)
-    assert sandbox is True, f"Expected sandbox=true, got {sandbox!r}"
-
-
-@then("the response should not include a sandbox field")
-def then_no_sandbox_field(ctx: dict) -> None:
-    """Assert response does not include sandbox field for production accounts.
-
-    Step text: 'should not include a sandbox field'. If production includes
-    it anyway, this is a spec-production gap.
-    """
-
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
-    sandbox = getattr(resp, "sandbox", None)
-    # Violation path: sandbox IS present when it should NOT be
-    assert sandbox is None, (
-        f"Production response includes sandbox={sandbox!r} for production account — should be absent"
-    )
-
-
-@then("the response should indicate a validation error")
-def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error.
-
-    Step text says 'indicate a validation error' — must verify either:
-    1. An exception was raised with validation-related keywords, OR
-    2. Response.errors contains validation-related content.
-    """
-
-    error = ctx.get("error")
-    if error:
-        # Verify it's actually a validation error, not just any error
-        msg = str(error).lower()
-        assert any(kw in msg for kw in ("validation", "invalid", "required", "type", "field")), (
-            f"Expected a validation error, but error doesn't indicate validation: {error}"
-        )
-        return
-    resp = ctx.get("response")
-    if resp:
-        errors = getattr(resp, "errors", None)
-        if errors:
-            # Verify at least one error relates to validation
-            error_strs = [str(e).lower() for e in errors]
-            has_validation_keyword = any(
-                any(kw in s for kw in ("validation", "invalid", "required", "type", "field")) for s in error_strs
-            )
-            assert has_validation_keyword, f"Response has errors but none indicate validation: {errors}"
-            return
-    raise AssertionError(
-        "Expected validation error: neither error raised nor response.errors contains validation content"
-    )
-
-
-@then("the error should be a real validation error, not simulated")
-def then_real_validation_error(ctx: dict) -> None:
-    """Assert error is a real validation error (not simulated sandbox response)."""
-
-    error = ctx.get("error")
-    assert error is not None, "Expected a real validation error but no error was raised"
-    from src.core.exceptions import AdCPError
-
-    # A "real" validation error is an actual exception (not a response-embedded simulated one)
-    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
-        f"Expected a real validation error (AdCPError/ValueError/TypeError), got {type(error).__name__}: {error}"
-    )
-
-
-@then("the error should include a suggestion for how to fix the issue")
-def then_error_suggestion_for_fix(ctx: dict) -> None:
-    """Assert error includes a suggestion with actionable fix guidance.
-
-    Step text: 'suggestion for how to fix the issue' — the suggestion must be
-    a non-empty string with enough content to be actionable (at least 5 chars).
-    No xfail escape — if production omits suggestions, the test must fail.
-    """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error to check suggestion on"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain suggestion"
-    )
-    suggestion = error.details.get("suggestion")
-    assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
-        f"Expected actionable suggestion string (>= 5 chars) in error details, "
-        f"got {suggestion!r}. Step claims 'how to fix the issue' — suggestion "
-        f"must contain meaningful guidance."
-    )
+# 'the response should include sandbox equals true' / 'not include a sandbox
+# field' — no domain-specific implementation. Uses
+# tests.bdd.steps.generic.then_success (same object path: resp.sandbox).
+#
+# 'the response should indicate a validation error' — no domain-specific
+# implementation. Uses tests.bdd.steps.generic.then_error, which requires a
+# raised error with error_code == "VALIDATION_ERROR" (stricter than the old
+# domain version's response.errors fallback). Only used by
+# T-UC-019-sandbox-validation, whose next step (below) requires ctx["error"]
+# to be a real pydantic.ValidationError anyway, so a soft response.errors path
+# was never reachable here. See #1555 collision resolution.
+#
+# 'the error should be a real validation error, not simulated' / 'the error
+# should include a suggestion for how to fix the issue' — no domain-specific
+# implementation. Uses tests.bdd.steps.generic.then_error (same object path:
+# error.details["suggestion"] / isinstance(error, ValidationError)).
 
 
 @then(parsers.parse('only media buys with status "{status}" are returned'))
