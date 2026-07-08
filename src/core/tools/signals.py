@@ -22,12 +22,7 @@ from src.core.tool_context import ToolContext
 logger = logging.getLogger(__name__)
 
 from adcp.types import ContextObject
-from adcp.types.generated_poc.core.signal_id import (
-    SignalId,
-)  # adcp 6.6: agent-source variant renumbered SignalId5 → SignalId54 (same fields: agent_url, id, source). Suffix is codegen-ordinal; expect churn.
-from adcp.types.generated_poc.core.signal_id import (
-    SignalId54 as SignalId5,
-)
+from adcp.types.generated_poc.core.signal_id import SignalId
 from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
@@ -46,8 +41,16 @@ from src.core.transport_helpers import resolve_identity_from_context
 
 
 def _agent_signal_id(segment_id: str) -> SignalId:
-    """Build a SignalId for an agent-native signal."""
-    return SignalId(SignalId5(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
+    """Build a SignalId for an agent-native signal.
+
+    SignalId is a RootModel discriminated union on ``source``; validating a dict with
+    ``source="agent"`` selects the agent-URL variant. We deliberately do NOT name that
+    variant (adcp codegen emits an ordinal like ``SignalId54`` that churns on every bump).
+    (``signal-id.json`` is deprecated in spec 3.1.1 in favor of ``SignalRef`` — a follow-up.)
+    """
+    return SignalId.model_validate(
+        {"id": segment_id, "source": "agent", "agent_url": "https://salesagent.adcontextprotocol.org"}
+    )
 
 
 def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricingOption]:
