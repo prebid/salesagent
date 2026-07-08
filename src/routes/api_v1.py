@@ -318,7 +318,7 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
         media_buy_ids=body.media_buy_ids,
         status_filter=body.status_filter,
         include_snapshot=body.include_snapshot,
-        account=to_account_reference(body.account) if body.account is not None else None,
+        account=to_account_reference(body.account),
         context=body.context,
         identity=identity,
     )

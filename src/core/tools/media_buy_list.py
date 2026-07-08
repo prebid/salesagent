@@ -66,7 +66,7 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object, require_identity, require_tenant
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import Creative, CreativeAssignment, MediaBuy, is_media_buy_seller_confirmed
 from src.core.database.repositories import MediaBuyUoW
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
@@ -288,7 +288,7 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                # AdCP 3.1.1 GA item fields. confirmed_at is the persisted
+                # AdCP 3.1.0-beta.3 GA item fields. confirmed_at is the persisted
                 # created_at but ONLY once the seller has committed to the buy
                 # (unconfirmed/pending_approval buys report None — the field
                 # means "seller committed", and get must agree with create);
@@ -486,16 +486,14 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
 }
 
 
-# Statuses in which the seller has NOT committed to running the buy, so
-# confirmed_at (AdCP GA: "when the seller committed to this media buy") must be
-# absent — matching create_media_buy, which omits confirmed_at on the submitted
-# (manual-approval) arm and only sets it on the synchronous success arm.
-_UNCONFIRMED_STATUSES: frozenset[str] = frozenset({"draft", "pending", "pending_approval", "rejected", "failed"})
-
-
 def _seller_confirmed_at(buy: _MediaBuyData) -> datetime | None:
     """confirmed_at for a listed buy: the seller's confirmation instant once the
     seller has committed, else None (still pending approval / never confirmed).
+
+    Whether the seller has committed is decided by the shared
+    :func:`is_media_buy_seller_confirmed` classifier — the SAME definition
+    create_media_buy consults to gate confirmed_at on its response arms — so get
+    and create cannot drift (see #1544).
 
     The confirmation instant is ``approved_at`` when the buy went through seller
     approval (manual-approval path — the moment the seller committed), falling
@@ -503,7 +501,7 @@ def _seller_confirmed_at(buy: _MediaBuyData) -> datetime | None:
     create_media_buy response constitutes order confirmation" (AdCP media-buy
     spec). Returning ``created_at`` for an approved buy would report the buyer's
     request time, not the confirmation moment — see #1544."""
-    if (buy.status or "").lower() in _UNCONFIRMED_STATUSES:
+    if not is_media_buy_seller_confirmed(buy.status):
         return None
     return buy.approved_at or buy.created_at
 

@@ -14,6 +14,11 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps.domain._media_buy_steps_shared import (
+    advance_revision_to,
+    create_and_load_real_buy,
+    resolve_media_buy_id,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -50,10 +55,7 @@ def _register_media_buy(ctx: dict, label: str, media_buy: Any) -> None:
 
 def _resolve_media_buy_id(ctx: dict, label: str) -> str:
     """Resolve a Gherkin label to the real database media_buy_id."""
-    labels = ctx.get("media_buy_labels", {})
-    if label in labels:
-        return labels[label]
-    return label  # fallback: label IS the real ID (legacy)
+    return resolve_media_buy_id(ctx, label)
 
 
 def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
@@ -2308,14 +2310,8 @@ def _create_real_buy(ctx: dict, mb_id: str, principal_id: str) -> Any:
 
     Returns the ORM row loaded through the repository (factory-bound session).
     """
-    from src.core.database.repositories.media_buy import MediaBuyRepository
-
     _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    created = env.create_default_buy(ctx["default_product"])
-    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
-    media_buy = repo.get_by_id(created.media_buy_id)
-    assert media_buy is not None, f"created media buy {created.media_buy_id} not found in DB"
+    media_buy = create_and_load_real_buy(ctx)
     _register_media_buy(ctx, mb_id, media_buy)
     return media_buy
 
@@ -2362,15 +2358,8 @@ def given_owns_media_buy_at_revision(ctx: dict, principal_id: str, mb_id: str, r
     (MediaBuyRepository.bump_revision) — the persisted value is derived from
     real transitions, never seeded directly.
     """
-    from src.core.database.repositories.media_buy import MediaBuyRepository
-
-    env = ctx["env"]
     media_buy = _create_real_buy(ctx, mb_id, principal_id)
-    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
-    while (media_buy.revision or 1) < revision:
-        media_buy = repo.bump_revision(media_buy.media_buy_id)
-    env._commit_factory_data()
-    assert media_buy.revision == revision, f"expected persisted revision {revision}, got {media_buy.revision}"
+    advance_revision_to(ctx, media_buy, revision)
 
 
 @given(

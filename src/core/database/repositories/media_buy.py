@@ -16,7 +16,7 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
@@ -59,11 +59,15 @@ class MediaBuyRepository:
     def get_by_id(self, media_buy_id: str, *, for_update: bool = False) -> MediaBuy | None:
         """Get a media buy by its ID within the tenant.
 
-        ``for_update=True`` acquires a row lock (``SELECT ... FOR UPDATE``) so a
-        read-modify-write on the row (notably the revision bump) serializes
-        against concurrent mutations of the same buy under READ COMMITTED: the
-        second transaction blocks on the lock and re-reads the committed value,
-        so two racing updates produce distinct revisions.
+        ``for_update=True`` acquires a row lock (``SELECT ... FOR UPDATE``) so
+        concurrent writers to the same buy's mutable columns serialize under
+        READ COMMITTED. Note: if the row is already in this session's identity
+        map, SQLAlchemy takes the lock but returns the existing in-memory
+        instance without re-reading the committed values (no
+        ``populate_existing()``). Do NOT rely on the lock to freshen a stale
+        read — the revision counter is bumped with a server-side SQL expression
+        (see ``_bump_revision``) precisely so it is collision-free regardless of
+        what the identity map holds.
         """
         stmt = select(MediaBuy).where(
             MediaBuy.tenant_id == self._tenant_id,
@@ -439,17 +443,23 @@ class MediaBuyRepository:
         """Increment the persisted monotonic revision counter by 1.
 
         Single shared bump used by every mutation path (update_status,
-        update_fields, bump_revision). The counter is the AdCP GA
-        ``revision`` optimistic-concurrency token: it starts at 1 on create
-        and MUST strictly increase on every successful mutation — never
-        derived from timestamps.
+        update_fields, bump_revision, apply_status_transition). The counter is
+        the AdCP 3.1.0-beta.3 ``revision`` optimistic-concurrency token: it
+        starts at 1 on create and MUST strictly increase on every successful
+        mutation — never derived from timestamps.
 
-        Callers MUST load ``media_buy`` via ``get_by_id(..., for_update=True)``
-        so this read-modify-write is serialized by the row lock; otherwise two
-        concurrent updates both read the same value and write the same
-        revision, defeating the counter.
+        The increment is a **server-side** SQL expression, not a Python
+        read-modify-write: assigning ``revision + 1`` to the mapped attribute
+        defers the compute to flush time, so the database emits
+        ``UPDATE ... SET revision = coalesce(revision, 0) + 1`` and serializes
+        two concurrent bumps at the row write-lock. A stale identity-mapped read
+        therefore cannot collapse two bumps onto the same value — the guarantee
+        holds even on paths that loaded the row without ``FOR UPDATE`` (the
+        cross-tenant scheduler sweep and creative-sync via
+        ``apply_status_transition``). SQLAlchemy expires the attribute after
+        flush, so the next read re-selects the committed value automatically.
         """
-        media_buy.revision = (media_buy.revision or 0) + 1
+        media_buy.revision = func.coalesce(MediaBuy.revision, 0) + 1
 
     def bump_revision(self, media_buy_id: str) -> MediaBuy | None:
         """Bump the revision of a media buy that was mutated outside this repository.
@@ -635,7 +645,7 @@ class MediaBuyRepository:
         return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
 
     @staticmethod
-    def apply_status_transition(media_buy: MediaBuy, new_status: str) -> None:
+    def apply_status_transition(media_buy: MediaBuy, new_status: str) -> MediaBuy:
         """Transition an already-loaded MediaBuy to ``new_status`` and bump revision.
 
         The seam for paths that already hold a ``MediaBuy`` row on their own
@@ -643,10 +653,15 @@ class MediaBuyRepository:
         :meth:`update_status`: the cross-tenant scheduler sweep (rows from
         :meth:`get_all_by_statuses`) and the creative-sync assignment pass
         (rows loaded inside ``CreativeUoW``). The caller owns the
-        session/transaction and commits. Bumps the AdCP GA ``revision`` counter
-        so seller-initiated lifecycle transitions (``pending_start`` → ``active``,
-        ``active`` → ``completed``, ``draft`` → ``pending_creatives``) advance the
-        optimistic-concurrency token like any other state change. See #1544.
+        session/transaction and commits. Bumps the AdCP 3.1.0-beta.3
+        ``revision`` counter so seller-initiated lifecycle transitions
+        (``pending_start`` → ``active``, ``active`` → ``completed``,
+        ``draft`` → ``pending_creatives``) advance the optimistic-concurrency
+        token like any other state change. Returns the same (mutated) row so the
+        seam matches the ``MediaBuy | None`` shape of every sibling mutator — the
+        return is never None here because the caller supplies a loaded row. See
+        #1544.
         """
         media_buy.status = new_status
         MediaBuyRepository._bump_revision(media_buy)
+        return media_buy

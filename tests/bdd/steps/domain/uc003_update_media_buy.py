@@ -15,6 +15,12 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
+from tests.bdd.steps.domain._media_buy_steps_shared import (
+    advance_revision_to,
+    create_and_load_real_buy,
+    load_real_buy,
+    resolve_media_buy_id,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 
@@ -2117,12 +2123,8 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
 
 
 def _resolve_media_buy_id(ctx: dict, label: str) -> str:
-    """Resolve a Gherkin media buy label (e.g. "mb_existing") to the real id.
-
-    Mirrors _resolve_package_id: falls back to the label itself so scenarios
-    where the label and the real ID coincide continue to work.
-    """
-    return ctx.get("media_buy_labels", {}).get(label, label)
+    """Resolve a Gherkin media buy label (e.g. "mb_existing") to the real id."""
+    return resolve_media_buy_id(ctx, label)
 
 
 @given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{label}"'))
@@ -2133,38 +2135,16 @@ def given_buyer_owns_media_buy_labeled(ctx: dict, label: str) -> None:
     media_buy_id; subsequent steps resolve the label before hitting production.
     Stashes the ORM row as ctx["existing_media_buy"] for the precondition steps.
     """
-    from src.core.database.repositories.media_buy import MediaBuyRepository
-
-    env = ctx["env"]
-    created = env.create_default_buy(ctx["default_product"])
-    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
-    media_buy = repo.get_by_id(created.media_buy_id)
-    assert media_buy is not None, f"created media buy {created.media_buy_id} not found in DB"
+    media_buy = create_and_load_real_buy(ctx)
     ctx["existing_media_buy"] = media_buy
     ctx.setdefault("media_buy_labels", {})[label] = media_buy.media_buy_id
 
 
 @given(parsers.parse('the media buy "{label}" is at revision {revision:d}'))
 def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
-    """Advance the persisted revision to the target via real repository bumps.
-
-    Each bump is a real mutation through the production seam
-    (MediaBuyRepository.bump_revision), not a seeded column value, so the
-    precondition itself exercises the counter's strict monotonicity.
-    """
-    from src.core.database.repositories.media_buy import MediaBuyRepository
-
-    env = ctx["env"]
-    media_buy_id = _resolve_media_buy_id(ctx, label)
-    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
-    media_buy = repo.get_by_id(media_buy_id)
-    assert media_buy is not None, f"media buy {label!r} ({media_buy_id}) not found in DB"
-    current = media_buy.revision or 1
-    assert current <= revision, f"cannot lower persisted revision from {current} to {revision}"
-    while (media_buy.revision or 1) < revision:
-        media_buy = repo.bump_revision(media_buy_id)
-    env._commit_factory_data()
-    assert media_buy.revision == revision, f"expected persisted revision {revision}, got {media_buy.revision}"
+    """Advance the persisted revision to the target via real repository bumps."""
+    media_buy = load_real_buy(ctx, _resolve_media_buy_id(ctx, label))
+    advance_revision_to(ctx, media_buy, revision)
 
 
 @given(parsers.parse("the request revision is set to {revision:d}"))

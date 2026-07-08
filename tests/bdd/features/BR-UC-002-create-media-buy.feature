@@ -826,7 +826,10 @@ Feature: BR-UC-002 Create Media Buy
     Then the ad server adapter should never be invoked
     And a simulated success should be returned
     And no database records should be created
+    And the response should include "confirmed_at" as an ISO 8601 timestamp
+    And the response should include "revision" with an integer value of 1
     # BR-RULE-020 INV-5 (v3.1): dry-run validates fully but never calls the adapter or persists
+    # v3.1 dry-run parity (#1544): the simulated success arm still carries confirmed_at + revision=1
     # --- BR-RULE-026: Creative Assignment Validation ---
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -1994,11 +1997,11 @@ Feature: BR-UC-002 Create Media Buy
     And the response status should be "completed"
     And the response should include a "media_buy_id"
     And the response should include "confirmed_at" as an ISO 8601 timestamp
-    And the response should include "revision" with an integer value of at least 1
+    And the response should include "revision" with an integer value of 1
     And the response should include a "valid_actions" array
     And every value in valid_actions should be a member of the media-buy-valid-action enum
     # v3.1: confirmed_at — order confirmation timestamp
-    # v3.1: revision — initial value >= 1 for optimistic concurrency on update_media_buy
+    # v3.1: revision — initial value is exactly 1 for optimistic concurrency on update_media_buy
     # v3.1: valid_actions — subset of [pause, resume, cancel, update_budget, update_dates, update_packages, add_packages, sync_creatives]
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 

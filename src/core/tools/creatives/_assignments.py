@@ -203,7 +203,7 @@ def _process_assignments(
 
             # Update media buy status if needed (draft -> pending_creatives).
             # Route through the repository seam so the persisted revision bumps
-            # on this state change (AdCP GA revision) — see #1544.
+            # on this state change (AdCP 3.1.0-beta.3 revision) — see #1544.
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
                     MediaBuyRepository.apply_status_transition(mb_obj, "pending_creatives")

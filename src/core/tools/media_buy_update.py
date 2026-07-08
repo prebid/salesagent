@@ -102,12 +102,17 @@ from src.services.targeting_capabilities import (
 def _current_revision(mb: MediaBuy | None) -> int:
     """Persisted revision to echo on an update response.
 
-    ``mb`` is the post-mutation buy re-read from the DB. The fallback of 1 is
-    defensive only: every response site here runs after ``_verify_principal``
-    has already raised MEDIA_BUY_NOT_FOUND for a missing buy, so ``mb`` is
-    effectively always present.
+    ``mb`` is the post-mutation buy re-read from the DB. It is always present:
+    every response site here runs after ``_verify_principal`` has already raised
+    MEDIA_BUY_NOT_FOUND for a missing buy. A ``None`` here is an internal
+    invariant violation, so we raise rather than fabricate a fallback — a
+    defaulted ``1`` could report a token *regression* (a later read returning a
+    lower value than an earlier one), which an optimistic-concurrency counter
+    must never do.
     """
-    return mb.revision if mb is not None else 1
+    if mb is None:
+        raise RuntimeError("_current_revision called with no media buy — the buy must exist post-mutation")
+    return mb.revision
 
 
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
@@ -574,7 +579,7 @@ def _update_media_buy_impl(
 
             # Every column mutation from this update is staged here and applied
             # with a SINGLE update_fields() call at the end of the flow, so one
-            # accepted update bumps the persisted revision exactly once (AdCP GA
+            # accepted update bumps the persisted revision exactly once (AdCP 3.1.0-beta.3
             # revision is a per-resource version token). Intra-update status
             # transitions (draft → pending_creatives on creative assignment)
             # stage into this dict rather than writing ``.status`` directly —

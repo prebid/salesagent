@@ -2568,15 +2568,18 @@ _IMPL_ONLY: set[tuple[str, str]] = {
 _UC002_CREATE_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-replay",
     "T-UC-002-v31-idempotency-missing",
-    # AdCP GA revision/confirmed_at/valid_actions on the sync success arm (#1544)
+    # AdCP 3.1.0-beta.3 revision/confirmed_at/valid_actions on the sync success arm (#1544)
     "T-UC-002-v31-success-revision-and-actions",
+    # Dry-run parity: the simulated success arm carries confirmed_at/revision too,
+    # never invokes the adapter, and persists nothing (#1544 round-2 BG-04)
+    "T-UC-002-inv-020-5",
 }
 
 # UC-003 scenarios wired to MediaBuyDualEnv (real create in the Background,
 # real update through every transport). The rest stay blanket-xfailed in
 # _harness_env until their steps are wired.
 _UC003_WIRED: set[str] = {
-    # AdCP GA revision counter: successful update increments and returns it (#1544)
+    # AdCP 3.1.0-beta.3 revision counter: successful update increments and returns it (#1544)
     "T-UC-003-revision-success-increments",
 }
 
@@ -2584,7 +2587,7 @@ _UC003_WIRED: set[str] = {
 # queries run through every transport). The rest stay blanket-xfailed in
 # _harness_env until their steps are wired.
 _UC019_WIRED: set[str] = {
-    # AdCP GA revision/confirmed_at invariants (#1544)
+    # AdCP 3.1.0-beta.3 revision/confirmed_at invariants (#1544)
     "T-UC-019-inv-291-1",
     "T-UC-019-inv-291-4",
     "T-UC-019-inv-291-5",

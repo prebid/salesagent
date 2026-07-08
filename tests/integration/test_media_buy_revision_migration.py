@@ -1,6 +1,6 @@
 """Migration sanity for 1497aa06013c — add media_buys.revision.
 
-The persisted monotonic revision counter backing the AdCP GA ``revision``
+The persisted monotonic revision counter backing the AdCP 3.1.0-beta.3 ``revision``
 response field. Verifies against a real PostgreSQL (Alembic-managed, no
 create_all):
 

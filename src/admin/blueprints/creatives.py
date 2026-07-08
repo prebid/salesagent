@@ -22,6 +22,7 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.media_buy_flight import resolve_flight_window_utc
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -83,23 +84,10 @@ def _cleanup_completed_tasks():
 def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
     """Compute status based on flight dates: 'active' if within window, else 'scheduled'."""
     now = datetime.now(UTC)
-
-    start_time = None
-    if media_buy.start_time:
-        raw_start = media_buy.start_time
-        start_time = raw_start.replace(tzinfo=UTC) if raw_start.tzinfo is None else raw_start.astimezone(UTC)
-    elif media_buy.start_date:
-        start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(tzinfo=UTC)
-
-    end_time = None
-    if media_buy.end_time:
-        raw_end = media_buy.end_time
-        end_time = raw_end.replace(tzinfo=UTC) if raw_end.tzinfo is None else raw_end.astimezone(UTC)
-    elif media_buy.end_date:
-        end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(tzinfo=UTC)
+    start_time, end_time = resolve_flight_window_utc(media_buy)
 
     # If start time passed and end time not passed, set to active
-    if start_time and end_time and now >= start_time and now <= end_time:
+    if start_time and end_time and start_time <= now <= end_time:
         return "active"
 
     return "scheduled"
@@ -656,7 +644,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                         new_status = _compute_media_buy_status_from_flight_dates(mb)
                         # Route through the repository seam so the persisted
                         # revision bumps and approved_at/approved_by stamp in one
-                        # place (AdCP GA revision + confirmed_at) — see #1544.
+                        # place (AdCP 3.1.0-beta.3 revision + confirmed_at) — see #1544.
                         uow2.media_buys.update_status(
                             action["media_buy_id"],
                             new_status,

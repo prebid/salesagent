@@ -1,4 +1,4 @@
-"""Persisted media-buy revision counter on the wire (AdCP GA fields).
+"""Persisted media-buy revision counter on the wire (AdCP 3.1.0-beta.3 fields).
 
 ``revision`` is a persisted monotonic counter (``media_buys.revision``), not a
 timestamp-derived value: two updates within the same second MUST still yield
@@ -93,7 +93,7 @@ class TestPersistedRevisionOnTheWire:
 
         Regression for #1544: the update path bumped independently for the
         package set, the budget, and the date range (3 sites), so a combined
-        update jumped the revision by 2-3. AdCP GA ``revision`` is a per-resource
+        update jumped the revision by 2-3. AdCP 3.1.0-beta.3 ``revision`` is a per-resource
         version token, so one update must advance it by exactly one.
         """
         from datetime import UTC, datetime, timedelta
@@ -145,3 +145,31 @@ class TestPersistedRevisionOnTheWire:
             # And the read tool agrees with the last write.
             item = _get_buy(env, created.media_buy_id)
             assert item.revision == second.revision
+
+    def test_pause_bumps_persisted_revision(self, integration_db):
+        """A campaign-level pause through the real impl bumps the persisted counter.
+
+        The value the buyer sees is produced by PostgreSQL (the server-side
+        increment), not echoed from a mock — the real-DB half of the pause-bump
+        contract whose plumbing half lives in
+        ``tests/unit/test_update_media_buy_behavioral.py`` (#1544 round-2 TQ-03).
+        """
+        from src.core.database.repositories import MediaBuyUoW
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv() as env:
+            tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            created = _create_buy(env, product)
+
+            # 'pause' is only a valid action for an 'active' buy — transition the
+            # setup state there (itself a bump), then capture the pre-pause value.
+            with MediaBuyUoW(tenant.tenant_id) as uow:
+                uow.media_buys.update_status(created.media_buy_id, "active")
+            pre_pause = _get_buy(env, created.media_buy_id).revision
+
+            result = env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=created.media_buy_id, paused=True))
+            assert isinstance(result, UpdateMediaBuySuccess), f"pause must succeed, got {result!r}"
+
+            # Pause advanced the revision by exactly one, and the read tool agrees.
+            assert result.revision == pre_pause + 1
+            assert _get_buy(env, created.media_buy_id).revision == result.revision

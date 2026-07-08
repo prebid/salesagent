@@ -2946,19 +2946,29 @@ class TestUC003StateMachine:
                 f"('pending_creatives'), not the hardcoded ('paused'). Got: {action_values}"
             )
 
-    def test_pause_bumps_revision(self):
-        """A successful campaign-level pause bumps the persisted revision.
+    def test_pause_routes_through_bump_revision_and_echoes_its_result(self):
+        """A campaign-level pause routes the revision bump through ``bump_revision``
+        and echoes the row that method returns.
 
-        Regression: the pause/resume early-return path returned success while
-        echoing the current (un-bumped) revision, so a buyer using the token
-        could not detect the pause — while the package-level pause path already
-        bumped. The post-action read now routes through ``bump_revision`` (bump
-        + return in one FOR UPDATE round trip).
+        This is the DB-independent plumbing half of the contract: the pause path
+        must call the bumping seam (not echo the un-bumped current revision) and
+        surface whatever it returns. The actual increment the seam produces —
+        that revision genuinely advances 1 → 2 in PostgreSQL — is asserted
+        against the real database in
+        ``tests/integration/test_media_buy_revision.py::...::test_pause_bumps_persisted_revision``
+        (#1544 round-2 TQ-03: never assert a magic revision literal sourced from
+        the mock).
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             active_mb = _make_mock_media_buy("mb_pause_rev", status="active")
+            active_mb.revision = 1
+            # The seam's return value IS the response's revision — assert the
+            # response echoes exactly what bump_revision handed back (referenced
+            # via the variable), not a hardcoded literal that pretends to be a
+            # real increment. That the seam genuinely advances 1 → 2 is proven
+            # against PostgreSQL in the integration test named above.
             bumped_mb = _make_mock_media_buy("mb_pause_rev", status="paused")
-            bumped_mb.revision = 7  # the post-bump value the response must echo
+            bumped_mb.revision = active_mb.revision + 1
             env.mock["uow"].return_value.media_buys.get_by_id.side_effect = [active_mb]
             env.mock["uow"].return_value.media_buys.bump_revision.return_value = bumped_mb
 
@@ -2972,4 +2982,4 @@ class TestUC003StateMachine:
 
             assert isinstance(result, UpdateMediaBuySuccess)
             env.mock["uow"].return_value.media_buys.bump_revision.assert_called_once_with("mb_pause_rev")
-            assert result.revision == 7
+            assert result.revision == bumped_mb.revision

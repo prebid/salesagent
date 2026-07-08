@@ -787,6 +787,9 @@ Feature: BR-UC-019 Query Media Buys
     # @source repo=adcp ref=3.1.0-beta.3 path=dist/docs/media-buy/specification.mdx (revision MUST
     #         increment on every state change; confirmed_at stamped at IO-signing per the
     #         sales-guaranteed conformance storyboard)
+    # NOTE: hand-authored obligation (neighbors are generated from adcp-req with
+    #       ref=v3.1-<sha>). Reconcile upstream into adcp-req so this is generated
+    #       and its @source aligns automatically — tracked in #1565.
 
   @T-UC-019-partition-confirmed-at @partition @confirmed_at @schema-v3.1
   Scenario Outline: confirmed_at - <partition>

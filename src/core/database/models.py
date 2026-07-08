@@ -894,6 +894,29 @@ class AgentAccountAccess(Base):
     )
 
 
+# Statuses in which the seller has NOT yet committed to running the buy. The
+# AdCP 3.1.0-beta.3 `confirmed_at` field ("when the seller committed to this
+# media buy") MUST be absent for these. This is the SINGLE source of truth for
+# "seller committed", consulted by both create_media_buy (which omits
+# confirmed_at on its not-yet-committed arms) and get_media_buys
+# (_seller_confirmed_at) so the create and get paths cannot drift: adding a new
+# not-yet-committed status here fixes both at once. See #1544.
+MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
+    {"draft", "pending", "pending_approval", "rejected", "failed"}
+)
+
+
+def is_media_buy_seller_confirmed(status: str | None) -> bool:
+    """True once the seller has committed to running the buy (confirmed_at is set).
+
+    The inverse of :data:`MEDIA_BUY_UNCONFIRMED_STATUSES`. Case-insensitive; a
+    missing/empty status reads as not-confirmed (we never emit confirmed_at when
+    the state is unknown).
+    """
+    normalized = (status or "").lower()
+    return bool(normalized) and normalized not in MEDIA_BUY_UNCONFIRMED_STATUSES
+
+
 class MediaBuy(Base):
     __tablename__ = "media_buys"
 
@@ -913,7 +936,7 @@ class MediaBuy(Base):
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
-    # Monotonic optimistic-concurrency counter (AdCP GA `revision`).
+    # Monotonic optimistic-concurrency counter (AdCP 3.1.0-beta.3 `revision`).
     # Starts at 1 on create; bumped by MediaBuyRepository on every successful
     # mutation. Never derived from timestamps — two updates within one second
     # must still yield strictly increasing revisions.

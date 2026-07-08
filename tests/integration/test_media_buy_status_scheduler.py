@@ -192,7 +192,7 @@ async def test_scheduler_transition_bumps_revision(integration_db):
 
     Regression for #1544: the flight-date sweep mutated ``.status`` directly and
     never bumped ``revision``, so seller-initiated transitions (scheduled →
-    active) left the AdCP GA optimistic-concurrency token stale.
+    active) left the AdCP 3.1.0-beta.3 optimistic-concurrency token stale.
     """
     tenant_id = _create_test_tenant("tenant_sched_revision")
     principal_id = _create_test_principal(tenant_id)

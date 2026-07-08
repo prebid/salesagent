@@ -570,6 +570,10 @@ class BaseTestEnv:
                 "x-adcp-auth": auth_token,
                 "x-adcp-tenant": a2a_identity.tenant_id or "",
             }
+            if self._dry_run:
+                # Mirror a real dry-run client: production reads x-dry-run from the
+                # wire headers (apply_testing_hooks), not from the identity object.
+                headers["x-dry-run"] = "true"
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
@@ -700,11 +704,19 @@ class BaseTestEnv:
                 "x-adcp-auth": auth_token,
                 "x-adcp-tenant": mcp_identity.tenant_id or "",
             }
+            if self._dry_run:
+                # Mirror a real dry-run client: production reads x-dry-run from the
+                # wire headers (apply_testing_hooks), not from the identity object.
+                headers["x-dry-run"] = "true"
 
             async def _call():
                 mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
                 mock_mw = patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers)
-                with mock_th as patched_th, mock_mw as patched_mw:
+                # testing_hooks.TestContext.from_context reads its OWN imported
+                # get_http_headers, so the testing context (e.g. x-dry-run) only
+                # reaches the mcp path if this third module is patched too.
+                mock_hooks = patch("src.core.testing_hooks.get_http_headers", return_value=headers)
+                with mock_th as patched_th, mock_mw as patched_mw, mock_hooks:
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
                         # Guard: verify the header patches were called.

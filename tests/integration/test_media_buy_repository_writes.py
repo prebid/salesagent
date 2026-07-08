@@ -220,7 +220,7 @@ class TestUpdateStatus:
 
 
 class TestRevisionBumpsOnStatusTransition:
-    """Every status transition through the repository seam bumps the AdCP GA
+    """Every status transition through the repository seam bumps the AdCP 3.1.0-beta.3
     ``revision`` counter, and manual approval stamps the confirmation instant.
 
     Regression for #1544: the admin approve/reject routes, the flight-date
@@ -251,9 +251,19 @@ class TestRevisionBumpsOnStatusTransition:
         with MediaBuyUoW(tenant_a) as uow:
             buy = uow.media_buys.get_by_id("mb_rev_transition")
             assert buy is not None
-            MediaBuyRepository.apply_status_transition(buy, "active")
+            returned = MediaBuyRepository.apply_status_transition(buy, "active")
+            # CON-03: the seam returns the same (mutated) row, matching sibling mutators.
+            assert returned is buy
             assert buy.status == "active"
-            assert buy.revision == 2
+
+        # The revision increment is a server-side SQL expression that only
+        # materializes at flush/commit, so assert the value read back from the
+        # database, not the transient in-memory attribute.
+        with get_db_session() as session:
+            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_rev_transition")
+            assert persisted is not None
+            assert persisted.status == "active"
+            assert persisted.revision == 2
 
     def test_manual_approval_stamps_confirmed_at_and_bumps_revision(self, tenant_a, principal_a):
         """create (pending_approval) → approve → get: confirmed_at is the approval
@@ -650,3 +660,135 @@ class TestCreatePackagesBulk:
         with pytest.raises(ValueError, match="not found"):
             with MediaBuyUoW(tenant_a) as uow:
                 uow.media_buys.create_packages_bulk("mb_bulk_iso", packages)
+
+
+# ---------------------------------------------------------------------------
+# Concurrent revision bump — the counter must not collide under real contention
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentRevisionBump:
+    """Two concurrent bumps on the SAME buy must land on distinct revisions.
+
+    This is the test the sequential "rapid updates" case cannot provide: it runs
+    two bumps on two independent sessions/transactions that BOTH preload the row
+    into their identity map at the same starting revision before either commits.
+
+    Under a Python read-modify-write bump (``revision = mb.revision + 1``) both
+    transactions read the stale identity-mapped ``N`` — a ``SELECT ... FOR
+    UPDATE`` that finds the PK already in the session returns the in-memory
+    instance without ``populate_existing()`` — and both write ``N+1``: a lost
+    update, so the counter advances by 1 across two bumps and the two updates
+    share a revision (#1544 round-2 blocker #1).
+
+    Under the server-side ``revision = coalesce(revision, 0) + 1`` the database
+    computes the increment at flush under the row write-lock: the second bump
+    blocks until the first commits, then increments the committed value. The two
+    bumps deterministically produce ``N+1`` and ``N+2`` — the counter advances by
+    exactly 2, proving the two updates landed on distinct revisions.
+    """
+
+    def test_two_concurrent_bumps_yield_distinct_revisions(self, tenant_a, principal_a):
+        import threading
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_concurrent_rev"))
+
+        # Starting revision after create.
+        with get_db_session() as session:
+            start_rev = MediaBuyRepository(session, tenant_a).get_by_id("mb_concurrent_rev").revision
+        assert start_rev == 1
+
+        both_preloaded = threading.Barrier(2, timeout=30)
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
+
+        def bump_once() -> None:
+            try:
+                with MediaBuyUoW(tenant_a) as uow:
+                    # Preload the row into THIS transaction's identity map at the
+                    # current revision, before either thread bumps. This is the
+                    # stale-read setup that a naive Python increment would lose.
+                    preloaded = uow.media_buys.get_by_id("mb_concurrent_rev")
+                    assert preloaded is not None
+                    both_preloaded.wait()
+                    updated = uow.media_buys.bump_revision("mb_concurrent_rev")
+                    assert updated is not None
+                    # UoW commit happens on clean exit.
+            except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
+                with errors_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=bump_once, name=f"bump-{i}") for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+
+        assert not any(t.is_alive() for t in threads), "a bump thread hung (possible deadlock)"
+        assert not errors, f"concurrent bump thread(s) failed: {errors}"
+
+        with get_db_session() as session:
+            final_rev = MediaBuyRepository(session, tenant_a).get_by_id("mb_concurrent_rev").revision
+        # Two bumps from revision 1 → 3. A collision (lost update) would leave 2.
+        assert final_rev == 3, f"expected two distinct bumps 1→2→3, got final revision {final_rev}"
+
+
+# ---------------------------------------------------------------------------
+# Persisted revision bump — assert the value the DB produces, not a mock echo
+# ---------------------------------------------------------------------------
+
+
+class TestPersistedRevisionBump:
+    """Each mutation path bumps the persisted counter, read back from the DB.
+
+    These replace the transient-instance unit assertions that became meaningless
+    once the bump moved server-side: ``_bump_revision`` now assigns a SQL
+    expression (``coalesce(revision, 0) + 1``), so the value only materializes on
+    flush — the number a buyer sees must be read back from PostgreSQL, never
+    asserted on an in-memory ORM attribute (#1544 round-2 TQ-03).
+    """
+
+    def _read_revision(self, tenant_id: str, media_buy_id: str) -> int:
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+            assert buy is not None
+            return buy.revision
+
+    def test_update_status_bumps_persisted_revision(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_status"))
+        assert self._read_revision(tenant_a, "mb_rev_status") == 1
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_status("mb_rev_status", "paused")
+        assert self._read_revision(tenant_a, "mb_rev_status") == 2
+
+    def test_update_fields_bumps_persisted_revision(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_fields"))
+        assert self._read_revision(tenant_a, "mb_rev_fields") == 1
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_fields("mb_rev_fields", budget=Decimal("250.00"), currency="USD")
+        assert self._read_revision(tenant_a, "mb_rev_fields") == 2
+
+    def test_bump_revision_is_strictly_monotonic_across_consecutive_commits(self, tenant_a, principal_a):
+        """Two sequential bumps yield 1 → 2 → 3 — no same-second collision.
+
+        A time-derived formula returns the same value for bumps within one clock
+        tick; the persisted counter advances by exactly one each time.
+        """
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_mono"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.bump_revision("mb_rev_mono")
+        first = self._read_revision(tenant_a, "mb_rev_mono")
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.bump_revision("mb_rev_mono")
+        second = self._read_revision(tenant_a, "mb_rev_mono")
+
+        assert (first, second) == (2, 3)
+        assert second > first

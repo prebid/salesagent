@@ -107,7 +107,7 @@ from src.core.auth import (
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy
+from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, is_media_buy_seller_confirmed
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
@@ -3443,9 +3443,10 @@ async def _create_media_buy_impl(
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
                 # Dry-run persists nothing, but the success arm still carries
-                # the GA fields so a strict client's oneOf resolves: a simulated
-                # commit timestamp and the initial revision (1). Parity with the
-                # update dry-run path, which echoes the current revision.
+                # the AdCP 3.1.0-beta.3 confirmed_at/revision fields so a strict
+                # client's oneOf resolves: a simulated commit timestamp and the
+                # initial revision (1). Parity with the update dry-run path,
+                # which echoes the current revision.
                 confirmed_at=datetime.now(UTC),
                 revision=1,
             )
@@ -3952,11 +3953,14 @@ async def _create_media_buy_impl(
             creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
             errors=property_list_unsupported_advisories(req.packages, adapter),
-            # AdCP 3.1.1 success-arm required fields: the buy is committed
-            # synchronously here. confirmed_at is the persisted created_at —
-            # the same value get_media_buys reports — and revision is the
-            # persisted monotonic counter at its initial value (1).
-            confirmed_at=persisted_confirmed_at,
+            # AdCP 3.1.0-beta.3 success-arm fields. confirmed_at is gated by the
+            # SAME shared classifier get_media_buys consults
+            # (is_media_buy_seller_confirmed), keyed on the status we actually
+            # persisted — so create and get can never disagree about whether the
+            # seller has committed. For a committed status it is the persisted
+            # created_at (the value get reports); revision is the persisted
+            # monotonic counter at its initial value (1). See #1544.
+            confirmed_at=persisted_confirmed_at if is_media_buy_seller_confirmed(media_buy_status) else None,
             revision=persisted_revision,
         )
 

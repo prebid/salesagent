@@ -1731,7 +1731,8 @@ def then_response_confirmed_at_is_iso(ctx: dict) -> None:
 
     AdCP 3.1.0-beta.3 media-buy/specification.mdx: a successful synchronous
     create_media_buy response constitutes order confirmation (prose-MUST;
-    schema-optional in beta.3).
+    schema-optional in beta.3). The prose/schema divergence is tracked for
+    upstream reconciliation in #1564.
     """
     from datetime import datetime
 
@@ -1746,13 +1747,17 @@ def then_response_confirmed_at_is_iso(ctx: dict) -> None:
     assert parsed.tzinfo is not None, f"confirmed_at must carry a timezone designator, got {confirmed_at!r}"
 
 
-@then(parsers.parse('the response should include "revision" with an integer value of at least 1'))
-def then_response_revision_at_least_1(ctx: dict) -> None:
-    """revision is the persisted optimistic-concurrency counter; created buys start at 1."""
+@then(parsers.parse('the response should include "revision" with an integer value of 1'))
+def then_response_revision_is_1(ctx: dict) -> None:
+    """revision is the persisted optimistic-concurrency counter; a freshly created
+    buy starts at EXACTLY 1 — the same value the integration test pins
+    (test_media_buy_revision.py). Asserting the exact initial value, not merely
+    ``>= 1``, is what catches a create arm that echoes a stale/garbage counter
+    (#1544 round-2 TQ-02)."""
     resp = _require_success_response(ctx)
     revision = _get_response_field(resp, "revision")
     assert isinstance(revision, int), f"Expected an integer revision, got {type(revision).__name__}: {revision!r}"
-    assert revision >= 1, f"Expected revision >= 1, got {revision}"
+    assert revision == 1, f"Expected a fresh create to report revision 1, got {revision}"
 
 
 @then(parsers.parse('the response should include a "valid_actions" array'))
@@ -1775,3 +1780,54 @@ def then_valid_actions_are_enum_members(ctx: dict) -> None:
     values = [getattr(action, "value", action) for action in actions]
     outside = [value for value in values if value not in allowed]
     assert not outside, f"valid_actions contains values outside the enum: {outside} (allowed: {sorted(allowed)})"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Dry-run mode (INV-5): the simulated success arm carries the GA fields,
+# never invokes the adapter, and persists nothing (T-UC-002-inv-020-5, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the request is sent in dry-run mode")
+def given_dry_run_mode(ctx: dict) -> None:
+    """Enable dry-run so the create dispatches with ``x-dry-run: true``.
+
+    Toggling ``env._dry_run`` before the When step makes the harness stamp the
+    dry-run testing context onto the identity/headers for whichever transport is
+    parametrized. The identity cache is cleared so the not-yet-built identity
+    picks up the flag.
+    """
+    env = ctx["env"]
+    env._dry_run = True
+    env._identity_cache.clear()
+
+
+@then("the ad server adapter should never be invoked")
+def then_adapter_never_invoked(ctx: dict) -> None:
+    """The dry-run arm returns a simulated success before any ad-server booking."""
+    env = ctx["env"]
+    adapter = env.mock["adapter"].return_value
+    assert not adapter.create_media_buy.called, (
+        "dry-run must not invoke the adapter's create_media_buy — it returns a simulated response"
+    )
+
+
+@then("a simulated success should be returned")
+def then_simulated_success(ctx: dict) -> None:
+    """Dry-run returns a CreateMediaBuySuccess with a synthetic ``dry_run_`` id."""
+    resp = _require_success_response(ctx)
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert isinstance(media_buy_id, str) and media_buy_id.startswith("dry_run_"), (
+        f"expected a simulated dry_run_ media_buy_id, got {media_buy_id!r}"
+    )
+
+
+@then("no database records should be created")
+def then_no_db_records(ctx: dict) -> None:
+    """Dry-run persists nothing — no MediaBuy row exists for the tenant."""
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    env = ctx["env"]
+    env._session.expire_all()
+    persisted = MediaBuyRepository(env._session, ctx["tenant"].tenant_id).list_all()
+    assert persisted == [], f"dry-run must not persist any media buy, found {[b.media_buy_id for b in persisted]}"

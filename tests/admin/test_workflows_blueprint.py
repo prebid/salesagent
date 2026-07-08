@@ -165,6 +165,85 @@ class TestWorkflowApproval:
         )
         assert response.status_code == 404
 
+    def test_approve_stamps_confirmed_at_and_bumps_revision_through_the_route(
+        self, client, test_tenant, factory_session
+    ):
+        """Driving the real approve route stamps approved_at/approved_by and bumps revision.
+
+        This exercises the production surface the PR rewrote — the approve
+        blueprint calling ``MediaBuyRepository.update_status(..., approved_at=)``
+        — end to end through the Flask route, not the repository seam in
+        isolation. Dropping the ``approved_at=`` kwarg (or the bump) would corrupt
+        the buyer-visible ``confirmed_at``/``revision`` while every seam-level
+        test stayed green; this is the test that goes red on that regression
+        (#1544 round-2 blocker #3).
+
+        The workflow step has an unapproved creative assignment, so the route
+        takes the "await creatives" arm — it stamps the approval and returns
+        BEFORE any adapter call, so no adapter mocking is needed.
+        """
+        from datetime import UTC, datetime
+
+        from src.core.database.models import Principal, Tenant
+        from src.core.database.repositories import MediaBuyRepository, WorkflowRepository
+        from src.core.schemas._base import GetMediaBuysRequest
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from tests.factories import CreativeAssignmentFactory, CreativeFactory, MediaBuyFactory, PrincipalFactory
+
+        _auth_session(client, test_tenant)
+
+        # Reuse the tenant/principal the test_tenant fixture committed.
+        tenant_obj = factory_session.get(Tenant, test_tenant)
+        principal_obj = factory_session.get(Principal, (test_tenant, "wf_test_principal"))
+
+        # A media buy awaiting seller approval (revision starts at 1).
+        buy = MediaBuyFactory(tenant=tenant_obj, principal=principal_obj, status="pending_approval")
+        assert buy.revision == 1
+
+        # An unapproved creative assigned to it → route stops before the adapter.
+        creative = CreativeFactory(tenant=tenant_obj, principal=principal_obj, status="pending")
+        CreativeAssignmentFactory(creative=creative, media_buy=buy)
+
+        # The pending approval workflow step + a mapping tying it to the buy.
+        context_id, step_id = _create_context_and_step(test_tenant, status="pending_approval")
+        WorkflowRepository(factory_session, test_tenant).add_mapping(
+            step_id=step_id, object_type="media_buy", object_id=buy.media_buy_id, action="create"
+        )
+        factory_session.commit()
+
+        before_approval = datetime.now(UTC)
+        response = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+            content_type="application/json",
+            json={},
+        )
+        after_approval = datetime.now(UTC)
+        assert response.status_code == 200, response.data
+        assert response.get_json().get("success") is True
+
+        # ORM read-back: the seam stamped approval and advanced the counter.
+        factory_session.expire_all()
+        stored = MediaBuyRepository(factory_session, test_tenant).get_by_id(buy.media_buy_id)
+        assert stored is not None
+        assert stored.status == "pending_creatives"
+        assert stored.approved_by == "test@example.com"
+        assert stored.approved_at is not None
+        assert before_approval <= stored.approved_at <= after_approval
+
+        # Wire read-back: buyer-visible revision advanced (1 → 2) and confirmed_at
+        # is the approval instant (== approved_at), NOT the buy's created_at.
+        identity = PrincipalFactory.make_identity(tenant_id=test_tenant, principal_id="wf_test_principal")
+        listed = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]),
+            identity=identity,
+            include_snapshot=False,
+        )
+        assert len(listed.media_buys) == 1
+        item = listed.media_buys[0]
+        assert item.revision == 2
+        assert item.confirmed_at == stored.approved_at
+        assert item.confirmed_at != item.created_at
+
 
 class TestWorkflowRejection:
     """Test workflow step rejection."""

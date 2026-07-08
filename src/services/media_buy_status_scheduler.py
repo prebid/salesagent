@@ -20,6 +20,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
+from src.core.media_buy_flight import resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class MediaBuyStatusScheduler:
                         old_status = media_buy.status
                         # Route through the repository seam so the persisted
                         # revision bumps on this seller-initiated lifecycle
-                        # transition (AdCP GA revision) — see #1544.
+                        # transition (AdCP 3.1.0-beta.3 revision) — see #1544.
                         MediaBuyRepository.apply_status_transition(media_buy, new_status)
                         updated_count += 1
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
@@ -113,34 +114,12 @@ class MediaBuyStatusScheduler:
         Returns:
             New status string if change needed, None otherwise.
         """
-        # Get start and end times (prefer start_time/end_time over start_date/end_date)
-        start_time: datetime | None = None
-        if media_buy.start_time:
-            raw_start: datetime = media_buy.start_time
-            if raw_start.tzinfo is None:
-                start_time = raw_start.replace(tzinfo=UTC)
-            else:
-                start_time = raw_start
-        elif media_buy.start_date:
-            start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
+        # Resolve the effective UTC flight window (shared with the admin approve
+        # route and creative-review path — see resolve_flight_window_utc / #1544).
+        start_time, end_time = resolve_flight_window_utc(media_buy)
 
         if start_time is None:
             return None  # No start time defined
-
-        end_time: datetime | None = None
-        if media_buy.end_time:
-            raw_end: datetime = media_buy.end_time
-            if raw_end.tzinfo is None:
-                end_time = raw_end.replace(tzinfo=UTC)
-            else:
-                end_time = raw_end
-        elif media_buy.end_date:
-            end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
-
         if end_time is None:
             return None  # No end time defined
 

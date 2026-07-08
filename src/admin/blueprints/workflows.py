@@ -224,7 +224,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                             )
                             # Route through the repository seam so the persisted
                             # revision bumps and the approval instant is stamped
-                            # (AdCP GA revision + confirmed_at) — see #1544.
+                            # (AdCP 3.1.0-beta.3 revision + confirmed_at) — see #1544.
                             media_buy_repo.update_status(
                                 media_buy_id,
                                 "pending_creatives",
@@ -247,7 +247,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
                     # Update media buy status through the repository seam so the
                     # persisted revision bumps and approved_at/approved_by stamp
-                    # in one place (AdCP GA revision + confirmed_at) — see #1544.
+                    # in one place (AdCP 3.1.0-beta.3 revision + confirmed_at) — see #1544.
                     media_buy_repo.update_status(
                         media_buy_id,
                         "scheduled",
