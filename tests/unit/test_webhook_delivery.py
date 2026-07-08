@@ -286,11 +286,23 @@ class TestWebhookDelivery:
 
             success, result = deliver_webhook_with_retry(delivery)
 
-            # Check that signature headers were added
+            # Byte-equality oracle: the HMAC in the header must verify over
+            # the LITERAL bytes handed to the transport — the exact property
+            # the old sign-one-thing-send-another path violated (#1441).
+            import hashlib
+            import hmac as hmac_mod
+
             call_args = mock_post.call_args
             headers = call_args.kwargs["headers"]
+            sent_bytes = call_args.kwargs["data"]
 
-            assert "X-Webhook-Signature" in headers or "X-Hub-Signature-256" in headers
+            assert isinstance(sent_bytes, bytes)
+            signature = headers["X-AdCP-Signature"]
+            timestamp = headers["X-AdCP-Timestamp"]
+            expected = hmac_mod.new(
+                b"test-secret-key", timestamp.encode() + b"." + sent_bytes, hashlib.sha256
+            ).hexdigest()
+            assert signature == f"sha256={expected}"
             assert success is True
 
     def test_invalid_webhook_url_validation(self, mock_sleep):

@@ -9,6 +9,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules.
 
 from __future__ import annotations
 
+import json
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -52,13 +53,14 @@ class TestWebhookDeliveryHappyPath:
             call_args = env.mock["post"].call_args
             assert call_args.args[0] == "https://buyer.example.com/webhook"
 
-            # Verify HMAC signature headers were added
-            sent_headers = call_args.kwargs["headers"]
-            assert "X-Webhook-Signature" in sent_headers
-            assert "X-Webhook-Timestamp" in sent_headers
+            # Verify HMAC signature headers were added (spec names via the
+            # adcp signer; case-insensitive on the wire)
+            sent_headers = {k.lower(): v for k, v in call_args.kwargs["headers"].items()}
+            assert "x-adcp-signature" in sent_headers
+            assert "x-adcp-timestamp" in sent_headers
 
             # Verify payload was sent
-            sent_payload = call_args.kwargs["json"]
+            sent_payload = json.loads(call_args.kwargs["data"])
             assert sent_payload["media_buy_id"] == "mb_001"
             assert sent_payload["notification_type"] == "scheduled"
 
@@ -74,23 +76,30 @@ class TestWebhookHmacSha256Signing:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
     """
 
-    def test_sign_payload_produces_hmac_headers(self):
-        """WebhookAuthenticator.sign_payload produces HMAC-SHA256 signature headers.
+    def test_sign_legacy_webhook_produces_hmac_headers(self):
+        """The canonical signer produces HMAC-SHA256 headers over the wire bytes.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
-        from src.core.webhook_authenticator import WebhookAuthenticator
+        import hashlib
+        import hmac
+
+        from adcp import sign_legacy_webhook
 
         payload = {"media_buy_id": "mb_001", "impressions": 5000}
         secret = "test-signing-secret"
 
-        headers = WebhookAuthenticator.sign_payload(payload, secret)
+        headers, body_bytes = sign_legacy_webhook(secret, payload)
 
-        assert "X-Webhook-Signature" in headers
-        assert headers["X-Webhook-Signature"].startswith("sha256=")
-        assert len(headers["X-Webhook-Signature"]) > len("sha256=")
-        assert "X-Webhook-Timestamp" in headers
-        assert headers["X-Webhook-Timestamp"].isdigit()
+        assert headers["X-AdCP-Signature"].startswith("sha256=")
+        assert headers["X-AdCP-Timestamp"].isdigit()
+        # Byte-equality: the signature verifies over the returned wire bytes
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            headers["X-AdCP-Timestamp"].encode() + b"." + body_bytes,
+            hashlib.sha256,
+        ).hexdigest()
+        assert headers["X-AdCP-Signature"] == f"sha256={expected}"
 
 
 # ---------------------------------------------------------------------------
@@ -454,10 +463,10 @@ class TestEXT_G_06_HmacAuthRejection:
                 object_id="mb_001",
             )
 
-            sent_headers = env.mock["post"].call_args[1]["headers"]
-            assert "X-Webhook-Signature" in sent_headers
-            assert sent_headers["X-Webhook-Signature"].startswith("sha256=")
-            assert "X-Webhook-Timestamp" in sent_headers
+            sent_headers = {k.lower(): v for k, v in env.mock["post"].call_args[1]["headers"].items()}
+            assert "x-adcp-signature" in sent_headers
+            assert sent_headers["x-adcp-signature"].startswith("sha256=")
+            assert "x-adcp-timestamp" in sent_headers
 
     def test_auth_rejection_vs_server_error_retry_behavior(self, integration_db):
         """Contrast: 401 does NOT retry, but 500 DOES retry.

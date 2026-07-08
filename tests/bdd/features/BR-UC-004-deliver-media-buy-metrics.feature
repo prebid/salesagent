@@ -253,7 +253,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the shared secret is a valid 32+ character string
     When the system delivers a webhook report for "mb-001"
     Then the request should include header "X-ADCP-Signature" with hex-encoded HMAC
-    And the request should include header "X-ADCP-Timestamp" with ISO timestamp
+    And the request should include header "X-ADCP-Timestamp" with unix timestamp
     And the HMAC should be computed over "timestamp.payload" concatenation
     # POST-S8: Buyer can verify report authenticity
     # BR-RULE-029 INV-1: monotonically increasing sequence (signing is precondition)

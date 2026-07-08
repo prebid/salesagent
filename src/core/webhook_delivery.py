@@ -5,9 +5,10 @@ This module provides reliable webhook delivery with:
 - Database tracking of delivery attempts
 - Retry on 5xx errors, no retry on 4xx client errors
 - SSRF protection via WebhookURLValidator
-- HMAC signing support via WebhookAuthenticator
+- HMAC signing via adcp.sign_legacy_webhook (spec byte-equality contract)
 """
 
+import json
 import logging
 import time
 import uuid
@@ -16,9 +17,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import requests
+from adcp import sign_legacy_webhook
 
 from src.core.database.database_session import get_db_session
-from src.core.webhook_authenticator import WebhookAuthenticator
 from src.core.webhook_validator import WebhookURLValidator
 
 logger = logging.getLogger(__name__)
@@ -101,11 +102,20 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     # Generate delivery ID for tracking
     delivery_id = f"whd_{uuid.uuid4().hex[:12]}"
 
-    # Add HMAC signature if secret provided
+    # Serialize ONCE; when signing, sign those exact bytes. The AdCP
+    # legacy-HMAC contract is byte-equality (signature covers
+    # ``{unix_timestamp}.{raw_http_body}``) — the old path signed a
+    # sorted-compact re-serialization while ``requests(json=...)`` sent a
+    # spaced one, so signatures could never match the wire. Also moves this
+    # sender onto the spec header names (X-AdCP-Signature with sha256=
+    # prefix / X-AdCP-Timestamp) instead of the legacy X-Webhook-*.
     headers = delivery.headers.copy()
+    headers.setdefault("Content-Type", "application/json")
     if delivery.signing_secret:
-        signature_headers = WebhookAuthenticator.sign_payload(delivery.payload, delivery.signing_secret)
-        headers.update(signature_headers)
+        signed_headers, body_bytes = sign_legacy_webhook(delivery.signing_secret, delivery.payload)
+        headers.update(signed_headers)
+    else:
+        body_bytes = json.dumps(delivery.payload, separators=(",", ":")).encode("utf-8")
 
     # Track delivery attempts
     attempts = 0
@@ -133,9 +143,8 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
                 f"[Webhook Delivery] Attempt {attempt + 1}/{delivery.max_retries} for {delivery_id} to {delivery.webhook_url}"
             )
 
-            response = requests.post(
-                delivery.webhook_url, json=delivery.payload, headers=headers, timeout=delivery.timeout
-            )
+            # data= (not json=) so the signed bytes ARE the sent bytes
+            response = requests.post(delivery.webhook_url, data=body_bytes, headers=headers, timeout=delivery.timeout)
 
             response_code = response.status_code
             attempt_duration = time.time() - attempt_start

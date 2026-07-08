@@ -11,8 +11,6 @@ This service implements the AdCP webhook specification from PR #86:
 """
 
 import atexit
-import hashlib
-import hmac
 import json
 import logging
 import random
@@ -24,7 +22,7 @@ from enum import Enum
 from typing import Any
 
 import httpx
-from adcp import get_adcp_spec_version
+from adcp import get_adcp_spec_version, sign_legacy_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -305,26 +303,6 @@ class WebhookDeliveryService:
             )
             return False
 
-    def _generate_hmac_signature(self, payload: dict[str, Any], secret: str, timestamp: str) -> str:
-        """Generate HMAC-SHA256 signature for webhook payload.
-
-        Args:
-            payload: Webhook payload
-            secret: Webhook secret (min 32 characters)
-            timestamp: ISO format timestamp
-
-        Returns:
-            HMAC signature as hex string
-        """
-        # Create signature input: timestamp + json payload
-        payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        message = f"{timestamp}.{payload_str}"
-
-        # Generate HMAC-SHA256
-        signature = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-
-        return signature
-
     def _verify_secret_strength(self, secret: str) -> bool:
         """Verify webhook secret meets minimum strength requirements.
 
@@ -448,22 +426,30 @@ class WebhookDeliveryService:
 
         config = webhook_data["config"]
         payload = webhook_data["payload"]
-        timestamp = webhook_data["timestamp"].isoformat()
+        # AdCP legacy-HMAC replay prevention uses unix seconds — the signed
+        # message is ``{unix_timestamp}.{raw_http_body}`` (the previous ISO
+        # form here never matched a spec-compliant verifier).
+        timestamp = int(webhook_data["timestamp"].timestamp())
 
-        # Generate HMAC signature if webhook secret is configured
         webhook_secret = getattr(config, "webhook_secret", None)
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
-            "X-ADCP-Timestamp": timestamp,  # For replay prevention
         }
 
-        if webhook_secret:
-            if not self._verify_secret_strength(webhook_secret):
+        # Serialize ONCE, before the retry loop, and sign those exact bytes.
+        # Byte-equality is the whole contract: signing a sorted-compact
+        # re-serialization while httpx re-serialized the body differently (the
+        # old path) made every signature fail raw-body verification.
+        if webhook_secret and self._verify_secret_strength(webhook_secret):
+            signed_headers, body_bytes = sign_legacy_webhook(webhook_secret, payload, timestamp=timestamp)
+            # X-AdCP-Signature: sha256=<hex> + X-AdCP-Timestamp (unix seconds)
+            headers.update(signed_headers)
+        else:
+            if webhook_secret:
                 logger.warning(f"⚠️ Webhook secret for {config.url} is too weak (min 32 characters required)")
-            else:
-                signature = self._generate_hmac_signature(payload, webhook_secret, timestamp)
-                headers["X-ADCP-Signature"] = signature
+            body_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            headers["X-ADCP-Timestamp"] = str(timestamp)  # For replay prevention
 
         # Add authentication
         if config.authentication_type == "bearer" and config.authentication_token:
@@ -481,9 +467,10 @@ class WebhookDeliveryService:
 
                 # Send webhook
                 with httpx.Client(timeout=10.0) as client:
+                    # content= (not json=) so the signed bytes ARE the sent bytes
                     response = client.post(
                         config.url,
-                        json=payload,
+                        content=body_bytes,
                         headers=headers,
                     )
 

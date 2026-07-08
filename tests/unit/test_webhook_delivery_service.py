@@ -3,6 +3,7 @@
 Tests the thread-safe webhook delivery service that's shared by all adapters.
 """
 
+import json
 import threading
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -132,7 +133,7 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
         # Version should match what's reported by the adcp library
         from adcp import get_adcp_spec_version
 
-        payload = call_args.kwargs["json"]
+        payload = json.loads(call_args.kwargs["content"])  # wire bytes, not a re-serializable dict
         assert payload["adcp_version"] == get_adcp_spec_version()
         assert payload["notification_type"] == "scheduled"
         assert payload["is_adjusted"] is False  # NEW in PR #86
@@ -183,7 +184,7 @@ def test_final_notification_type(webhook_service, mock_db_session):
         )
 
         # Check notification_type (direct payload structure in PR #86)
-        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        payload = json.loads(mock_client.return_value.__enter__.return_value.post.call_args.kwargs["content"])
         assert payload["notification_type"] == "final"
         assert payload["is_adjusted"] is False
         assert "next_expected_at" not in payload

@@ -1732,30 +1732,42 @@ class TestDeliveryWebhookHappyPath:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
         CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification.
-        Tests that WebhookDeliveryService._generate_hmac_signature produces a valid hex signature,
-        and that signing with the same inputs is deterministic.
+        The signer is adcp.sign_legacy_webhook: the signature covers
+        ``{unix_timestamp}.{body_bytes}`` and the returned body_bytes are the
+        exact wire bytes (byte-equality — #1441 removed the local signer that
+        re-serialized the payload differently from the transport).
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
-        service = WebhookDeliveryService()
+        import hashlib
+        import hmac as hmac_mod
+
+        from adcp import sign_legacy_webhook
 
         payload = {"media_buy_id": "mb_wh07", "impressions": 1000}
         secret = "a" * 32  # 32-char minimum secret
-        timestamp = "2025-06-15T12:00:00Z"
+        timestamp = 1_750_000_000  # spec: unix seconds
 
-        sig1 = service._generate_hmac_signature(payload, secret, timestamp)
-        sig2 = service._generate_hmac_signature(payload, secret, timestamp)
+        headers1, body1 = sign_legacy_webhook(secret, payload, timestamp=timestamp)
+        headers2, body2 = sign_legacy_webhook(secret, payload, timestamp=timestamp)
 
-        # Signature is a hex string
-        assert isinstance(sig1, str)
+        sig1 = headers1["X-AdCP-Signature"].removeprefix("sha256=")
         assert len(sig1) == 64  # SHA-256 hex = 64 chars
 
         # Deterministic
-        assert sig1 == sig2
+        assert headers1["X-AdCP-Signature"] == headers2["X-AdCP-Signature"]
+        assert body1 == body2
+
+        # The signature verifies over the exact returned bytes
+        expected = hmac_mod.new(
+            secret.encode("utf-8"), str(timestamp).encode() + b"." + body1, hashlib.sha256
+        ).hexdigest()
+        assert sig1 == expected
 
         # Different payload produces different signature
-        different_payload = {"media_buy_id": "mb_wh07", "impressions": 2000}
-        sig3 = service._generate_hmac_signature(different_payload, secret, timestamp)
-        assert sig3 != sig1
+        headers3, _ = sign_legacy_webhook(
+            secret, {"media_buy_id": "mb_wh07", "impressions": 2000}, timestamp=timestamp
+        )
+        assert headers3["X-AdCP-Signature"] != headers1["X-AdCP-Signature"]
 
     def test_webhook_excludes_aggregated_totals(self):
         """UC-004-WH-09: webhook does NOT include aggregated_totals.
