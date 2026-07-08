@@ -196,6 +196,10 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
     Given the principal "buyer-001" owns media buys in various statuses
+    # Pin the clock: the "various statuses" seed builds each buy's flight window
+    # around this date, so the query MUST evaluate status against it too (else all
+    # windows are in the past under the real clock and every buy reads completed).
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
     # BR-RULE-151: Status filter defaults and validation
@@ -224,6 +228,9 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given the principal "buyer-001" owns media buys in various statuses
+    # Pin the clock so the seed's flight windows and the query's status
+    # computation agree (see the partition scenario above).
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
     # BR-RULE-151: Boundary test for status filter
@@ -231,7 +238,7 @@ Feature: BR-UC-019 Query Media Buys
     Examples: Boundary values
       | boundary_point                              | filter_config                                          | expected_behavior                                               |
       | status_filter omitted, media_buy_ids omitted| no status_filter                                       | only media buys with status "active" are returned               |
-      | status_filter omitted, media_buy_ids non-empty | no status_filter and media_buy_ids ["mb-1","mb-2"]   | every matching buy returned regardless of status                |
+      | status_filter omitted, media_buy_ids non-empty | no status_filter and media_buy_ids ["mb-active","mb-completed"]   | every matching buy returned regardless of status                |
       | single valid enum value                     | status_filter "active"                                 | only media buys with status "active" are returned               |
       | array with one valid value                  | status_filter ["completed"]                            | only media buys with status "completed" are returned            |
       | array with all seven enum values            | all seven v3.1 status values in status_filter          | media buys in any status are returned                           |

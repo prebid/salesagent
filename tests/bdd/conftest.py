@@ -1977,17 +1977,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (status filter no longer blocks by-ID queries)
             # Graduated: T-UC-019-boundary-status day before/day after
             # (status filter no longer blocks by-ID queries)
-            # Default status filter: multi-status queries fail
-            (
-                "T-UC-019-partition-status-filter",
-                {"multiple_statuses", "all_statuses"},
-                "UC-019: multi-status filter not implemented",
-            ),
-            # Status filter boundary: complex filter variants fail
+            # Graduated (#1545 review): T-UC-019-partition-status-filter
+            # multiple_statuses / all_statuses — multi-status filtering works on the
+            # wire once status_filter is coerced to the MediaBuyStatus enum and the
+            # scenario pins its clock. The remaining status-filter gaps are the
+            # value/empty VALIDATION rows below, not the mapping.
+            # Status filter boundary: STATUS_FILTER_EMPTY (empty array) is not a
+            # dedicated code yet (the value-validation rows are handled by
+            # _UC019_BOUNDARY_SELECTIVE above). "all seven" now grades and passes.
             (
                 "T-UC-019-boundary-status-filter",
-                {"all six", "empty array", "unknown enum", "mix of valid"},
-                "UC-019: complex status filter boundary not implemented",
+                {"empty array"},
+                "STATUS_FILTER_EMPTY not implemented — empty array returns empty success, not an error",
             ),
             # Snapshot: not-requested variant fails (include_snapshot=false path)
             (
