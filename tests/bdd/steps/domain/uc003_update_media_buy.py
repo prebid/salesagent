@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
+from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 
@@ -2054,9 +2055,7 @@ def given_authenticated_principal(ctx: dict, principal: str) -> None:
     Updates the env's identity to use the specified principal_id.
     """
     principal_id = principal.strip()
-    env = ctx["env"]
-    env._identity_cache.clear()
-    env._principal_id = principal_id
+    authenticate_env_as(ctx, principal_id)
     ctx["principal_override"] = principal_id
 
 

@@ -17,19 +17,23 @@ conftest harness fixture):
 The first two are pinned at v3.1-04f59d2d5 (adcp 3.1.0-beta.3).
 
 - ``T-UC-018-inv-034-1-holds`` / ``T-UC-018-inv-034-1-violated`` (#1503):
-  BR-RULE-034 cross-principal isolation. Two principals in one tenant each own
-  creatives; a buyer authenticated as one sees exactly its own library (holds) and
-  never the other's (counter). Enforced in production by
+  BR-RULE-034 cross-principal isolation — an AdCP normative MUST (v3.1-04f59d2d5:
+  principals-and-security.mdx §Data Isolation), ungraded by any conformance storyboard,
+  so these two scenarios are its only executable guard. Two principals in one tenant
+  each own creatives; a buyer authenticated as one sees exactly its own library (holds)
+  and never the other's (counter). Enforced in production by
   ``CreativeRepository.get_by_principal``'s ``principal_id`` filter — dropping it
   leaks the co-tenant principal's rows and fails these scenarios. principal_id is
   ``Field(exclude=True)`` (never on the wire), so ownership is verified by matching
   returned creative_ids to the seeded per-principal id sets. See the section comment
-  above those steps.
+  above those steps for the full spec citation.
 
 Wired to real production across all wire transports (auto-parametrized; UC-018
 -> CreativeListEnv via conftest ``_detect_uc`` / ``_harness_env``). The repo
-sunsets the IMPL pseudo-transport in BDD, so the scenario runs on a2a/mcp/rest
-(plus e2e_rest in-network). Each transport returns the same typed response, and
+sunsets the IMPL pseudo-transport in BDD, so the scenario runs on a2a/mcp/rest.
+(The isolation Then steps read the success-path ``wire_response``, which the E2E
+REST dispatcher does not stash — so those assertions cover a2a/mcp/rest, not
+e2e_rest.) Each transport returns the same typed response, and
 the Then steps validate its production JSON serialization
 (``model_dump(mode="json", exclude_none=True)`` — the same NestedModelSerializerMixin
 path that produces the on-the-wire bytes); the parametrization still exercises
@@ -60,6 +64,7 @@ from typing import Any
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.harness.transport import Transport
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 
@@ -69,43 +74,29 @@ from tests.helpers.pinned_schema import validate_against_pinned_schema
 # known formats, so an unregistered id would be rejected on that transport.
 _SYNCED_FORMATS = ("display_300x250", "video_640x480", "audio_30s")
 
-# Bind the UC-018 feature. Only the @list-after-sync storyboard scenario is wired
-# here (#1405); the remaining scenarios xfail fast at the conftest _harness_env
-# fixture (no UC-018 harness yet). Whole-feature binding via scenarios() is the
-# repo convention the CI shard-splitter requires (scripts/ci/shard_split.py).
+# Bind the UC-018 feature. The wired scenarios are @list-after-sync (#1405),
+# @concept-id (#1407), and the @BR-RULE-034 isolation invariants (#1503); the
+# remaining scenarios xfail fast at the conftest _harness_env fixture. Whole-feature
+# binding via scenarios() is the repo convention the CI shard-splitter requires
+# (scripts/ci/shard_split.py).
 scenarios("features/BR-UC-018-list-creatives.feature")
 
 
 # ── Given ────────────────────────────────────────────────────────────
 
 
-def _authenticate_env_as(ctx: dict, principal_id: str) -> Any:
-    """Authenticate the harness env as *principal_id*; return the env.
-
-    Shared by the Background Given and the BR-RULE-034 When (#1503). Mutates the env
-    so list_creatives is principal-scoped to this buyer, and records the principal so
-    the seed steps own their creatives under the same id the query authenticates as
-    (list_creatives is principal-scoped — a mismatch returns an empty library).
-
-    Clears the identity cache so the NEXT identity build re-resolves the principal's
-    real auth_token from the DB. Background runs before any principal row exists, so
-    the first ``env.identity`` access caches a tokenless identity under the "mcp"
-    protocol key (shared by IMPL+MCP). Clearing here — invoked again from the When
-    step, after the seed steps have committed the principals — lets the wire dispatch
-    rebuild identity with the real token and run the full header -> token -> DB-lookup
-    auth chain rather than the tokenless injection shortcut.
-    """
-    env = ctx["env"]
-    env._identity_cache.clear()
-    env._principal_id = principal_id
-    ctx["principal_id"] = principal_id
-    return env
-
-
 @given(parsers.parse('the Buyer is authenticated as principal "{principal_id}"'))
 def given_buyer_authenticated_as_principal(ctx: dict, principal_id: str) -> None:
-    """Authenticate the listing buyer as *principal_id* (Background)."""
-    env = _authenticate_env_as(ctx, principal_id)
+    """Authenticate the listing buyer as *principal_id* (Background).
+
+    Uses the shared ``authenticate_env_as`` helper (which clears the identity cache and
+    switches the env's principal) so list_creatives is principal-scoped to this buyer,
+    and records the principal so the seed steps own their creatives under the same id
+    the query authenticates as (list_creatives is principal-scoped — a mismatch returns
+    an empty library).
+    """
+    env = authenticate_env_as(ctx, principal_id)
+    ctx["principal_id"] = principal_id
     # Post-condition: verify the identity mutation took effect.
     actual = env.identity.principal_id
     assert actual == principal_id, f"env.identity.principal_id is {actual!r} after setting {principal_id!r}"
@@ -373,8 +364,17 @@ def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
 # ── @BR-RULE-034 cross-principal isolation scenarios (#1503) ────────────
 #
 # BR-RULE-034 (P0): list_creatives is principal-scoped — a buyer sees only its own
-# creatives, never another principal's, even within the same tenant. Enforced in
-# production by CreativeRepository.get_by_principal's ``principal_id=principal_id``
+# creatives, never another principal's, even within the same tenant.
+#
+# Spec ground (Spec-Grounding Gate): this is an AdCP normative MUST, pinned at
+# v3.1-04f59d2d5 — principals-and-security.mdx §Data Isolation ("the server MUST verify
+# that the principal_id from the request matches ... one principal can never view or
+# modify another principal's data"; reference/security.mdx:714,721). It is
+# ungraded-by-storyboard: no conformance storyboard grades multi-principal isolation
+# (universal/security.yaml grades authentication, not authenticated isolation), so these
+# two scenarios are the ONLY executable guard of that MUST.
+#
+# Enforcement site: CreativeRepository.get_by_principal's ``principal_id=principal_id``
 # filter (src/core/database/repositories/creative.py). Dropping that filter leaks
 # the co-tenant principal's rows and fails both scenarios below (INV-1 holds asserts
 # an exact-set match; INV-1 counter asserts zero overlap with the other principal).
@@ -415,14 +415,10 @@ def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) ->
     principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
     seeded: dict[str, list[str]] = ctx.setdefault(_ISOLATION_CREATIVES_KEY, {})
     seeded[principal_id] = [
-        CreativeFactory(
-            tenant=tenant,
-            principal=principal,
-            status="approved",
-            # Present-but-empty assets object: the repository drops rows whose
-            # data["assets"] IS NULL (legacy guard), so the key must exist.
-            data={"assets": {}},
-        ).creative_id
+        # ``approved`` trait -> status="approved"; CreativeFactory's default ``data``
+        # is a realistic {"assets": build_assets(...)}, which already satisfies the
+        # repository's data["assets"] IS NOT NULL guard.
+        CreativeFactory(tenant=tenant, principal=principal, approved=True).creative_id
         for _ in range(count)
     ]
 
@@ -431,14 +427,18 @@ def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) ->
 def when_authenticated_principal_lists_creatives(ctx: dict, principal_id: str) -> None:
     """Authenticate as *principal_id* and dispatch an unfiltered list_creatives.
 
-    Re-authenticates via the shared helper (which clears the identity cache) AFTER the
-    seed steps committed the principals, so the wire dispatch resolves the principal's
-    real token and runs the full auth chain. Reuses the canonical generic dispatch
+    Re-authenticates via the shared ``authenticate_env_as`` helper (which clears the
+    identity cache) AFTER the seed steps committed the principals, so the next identity
+    build resolves the principal's real token from the DB rather than the tokenless
+    identity cached during Background (which ran before any principal row existed). On
+    MCP/A2A this exercises the full header -> token -> DB-lookup auth chain; REST resolves
+    identity via a FastAPI dependency override. Reuses the canonical generic dispatch
     helper (``_call_via`` stashes response / wire_response / error on ctx).
     """
     from tests.bdd.steps.generic.when_request import _call_via
 
-    _authenticate_env_as(ctx, principal_id)
+    authenticate_env_as(ctx, principal_id)
+    ctx["principal_id"] = principal_id
     _call_via(ctx, ctx.get("transport"))
 
 
@@ -477,7 +477,9 @@ def then_all_creatives_belong_to(ctx: dict, principal_id: str) -> None:
 @then(parsers.parse('none of the returned creatives belong to principal "{principal_id}"'))
 def then_none_belong_to(ctx: dict, principal_id: str) -> None:
     """Assert no returned creative belongs to the co-tenant principal (isolation counter)."""
-    leaked = _returned_creative_ids(ctx) & set(ctx[_ISOLATION_CREATIVES_KEY][principal_id])
+    returned = _returned_creative_ids(ctx)
+    assert returned, "isolation counter is vacuous on an empty response (list_creatives returned no creatives)"
+    leaked = returned & set(ctx[_ISOLATION_CREATIVES_KEY][principal_id])
     assert not leaked, (
         f"cross-principal leak: creatives owned by {principal_id!r} appeared in the response: {sorted(leaked)}"
     )

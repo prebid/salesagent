@@ -14,6 +14,7 @@ from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults
+from tests.bdd.steps.generic._auth import authenticate_env_as
 
 
 def _inject_privilege_error(ctx: dict) -> None:
@@ -50,10 +51,8 @@ def given_buyer_authenticated_as(ctx: dict, principal_id: str) -> None:
     """
     ctx["principal_override"] = principal_id
     ctx["has_auth"] = True
-    # Update the env identity to use this principal_id
-    env = ctx["env"]
-    env._identity_cache.clear()
-    env._principal_id = principal_id
+    # Update the env identity to use this principal_id (shared helper).
+    env = authenticate_env_as(ctx, principal_id)
     # Post-condition: verify the identity mutation took effect
     actual = env.identity.principal_id
     assert actual == principal_id, (
