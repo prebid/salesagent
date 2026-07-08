@@ -132,10 +132,10 @@ def then_wire_media_buy_status_value(ctx: dict, status: str) -> None:
 def then_wire_status_value(ctx: dict, status: str) -> None:
     """Assert the REAL wire top-level ``status`` equals the expected PROTOCOL TaskStatus.
 
-    rc.12 storyboard pending_creatives_to_start.yaml grades top-level
+    The GA 3.1.0 storyboard pending_creatives_to_start.yaml grades top-level
     ``status`` = field_value 'completed' on synchronous create/update success
     (protocol-envelope.json required: [status]) — a different namespace from
-    the domain ``media_buy_status`` (salesagent-zsdt)."""
+    the domain ``media_buy_status``."""
     _assert_wire_field_equals(ctx, "status", status)
 
 

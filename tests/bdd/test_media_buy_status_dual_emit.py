@@ -3,8 +3,8 @@
 Local (hand-authored) feature — verifies that create_media_buy and
 update_media_buy success responses carry the preferred DOMAIN ``media_buy_status``
 (a MediaBuyStatus enum value) alongside a top-level protocol ``status`` that is a
-PROTOCOL TaskStatus — DIFFERENT namespaces, NOT identical. This is the target GA
-model graded by the 3.1.0-rc.12 storyboard; it diverges from the pinned SDK's
+PROTOCOL TaskStatus — DIFFERENT namespaces, NOT identical. This is the GA model
+graded by the published 3.1.0 storyboard; it diverges from the pinned SDK's
 beta.3 storyboard, which graded the two identical during the deprecation window
 (#4908). See docs/adcp-spec-version.md "Behavior target vs SDK pin".
 

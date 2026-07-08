@@ -264,7 +264,7 @@ def _mirror_media_buy_status(model: Any) -> Any:
     ``TaskResultEnvelope._serialize`` OVERWRITES the top-level ``status`` with the
     PROTOCOL ``TaskStatus`` (``submitted`` / ``completed``), so on the wire the
     top-level ``status`` and ``media_buy_status`` are DIFFERENT namespaces and are
-    NOT identical. This is the target GA model graded by the 3.1.0-rc.12 storyboard
+    NOT identical. This is the GA model graded by the published 3.1.0 storyboard
     ``pending_creatives_to_start.yaml`` (status=field_value 'completed'), which
     diverges from the pinned SDK's beta.3 storyboard (status=field_value_or_absent,
     MUST-equal media_buy_status; #4908). See docs/adcp-spec-version.md
@@ -333,7 +333,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
-        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
         NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
@@ -520,7 +520,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
-        — a different namespace from ``media_buy_status`` (target GA / rc.12 model, divergent).
+        — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
         NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
