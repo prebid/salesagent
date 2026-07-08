@@ -3255,12 +3255,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
-    elif uc == "UC-003":
-        from tests.harness.media_buy_update import MediaBuyUpdateEnv
-
-        with MediaBuyUpdateEnv() as env:
-            ctx["env"] = env
-            yield
     elif uc == "UC-GET-PRODUCTS":
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
