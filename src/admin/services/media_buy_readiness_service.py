@@ -11,8 +11,8 @@ No database schema changes required - computes state from existing data.
 """
 
 import logging
-from datetime import UTC, date, datetime
-from typing import TypedDict, cast
+from datetime import UTC, datetime
+from typing import TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, GAMLineItem, GAMOrder, MediaBuy, Tenant
 from src.core.database.repositories import MediaBuyRepository
+from src.core.media_buy_flight import resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
 
@@ -265,29 +266,13 @@ class MediaBuyReadinessService:
         if media_buy.status == "pending_approval":
             return "needs_approval"
 
-        # Check flight timing - ensure timezone-aware datetimes
-        # Note: SQLAlchemy's DateTime and Date map to Python's datetime and date at runtime
-        if media_buy.start_time:
-            # media_buy.start_time is datetime | None (from Mapped[DateTime | None])
-            # Cast to help mypy understand the runtime type
-            start_datetime = cast(datetime, media_buy.start_time)
-            start_time = start_datetime if start_datetime.tzinfo else start_datetime.replace(tzinfo=UTC)
-        else:
-            # media_buy.start_date is date (from Mapped[Date])
-            # Cast to help mypy understand the runtime type
-            start_date_val = cast(date, media_buy.start_date)
-            start_time = datetime.combine(start_date_val, datetime.min.time()).replace(tzinfo=UTC)
-
-        if media_buy.end_time:
-            # media_buy.end_time is datetime | None (from Mapped[DateTime | None])
-            # Cast to help mypy understand the runtime type
-            end_datetime = cast(datetime, media_buy.end_time)
-            end_time = end_datetime if end_datetime.tzinfo else end_datetime.replace(tzinfo=UTC)
-        else:
-            # media_buy.end_date is date (from Mapped[Date])
-            # Cast to help mypy understand the runtime type
-            end_date_val = cast(date, media_buy.end_date)
-            end_time = datetime.combine(end_date_val, datetime.max.time()).replace(tzinfo=UTC)
+        # Resolve the effective UTC flight window (shared helper — same
+        # start_time/end_time-preferred, date-fallback resolution used by the
+        # scheduler, admin approve route, and creative-review path). See #1544.
+        # start_date/end_date are NOT NULL, so the window is always fully
+        # resolved for a persisted media buy.
+        start_time, end_time = resolve_flight_window_utc(media_buy)
+        assert start_time is not None and end_time is not None
 
         # Completed if past end date
         if now > end_time:

@@ -419,6 +419,19 @@ class BaseTestEnv:
         ).first()
         return token
 
+    def _wire_auth_headers(self, auth_token: str, tenant_id: str | None) -> dict[str, str]:
+        """Build the wire auth headers for an integration-mode transport call.
+
+        Shared by the A2A and MCP dispatch paths. When the env is in dry-run
+        mode, stamps ``x-dry-run`` so production reads it from the wire headers
+        (apply_testing_hooks) exactly as a real dry-run client would — the
+        identity object's testing_context is not consulted on those transports.
+        """
+        headers = {"x-adcp-auth": auth_token, "x-adcp-tenant": tenant_id or ""}
+        if self._dry_run:
+            headers["x-dry-run"] = "true"
+        return headers
+
     @property
     def identity(self) -> ResolvedIdentity:
         """Default identity (protocol='mcp'). Backward-compatible.
@@ -566,14 +579,7 @@ class BaseTestEnv:
         if auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
-            headers = {
-                "x-adcp-auth": auth_token,
-                "x-adcp-tenant": a2a_identity.tenant_id or "",
-            }
-            if self._dry_run:
-                # Mirror a real dry-run client: production reads x-dry-run from the
-                # wire headers (apply_testing_hooks), not from the identity object.
-                headers["x-dry-run"] = "true"
+            headers = self._wire_auth_headers(auth_token, a2a_identity.tenant_id)
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
@@ -700,14 +706,7 @@ class BaseTestEnv:
             # Patch get_http_headers in BOTH modules that import it:
             # transport_helpers (called by resolve_identity_from_context) and
             # mcp_auth_middleware (called for context_id extraction).
-            headers = {
-                "x-adcp-auth": auth_token,
-                "x-adcp-tenant": mcp_identity.tenant_id or "",
-            }
-            if self._dry_run:
-                # Mirror a real dry-run client: production reads x-dry-run from the
-                # wire headers (apply_testing_hooks), not from the identity object.
-                headers["x-dry-run"] = "true"
+            headers = self._wire_auth_headers(auth_token, mcp_identity.tenant_id)
 
             async def _call():
                 mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
