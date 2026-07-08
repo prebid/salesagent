@@ -27,8 +27,15 @@ def _seed_package(session, media_buy, package_id: str = "pkg_default") -> None:
     the same transaction. ``package_config={}`` preserves these tests' seeded
     shape.
     """
+    previous_session = MediaPackageFactory._meta.sqlalchemy_session
     MediaPackageFactory._meta.sqlalchemy_session = session
-    MediaPackageFactory(media_buy=media_buy, package_id=package_id, package_config={})
+    try:
+        MediaPackageFactory(media_buy=media_buy, package_id=package_id, package_config={})
+    finally:
+        # Restore — IntegrationEnv.__enter__ asserts the factory session is
+        # None before binding, so leaking this binding fails whichever
+        # IntegrationEnv-based test runs next in the same worker.
+        MediaPackageFactory._meta.sqlalchemy_session = previous_session
 
 
 @pytest.mark.requires_db

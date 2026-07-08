@@ -443,19 +443,25 @@ def _update_media_buy_impl(
             # terminal-state check above (INVALID_STATE) run first, so they
             # preempt this guard; PACKAGE_NOT_FOUND in turn preempts the
             # budget / targeting validators below — a package's budget is
-            # meaningless if the package does not exist. Spec grounding:
+            # meaningless if the package does not exist. (The PACKAGE-preempts-
+            # BUDGET ordering itself is a reasonable reading but ungraded — no
+            # storyboard pins it.) Spec grounding:
             # invalid_transitions.yaml Phase 3 (unknown_package), storyboard
             # scenario "unknown package_id returns PACKAGE_NOT_FOUND" in
             # BR-UC-003-update-media-buy.feature (@source v3.1-04f59d2d5).
             #
-            # Existence is checked with a raw_request fallback: media buys
-            # whose packages were never mirrored into media_packages (pre-
-            # dual-write buys; adapters returning empty response.packages)
-            # must not fail their own update with a spurious not-found.
+            # The media_packages/raw_request duality (pre-dual-write buys;
+            # adapters returning empty response.packages) is resolved once
+            # inside MediaBuyRepository.get_package via lazy materialization,
+            # so this guard AND the later row-needing lookups (creative
+            # assignment, targeting mutation) behave identically on legacy
+            # buys — none of them can raise a spurious not-found for a
+            # package that exists only in raw_request. (Ungraded: no
+            # storyboard covers pre-dual-write data.)
             if req.packages:
                 for _pkg_update in req.packages:
                     if _pkg_update.package_id:
-                        uow.media_buys.package_exists_or_raise(
+                        uow.media_buys.get_package_or_raise(
                             media_buy_id_to_use, _pkg_update.package_id, context=req.context
                         )
 

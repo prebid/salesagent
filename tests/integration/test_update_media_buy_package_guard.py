@@ -183,3 +183,46 @@ class TestPackageGuardRawRequestFallback:
                 )
             ).all()
             assert assignments, "expected creative assignment on the raw_request-only buy"
+
+    def test_targeting_overlay_update_succeeds_on_raw_request_only_buy(self, _seeded):
+        """The ROW-NEEDING path (targeting_overlay mutates package_config) also
+        works on a raw_request-only buy: get_package materializes the canonical
+        row lazily, so the same lookup that used to raise a spurious
+        PACKAGE_NOT_FOUND after the guard passed now yields a mutable row."""
+        from sqlalchemy import select
+
+        from src.core.database.models import MediaBuy, MediaPackage
+
+        identity = _seeded["identity"]
+
+        now = datetime.now(UTC)
+        media_buy = MediaBuyFactory(
+            tenant=_seeded["tenant"],
+            principal=_seeded["principal"],
+            media_buy_id="mb_raw_only_targeting",
+            status="active",
+            start_date=now.date(),
+            end_date=(now + timedelta(days=30)).date(),
+            start_time=now,
+            end_time=now + timedelta(days=30),
+            raw_request={"packages": [{"package_id": "pkg_legacy_t", "impressions": 50000}]},
+        )
+        assert isinstance(media_buy, MediaBuy)
+
+        update_req = UpdateMediaBuyRequest(
+            media_buy_id=media_buy.media_buy_id,
+            packages=[{"package_id": "pkg_legacy_t", "targeting_overlay": {"geo_countries": ["US"]}}],
+        )
+        result = _update_media_buy_impl(req=update_req, identity=identity)
+        assert not isinstance(result, UpdateMediaBuyError), f"update failed: {result}"
+
+        # The canonical row was materialized AND carries the mutation.
+        with get_db_session() as session:
+            row = session.scalars(
+                select(MediaPackage).where(
+                    MediaPackage.media_buy_id == media_buy.media_buy_id,
+                    MediaPackage.package_id == "pkg_legacy_t",
+                )
+            ).first()
+            assert row is not None, "expected the raw_request package materialized as a canonical row"
+            assert row.package_config.get("targeting_overlay") is not None

@@ -70,31 +70,48 @@ class TestMediaBuyOrRaise:
         assert exc.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg-missing" in str(exc.value)
 
-    def test_package_exists_or_raise_returns_when_row_present(self):
-        repo = _repo_with_first(MediaBuyRepository, MagicMock())
-        repo.package_exists_or_raise("mb-1", "pkg-1")  # no raise
-
-    def test_package_exists_or_raise_falls_back_to_raw_request(self):
+    def test_get_package_materializes_row_from_raw_request(self):
         """A package recorded only in MediaBuy.raw_request (pre-dual-write buy,
-        or an adapter that returned empty response.packages) must NOT raise —
-        a valid reference on such a buy is not a buyer error."""
+        or an adapter that returned empty response.packages) is materialized
+        into a canonical row so EVERY caller — existence guard, creative
+        assignment, targeting mutation — behaves identically on legacy buys."""
+        raw_pkg = {"package_id": "pkg-raw-only", "impressions": 100000}
         media_buy = MagicMock()
-        media_buy.raw_request = {"packages": [{"package_id": "pkg-raw-only"}]}
+        media_buy.raw_request = {"packages": [raw_pkg]}
         session = MagicMock()
         # First lookup: no MediaPackage row; second lookup: the owning MediaBuy.
         session.scalars.return_value.first.side_effect = [None, media_buy]
         repo = MediaBuyRepository(session, "tenant-1")
-        repo.package_exists_or_raise("mb-1", "pkg-raw-only")  # no raise
 
-    def test_package_exists_or_raise_raises_when_absent_everywhere(self):
+        package = repo.get_package("mb-1", "pkg-raw-only")
+
+        assert package is not None
+        assert package.package_id == "pkg-raw-only"
+        assert package.package_config == raw_pkg
+        # Added to the session (UoW owns the commit), flushed for immediate use
+        session.add.assert_called_once_with(package)
+        session.flush.assert_called_once()
+
+    def test_get_package_or_raise_inherits_raw_request_fallback(self):
+        media_buy = MagicMock()
+        media_buy.raw_request = {"packages": [{"package_id": "pkg-raw-only"}]}
+        session = MagicMock()
+        session.scalars.return_value.first.side_effect = [None, media_buy]
+        repo = MediaBuyRepository(session, "tenant-1")
+        assert repo.get_package_or_raise("mb-1", "pkg-raw-only") is not None  # no raise
+
+    def test_get_package_or_raise_raises_when_absent_everywhere(self):
+        from adcp import ErrorCode
+
         media_buy = MagicMock()
         media_buy.raw_request = {"packages": [{"package_id": "pkg-other"}]}
         session = MagicMock()
         session.scalars.return_value.first.side_effect = [None, media_buy]
         repo = MediaBuyRepository(session, "tenant-1")
         with pytest.raises(AdCPPackageNotFoundError) as exc:
-            repo.package_exists_or_raise("mb-1", "pkg-missing", context={"context_id": "ctx-7"})
-        assert exc.value.error_code == "PACKAGE_NOT_FOUND"
+            repo.get_package_or_raise("mb-1", "pkg-missing", context={"context_id": "ctx-7"})
+        # SDK enum, .value at the comparison boundary (plain Enum, not StrEnum)
+        assert exc.value.error_code == ErrorCode.PACKAGE_NOT_FOUND.value
         assert "pkg-missing" in str(exc.value)
         assert exc.value.context == {"context_id": "ctx-7"}
 
