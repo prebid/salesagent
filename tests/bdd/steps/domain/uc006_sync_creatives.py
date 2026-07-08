@@ -2689,7 +2689,7 @@ def then_creative_has_approval_workflow_status(ctx: dict) -> None:
     """Assert the creative's status is one of the approval-workflow statuses."""
     _APPROVAL_STATUSES = {"pending_review", "approved", "rejected", "processing", "adaptation_required"}
     result = _get_sync_creative_result(ctx)
-    status = getattr(result, "status", None)
+    status = getattr(result, "internal_status", None)
     if status is None:
         _xfail_if_e2e(ctx)
         creative = _get_creative_from_db(ctx)

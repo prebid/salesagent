@@ -283,7 +283,7 @@ class TestSyncCreativesResponseShape:
         result = SyncCreativeResult(
             creative_id="creative_002",
             action=CreativeAction.updated,
-            status="approved",
+            internal_status="approved",
             review_feedback="Looks good",
         )
         resp = SyncCreativesResponse(creatives=[result], dry_run=False)  # type: ignore[call-arg]

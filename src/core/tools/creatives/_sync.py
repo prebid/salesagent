@@ -24,6 +24,16 @@ from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creat
 logger = logging.getLogger(__name__)
 
 
+def _append_warning(result: SyncCreativeResult, warning: str) -> None:
+    """Append a non-fatal warning to a sync result.
+
+    ``warnings`` is inherited from the adcp 6.6 parent with a ``None`` default (it was
+    formerly a local ``[]``-default override, salesagent-qj0p), so materialize the list
+    before appending rather than assuming a list is present.
+    """
+    result.warnings = (result.warnings or []) + [warning]
+
+
 def _sync_creatives_impl(
     creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
     assignments: dict | None = None,
@@ -186,11 +196,8 @@ def _sync_creatives_impl(
                             SyncCreativeResult(
                                 creative_id=creative_id,
                                 action=CreativeAction.updated,
-                                status=existing_creative.status,
-                                platform_id=None,
+                                internal_status=existing_creative.status,
                                 review_feedback=None,
-                                assigned_to=None,
-                                assignment_errors=None,
                             )
                         )
                     else:
@@ -199,11 +206,7 @@ def _sync_creatives_impl(
                             SyncCreativeResult(
                                 creative_id=creative_id,
                                 action=CreativeAction.created,
-                                status=None,
-                                platform_id=None,
                                 review_feedback=None,
-                                assigned_to=None,
-                                assignment_errors=None,
                             )
                         )
                     synced_creatives.append(creative)
@@ -270,7 +273,7 @@ def _sync_creatives_impl(
 
                         # Add provenance warning if applicable
                         if provenance_warning and update_result.action != "failed":
-                            update_result.warnings.append(provenance_warning)
+                            _append_warning(update_result, provenance_warning)
                             # Flag for review when provenance is missing
                             existing_creative.status = "pending_review"
                             needs_approval = True
@@ -315,7 +318,7 @@ def _sync_creatives_impl(
                                 "creative_id": create_result.creative_id,
                                 "format": creative.format_id,
                                 "name": creative.name,
-                                "status": create_result.status,
+                                "status": create_result.internal_status,
                             }
                             # AI review reason will be added asynchronously when review completes
                             # No ai_result available yet in async mode
@@ -323,7 +326,7 @@ def _sync_creatives_impl(
 
                         # Add provenance warning if applicable
                         if provenance_warning and create_result.action != "failed":
-                            create_result.warnings.append(provenance_warning)
+                            _append_warning(create_result, provenance_warning)
                             needs_approval = True
 
                         results.append(create_result)
@@ -360,11 +363,7 @@ def _sync_creatives_impl(
                         SyncCreativeResult(
                             creative_id=db_creative.creative_id,
                             action=CreativeAction.deleted,
-                            status=None,
-                            platform_id=None,
                             review_feedback=None,
-                            assigned_to=None,
-                            assignment_errors=None,
                         )
                     )
 

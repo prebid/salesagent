@@ -270,7 +270,7 @@ class TestSyncCreativeResultSchema:
         result = SyncCreativeResult(
             creative_id="c_1",
             action="created",
-            status="approved",
+            internal_status="approved",
             review_feedback="Looks good",
         )
         data = result.model_dump()

@@ -43,8 +43,6 @@ def _failed_sync_result(creative_id: str, error_msg: str, *, recovery: str | Non
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
-        status=None,
-        platform_id=None,
         errors=[
             AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
                 code="SERVICE_UNAVAILABLE", message=error_msg, recovery=recovery
@@ -454,12 +452,9 @@ def _update_existing_creative(
         SyncCreativeResult(
             creative_id=existing_creative.creative_id,
             action=action,
-            status=existing_creative.status,
-            platform_id=None,
+            internal_status=existing_creative.status,
             changes=changes,
             review_feedback=None,
-            assigned_to=None,
-            assignment_errors=None,
         ),
         needs_approval,
     )
@@ -803,11 +798,8 @@ def _create_new_creative(
         SyncCreativeResult(
             creative_id=db_creative.creative_id,
             action="created",
-            status=db_creative.status,
-            platform_id=None,
+            internal_status=db_creative.status,
             review_feedback=None,
-            assigned_to=None,
-            assignment_errors=None,
         ),
         needs_approval,
     )

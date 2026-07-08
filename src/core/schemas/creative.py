@@ -349,18 +349,15 @@ class SyncSummary(SalesAgentBaseModel):
 
 
 class SyncCreativeResult(LibrarySyncCreativeResult):
-    """Extends library SyncCreativeResult with locally-owned fields.
+    """Extends library SyncCreativeResult with internal-only fields.
 
-    Library (SDK 5.7) provides: creative_id, action, errors,
-    adcp_major_version, adcp_version.
+    adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
+    changes and warnings to the library parent, so all six are now INHERITED (they were
+    locally redeclared under SDK 5.7 which had dropped them). See salesagent-qj0p.
 
-    Locally owned (removed from SDK 5.7 but used by this codebase):
-    - assigned_to, assignment_errors: assignment reporting (UC-006)
-    - platform_id, status: internal tracking
-    - changes, warnings: sync operation details
-
-    Internal-only (not in AdCP spec):
-    - review_feedback: excluded from responses
+    Internal-only (not in AdCP spec, excluded from responses):
+    - internal_status: review-routing state (renamed off the inherited spec `status`)
+    - review_feedback: platform review feedback
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -383,34 +380,28 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         """
         return enum_value(v)
 
-    # --- Fields re-added to the adcp 6.6 parent (sync_creatives_response Creative) ---
-    # 6.6 re-added assigned_to/assignment_errors/platform_id/status/changes/warnings to the
-    # library parent. We keep local declarations because our contract differs from the parent's:
-    # status is internal (exclude=True) tracking, and changes/warnings default to [] (writers
-    # append). FIXME(#TBD): reconcile with the schema-inheritance guard — either adopt the spec
-    # status field and rename internal tracking, or move these to KNOWN_OVERRIDES with sign-off.
-    assigned_to: list[str] | None = Field(None, description="Package IDs this creative was assigned to during sync")
-    assignment_errors: dict[str, str] | None = Field(
-        None, description="Per-package assignment errors {package_id: error_message}"
+    # adcp 6.6 (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
+    # warnings to the library parent — we now INHERIT all six (salesagent-qj0p, shrinking the
+    # schema-inheritance allowlist). Our former local `status` held internal review-routing state,
+    # not the spec's advisory CreativeStatus, so it is renamed to `internal_status` (excluded from
+    # the wire) rather than shadowing the inherited spec field. Per owner decision we inherit but
+    # do NOT populate the spec `status`: it stays None and exclude_none omits it, so the sync wire
+    # is byte-identical this bump. changes/warnings inherit the parent's None default (writers use
+    # the _append_warning guard in _sync.py); platform_id/assigned_to/assignment_errors are
+    # type-compatible and inherited as-is.
+    internal_status: str | None = Field(
+        None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
     )
-    platform_id: str | None = Field(None, description="Platform-assigned creative identifier")
-    status: str | None = Field(None, exclude=True, description="Internal creative status")  # type: ignore[assignment]
 
     # Internal-only fields (not in AdCP spec)
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
 
-    # Override library defaults: library uses None, we use [] for backward compatibility
-    changes: list[str] = Field(
-        default_factory=list, description="List of field names that were modified (for 'updated' action)"
-    )
-    warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
-
     def model_dump(self, **kwargs):
         """Override to strip empty lists for AdCP spec compliance.
 
-        Internal fields (status, review_feedback) are excluded via Field(exclude=True).
+        Internal fields (internal_status, review_feedback) are excluded via Field(exclude=True).
         This override handles empty-list stripping: changes, errors, warnings are
         optional in the AdCP spec, so omit them when empty rather than serializing [].
         """

@@ -1468,12 +1468,12 @@ class TestAdCPContract:
                 SyncCreativeResult(
                     creative_id="creative_123",
                     action="created",
-                    status="approved",
+                    internal_status="approved",
                 ),
                 SyncCreativeResult(
                     creative_id="creative_456",
                     action="updated",
-                    status="pending_review",
+                    internal_status="pending_review",
                     changes=["url", "name"],
                 ),
                 SyncCreativeResult(

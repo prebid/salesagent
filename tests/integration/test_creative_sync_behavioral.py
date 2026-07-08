@@ -754,9 +754,11 @@ class TestSchemaCompleteness:
 
         assert len(response.creatives) == 1
         result = response.creatives[0]
-        # Warnings field should exist (may be empty or populated)
+        # warnings is inherited from the adcp 6.6 parent as an OPTIONAL list[str] | None
+        # (salesagent-qj0p): None when there are no warnings (omitted on the wire), a list
+        # when populated — never any other type.
         assert hasattr(result, "warnings")
-        assert isinstance(result.warnings, list)
+        assert result.warnings is None or isinstance(result.warnings, list)
 
     def test_per_creative_result_has_required_fields(self, integration_db):
         """Covers: UC-006-MAIN-MCP-01 — result has creative_id, action, changes, errors."""
@@ -769,7 +771,9 @@ class TestSchemaCompleteness:
         result = response.creatives[0]
         assert result.creative_id == "c_fields"
         assert result.action in [a.value for a in CreativeAction]
-        assert isinstance(result.changes, list)
+        # changes/errors are inherited optional list[str] | None (salesagent-qj0p): None when
+        # empty (omitted on the wire), a list when populated.
+        assert result.changes is None or isinstance(result.changes, list)
         assert result.errors is None or isinstance(result.errors, list)
 
 

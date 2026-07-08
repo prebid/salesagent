@@ -256,7 +256,7 @@ class TestA2AResponseDictConstruction:
             creatives=[
                 SyncCreativeResult(
                     creative_id="cr-001",
-                    status="approved",
+                    internal_status="approved",
                     action="created",  # Required field
                 )
             ],
