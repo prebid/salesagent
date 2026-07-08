@@ -1,4 +1,4 @@
-# Manual feature for #1324 — brand string shorthand coercion on get_products.
+# Hand-authored feature for #1324 — brand string shorthand coercion on get_products.
 # Companion to BR-UC-GET-PRODUCTS-inventory-profile; reuses the wired
 # get_products dispatch (_call_get_products → env.call_via, all transports).
 

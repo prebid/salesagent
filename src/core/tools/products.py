@@ -833,7 +833,7 @@ async def get_products(
 
 async def get_products_raw(
     brief: str = "",
-    brand: BrandReference | dict[str, Any] | str | None = None,
+    brand: BrandReference | str | None = None,
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec

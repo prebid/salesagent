@@ -138,12 +138,17 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
     if isinstance(brand, str):
         return BrandReference(domain=_coerce_domain_or_raise(brand))
     if isinstance(brand, dict):
-        data = dict(brand)
-        domain_raw = data.get("domain")
-        if isinstance(domain_raw, str):
-            data["domain"] = _coerce_domain_or_raise(domain_raw)
+        domain_raw = brand.get("domain")
+        if not isinstance(domain_raw, str):
+            raise AdCPValidationError(
+                "Invalid brand: domain is required",
+                field="brand",
+            )
+        ref_data: dict[str, Any] = {"domain": _coerce_domain_or_raise(domain_raw)}
+        if "brand_id" in brand:
+            ref_data["brand_id"] = brand["brand_id"]
         try:
-            return BrandReference(**data)
+            return BrandReference(**ref_data)
         except ValidationError as e:
             raise AdCPValidationError(
                 format_validation_error(e, context="brand"),
