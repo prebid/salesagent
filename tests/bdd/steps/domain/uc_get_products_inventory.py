@@ -1,5 +1,7 @@
 """Domain step definitions for product discovery with inventory profiles (#1162).
 
+Also hosts brand-shorthand steps for #1324 (same get_products dispatch).
+
 Given steps: tenant setup, inventory profile creation, product linking
 When steps: get_products dispatch via call_via (all 4 transports)
 Then steps: publisher_properties assertions (selection_type, field presence)
@@ -7,10 +9,12 @@ Then steps: publisher_properties assertions (selection_type, field presence)
 Steps store results in ctx:
     ctx["response"] — GetProductsResponse on success
     ctx["error"] — Exception on failure
+    ctx["wire_error_envelope"] — transport wire envelope on tool error
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -22,6 +26,7 @@ from tests.factories import (
     ProductFactory,
     TenantFactory,
 )
+from tests.helpers import assert_envelope_shape
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -36,6 +41,8 @@ def _call_get_products(ctx: dict, **kwargs: Any) -> None:
             result = env.call_via(transport, **kwargs)
             if result.is_error:
                 ctx["error"] = result.error
+                ctx["wire_error_envelope"] = result.wire_error_envelope
+                ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
             else:
                 ctx["response"] = result.payload
         except Exception as exc:
@@ -153,6 +160,16 @@ def when_request_products(ctx: dict) -> None:
     _call_get_products(ctx)
 
 
+@when(parsers.parse("the buyer requests products with brand {brand}"))
+def when_request_products_with_brand(ctx: dict, brand: str) -> None:
+    """Dispatch get_products with a brand value (JSON dict or bare/quoted string)."""
+    try:
+        value: Any = json.loads(brand)
+    except json.JSONDecodeError:
+        value = brand
+    _call_get_products(ctx, brand=value)
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 
@@ -170,6 +187,15 @@ def then_has_products(ctx: dict) -> None:
     )
     assert actual.name == expected.name, f"Expected name={expected.name!r}, got {actual.name!r}"
     ctx["first_product"] = actual
+
+
+@then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
+def then_rejected_validation_field(ctx: dict, field: str) -> None:
+    """Assert the wire envelope is VALIDATION_ERROR and names the field."""
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
+    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+    assert field in json.dumps(envelope), f"envelope does not name field {field!r}: {envelope}"
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))

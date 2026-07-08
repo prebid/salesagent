@@ -2802,7 +2802,7 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
-    if "inventory_profile" in marker_names:
+    if "inventory_profile" in marker_names or "brand_shorthand" in marker_names:
         return "UC-GET-PRODUCTS"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
