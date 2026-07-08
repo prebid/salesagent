@@ -561,7 +561,11 @@ def _get_media_buy_delivery_impl(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
-        # Derived quotients (BR-RULE-220 INV-2: top-level aggregated_totals scalars).
+        # Derived quotients — top-level aggregated_totals scalars per the AdCP 3.1
+        # response schema (media-buy/get-media-buy-delivery-response.json defines
+        # roas as "total conversion_value / total spend" and cost_per_acquisition
+        # as "total spend / total conversions"; graded by the uc004
+        # aggregated-roas-and-cpa storyboard scenario).
         # Spec semantics: roas = total conversion_value / total spend;
         # cost_per_acquisition = total spend / total conversions. Omitted (None) —
         # never zeroed — when inputs are absent or the denominator is zero.

@@ -1639,7 +1639,7 @@ def _make_identity_for_agent(ctx: dict, agent_name: str) -> Any:
 
     Carries the agent principal's access_token: the REST e2e dispatcher only
     sends x-adcp-auth when the identity has an auth_token, and the live server
-    401s tokenless agent syncs (salesagent-927n).
+    401s tokenless agent syncs (PR #1430 items 1-2).
     """
     from tests.factories.principal import PrincipalFactory
 
@@ -1656,7 +1656,7 @@ def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
 
     Shared body for the agent-scoped sync Givens. Fails loudly if the sync
     itself failed — swallowing the Given error previously masked live-server
-    401s, so agent accounts silently never existed (salesagent-927n).
+    401s, so agent accounts silently never existed (PR #1430 items 1-2).
     """
     from src.core.schemas.account import SyncAccountsRequest
 

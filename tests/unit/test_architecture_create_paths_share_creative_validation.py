@@ -1,6 +1,6 @@
 """Guard: both create_media_buy approval paths run the shared creative validation.
 
-Disease pattern (salesagent-kk15 / salesagent-39n0): the manual-approval
+Disease pattern (PR #1430 review): the manual-approval
 (pending) branch of ``_create_media_buy_impl`` duplicated the auto path's
 creative-association logic minus its checks — missing creative_ids were
 silently skipped (pending SUCCESS) and format mismatch raised a different
@@ -39,18 +39,52 @@ def count_shared_validator_calls(tree: ast.Module) -> int:
     return count
 
 
+def _manual_branch_span(tree: ast.Module) -> tuple[int, int] | None:
+    """Line span of the manual-approval If body (test references manual_approval_required).
+
+    Several Ifs may reference the name (e.g. one-line guards); the manual-approval
+    branch is the WIDEST such span — the multi-hundred-line pending-path body.
+    """
+    spans: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and any(
+            isinstance(n, ast.Name) and n.id == "manual_approval_required" for n in ast.walk(node.test)
+        ):
+            spans.append((node.body[0].lineno, max(getattr(n, "lineno", 0) for n in ast.walk(node))))
+    if not spans:
+        return None
+    return max(spans, key=lambda s: s[1] - s[0])
+
+
+def shared_validator_calls_per_branch(tree: ast.Module) -> tuple[int, int]:
+    """(calls inside the manual-approval branch, calls outside it).
+
+    Module-wide counting alone would pass with both calls in one branch
+    (PR #1430 review nit) — split by the manual-approval If's line span.
+    """
+    span = _manual_branch_span(tree)
+    inside = outside = 0
+    for call in iter_call_expressions(tree, name=_SHARED_VALIDATOR):
+        if span and span[0] <= call.lineno <= span[1]:
+            inside += 1
+        else:
+            outside += 1
+    return inside, outside
+
+
 class TestCreatePathsShareCreativeValidation:
     """Structural guard: pending and auto create paths share creative validation."""
 
     @pytest.mark.arch_guard
     def test_both_create_paths_call_shared_validator(self):
         tree = parse_module(_MEDIA_BUY_CREATE)
-        calls = count_shared_validator_calls(tree)
-        assert calls >= _REQUIRED_CALL_SITES, (
-            f"Expected >= {_REQUIRED_CALL_SITES} call sites of {_SHARED_VALIDATOR} in "
-            f"media_buy_create.py (manual-approval branch + auto path), found {calls}. "
+        inside, outside = shared_validator_calls_per_branch(tree)
+        assert inside >= 1 and outside >= 1, (
+            f"Expected {_SHARED_VALIDATOR} to be called in BOTH create paths of "
+            f"media_buy_create.py — found {inside} inside the manual-approval branch "
+            f"and {outside} outside it (auto path). "
             "Removing either call re-opens the approval-mode validation divergence "
-            "(salesagent-kk15 / salesagent-39n0): missing creative_ids silently "
+            "(PR #1430 review): missing creative_ids silently "
             "skipped on the pending path, or VALIDATION_ERROR instead of "
             "CREATIVE_REJECTED for format mismatch."
         )

@@ -5626,7 +5626,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
 def when_sync_cross_principal_assignment(ctx: dict) -> None:
     """Dispatch sync_creatives with ONLY an assignment referencing another
     principal's creative (no creatives array) — the cross-principal FK-500
-    surface (local feature, salesagent-t4or).
+    surface (local feature; upstream storyboard gap, PR #1430 review).
     """
     from src.core.database.models import Principal
     from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory

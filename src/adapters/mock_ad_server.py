@@ -1160,7 +1160,15 @@ class MockAdServer(AdServerAdapter):
         ``delivery_simulation_configs`` row keyed by (tenant_id, media_buy_id).
         The live server's Mock adapter reads it here so in-process and e2e
         return byte-identical payloads. No row -> None -> legacy behavior.
+
+        Gated behind ADCP_TESTING: the table has no production writer, so the
+        per-poll DB read is pure test plumbing — a production deployment must
+        not query it at all (PR #1430 review).
         """
+        import os
+
+        if os.environ.get("ADCP_TESTING", "").lower() != "true":
+            return None
         if not self.tenant_id:
             return None
 

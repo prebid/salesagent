@@ -116,7 +116,7 @@ def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
     harness zeroes manual_approval_operations, but the live tenant defaults to
     human_review_required=True and the real adapter requires approval for
     create_media_buy, which would divert e2e onto the PENDING-approval path
-    with different validation semantics (salesagent-mchp).
+    with different validation semantics (PR #1430 item 3).
 
     No-op when the scenario has no tenant yet.
     """

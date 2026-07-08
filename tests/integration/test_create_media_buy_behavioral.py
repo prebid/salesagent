@@ -713,7 +713,7 @@ class TestManualApprovalPathCreativeValidation:
     """
 
     def test_manual_path_rejects_missing_creative_ids(self, integration_db):
-        """salesagent-kk15: missing creative_ids on the manual-approval path fail
+        """PR #1430 review: missing creative_ids on the manual-approval path fail
         CREATIVE_REJECTED on the wire — not a pending SUCCESS that skips them.
         """
         from tests.factories import CreativeFactory
@@ -757,7 +757,7 @@ class TestManualApprovalPathCreativeValidation:
             )
 
     def test_manual_path_format_mismatch_emits_creative_rejected(self, integration_db):
-        """salesagent-39n0: creative-vs-product format mismatch must emit
+        """PR #1430 review: creative-vs-product format mismatch must emit
         CREATIVE_REJECTED on the manual-approval path — the same wire code the
         auto path emits for the same buyer input — not VALIDATION_ERROR.
         """

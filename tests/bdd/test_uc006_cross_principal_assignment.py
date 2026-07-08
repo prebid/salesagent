@@ -3,7 +3,7 @@
 Covers the ungraded surface behind the cross-principal FK-500/leak bug
 (PR #1430 review): `assignments` referencing another principal's creative_id.
 Retire together with the local feature once the upstream storyboard
-(adcp-req) grows the equivalent scenario (salesagent-t4or).
+(adcp-req) grows the equivalent scenario.
 """
 
 from __future__ import annotations

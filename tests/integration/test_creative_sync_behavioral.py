@@ -694,7 +694,7 @@ class TestAssignmentProcessing:
         existence gate must be principal-scoped like the parallel lookup in
         _sync.py (SECURITY comment), so a cross-principal reference resolves to
         "not found" instead of passing the gate on the other principal's row and
-        crashing on the FK insert (salesagent-hpjq / PR #1430 review).
+        crashing on the FK insert (PR #1430 review).
         """
         from sqlalchemy import select
 

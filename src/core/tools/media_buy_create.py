@@ -313,7 +313,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     inside the live server's async transports, where asyncio.run() raises
     "cannot be called from a running event loop" — which previously made every
     format lookup fail on the server and reject valid catalog formats as
-    unknown (salesagent-w2mx).
+    unknown (PR #1430 review).
 
     Args:
         agent_url: Creative agent URL

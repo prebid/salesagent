@@ -1,6 +1,6 @@
 """Guard: BDD steps must not clear a dispatch error without asserting on it.
 
-Disease pattern (salesagent-927n): a Given/helper dispatches a request and then
+Disease pattern (PR #1430, uc011 agent-sync 401 swallow): a Given/helper dispatches a request and then
 "cleans up" with ``ctx.pop("error", None)`` without first asserting the dispatch
 succeeded. A failed Given (e.g. a live-server 401 over e2e_rest) is silently
 swallowed, the seeded state never exists, and the scenario fails later with a
@@ -106,7 +106,7 @@ class TestBddNoSwallowedDispatchErrors:
             "dispatch without asserting the dispatch succeeded:\n"
             + "\n".join(f"  {p}:{n}" for p, n in new)
             + "\n\nAssert ctx.get('error') is None (or on the response) before "
-            "clearing — a failed Given must fail loudly (salesagent-927n)."
+            "clearing — a failed Given must fail loudly (PR #1430, uc011 401 swallow)."
         )
 
     @pytest.mark.arch_guard
