@@ -2926,8 +2926,6 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-006"
     if any(t.startswith("T-UC-005") for t in marker_names):
         return "UC-005"
-    if any(t.startswith("T-UC-003") for t in marker_names):
-        return "UC-003"
     if any(t.startswith("T-UC-004") for t in marker_names):
         return "UC-004"
     if any(t.startswith("T-UC-011") for t in marker_names):
