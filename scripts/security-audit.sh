@@ -37,9 +37,9 @@
 # - PYSEC-2026-161: starlette 0.50.0 BadHost / CVE-2026-48710.
 #   Resolved: fastapi bumped to >=0.133.0 (starlette 1.0+ support) (PR 2 of #1234).
 #
-# ``--allow-unused-ignores`` keeps the build resilient: an ignored advisory
-# that the upstream database temporarily un-flags must not flip the suite
-# red on the next run.
+# When active suppressions exist, ``--allow-unused-ignores`` keeps the build
+# resilient: an ignored advisory that the upstream database temporarily
+# un-flags must not flip the suite red on the next run.
 #
 # Extra arguments are forwarded to uv-secure (e.g. ``--no-check-uv-tool``).
 # Ignore IDs are sourced from scripts/security-ignored-vulns.sh.
@@ -48,4 +48,9 @@ set -euo pipefail
 source "$(dirname "$0")/security-ignored-vulns.sh"
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-exec uvx uv-secure --ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores "$@" "$PROJECT_ROOT/uv.lock"
+UV_SECURE_ARGS=()
+if [[ -n "$UV_SECURE_IGNORED_VULNS" ]]; then
+  UV_SECURE_ARGS+=(--ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores)
+fi
+
+exec uvx uv-secure "${UV_SECURE_ARGS[@]}" "$@" "$PROJECT_ROOT/uv.lock"
