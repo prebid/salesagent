@@ -85,7 +85,12 @@ fi
 # unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     SUITES="${SUITES/bdd/bdd_inprocess,bdd_e2e}"
-    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS -> suites=$SUITES"
+    # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
+    # so the in-process bulk only parallelizes if we export a worker count here.
+    # Default to `auto` (PYTEST_XDIST_AUTO_NUM_WORKERS) so the swap is actually
+    # fast on its own — without this the ~23m->~3.5m in-process win never lands.
+    export BDD_XDIST_N="${BDD_XDIST_N:-auto}"
+    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
 fi
 
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
@@ -142,8 +147,14 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     echo "Provisioning $N per-worker e2e server stacks..."
     psql_admin "DROP DATABASE IF EXISTS adcp_e2e_template"
     psql_admin "CREATE DATABASE adcp_e2e_template"
-    dc run --rm --no-deps -e DATABASE_URL="$_admin/adcp_e2e_template?sslmode=disable" \
-        tests python scripts/ops/migrate.py >/dev/null 2>&1 || echo "  (template migrate warning)"
+    # Fail fast: if the template migration fails, every per-worker DB below would
+    # be cloned from an un-migrated template and the whole e2e_rest pass would
+    # error confusingly. Surface it here instead.
+    if ! dc run --rm --no-deps -e DATABASE_URL="$_admin/adcp_e2e_template?sslmode=disable" \
+            tests python scripts/ops/migrate.py >/dev/null 2>&1; then
+        echo "ERROR: e2e template migration failed — aborting per-worker provisioning" >&2
+        exit 1
+    fi
     for i in $(seq 0 $((N - 1))); do
         psql_admin "DROP DATABASE IF EXISTS adcp_gw$i"
         psql_admin "CREATE DATABASE adcp_gw$i TEMPLATE adcp_e2e_template"

@@ -162,10 +162,12 @@ services:
       # default (unit -n auto has flaked); exposed for parity.
       INTEGRATION_XDIST_N: "${INTEGRATION_XDIST_N:-0}"
       UNIT_XDIST_N: "${UNIT_XDIST_N:-0}"
-      # Opt-in fast per-test DB path: clone from a schema template + skip the
-      # per-test DROP (throwaway clones wiped on tmpfs Postgres restart). Removes
-      # most per-test DB-lifecycle CPU under heavy xdist. Default off (unset).
+      # Opt-in fast per-test DB path: clone from a schema template (default off).
+      # TEST_DB_SKIP_DROP additionally skips the per-test DROP — safe ONLY on a
+      # throwaway (tmpfs) Postgres, where clones are wiped on container restart;
+      # off elsewhere so template mode never leaks DBs on a persistent Postgres.
       TEST_DB_TEMPLATE: "${TEST_DB_TEMPLATE:-}"
+      TEST_DB_SKIP_DROP: "${TEST_DB_SKIP_DROP:-}"
       # bdd is the only suite using `pytest -n auto`. It MUST run serial in-network:
       # all bdd workers share ONE Postgres (postgres:5432/adcp_test), and the
       # factory-boy fixtures create tenants/principals with fixed IDs, so >1 worker
@@ -259,6 +261,5 @@ services:
       start_period: 30s
 
 volumes:
-  postgres_data:
   tox_data:
   creative_pg_data:

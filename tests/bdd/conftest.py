@@ -110,9 +110,11 @@ def pytest_configure(config: pytest.Config) -> None:
     # this — collection never happens. Turn the silent drop into a hard error.
     # In-network bdd already pins BDD_XDIST_N=0 (docker-compose.e2e.yml). (#1420)
     # Exception: with E2E_PER_WORKER=1 each xdist worker targets its OWN server +
-    # DB (Phase B), so e2e_rest CAN run in parallel. The worker env inherits
-    # BDD_E2E_ENABLED (verified), so the transport is not dropped. Keep the guard
-    # for the shared-server case (the silent-drop hazard remains there).
+    # DB (Phase B), so e2e_rest CAN run in parallel. The worker inherits
+    # BDD_E2E_ENABLED, and the bdd_e2e env runs `-k e2e_rest`, which pytest exits
+    # 5 (no tests selected) on if the transport were dropped — so a silent drop
+    # can't pass unnoticed. Keep the guard for the shared-server case (where the
+    # silent-drop hazard genuinely remains).
     if os.environ.get("BDD_E2E_ENABLED") == "true" and os.environ.get("E2E_PER_WORKER") != "1":
         numprocesses = getattr(config.option, "numprocesses", None)
         if numprocesses not in (None, 0, "0"):
