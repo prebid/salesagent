@@ -365,6 +365,62 @@ def auth_headers(test_principal):
     return {"x-adcp-auth": test_principal.access_token}
 
 
+# ── Optional fast path: template-clone + skip-drop (opt-in via TEST_DB_TEMPLATE=1) ──
+# Instead of running Base.metadata.create_all() on a fresh database per test (the
+# dominant CPU cost under heavy xdist parallelism) and DROP-ing it afterwards,
+# build the schema ONCE into a template database and `CREATE DATABASE ... TEMPLATE`
+# a cheap clone per test, then skip the per-test drop entirely. Throwaway clones
+# accumulate in the (tmpfs) Postgres and are wiped when the container restarts, so
+# no teardown is needed. Correct because every test gets a unique DB name.
+_TEST_DB_TEMPLATE_NAME = "test_schema_template"
+_TEST_DB_TEMPLATE_LOCK = 0x5A1E5DB  # arbitrary fixed advisory-lock key
+_template_ready = False
+
+
+def _use_db_template() -> bool:
+    return os.environ.get("TEST_DB_TEMPLATE") == "1"
+
+
+def _build_schema(url: str) -> None:
+    """create_all the full ORM schema into the database at ``url``."""
+    from sqlalchemy import create_engine
+
+    import src.core.database.models  # noqa: F401  (register every model on Base.metadata)
+    from src.core.database.database_session import _pydantic_json_serializer
+    from src.core.database.models import Base
+
+    eng = create_engine(url, echo=False, json_serializer=_pydantic_json_serializer)
+    try:
+        Base.metadata.create_all(bind=eng, checkfirst=True)
+    finally:
+        eng.dispose()
+
+
+def _ensure_db_template(conn_params: dict, engine_url_base: str) -> str:
+    """Ensure the schema template DB exists; build it once (xdist-safe via a
+    Postgres advisory lock so exactly one worker builds it). Returns its name."""
+    global _template_ready
+    if _template_ready:
+        return _TEST_DB_TEMPLATE_NAME
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+    conn = _connect_with_retry(conn_params)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT pg_advisory_lock(%s)", (_TEST_DB_TEMPLATE_LOCK,))
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (_TEST_DB_TEMPLATE_NAME,))
+        if not cur.fetchone():
+            cur.execute(f'CREATE DATABASE "{_TEST_DB_TEMPLATE_NAME}"')
+            _build_schema(f"{engine_url_base}/{_TEST_DB_TEMPLATE_NAME}")
+        cur.execute("SELECT pg_advisory_unlock(%s)", (_TEST_DB_TEMPLATE_LOCK,))
+    finally:
+        cur.close()
+        conn.close()
+    _template_ready = True
+    return _TEST_DB_TEMPLATE_NAME
+
+
 @pytest.fixture(scope="function")
 def integration_db():
     """Provide an isolated PostgreSQL database for each integration test.
@@ -422,8 +478,13 @@ def integration_db():
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
 
+    _engine_url_base = f"postgresql://{user}:{password}@{host}:{postgres_port}"
     try:
-        cur.execute(f'CREATE DATABASE "{unique_db_name}"')
+        if _use_db_template():
+            _ensure_db_template(conn_params, _engine_url_base)
+            cur.execute(f'CREATE DATABASE "{unique_db_name}" TEMPLATE "{_TEST_DB_TEMPLATE_NAME}"')
+        else:
+            cur.execute(f'CREATE DATABASE "{unique_db_name}"')
     finally:
         cur.close()
         conn.close()
@@ -508,8 +569,10 @@ def integration_db():
         PropertyTag,
     )
 
-    # Create all tables directly (no migrations)
-    Base.metadata.create_all(bind=engine, checkfirst=True)
+    # Create all tables directly (no migrations) — skipped when the database was
+    # cloned from the schema template, which already has them.
+    if not _use_db_template():
+        Base.metadata.create_all(bind=engine, checkfirst=True)
 
     # Reset engine and update globals to point to the test database
     from src.core.database.database_session import reset_engine
@@ -551,25 +614,27 @@ def integration_db():
     elif "DB_TYPE" in os.environ:
         del os.environ["DB_TYPE"]
 
-    # Drop PostgreSQL test database
-    try:
-        conn = _connect_with_retry(conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        # Terminate connections to the test database
-        cur.execute(
-            f"""
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '{db_path}'
-            AND pid <> pg_backend_pid()
-            """
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
-        cur.close()
-        conn.close()
-    except Exception:
-        pass  # Ignore cleanup errors
+    # Drop PostgreSQL test database — skipped in template mode, where throwaway
+    # clones accumulate in the (tmpfs) Postgres and are wiped on container restart.
+    if not _use_db_template():
+        try:
+            conn = _connect_with_retry(conn_params)
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            cur = conn.cursor()
+            # Terminate connections to the test database
+            cur.execute(
+                f"""
+                SELECT pg_terminate_backend(pg_stat_activity.pid)
+                FROM pg_stat_activity
+                WHERE pg_stat_activity.datname = '{db_path}'
+                AND pid <> pg_backend_pid()
+                """
+            )
+            cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
+            cur.close()
+            conn.close()
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 # Import inspect only when needed
