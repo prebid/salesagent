@@ -143,3 +143,54 @@ class TestAdminMediaBuyRejectWebhook:
             payload=ANY,
             metadata={"task_type": "create_media_buy"},
         )
+
+    def test_reject_webhook_does_not_embed_completed_success(
+        self, authenticated_admin_session, pending_reject_media_buy
+    ):
+        """The rejected media buy webhook body must not embed a completed success result.
+
+        Regression for salesagent-88e2 (adcp 6.6 / spec 3.1.1): the reject branch built the
+        embedded ``result`` as CreateMediaBuySuccess, which now defaults status="completed",
+        confirmed_at=now, revision=1. So the outbound body had a correct OUTER status="rejected"
+        but an embedded result asserting the buy COMPLETED — a Success envelope cannot represent
+        a rejection. Assert the embedded result does not claim completion.
+        """
+        tenant_id = pending_reject_media_buy["tenant_id"]
+        media_buy_id = pending_reject_media_buy["media_buy_id"]
+
+        # Capture the outbound payload via side_effect (atomic — avoids the weak
+        # split-assertion antipattern of assert_called_once() + call_args).
+        captured: dict = {}
+
+        async def _capture(*, push_notification_config=None, payload=None, metadata=None):
+            captured["payload"] = payload
+
+        mock_service = MagicMock()
+        mock_service.send_notification = AsyncMock(side_effect=_capture)
+
+        with patch(
+            "src.admin.blueprints.operations.get_protocol_webhook_service",
+            return_value=mock_service,
+        ):
+            resp = authenticated_admin_session.post(
+                f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+                data={"action": "reject", "reason": "test"},
+            )
+
+        assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
+        assert "payload" in captured, "reject route did not send a webhook payload"
+        payload = captured["payload"]
+        body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+
+        # Outer envelope correctly reports the rejection.
+        assert body["status"] == "rejected", f"outer status should be rejected, got {body.get('status')!r}"
+
+        # The embedded result must NOT assert completion inside a rejection payload.
+        embedded = body.get("result") or {}
+        assert embedded.get("status") != "completed", (
+            f"rejected webhook embeds a result claiming status={embedded.get('status')!r}; "
+            "a rejection must not carry a completed-success envelope"
+        )
+        assert not embedded.get("confirmed_at"), (
+            "rejected webhook embeds confirmed_at — the buy was rejected, not confirmed/completed"
+        )
