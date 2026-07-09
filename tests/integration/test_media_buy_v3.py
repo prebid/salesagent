@@ -926,11 +926,13 @@ class TestUpdateMediaBuyAdapterError:
         # actually reaches the adapter — a pending_creatives buy (no creatives)
         # rejects 'pause' with AdCPGoneError BEFORE any adapter call, so the
         # network-failure path would never be exercised (#1417).
-        with get_db_session() as session:
-            buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        with MediaBuyUoW(mb_tenant["tenant_id"]) as uow:
+            buy = uow.media_buys.get_by_id(media_buy_id)
             assert buy is not None
             buy.status = "active"
-            session.commit()
+            # MediaBuyUoW auto-commits on clean exit
 
         # Mock adapter to simulate network failure
         with patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter:
