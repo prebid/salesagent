@@ -450,9 +450,11 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         product_data["product_card_detailed"] = product_model.product_card_detailed
     if product_model.placements:
         # adcp 6.6 (spec 3.1.1) makes Placement.kind and Placement.mode required. Placements
-        # stored before these fields existed are publisher-defined, targetable references, so
-        # default kind="publisher_ref" and mode="targetable".
-        _placement_defaults = {"kind": "publisher_ref", "mode": "targetable"}
+        # stored before these fields existed carry seller-defined metadata (name/description)
+        # inline, so they are seller_inline, not publisher_ref: default kind="seller_inline"
+        # (spec requires publisher_domain for publisher_ref, which legacy rows lack, but name
+        # for seller_inline, which they carry) and mode="targetable".
+        _placement_defaults = {"kind": "seller_inline", "mode": "targetable"}
         product_data["placements"] = [
             {**_placement_defaults, **p} if isinstance(p, dict) else p for p in product_model.placements
         ]
