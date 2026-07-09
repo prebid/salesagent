@@ -522,3 +522,60 @@ class TestBuildCreativeUsesADCPClient:
 
         assert isinstance(result, dict), "build_creative must return a plain dict for downstream processing"
         assert result.get("status") == "draft"
+
+    @pytest.mark.asyncio
+    async def test_build_creative_translates_auth_error_to_terminal(self):
+        """build_creative must translate ADCPAuthenticationError to a terminal AdCPAuthenticationError.
+
+        Mirrors _fetch_formats_from_agent's translation via raise_mapped_adcp_error:
+        an SDK auth failure must not fall through to a blanket except that would
+        classify it as retryable "transient" — rejected credentials are terminal.
+        """
+        from adcp.exceptions import ADCPAuthenticationError
+
+        registry = CreativeAgentRegistry()
+
+        mock_agent_client = Mock()
+        mock_agent_client.build_creative = AsyncMock(
+            side_effect=ADCPAuthenticationError("invalid credentials", agent_id="agent-1")
+        )
+
+        mock_adcp_client = Mock()
+        mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+
+        with patch.object(registry, "_build_adcp_client", return_value=mock_adcp_client):
+            with pytest.raises(AdCPAuthenticationError) as exc_info:
+                await registry.build_creative(
+                    agent_url="https://creative.example.com",
+                    format_id="display_300x250_generative",
+                    message="Build a banner ad",
+                )
+
+        assert exc_info.value.recovery == "terminal", (
+            "Rejected credentials must be terminal — retrying a rejected auth token loops forever"
+        )
+
+    @pytest.mark.asyncio
+    async def test_build_creative_translates_timeout_error_to_transient(self):
+        """build_creative must translate ADCPTimeoutError to a transient AdCPServiceUnavailableError."""
+        from adcp.exceptions import ADCPTimeoutError
+
+        registry = CreativeAgentRegistry()
+
+        mock_agent_client = Mock()
+        mock_agent_client.build_creative = AsyncMock(
+            side_effect=ADCPTimeoutError("request timed out", agent_id="agent-1")
+        )
+
+        mock_adcp_client = Mock()
+        mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+
+        with patch.object(registry, "_build_adcp_client", return_value=mock_adcp_client):
+            with pytest.raises(AdCPServiceUnavailableError) as exc_info:
+                await registry.build_creative(
+                    agent_url="https://creative.example.com",
+                    format_id="display_300x250_generative",
+                    message="Build a banner ad",
+                )
+
+        assert exc_info.value.recovery == "transient", "A timeout may succeed on retry — recovery must be transient"

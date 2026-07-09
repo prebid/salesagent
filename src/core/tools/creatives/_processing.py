@@ -12,10 +12,9 @@ from adcp.types import BrandReference, CreativeAsset
 from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
-from src.core.exceptions import AdCPConfigurationError
+from src.core.exceptions import AdCPConfigurationError, AdCPError
 from src.core.helpers import _extract_format_info, _validate_creative_assets
-from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
-from src.core.validation import normalize_agent_url
+from src.core.schemas import CreativeStatusEnum, SyncCreativeResult, canonical_agent_url
 from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
@@ -35,28 +34,36 @@ def _get_format_agent_url(format_obj: Any) -> str | None:
     - Legacy/mock: ``format_obj.agent_url`` is a top-level attribute
       (used by some test mocks and older code paths).
 
-    Returns the normalized agent_url string (trailing slash stripped per
-    AdCP URL canonicalization), or ``None`` if it cannot be determined.
+    Returns the canonicalized agent_url string per AdCP URL canonicalization
+    (lowercased host, default ports stripped, trailing slash stripped — see
+    ``schemas.canonical_agent_url``), or ``None`` if it cannot be determined.
     """
     # Try structured shape first (SDK Format objects: format_id.agent_url)
     fmt_format_id = getattr(format_obj, "format_id", None)
     if fmt_format_id is not None and not isinstance(fmt_format_id, str):
         agent_url = getattr(fmt_format_id, "agent_url", None)
         if agent_url is not None:
-            return normalize_agent_url(str(agent_url))
+            return canonical_agent_url(agent_url)
     # Fall back to legacy shape (top-level agent_url attribute)
     agent_url = getattr(format_obj, "agent_url", None)
     if agent_url is not None:
-        return normalize_agent_url(str(agent_url))
+        return canonical_agent_url(agent_url)
     return None
 
 
 def _find_format(all_formats: list[Any], creative_format: Any) -> Any | None:
-    """Find a format by normalized composite (agent_url, id) key.
+    """Find a format by canonical composite (agent_url, id) key.
 
-    Normalizes agent_url on both sides per AdCP URL canonicalization rules
-    (RFC 3986 §6.2.2/§6.2.3) before comparing, so URLs differing only by
-    trailing slash, case, or default port compare equal.
+    Canonicalizes agent_url on both sides per AdCP URL canonicalization (spec
+    MUST — ``core/format-id.json`` / ``reference/url-canonicalization.mdx``):
+    lowercased host, default ports stripped, trailing slash stripped (see
+    ``schemas.canonical_agent_url`` / ``format_id_identity``, the same
+    canonical form used for federation identity and the format cache key).
+    Unlike ``normalize_agent_url`` (used elsewhere for lenient endpoint-suffix
+    matching), this does NOT strip ``/mcp``/``/a2a`` transport suffixes —
+    canonicalization must preserve the path, so a reference carrying a
+    transport suffix is a genuinely different agent_url and correctly fails
+    to match.
 
     Handles two format shapes:
     - Structured: ``fmt.format_id`` is an object with ``.agent_url`` and ``.id``
@@ -64,7 +71,7 @@ def _find_format(all_formats: list[Any], creative_format: Any) -> Any | None:
     - Legacy/mock: ``fmt.format_id`` is a plain string ID and ``fmt.agent_url``
       is a top-level attribute (used by some test mocks and older code paths).
     """
-    target_agent = normalize_agent_url(str(creative_format.agent_url))
+    target_agent = canonical_agent_url(creative_format.agent_url)
     target_id = creative_format.id
     for fmt in all_formats:
         fmt_format_id = fmt.format_id
@@ -73,7 +80,7 @@ def _find_format(all_formats: list[Any], creative_format: Any) -> Any | None:
             fmt_agent = getattr(fmt, "agent_url", None)
             if fmt_agent is None:
                 continue
-            if normalize_agent_url(str(fmt_agent)) == target_agent and fmt_format_id == target_id:
+            if canonical_agent_url(fmt_agent) == target_agent and fmt_format_id == target_id:
                 return fmt
         else:
             # Structured shape: format_id has .agent_url and .id
@@ -81,7 +88,7 @@ def _find_format(all_formats: list[Any], creative_format: Any) -> Any | None:
             fmt_id = getattr(fmt_format_id, "id", None)
             if fmt_agent_url is None or fmt_id is None:
                 continue
-            if normalize_agent_url(str(fmt_agent_url)) == target_agent and fmt_id == target_id:
+            if canonical_agent_url(fmt_agent_url) == target_agent and fmt_id == target_id:
                 return fmt
     return None
 
@@ -492,9 +499,23 @@ def _update_existing_creative(
                 "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
             )
             return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="terminal"), False)
+        except AdCPError as adcp_error:
+            # Typed creative-agent failure (build_creative maps the SDK's ADCPError
+            # via raise_mapped_adcp_error before this point) — carry its recovery
+            # classification through instead of flattening to "transient" below.
+            # An auth failure is terminal (fix credentials, don't retry); a
+            # malformed manifest is correctable; only a genuine outage is transient.
+            error_msg = str(adcp_error)
+            logger.error(
+                "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
+            )
+            return (
+                _failed_sync_result(existing_creative.creative_id, error_msg, recovery=adcp_error.recovery),
+                False,
+            )
         except Exception as validation_error:
-            # Creative agent validation failed for update (network error, agent down, etc.)
-            # Do NOT update the creative - it needs validation before acceptance
+            # Genuinely unknown failure (network error, agent down, etc.) —
+            # transient is the spec-endorsed fallback recovery.
             error_msg = (
                 f"Creative agent unreachable or validation error: {str(validation_error)}. "
                 f"Retry recommended - creative agent may be temporarily unavailable."
@@ -752,9 +773,18 @@ def _create_new_creative(
             error_msg = str(config_error)
             logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
             return (_failed_sync_result(creative_id, error_msg, recovery="terminal"), False)
+        except AdCPError as adcp_error:
+            # Typed creative-agent failure (build_creative maps the SDK's ADCPError
+            # via raise_mapped_adcp_error before this point) — carry its recovery
+            # classification through instead of flattening to "transient" below.
+            # An auth failure is terminal (fix credentials, don't retry); a
+            # malformed manifest is correctable; only a genuine outage is transient.
+            error_msg = str(adcp_error)
+            logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
+            return (_failed_sync_result(creative_id, error_msg, recovery=adcp_error.recovery), False)
         except Exception as validation_error:
-            # Creative agent validation failed (network error, agent down, etc.)
-            # Do NOT store the creative - it needs validation before acceptance
+            # Genuinely unknown failure (network error, agent down, etc.) —
+            # transient is the spec-endorsed fallback recovery.
             error_msg = (
                 f"Creative agent unreachable or validation error: {str(validation_error)}. "
                 f"Retry recommended - creative agent may be temporarily unavailable."
@@ -787,11 +817,10 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (model attribute assignment).
-    # CreativeAsset is a RootModel with a __getattr__ proxy — mypy cannot see
-    # through it to the inner model's creative_id field, so the assignment needs
-    # a type: ignore. The proxy is defined in adcp.types.generated_poc.core.creative_asset.
+    # CreativeAsset is a RootModel with a __getattr__ proxy that now exposes
+    # creative_id to mypy under the pinned adcp version — no ignore needed.
     if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id  # type: ignore[attr-defined]
+        creative.creative_id = db_creative.creative_id
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":

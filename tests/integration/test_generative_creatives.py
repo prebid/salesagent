@@ -72,6 +72,18 @@ class TestGenerativeCreatives:
             # gemini_api_key is no longer passed — build_creative uses ADCPMultiAgentClient directly
             assert "gemini_api_key" not in call_args[1]
 
+            # Regression guard: the structured creative_manifest (this PR's core change) must
+            # reach build_creative with format_id as a {id, agent_url} object, not a bare string.
+            # Reverting to a bare-string format_id or dropping creative_manifest= keeps every
+            # other assertion in this test green, so this is the only line that pins it.
+            manifest = call_args[1]["creative_manifest"]
+            assert manifest is not None, "build_creative must receive a creative_manifest, not None"
+            assert isinstance(manifest["format_id"], dict), (
+                "creative_manifest['format_id'] must be a structured {id, agent_url} object, not a bare string"
+            )
+            assert manifest["format_id"]["id"] == "display_300x250_generative"
+            assert manifest["format_id"]["agent_url"] == DEFAULT_AGENT_URL
+
         # Verify result
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
@@ -134,6 +146,20 @@ class TestGenerativeCreatives:
         assert result.creatives[0].action == "created"
         assert registry.preview_creative.called
         assert not registry.build_creative.called
+
+        # Regression guard: preview_creative's twin of the build_creative manifest
+        # assertion above — reverting preview_creative to a bare-string format_id
+        # keeps every other assertion in this test green, so this is the only line
+        # that pins the structured creative_manifest on the static path.
+        preview_call_args = registry.preview_creative.call_args
+        assert preview_call_args is not None, "preview_creative should have been called"
+        preview_manifest = preview_call_args[1]["creative_manifest"]
+        assert isinstance(preview_manifest["format_id"], dict), (
+            "preview_creative's creative_manifest['format_id'] must be a structured "
+            "{id, agent_url} object, not a bare string"
+        )
+        assert preview_manifest["format_id"]["id"] == "display_300x250"
+        assert preview_manifest["format_id"]["agent_url"] == DEFAULT_AGENT_URL
 
     def test_missing_gemini_api_key_does_not_fail(self, integration_db):
         """Change 3: missing GEMINI_API_KEY no longer fails generative creatives.

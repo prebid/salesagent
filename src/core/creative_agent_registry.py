@@ -1014,10 +1014,12 @@ class CreativeAgentRegistry:
             _brand_str_to_ref(brand) if isinstance(brand, str) else to_brand_reference(brand)
         )
 
-        # Validate creative_manifest via model_validate (not model_construct) so the
-        # ≥16-char idempotency_key constraint and other field validators are enforced.
-        # CreativeManifest(…) trips mypy under adcp 5.7 (alias hides kwargs) — use
-        # .model_validate(dict) instead.
+        # Validate creative_manifest via model_validate (not model_construct) so its
+        # field validators are enforced rather than silently skipped. (The
+        # ≥16-char idempotency_key constraint below is on BuildCreativeRequest, not
+        # on CreativeManifest — model_validate() here guards the manifest's own
+        # fields, e.g. asset shape.) CreativeManifest(…) trips mypy under adcp 5.7
+        # (alias hides kwargs) — use .model_validate(dict) instead.
         manifest: CreativeManifest | None = (
             CreativeManifest.model_validate(creative_manifest) if creative_manifest else None
         )
@@ -1042,7 +1044,20 @@ class CreativeAgentRegistry:
         transient_agent = CreativeAgent(agent_url=str(agent_url), name=agent_name)
         client = self._build_adcp_client([transient_agent])
 
-        result = await client.agent(agent_name).build_creative(request)
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            result = await client.agent(agent_name).build_creative(request)
+        except ADCPError as e:
+            from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
+
+            # Mirror _fetch_formats_from_agent: translate the SDK's exception
+            # hierarchy into the internal typed AdCPError taxonomy so recovery
+            # (terminal for auth, transient for timeout/connection) survives to
+            # the caller instead of being flattened by a blanket `except Exception`.
+            raise_mapped_adcp_error(e, agent_label=agent_name, logger=logger)
 
         # Return the result as a plain dict for downstream processing
         if hasattr(result, "model_dump"):

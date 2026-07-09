@@ -1,8 +1,12 @@
 """Unit tests for _processing.py helper functions (Change 1 & 2).
 
 Covers:
-- ``_find_format``: normalized composite (agent_url, id) key lookup per
-  AdCP URL canonicalization rules (RFC 3986 §6.2.2/§6.2.3).
+- ``_find_format``: canonical composite (agent_url, id) key lookup per
+  AdCP URL canonicalization (spec MUST — ``core/format-id.json`` /
+  ``reference/url-canonicalization.mdx``): lowercased host, default ports
+  stripped, trailing slash stripped. Transport-suffix paths (``/mcp``,
+  ``/a2a``) are NOT stripped — canonicalization must preserve the path, so
+  a reference carrying such a suffix is a genuinely different agent_url.
 - ``_build_generative_manifest``: AdCP-compliant creative_manifest structure
   (format_id as object, assets required, no creative_id/name).
 """
@@ -102,16 +106,45 @@ class TestFindFormat:
 
         assert result is fmt
 
-    def test_mcp_suffix_normalized(self):
-        """``/mcp`` suffix is stripped by normalize_agent_url before comparison."""
+    def test_mcp_suffix_not_stripped(self):
+        """``/mcp`` transport suffix is NOT stripped by canonical_agent_url (spec canonicalization
+        preserves the path — unlike the lenient ``normalize_agent_url`` used elsewhere).
+
+        A reference carrying a transport suffix is a genuinely different agent_url from the
+        bare host and must NOT match — this pins the over-match regression the review flagged.
+        """
         fmt = _make_format("https://creative.example.com", "display_300x250")
         creative_format = _make_creative_format("https://creative.example.com/mcp", "display_300x250")
 
         result = _find_format([fmt], creative_format)
 
+        assert result is None, (
+            "_find_format must NOT strip /mcp: canonicalization preserves the path, "
+            "so 'https://creative.example.com/mcp' must not match 'https://creative.example.com'"
+        )
+
+    def test_host_case_normalized(self):
+        """Host case differences are normalized per spec canonicalization (lowercased host)."""
+        fmt = _make_format("https://Creative.Example.com", "display_300x250")
+        creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
+
+        result = _find_format([fmt], creative_format)
+
         assert result is fmt, (
-            "_find_format must normalize /mcp suffix: "
-            "'https://creative.example.com/mcp' should match 'https://creative.example.com'"
+            "_find_format must canonicalize host case: "
+            "'https://Creative.Example.com' should match 'https://creative.example.com'"
+        )
+
+    def test_default_port_normalized(self):
+        """An explicit default port (443 for https) is normalized away per spec canonicalization."""
+        fmt = _make_format("https://creative.example.com:443", "display_300x250")
+        creative_format = _make_creative_format("https://creative.example.com", "display_300x250")
+
+        result = _find_format([fmt], creative_format)
+
+        assert result is fmt, (
+            "_find_format must strip the default port: "
+            "'https://creative.example.com:443' should match 'https://creative.example.com'"
         )
 
     def test_no_match_returns_none(self):
