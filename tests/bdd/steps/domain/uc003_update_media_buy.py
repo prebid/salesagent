@@ -170,6 +170,20 @@ def given_media_buy_status(ctx: dict, status: str) -> None:
     )
     # Precondition mutation: set status and persist to DB
     mb.status = status
+    # A pre-start status must be internally consistent with the flight window:
+    # the shared status taxonomy (#1545) date-refines generic serving aliases,
+    # so a "scheduled" buy whose factory-default flight already started would
+    # honestly refine to active. Move the window to the future so the seeded
+    # precondition means what the scenario says (awaiting start).
+    if status in ("scheduled", "pending_start"):
+        from datetime import date, timedelta
+
+        mb.start_date = date.today() + timedelta(days=7)
+        mb.end_date = date.today() + timedelta(days=37)
+        # start_time/end_time take precedence over the dates in the shared
+        # resolver — clear any seeded past timestamps so the future window holds.
+        mb.start_time = None
+        mb.end_time = None
     env = ctx["env"]
     env._commit_factory_data()
 

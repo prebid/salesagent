@@ -12,7 +12,7 @@ import logging
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
@@ -20,7 +20,10 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from pydantic import Field
 
-from src.core.tools.media_buy_list import normalize_persisted_media_buy_status
+from src.core.tools.media_buy_list import _compute_status
+
+if TYPE_CHECKING:
+    from src.core.database.models import MediaBuy
 
 # ---------------------------------------------------------------------------
 # Financial policy constants (F-05)
@@ -102,20 +105,21 @@ from src.services.targeting_capabilities import (
 )
 
 
-def _adcp_status_and_actions(persisted_status: str | None) -> tuple[MediaBuyStatus | None, list[str]]:
-    """Map a persisted ``MediaBuy.status`` to ``(media_buy_status, valid_actions)``.
+def _adcp_status_and_actions(buy: "MediaBuy | None") -> tuple[MediaBuyStatus | None, list[str]]:
+    """Map a media buy to ``(media_buy_status, valid_actions)`` for the update wire.
 
-    ``valid_actions`` is derived from the NORMALIZED AdCP status, not the raw
-    persisted string — otherwise a persisted status whose name differs from its
-    AdCP value (``scheduled``/``approved``/``pending_approval``/``failed``/``draft``)
-    feeds a non-AdCP token to ``valid_actions_for_status`` and yields ``[]`` (and a
-    null ``media_buy_status``), diverging from ``get_media_buys``'
-    persisted-status-authoritative ``_compute_status``, which reads the same
-    column (date-driven transitions live in the status scheduler, #1417).
-    Single source of truth for the update-response status pair so the four
-    ``UpdateMediaBuySuccess`` sites cannot drift.
+    Delegates to ``_compute_status`` — the SAME shared, flight-window-refined
+    resolver ``get_media_buys``/``get_media_buy_delivery`` use — so the update
+    response describes the buy identically to the read tools (#1545 taxonomy).
+    Date refinement matters on the write path too: a legacy ``scheduled`` buy
+    whose flight has not started reports ``pending_start`` (the dual-emit
+    contract), not a raw serving alias. ``valid_actions`` derives from the
+    refined AdCP status. Single source of truth for the update-response status
+    pair so the four ``UpdateMediaBuySuccess`` sites cannot drift.
     """
-    media_buy_status = normalize_persisted_media_buy_status(persisted_status)
+    if buy is None:
+        return None, []
+    media_buy_status = _compute_status(buy, date.today())
     valid_actions = valid_actions_for_status(media_buy_status.value) if media_buy_status else []
     return media_buy_status, valid_actions
 
@@ -510,10 +514,9 @@ def _update_media_buy_impl(
 
                 # Look up current status for valid_actions
                 _dry_run_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                _dry_run_status = _dry_run_mb.status if _dry_run_mb else ""
 
                 # Build simulated response
-                _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_status)
+                _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_mb)
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
                     media_buy_status=_dry_run_mbs,  # AdCP 3.1: mirrors `status`
@@ -538,8 +541,7 @@ def _update_media_buy_impl(
                 # execution path can re-execute the update after human approval.
                 # This mirrors create_media_buy's raw_request pattern.
                 _approval_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                _approval_status = _approval_mb.status if _approval_mb else ""
-                _approval_mbs, _approval_actions = _adcp_status_and_actions(_approval_status)
+                _approval_mbs, _approval_actions = _adcp_status_and_actions(_approval_mb)
                 approval_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
                     media_buy_status=_approval_mbs,  # AdCP 3.1: mirrors `status`
@@ -685,12 +687,7 @@ def _update_media_buy_impl(
                     # Fall back to the current state-machine target only if the DB
                     # row is missing (e.g., adapter deleted it under us).
                     _post_action_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                    _post_action_status = (
-                        _post_action_mb.status
-                        if _post_action_mb and _post_action_mb.status
-                        else ("paused" if req.paused else "active")
-                    )
-                    _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_status)
+                    _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
                         media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
@@ -1338,8 +1335,7 @@ def _update_media_buy_impl(
             # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
             _final_mb = uow.media_buys.get_by_id(req.media_buy_id)
-            _final_status = _final_mb.status if _final_mb else ""
-            _final_mbs, _final_actions = _adcp_status_and_actions(_final_status)
+            _final_mbs, _final_actions = _adcp_status_and_actions(_final_mb)
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
                 media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`

@@ -1008,17 +1008,16 @@ class TestUpdateMediaBuyMissingPackageId:
 
 
 class TestGetMediaBuysStatusIsPersistedAuthoritative:
-    """get_media_buys status is persisted-authoritative, in agreement with update (#1417 / 8plg).
+    """get_media_buys status follows the shared flight-refined taxonomy (#1545).
 
-    Core invariant: the read path never recomputes status from the flight window
-    ("persist status, never recompute from dates"). A past-end 'active'-persisted
-    buy reports 'active' — the active->completed transition is owned by the
-    media_buy_status_scheduler on the persisted column, and the update-response
-    reads that same column via normalize_persisted_media_buy_status, so the two
-    paths agree instead of diverging (update='active' vs list='completed').
+    A generic 'active'-persisted buy past its end date is date-refined to
+    'completed' by the shared resolve_canonical_status — the SAME answer the
+    update response now gives (both delegate to _compute_status), so the read
+    and write paths agree. Terminal persisted states are never date-derived
+    (#1417's core, preserved by the shared resolver).
     """
 
-    def test_past_end_active_buy_reports_active_not_completed(self, integration_db):
+    def test_past_end_active_buy_reports_completed(self, integration_db):
         from datetime import date
 
         from src.core.schemas import GetMediaBuysRequest
@@ -1047,7 +1046,7 @@ class TestGetMediaBuysStatusIsPersistedAuthoritative:
             response = _get_media_buys_impl(get_req, identity=env.identity)
 
         assert len(response.media_buys) == 1, f"Expected the buy; errors: {response.errors}"
-        assert response.media_buys[0].status == MediaBuyStatus.active, (
-            "past-end 'active'-persisted buy must report persisted 'active' (agreeing with the "
-            "update path), NOT date-derived 'completed'"
+        assert response.media_buys[0].status == MediaBuyStatus.completed, (
+            "past-end generic 'active'-persisted buy must be date-refined to 'completed' by the "
+            "shared resolver (agreeing with delivery and the update path)"
         )
