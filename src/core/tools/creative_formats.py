@@ -287,6 +287,9 @@ def _list_creative_formats_impl(
                         )
                         formats.append(fmt)
                     except Exception as e:
+                        # FIXME(#1566): silent per-item failure — unparseable template is
+                        # dropped from the formats response with no signal to the caller.
+                        # Allowlisted in test_architecture_no_silent_loop_failures.py.
                         logger.warning(f"Failed to parse Broadstreet template {template_id}: {e}")
                         continue
 

@@ -228,6 +228,116 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     ctx.setdefault("_patchers", []).append(patcher)
 
 
+# Pre-flight window (far future) for persisted-status seeds that carry no
+# explicit dates: keeps the persisted value stable regardless of the real clock.
+# INV-8/9/10 assert the raw persisted→canonical mapping with no flight
+# refinement, so a pre-flight window is invisible to the resolver (those statuses
+# are terminal or non-serving, never date-refined) while making the seed
+# self-consistent (a pending buy is legitimately pre-flight).
+_UC019_PERSISTED_SEED_WINDOW = (date(2099, 1, 1), date(2099, 12, 31))
+
+
+def _seed_media_buy_with_persisted_status(
+    ctx: dict,
+    principal_id: str,
+    mb_id: str,
+    persisted: str,
+    *,
+    is_paused: bool = False,
+) -> None:
+    """Seed a media buy carrying a specific persisted (internal) status column.
+
+    Mirrors given_multiple_buys_various_statuses in uc004 (the reviewer's
+    template): the persisted status is written verbatim so get_media_buys
+    exercises the real PERSISTED_STATUS_TO_CANONICAL mapping. Dates default to a
+    pre-flight window; scenarios that need a specific flight phase override them
+    via the "has start_date/end_date" modifier step.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    start, end = _UC019_PERSISTED_SEED_WINDOW
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=persisted,
+        is_paused=is_paused,
+        start_date=start,
+        end_date=end,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with persisted status "{persisted}"'))
+def given_owns_media_buy_persisted_status(ctx: dict, principal_id: str, mb_id: str, persisted: str) -> None:
+    """Seed a buy with a persisted status (INV-7/8/9/10 taxonomy mapping)."""
+    _seed_media_buy_with_persisted_status(ctx, principal_id, mb_id, persisted)
+
+
+def _seed_simple_media_buy(ctx: dict, principal_id: str, mb_id: str, status: str = "active") -> Any:
+    """Register the principal, seed a media buy (default mid-flight window) under a
+    unique id, and register its Gherkin label. Shared by the plain and
+    with-status Given steps so the seed+register block lives in one place.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=status,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+    return mb
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with status "{status}"'))
+def given_owns_media_buy_with_status(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
+    """Seed a buy carrying a specific status and REGISTER its label.
+
+    Without this specific binding the greedy generic step (`owns media buy
+    "{mb_id}"`) captured the trailing ` with status "…"` into mb_id, registering
+    a garbled label so a later by-ID query couldn't resolve it (INV-5). Default
+    (mid-flight) window: "active" stays active; terminal states pass through.
+    """
+    _seed_simple_media_buy(ctx, principal_id, mb_id, status)
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" '
+        'with persisted status "{persisted}" and is_paused {flag}'
+    )
+)
+def given_owns_media_buy_persisted_status_paused(
+    ctx: dict, principal_id: str, mb_id: str, persisted: str, flag: str
+) -> None:
+    """Seed a buy with a persisted status and explicit is_paused (INV-6/INV-11)."""
+    _seed_media_buy_with_persisted_status(
+        ctx, principal_id, mb_id, persisted, is_paused=(flag.strip().lower() == "true")
+    )
+
+
+@given(parsers.parse('media buy "{mb_id}" has start_date "{start}" and end_date "{end}"'))
+def given_media_buy_has_dates(ctx: dict, mb_id: str, start: str, end: str) -> None:
+    """Override the flight window on an already-seeded buy (INV-6/7/11 modifier)."""
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy as DBMediaBuy
+
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    env = ctx["env"]
+    row = env._session.scalars(select(DBMediaBuy).filter_by(media_buy_id=real_id)).first()
+    assert row is not None, f"Media buy '{mb_id}' (real_id={real_id}) not seeded before setting its dates"
+    row.start_date = date.fromisoformat(start)
+    row.end_date = date.fromisoformat(end)
+    env._session.commit()
+
+
 @given(parsers.parse('the principal "{principal_id}" owns media buys "{mb1}", "{mb2}", and "{mb3}"'))
 def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: str, mb3: str) -> None:
     """Create 3 media buys, verifying principal_id consistency."""
@@ -858,17 +968,7 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}"'))
 def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> None:
     """Create a media buy (simple, no date attributes)."""
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
+    _seed_simple_media_buy(ctx, principal_id, mb_id)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no start_time and no start_date'))
@@ -1106,10 +1206,26 @@ def when_query_with_snapshot(ctx: dict) -> None:
 @when("the Buyer Agent sends a get_media_buys request")
 @when("the Buyer Agent sends a get_media_buys request with no include_snapshot param")
 @when("the Buyer Agent sends a get_media_buys request with no status_filter")
+@when("the Buyer Agent sends a get_media_buys request with no status_filter and no media_buy_ids")
 @when(parsers.parse('"{principal_id}" sends a get_media_buys request'))
 def when_query_no_filters(ctx: dict, principal_id: str | None = None) -> None:
     """Send get_media_buys with default parameters (no extra kwargs)."""
     _dispatch_query(ctx)
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a get_media_buys request with no status_filter and media_buy_ids (?P<ids>\[.+\])"
+    )
+)
+def when_query_no_filter_with_ids(ctx: dict, ids: str) -> None:
+    """No status_filter but explicit media_buy_ids — the by-ID path returns every
+    matching buy regardless of status (status filter is skipped for explicit IDs).
+    """
+    import json
+
+    real_ids = _resolve_media_buy_ids(ctx, json.loads(ids))
+    _dispatch_query(ctx, media_buy_ids=real_ids)
 
 
 @when("the Buyer Agent sends a get_media_buys request without authentication")
@@ -1160,20 +1276,17 @@ def when_query_empty_status_filter(ctx: dict) -> None:
     _dispatch_query(ctx, status_filter=[])
 
 
-@when("the Buyer Agent sends a get_media_buys request with all six status values in status_filter")
+@when("the Buyer Agent sends a get_media_buys request with all seven v3.1 status values in status_filter")
 def when_query_all_statuses(ctx: dict) -> None:
-    """Send get_media_buys with all six status enum values."""
-    _dispatch_query(
-        ctx,
-        status_filter=[
-            "pending_start",
-            "active",
-            "completed",
-            "paused",
-            "canceled",
-            "rejected",
-        ],
-    )
+    """Send get_media_buys with all seven v3.1 MediaBuyStatus enum values.
+
+    Derived from the pinned SDK MediaBuyStatus enum (the enums/media-buy-status.json
+    vocabulary) rather than a hand-listed literal, so the "seven" tracks the spec
+    automatically and doesn't duplicate the status list held elsewhere.
+    """
+    from adcp.types import MediaBuyStatus
+
+    _dispatch_query(ctx, status_filter=[s.value for s in MediaBuyStatus])
 
 
 @when(parsers.parse("the Buyer Agent sends a get_media_buys request with invalid parameter types"))
@@ -2133,8 +2246,15 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
 
 @then(parsers.parse('only media buys with status "{status}" are returned'))
 def then_only_status(ctx: dict, status: str) -> None:
-    """Assert only media buys with specified status are in response."""
+    """Assert only media buys with the specified status are in the response.
+
+    Non-empty guard (mirrors the uc004 sibling and this module's other status
+    Thens): a filter that regresses to ``[]`` must NOT false-green here — the
+    single_status / null_default rows route through this step and each seeds a
+    matching buy, so an empty result is a real failure, not a vacuous pass.
+    """
     buys = _get_media_buys(ctx)
+    assert buys, f"Filter '{status}' returned no media buys — expected at least the seeded matching buy."
     for buy in buys:
         actual = getattr(buy, "status", None)
         actual_str = actual.value if hasattr(actual, "value") else str(actual)
@@ -2151,6 +2271,23 @@ def then_either_status_returned(ctx: dict) -> None:
     assert len(statuses) >= 2, (
         f"Step claims 'either status are returned' but only found status(es): {statuses}. "
         f"Expected at least 2 different statuses."
+    )
+
+
+@then("every matching buy returned regardless of status")
+def then_every_matching_buy_regardless_of_status(ctx: dict) -> None:
+    """By-ID query skips the status filter: all requested buys come back even
+    though they hold different lifecycle statuses.
+
+    Non-vacuous: requires the requested buys to be present AND to span more than
+    one status (else 'regardless of status' isn't actually exercised).
+    """
+    buys = _get_media_buys(ctx)
+    assert buys, "Expected media buys returned for an explicit-IDs query"
+    statuses = {b.status.value if hasattr(b.status, "value") else str(b.status) for b in buys}
+    assert len(statuses) >= 2, (
+        f"Step claims buys are returned 'regardless of status' but the result holds a "
+        f"single status {statuses}; the by-ID skip-filter behavior isn't exercised."
     )
 
 

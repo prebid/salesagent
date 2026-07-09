@@ -11,7 +11,7 @@ Handles delivery metrics reporting including:
 import logging
 from datetime import UTC, date, datetime, timedelta
 from math import floor
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -21,6 +21,7 @@ from rich.console import Console
 from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
+    to_wire_error_code,
 )
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
@@ -97,6 +98,7 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
     MediaBuyDeliveryData,
+    MediaBuyDeliveryStatus,
     PackageDelivery,
     PlacementBreakdown,
     PricingModel,
@@ -105,7 +107,58 @@ from src.core.schemas import (
     ReportingPeriod as MediaBuyReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
+from src.core.tools._media_buy_status import (
+    CANONICAL_STATUSES,
+    NO_MORE_DATA_STATUSES,
+    resolve_canonical_status,
+)
+from src.core.utils import utc_flight_end, utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary
+
+
+def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
+    """Resolve the (clock, simulate) pair a buy's status is evaluated against.
+
+    The status-filter path (``_get_target_media_buys``) and the per-buy display
+    path MUST use the same clock and simulate flag; otherwise, under
+    ``mock_time`` / ``jump_to_event`` the tool reports a status its own filter
+    excluded (and emits a spurious ``MEDIA_BUY_NOT_FOUND`` for a buy it can see).
+    ``default_dt`` is the real reference datetime used when no simulation is
+    active.
+    """
+    if testing_ctx.mock_time:
+        return testing_ctx.mock_time, True
+    if testing_ctx.jump_to_event:
+        simulated = TimeSimulator.jump_to_event_time(
+            testing_ctx.jump_to_event,
+            utc_flight_start(cast(date, buy.start_date)),
+            # Flight END is end-of-day UTC (utc_flight_end), not midnight: the
+            # last flight day is still serving, so CAMPAIGN_COMPLETE lands at the
+            # last instant of end_date. Mirrors the status scheduler
+            # (media_buy_status_scheduler.py: completed only when now >
+            # utc_flight_end) and resolve_canonical_status's inclusive end.
+            utc_flight_end(cast(date, buy.end_date)),
+        )
+        return simulated, True
+    return default_dt, False
+
+
+def _normalize_advisory_errors(errors: list[Error]) -> list[Error]:
+    """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes.
+
+    Unlike a raised ``AdCPError`` (translated at the transport boundary), advisory
+    entries serialize verbatim, so an internal-only code would leak to the buyer.
+    ``to_wire_error_code`` both translates mapped codes AND collapses anything
+    still non-standard to ``SERVICE_UNAVAILABLE``, so no internal code can reach
+    the buyer even if a future advisory is built with an unmapped internal code.
+    """
+    return [
+        Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+            code=to_wire_error_code(e.code),
+            message=e.message,
+        )
+        for e in errors
+    ]
 
 
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
@@ -183,7 +236,7 @@ def _get_media_buy_delivery_impl(
         assert uow.media_buys is not None
         repo = uow.media_buys
 
-        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date)
+        target_media_buys = _get_target_media_buys(req, principal_id, repo, reference_date, testing_ctx)
 
         # Diff requested IDs vs found IDs to report missing ones (salesagent-mexj)
         not_found_errors: list[Error] = []
@@ -215,6 +268,12 @@ def _get_media_buy_delivery_impl(
             pricing_option_ids, tenant_id=tenant["tenant_id"], product_repo=product_repo
         )
 
+        # Per-request invariants, hoisted out of the per-buy loop:
+        # - the circuit breaker is tenant-scoped, so one check covers every buy;
+        # - packages are fetched in one batch query instead of one per buy.
+        reporting_circuit_open = _is_circuit_breaker_open(tenant["tenant_id"])
+        packages_by_buy = repo.get_packages_for_ids([buy_id for buy_id, _ in target_media_buys])
+
         # Collect delivery data for each media buy
         deliveries = []
         total_spend = 0.0
@@ -224,37 +283,31 @@ def _get_media_buy_delivery_impl(
 
         for media_buy_id, buy in target_media_buys:
             try:
-                # Apply time simulation from testing context
-                simulation_datetime = end_dt
-                if testing_ctx.mock_time:
-                    simulation_datetime = testing_ctx.mock_time
-                elif testing_ctx.jump_to_event:
-                    # Calculate time based on event
-                    # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                    buy_start_date = cast(date, buy.start_date)
-                    buy_end_date = cast(date, buy.end_date)
-                    simulation_datetime = TimeSimulator.jump_to_event_time(
-                        testing_ctx.jump_to_event,
-                        datetime.combine(buy_start_date, datetime.min.time()),
-                        datetime.combine(buy_end_date, datetime.min.time()),
-                    )
+                # Time-simulation mode (mock_time / jump_to_event): the buyer is
+                # modeling delivery at a hypothetical clock, so non-terminal buys
+                # follow the simulated flight window to reach "completed"/final.
+                # _simulation_clock is the SAME (clock, simulate) source the
+                # status_filter path uses, so the reported status can never
+                # contradict the filter that selected the buy.
+                simulation_datetime, simulate_time = _simulation_clock(buy, testing_ctx, end_dt)
 
-                # Determine status
-                # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
-                buy_start_date_status = cast(date, buy.start_date)
-                buy_end_date_status = cast(date, buy.end_date)
-                if getattr(buy, "is_paused", False):
-                    status = "paused"
-                elif simulation_datetime.date() < buy_start_date_status:
-                    status = "ready"
-                elif simulation_datetime.date() > buy_end_date_status:
-                    status = "completed"
-                else:
-                    status = "active"
+                # Determine status from the persisted lifecycle column,
+                # date-refined only for serving states — the same single
+                # source of truth (resolve_canonical_status) as the
+                # status_filter path and get_media_buys. A canceled, rejected,
+                # or draft buy inside its flight window must not report "active"
+                # just because the dates line up.
+                status = resolve_canonical_status(buy, simulation_datetime.date(), simulate=simulate_time)
 
-                # Override status when circuit breaker is open (reporting degraded),
-                # but not for paused buys (paused takes priority)
-                if status != "paused" and _is_circuit_breaker_open(tenant["tenant_id"]):
+                # Override status when circuit breaker is open (reporting
+                # degraded). "reporting_delayed" means "delivery data temporarily
+                # unavailable, will report later", so it may only overwrite a buy
+                # that is actively serving and therefore genuinely awaiting fresh
+                # data. A terminal/paused buy has no more data coming, and a
+                # pending buy (pending_creatives / pending_start) has never served
+                # — marking either "reporting_delayed" would promise a report that
+                # will never come and contradict the status_filter that selected it.
+                if status == "active" and reporting_circuit_open:
                     status = "reporting_delayed"
 
                 # Get delivery metrics from adapter
@@ -297,7 +350,7 @@ def _get_media_buy_delivery_impl(
                         adapter_viewability = getattr(adapter_response.totals, "viewability", None)
 
                     except Exception as e:
-                        logger.error(f"Error getting delivery for {media_buy_id}: {e}")
+                        logger.error("Error getting delivery for %s: %s", media_buy_id, e)
                         # Write adapter failure to audit trail (NFR-003)
                         try:
                             from src.core.database.models import AuditLog
@@ -314,7 +367,7 @@ def _get_media_buy_delivery_impl(
                             if uow.session is not None:
                                 uow.session.add(audit_log)
                         except Exception as audit_err:
-                            logger.error(f"Failed to write adapter failure audit log: {audit_err}")
+                            logger.error("Failed to write adapter failure audit log: %s", audit_err)
                         adapter_errors.append(
                             Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                                 code="SERVICE_UNAVAILABLE",
@@ -327,8 +380,12 @@ def _get_media_buy_delivery_impl(
                     # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime)
                     buy_start_date_sim = cast(date, buy.start_date)
                     buy_end_date_sim = cast(date, buy.end_date)
-                    start_dt = datetime.combine(buy_start_date_sim, datetime.min.time(), tzinfo=UTC)
-                    end_dt_campaign = datetime.combine(buy_end_date_sim, datetime.min.time(), tzinfo=UTC)
+                    start_dt = utc_flight_start(buy_start_date_sim)
+                    # End-of-day (utc_flight_end): the flight runs THROUGH the end
+                    # date, so progress reaches 1.0 only after the last flight day,
+                    # matching the scheduler and resolve_canonical_status. Midnight
+                    # would complete the campaign a day early.
+                    end_dt_campaign = utc_flight_end(buy_end_date_sim)
                     progress = TimeSimulator.calculate_campaign_progress(start_dt, end_dt_campaign, simulation_datetime)
 
                     simulated_metrics = DeliverySimulator.calculate_simulated_metrics(
@@ -341,9 +398,9 @@ def _get_media_buy_delivery_impl(
                 # Create package delivery data
                 package_deliveries = []
 
-                # Get pricing info from MediaPackage.package_config via repository
+                # Get pricing info from MediaPackage.package_config (batch-fetched above)
                 package_pricing_map = {}
-                media_packages = repo.get_packages(media_buy_id)
+                media_packages = packages_by_buy.get(media_buy_id, [])
                 for media_pkg in media_packages:
                     package_config = media_pkg.package_config or {}
                     pricing_info = package_config.get("pricing_info")
@@ -415,7 +472,7 @@ def _get_media_buy_delivery_impl(
                                 impressions=package_impressions or 0.0,
                                 spend=package_spend or 0.0,
                                 clicks=package_clicks,
-                                video_completions=None,  # Optional field, not calculated in this implementation
+                                completed_views=None,  # Optional field, not calculated in this implementation
                                 pacing_index=1.0 if status == "active" else 0.0,
                                 # Add pricing fields from package_config
                                 pricing_model=pricing_info.get("pricing_model") if pricing_info else None,
@@ -455,10 +512,11 @@ def _get_media_buy_delivery_impl(
 
                 ctr = (clicks / impressions) if clicks is not None and impressions > 0 else None
 
-                # Cast status to match Literal type requirement
-                status_typed = cast(
-                    Literal["ready", "active", "paused", "completed", "failed", "reporting_delayed"], status
-                )
+                # Validate the resolver's string against the library enum at the
+                # construction site (instead of casting a lie past mypy): a status
+                # outside MediaBuyDeliveryStatus fails here, at the source, rather
+                # than surfacing as an opaque validation error downstream.
+                status_typed = MediaBuyDeliveryStatus(status)
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
                     status=status_typed,
@@ -471,7 +529,7 @@ def _get_media_buy_delivery_impl(
                         spend=spend,
                         clicks=clicks,  # Optional field
                         ctr=ctr,  # Optional field
-                        video_completions=None,  # Optional field
+                        completed_views=None,  # Optional field
                         completion_rate=None,  # Optional field
                         conversions=adapter_conversions,  # From adapter totals
                         viewability=adapter_viewability,  # From adapter totals
@@ -492,13 +550,43 @@ def _get_media_buy_delivery_impl(
                 # translator for a spec-compliant envelope.
                 raise
             except Exception as e:
-                logger.error(f"Error getting delivery for {media_buy_id}: {e}")
+                # Surface the per-buy failure as an advisory (mirrors the adapter
+                # handler above) so the buy does not silently vanish from the
+                # response — the caller sees an errors[] entry, not a shorter list.
+                logger.error("Error processing delivery for %s: %s", media_buy_id, e)
+                adapter_errors.append(
+                    Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                        # SERVICE_UNAVAILABLE (not INTERNAL_ERROR) — advisory
+                        # errors[] entries serialize verbatim (they never pass
+                        # through translate_error_code), and INTERNAL_ERROR is an
+                        # internal-only code (exceptions.INTERNAL_CODES) that must
+                        # not reach the buyer. Matches the sibling adapter handler
+                        # above. The assembly-time normalization below is the
+                        # backstop that keeps any hand-built code on the wire.
+                        code="SERVICE_UNAVAILABLE",
+                        message=f"Error processing delivery for {media_buy_id}",
+                    )
+                )
                 # Skip this media buy and continue with others
 
         # --- Compute response-level webhook metadata (u5hf, uelj, 8g9e) ---
 
-        # notification_type: "final" when all deliveries are completed, "scheduled" otherwise
-        if deliveries and all(d.status == "completed" for d in deliveries):
+        # notification_type: "final" when every returned buy is in a state that
+        # will never produce more data (completed, rejected, canceled, failed —
+        # NOT paused, which may resume), "scheduled" otherwise. Deriving from
+        # NO_MORE_DATA_STATUSES instead of a hardcoded "completed" keeps a
+        # rejected/canceled/failed buy from being promised a next report that
+        # will never come (next_expected_at is "only present ... when
+        # notification_type is not 'final'" per
+        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+        #
+        # UNGRADED: the schema/storyboard describe "final" narrowly as "the
+        # campaign completes" (optimization-reporting.mdx §Publisher Commitment).
+        # Extending "final" to the other no-more-data terminals (rejected /
+        # canceled / failed) is our reading of the same "no next_expected_at when
+        # no more data" invariant, not a directly graded conformance step — no
+        # storyboard exercises a rejected/canceled/failed buy's notification_type.
+        if deliveries and all(enum_value(d.status) in NO_MORE_DATA_STATUSES for d in deliveries):
             notification_type = "final"
         elif deliveries:
             notification_type = "scheduled"
@@ -546,6 +634,10 @@ def _get_media_buy_delivery_impl(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
+        # Normalize advisory error codes to guaranteed-standard wire codes
+        # (see _normalize_advisory_errors for why this can't leak an internal code).
+        advisory_errors = _normalize_advisory_errors(not_found_errors + adapter_errors)
+
         # Create AdCP-compliant response
         context_val = req.context
         response = GetMediaBuyDeliveryResponse(
@@ -555,12 +647,12 @@ def _get_media_buy_delivery_impl(
                 impressions=float(total_impressions),
                 spend=total_spend,
                 clicks=float(total_clicks) if total_clicks else None,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=media_buy_count,
             ),
             media_buy_deliveries=deliveries,
             attribution_window=attribution_window,
-            errors=(not_found_errors + adapter_errors) or None,
+            errors=advisory_errors or None,
             context=context_val,
             notification_type=notification_type,
             sequence_number=sequence_number,
@@ -577,8 +669,11 @@ def _get_media_buy_delivery_impl(
                 first_buy_start = cast(date, first_buy.start_date)
                 first_buy_end = cast(date, first_buy.end_date)
                 campaign_info = {
-                    "start_date": datetime.combine(first_buy_start, datetime.min.time()),
-                    "end_date": datetime.combine(first_buy_end, datetime.min.time()),
+                    "start_date": utc_flight_start(first_buy_start),
+                    # End-of-day (utc_flight_end) so the testing-hook progress math
+                    # treats the last flight day as still serving — consistent with
+                    # the simulation path above and the scheduler.
+                    "end_date": utc_flight_end(first_buy_end),
                     "total_budget": float(first_buy.budget) if first_buy.budget else 0.0,
                 }
 
@@ -737,7 +832,6 @@ def get_media_buy_delivery_raw(
 def _resolve_delivery_status_filter(
     status_filter: Any,
     valid_internal_statuses: set[str],
-    to_internal: Any,
 ) -> list[str]:
     """Resolve status_filter to a list of internal status strings.
 
@@ -747,6 +841,9 @@ def _resolve_delivery_status_filter(
     - list[MediaBuyStatus] -> convert each
     - Single MediaBuyStatus enum -> convert
     - Special "all" value (via .value attribute) -> all valid statuses
+
+    ``enum_value`` unwraps a MediaBuyStatus to its wire string and passes plain
+    strings through, so no per-representation converter is needed.
     """
     if not status_filter:
         return ["active"]
@@ -757,16 +854,19 @@ def _resolve_delivery_status_filter(
 
     # Handle list of statuses (plain list or unwrapped RootModel)
     if isinstance(status_filter, list):
-        result = []
+        result: list[str] = []
         for s in status_filter:
-            internal = to_internal(s) if isinstance(s, MediaBuyStatus) else str(s)
+            # The list holds non-None enum/str values, so enum_value never
+            # returns None here (its None overload matches only a None
+            # argument) — cast for mypy rather than a dead runtime guard.
+            internal = cast(str, enum_value(s))
             if internal in valid_internal_statuses:
                 result.append(internal)
         return result
 
     # Handle single enum value
     if isinstance(status_filter, MediaBuyStatus):
-        return [to_internal(status_filter)]
+        return [enum_value(status_filter)]
 
     # Handle special values (e.g., "all" via mock or raw string)
     status_str = enum_value(status_filter)
@@ -777,55 +877,10 @@ def _resolve_delivery_status_filter(
 
 
 # -- Helper functions --
-# Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
-# transitions) maps onto the internal delivery filter vocabulary below.
-# The persisted status is authoritative: terminal/explicit states
-# (completed, paused, rejected, canceled) are lifecycle decisions that
-# cannot be re-derived from flight dates. Transitional pre-serving states
-# (draft, pending_approval, pending_creatives, pending_start) map to
-# "ready" so the default "active" filter excludes them.
-_PERSISTED_STATUS_TO_INTERNAL: dict[str, str] = {
-    "active": "active",
-    "approved": "active",
-    "paused": "paused",
-    "completed": "completed",
-    "rejected": "rejected",
-    "canceled": "canceled",
-    "failed": "failed",
-    "draft": "ready",
-    "pending": "ready",
-    "pending_approval": "ready",
-    "pending_creatives": "ready",
-    "pending_start": "ready",
-}
-
-
-def _internal_status_for_buy(buy: MediaBuy, reference_date: date) -> str:
-    """Resolve a media buy's filterable status from its persisted column.
-
-    The persisted ``MediaBuy.status`` is the source of truth. Only when the
-    buy is in a generic serving state ("active"/"approved") do we refine
-    against flight dates — an "active" buy whose flight window has not yet
-    started is "ready", and one past its end date is "completed".
-    """
-    persisted = (buy.status or "").lower()
-    internal = _PERSISTED_STATUS_TO_INTERNAL.get(persisted, persisted)
-
-    if internal != "active":
-        return internal
-
-    # Generic serving state — refine against the flight window.
-    # Cast to date to satisfy mypy (SQLAlchemy returns Python date at runtime).
-    start_compare = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
-    end_compare = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
-
-    if getattr(buy, "is_paused", False):
-        return "paused"
-    if reference_date < start_compare:
-        return "ready"
-    if reference_date > end_compare:
-        return "completed"
-    return "active"
+# The persisted-status -> canonical-status map and its date-refinement live in
+# _media_buy_status.resolve_canonical_status — the single source of truth shared
+# with get_media_buys (CLAUDE.md DRY invariant). This module consumes the
+# canonical delivery vocabulary (CANONICAL_STATUSES) directly.
 
 
 def _get_target_media_buys(
@@ -833,20 +888,12 @@ def _get_target_media_buys(
     principal_id: str,
     repo: MediaBuyRepository,
     reference_date: date,
+    testing_ctx: "AdCPTestContext | None" = None,
 ) -> list[tuple[str, MediaBuy]]:
-    # Resolve status_filter to a set of internal status strings.
-    # Internal statuses: ready, active, paused, completed, failed,
-    # plus terminal lifecycle states (rejected, canceled).
-    # AdCP MediaBuyStatus: pending_creatives, pending_start, active,
-    # paused, completed, rejected, canceled.
-    # Map: pending_start/pending_creatives -> ready (internal).
-    valid_internal_statuses = {"active", "ready", "paused", "completed", "failed", "rejected", "canceled"}
-
-    def _to_internal(status: MediaBuyStatus) -> str:
-        """Convert AdCP MediaBuyStatus enum to internal status string."""
-        if status in (MediaBuyStatus.pending_start, MediaBuyStatus.pending_creatives):
-            return "ready"
-        return status.value
+    # The internal delivery filter vocabulary is exactly the canonical status
+    # set (pending_creatives, pending_start, active, paused, completed,
+    # rejected, canceled, plus delivery-only "failed").
+    valid_internal_statuses = set(CANONICAL_STATUSES)
 
     # When specific IDs are provided without an explicit status_filter,
     # return all matching buys regardless of status (fetch-by-ID semantics).
@@ -855,7 +902,7 @@ def _get_target_media_buys(
     if has_explicit_ids and not req.status_filter:
         filter_statuses = list(valid_internal_statuses)
     else:
-        filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
+        filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses)
 
     # Fetch media buys by IDs or all for principal
     if req.media_buy_ids:
@@ -863,12 +910,17 @@ def _get_target_media_buys(
     else:
         fetched_buys = repo.get_by_principal(principal_id)
 
-    # Filter on the persisted status (authoritative), not date-derivation.
-    return [
-        (buy.media_buy_id, buy)
-        for buy in fetched_buys
-        if _internal_status_for_buy(buy, reference_date) in filter_statuses
-    ]
+    # Filter on the persisted status (authoritative), date-refined against the
+    # SAME clock the reported status uses (_simulation_clock) so a time-simulation
+    # query cannot filter out a buy the display path would report as matching.
+    ctx = testing_ctx or AdCPTestContext()
+    default_dt = utc_flight_start(reference_date)
+
+    def _matches(buy: MediaBuy) -> bool:
+        clock, simulate = _simulation_clock(buy, ctx, default_dt)
+        return resolve_canonical_status(buy, clock.date(), simulate=simulate) in filter_statuses
+
+    return [(buy.media_buy_id, buy) for buy in fetched_buys if _matches(buy)]
 
 
 def _resolve_attribution_window(

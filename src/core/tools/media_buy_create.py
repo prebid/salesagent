@@ -3958,6 +3958,10 @@ async def _create_media_buy_impl(
                                             f"  ✗ Failed to associate creative {result['creative_id']}: {result.get('error', 'Unknown error')}"
                                         )
                             except Exception as e:
+                                # FIXME(#1566): silent per-item failure — association failure
+                                # is logged only; the response carries no signal that creatives
+                                # were not attached. Allowlisted in
+                                # test_architecture_no_silent_loop_failures.py.
                                 logger.error(
                                     f"Failed to associate creatives with line item {platform_line_item_id}: {e}"
                                 )

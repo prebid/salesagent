@@ -1009,18 +1009,20 @@ class TestUpdateMediaBuyMissingPackageId:
             UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}])
 
 
-class TestGetMediaBuysStatusIsPersistedAuthoritative:
-    """get_media_buys status is persisted-authoritative, in agreement with update (#1417 / 8plg).
+class TestGetMediaBuysStatusIsDateRefined:
+    """get_media_buys date-refines the generic serving state against the flight window (AdCP 3.1 GA).
 
-    Core invariant: the read path never recomputes status from the flight window
-    ("persist status, never recompute from dates"). A past-end 'active'-persisted
-    buy reports 'active' — the active->completed transition is owned by the
-    media_buy_status_scheduler on the persisted column, and the update-response
-    reads that same column via normalize_persisted_media_buy_status, so the two
-    paths agree instead of diverging (update='active' vs list='completed').
+    Core invariant (GA protocol lifecycle, docs/media-buy/media-buys/lifecycle.mdx):
+    the serving-state transitions are flight-date-driven — `pending_start` before the
+    flight starts, `active` within the window, `completed` after it ends. A past-end
+    'active'-persisted buy reports 'completed' at read time; only terminal/explicit
+    states (paused/rejected/canceled) are returned verbatim. Shared with
+    get_media_buy_delivery via resolve_canonical_status (#1545 supersedes the earlier
+    #1417 persisted-authoritative read; the GA state machine defines active->completed
+    at flight end).
     """
 
-    def test_past_end_active_buy_reports_active_not_completed(self, integration_db):
+    def test_past_end_active_buy_reports_completed(self, integration_db):
         from datetime import date
 
         from src.core.schemas import GetMediaBuysRequest
@@ -1049,7 +1051,7 @@ class TestGetMediaBuysStatusIsPersistedAuthoritative:
             response = _get_media_buys_impl(get_req, identity=env.identity)
 
         assert len(response.media_buys) == 1, f"Expected the buy; errors: {response.errors}"
-        assert response.media_buys[0].status == MediaBuyStatus.active, (
-            "past-end 'active'-persisted buy must report persisted 'active' (agreeing with the "
-            "update path), NOT date-derived 'completed'"
+        assert response.media_buys[0].status == MediaBuyStatus.completed, (
+            "past-end 'active'-persisted buy must date-refine to 'completed' per the GA state "
+            "machine (active->completed at flight end), NOT report persisted 'active'"
         )

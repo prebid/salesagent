@@ -3,7 +3,7 @@
 Covers:
 - Status computation from date fields (pending_activation, active, completed)
 - Status filtering (default: active only; explicit filters; multiple statuses)
-- Filtering by media_buy_ids
+- Filtering by media_buy_ids and buyer_refs
 - Creative approval mapping (approved, rejected, pending_review)
 - include_snapshot=True/False path
 - Auth / missing principal handling
@@ -81,6 +81,7 @@ def make_media_buy(
     buy.media_buy_id = media_buy_id
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
+    buy.buyer_ref = None
     buy.start_date = start_date
     buy.end_date = end_date
     buy.start_time = start_time
@@ -117,33 +118,27 @@ def make_package(
 
 
 class TestComputeStatus:
-    """_compute_status is PERSISTED-STATUS-AUTHORITATIVE (#1417).
-
-    Per the AdCP lifecycle requirement "persist status, never recompute from
-    dates", the read path never re-derives status from the flight window — the
-    media_buy_status_scheduler owns the pending_start -> active -> completed
-    transitions on the persisted column, so get_media_buys agrees with the
-    update-response status (which reads the same column). Only the is_paused flag
-    (command-driven, not a date) refines a generic 'active' serving state.
-    """
-
-    def test_active_persisted_reports_active_regardless_of_flight_window(self):
-        """An 'active'-persisted buy reports active even PAST its end date — the
-        date-driven active->completed transition is owned by the scheduler, not
-        recomputed here. This is what keeps update and get_media_buys in agreement."""
-        past = make_media_buy(status="active", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
-        future = make_media_buy(status="active", start_date=date(2099, 1, 1), end_date=date(2099, 12, 31))
-        assert _compute_status(past) == MediaBuyStatus.active
-        assert _compute_status(future) == MediaBuyStatus.active
+    def test_pending_start_when_before_start(self):
+        buy = make_media_buy(start_date=date(2099, 1, 1), end_date=date(2099, 12, 31))
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
 
     def test_active_when_in_flight(self):
-        buy = make_media_buy(status="active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
-        assert _compute_status(buy) == MediaBuyStatus.active
+        buy = make_media_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.active
 
-    def test_approved_persisted_reports_active(self):
-        """The generic 'approved' serving state maps to active (persisted lookup)."""
-        buy = make_media_buy(status="approved", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
-        assert _compute_status(buy) == MediaBuyStatus.active
+    def test_completed_when_past_end(self):
+        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.completed
+
+    def test_prefers_start_time_over_start_date(self):
+        """start_time (if set) takes precedence over start_date."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            start_time=datetime(2099, 1, 1, tzinfo=UTC),
+            end_time=datetime(2099, 12, 31, tzinfo=UTC),
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
 
     @pytest.mark.parametrize(
         ("persisted", "expected"),
@@ -155,24 +150,68 @@ class TestComputeStatus:
         ],
     )
     def test_persisted_terminal_status_authoritative_over_flight_window(self, persisted, expected):
-        """A buy persisted as a terminal/explicit lifecycle status is reported with
-        that status even when its flight window covers today — the persisted column
-        is the source of truth, never re-derived from flight dates (#1417)."""
-        buy = make_media_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31), status=persisted)
-        assert _compute_status(buy) == expected
+        """Regression (salesagent-36d): a buy persisted as a terminal/explicit
+        lifecycle status must be reported with that status even when its flight
+        window covers today. The persisted MediaBuy.status column is the source
+        of truth — terminal states cannot be re-derived from flight dates.
+        """
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status=persisted,
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == expected
 
-    def test_paused_flag_overrides_active(self):
-        """is_paused True reports paused for a generic 'active' serving state — a
-        command-driven flag, not a date (#1417)."""
-        buy = make_media_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31), status="active", is_paused=True)
-        assert _compute_status(buy) == MediaBuyStatus.paused
+    def test_paused_flag_overrides_active_window(self):
+        """Regression (salesagent-36d): is_paused True reports paused even when
+        the flight window covers today, via the shared resolve_canonical_status."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="active",
+            is_paused=True,
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.paused
+
+    def test_approved_buy_in_flight_is_active(self):
+        """A buy persisted as the generic 'approved' serving state with a flight
+        window covering today is date-refined to active."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="approved",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.active
+
+    def test_active_buy_before_flight_is_pending_start(self):
+        """The generic serving state is date-refined: an 'active' buy whose
+        flight has not started yet reports pending_start."""
+        buy = make_media_buy(
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 12, 31),
+            status="active",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_start
+
+    def test_active_buy_past_flight_is_completed(self):
+        """The generic serving state is date-refined: an 'active' buy past its
+        end date reports completed."""
+        buy = make_media_buy(
+            start_date=date(2020, 1, 1),
+            end_date=date(2020, 12, 31),
+            status="active",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.completed
 
     def test_pre_serving_persisted_status_maps_to_pending(self):
-        """Transitional pre-serving states map to a pending status (persisted lookup)."""
-        creatives = make_media_buy(status="pending_creatives", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
-        scheduled = make_media_buy(status="scheduled", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
-        assert _compute_status(creatives) == MediaBuyStatus.pending_creatives
-        assert _compute_status(scheduled) == MediaBuyStatus.pending_start
+        """Transitional pre-serving states (draft/pending_approval/...) report
+        a pending status, not a date-derived one."""
+        buy = make_media_buy(
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+            status="pending_creatives",
+        )
+        assert _compute_status(buy, date(2025, 6, 15)) == MediaBuyStatus.pending_creatives
 
 
 class TestResolveStatusFilter:
@@ -197,6 +236,22 @@ class TestResolveStatusFilter:
         result = _resolve_status_filter(StatusFilter([MediaBuyStatus.pending_start]))
         assert result == {MediaBuyStatus.pending_start}
 
+    def test_invalid_value_raises_validation_error(self):
+        """An unknown status_filter value is a bad request, not a 500.
+
+        On the wire the filter arrives as bare strings; an unmapped value must
+        surface as VALIDATION_ERROR (recovery correctable), never let the
+        underlying ValueError escape as an INTERNAL_ERROR/500.
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _resolve_status_filter(["active", "expired"])  # "expired" is not a MediaBuyStatus
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        # A single bare invalid string is rejected the same way.
+        with pytest.raises(AdCPValidationError):
+            _resolve_status_filter("not_a_status")
+
 
 class TestFetchTargetMediaBuys:
     """status_filter applies consistently regardless of which filter key is used."""
@@ -211,10 +266,8 @@ class TestFetchTargetMediaBuys:
         return _fetch_target_media_buys(req, "principal_1", mock_uow, self.TODAY)
 
     def test_media_buy_ids_with_status_filter_excludes_non_matching(self):
-        # Status is persisted-authoritative: filtering keys off the persisted column
-        # (the scheduler flips active->completed), not recomputed flight dates.
-        active = make_media_buy("buy_active", status="active")
-        completed = make_media_buy("buy_done", status="completed")
+        active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        completed = make_media_buy("buy_done", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
         req = GetMediaBuysRequest(
             media_buy_ids=["buy_active", "buy_done"],
             status_filter=MediaBuyStatus.active,
@@ -223,8 +276,8 @@ class TestFetchTargetMediaBuys:
         assert [b.media_buy_id for b in result] == ["buy_active"]
 
     def test_no_filter_defaults_to_active_only(self):
-        active = make_media_buy("buy_active", status="active")
-        completed = make_media_buy("buy_done", status="completed")
+        active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        completed = make_media_buy("buy_done", start_date=date(2020, 1, 1), end_date=date(2020, 12, 31))
         req = GetMediaBuysRequest()
         result = self._run(req, [active, completed])
         assert [b.media_buy_id for b in result] == ["buy_active"]
