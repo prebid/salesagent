@@ -171,6 +171,8 @@ __all__ = [
     "to_account_reference",
     "to_brand_reference",
     "to_context_object",
+    "to_property_list_reference",
+    "to_push_notification_config",
     "to_reporting_webhook",
     "coerce_creative_filters",
     "create_get_products_request",
