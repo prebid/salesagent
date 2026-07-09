@@ -50,6 +50,9 @@ from adcp.types.aliases import (
     UpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
 )
 from adcp.types.aliases import (
+    UpdateMediaBuySubmittedResponse as AdCPUpdateMediaBuySubmitted,
+)
+from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
@@ -537,8 +540,30 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
             return "Media buy update failed."
 
 
+class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc]
+    """Async/pending update_media_buy response extending adcp v3.1.1 type.
+
+    Spec 3.1.1 ``update-media-buy-response.json`` models a not-yet-applied update
+    (e.g. one pending human approval) as the ``UpdateMediaBuySubmitted`` variant of
+    the response ``oneOf``: protocol-envelope ``status="submitted"`` (const) plus a
+    required ``task_id`` the buyer polls for the outcome. This is distinct from
+    ``UpdateMediaBuySuccess``, whose adcp-6.6 envelope ``status`` defaults to
+    ``"completed"`` and would falsely assert the update was applied.
+
+    The update transport wrappers serialize the returned model straight onto the
+    wire (``ToolResult(structured_content=response)`` / A2A / REST), so returning
+    this type from the manual-approval branch yields the spec-correct submitted
+    envelope on every transport. ``status`` defaults to ``"submitted"`` on the
+    library base; ``task_id`` is required.
+    """
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for the protocol envelope."""
+        return f"Media buy update submitted for approval (task {self.task_id})."
+
+
 # Union type for update_media_buy operation
-UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError
+UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError | UpdateMediaBuySubmitted
 
 
 class TaskStatus(StrEnum):

@@ -464,6 +464,7 @@ class AdCPRequestHandler(RequestHandler):
                 SyncAccountsResponse,
                 SyncCreativesResponse,
                 UpdateMediaBuyError,
+                UpdateMediaBuySubmitted,
                 UpdateMediaBuySuccess,
             )
 
@@ -476,8 +477,13 @@ class AdCPRequestHandler(RequestHandler):
                 else:
                     return CreateMediaBuyError(**data)
             elif skill_name == "update_media_buy":
-                # Success responses have media_buy_id, error responses have errors
-                if "media_buy_id" in data:
+                # Submitted (pending-approval) responses carry status="submitted" + task_id
+                # and no applied media_buy_id; success responses have media_buy_id; error
+                # responses have errors. Check submitted first — a submitted envelope must not
+                # be mis-reconstructed as UpdateMediaBuySuccess (whose status is Literal completed).
+                if data.get("status") == "submitted":
+                    return UpdateMediaBuySubmitted(**data)
+                elif "media_buy_id" in data:
                     return UpdateMediaBuySuccess(**data)
                 else:
                     return UpdateMediaBuyError(**data)
