@@ -145,19 +145,18 @@ Feature: BR-UC-019 Query Media Buys
       | active_refined_completed  | 2026-04-01 | 2026-03-01 | 2026-03-31 | completed       |
       | single_day_flight         | 2026-03-15 | 2026-03-15 | 2026-03-15 | active          |
 
-  @T-UC-019-partition-status-invalid @partition @status @error
-  Scenario Outline: Status computation with missing dates - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with <date_condition>
-    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" status computation should handle the missing date gracefully
-    And the error should include a "suggestion" field
-    And the suggestion should contain "start_date" or "end_date" or "flight dates"
-    # BR-RULE-150: Missing dates prevent status computation
-
-    Examples: Invalid partitions
-      | partition          | date_condition                          |
-      | missing_start_date | no start_time and no start_date         |
-      | missing_end_date   | no end_time and no end_date             |
+  # RETIRED (T-UC-019-partition-status-invalid): "Status computation with missing dates".
+  # Verified against AdCP 3.1 GA (spec pin v3.1-04f59d2d5): the core media-buy object
+  # (dist/schemas/2.5.0/core/media-buy.json) has NO date fields — flight dates are
+  # per-package — and `status` is REQUIRED, always emitted from the persisted status
+  # column (never computed FROM dates; dates only REFINE a serving window). A media
+  # buy with "missing dates" is therefore not a spec-level state. It is also
+  # schema-impossible: MediaBuy.start_date/end_date are NOT NULL, so a dateless buy
+  # cannot be persisted and get_media_buys can never receive one. This partition was a
+  # phantom (its error was synthesized test-side; production was never invoked), so it
+  # is retired rather than wired. The latent crash it implied (date compare vs a NULL
+  # edge) is fixed defensively in resolve_canonical_status (returns the persisted
+  # status, no TypeError). Reconcile upstream in adcp-req so --merge does not re-add it.
 
   @T-UC-019-boundary-status @boundary @status
   Scenario Outline: Status computation boundary - <boundary_point>
