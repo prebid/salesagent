@@ -18,7 +18,8 @@ The first two are pinned at v3.1-04f59d2d5 (adcp 3.1.0-beta.3).
 
 - ``T-UC-018-inv-034-1-holds`` / ``T-UC-018-inv-034-1-violated`` (#1503):
   BR-RULE-034 cross-principal isolation — an AdCP normative MUST (v3.1-04f59d2d5:
-  principals-and-security.mdx §Data Isolation), ungraded by any conformance storyboard,
+  accounts-and-security.mdx §Data Isolation; building/by-layer/L1/security.mdx §Agent
+  and Account Isolation), ungraded by any conformance storyboard,
   so these two scenarios are its only executable guard. Two principals in one tenant
   each own creatives; a buyer authenticated as one sees exactly its own library (holds)
   and never the other's (counter). Enforced in production by
@@ -82,6 +83,40 @@ _SYNCED_FORMATS = ("display_300x250", "video_640x480", "audio_30s")
 scenarios("features/BR-UC-018-list-creatives.feature")
 
 
+def _seed_creative(
+    tenant: Any,
+    principal: Any,
+    fmt: str | None = None,
+    *,
+    concept_id: str | None = None,
+    concept_name: str | None = None,
+) -> Any:
+    """Seed one approved creative owned by *principal*, optionally concept-tagged.
+
+    The single place this module assembles a creative: the ``approved`` trait
+    supplies ``status="approved"`` and CreativeFactory's realistic default ``assets``
+    (which already satisfy the repository's ``data["assets"] IS NOT NULL`` guard — an
+    empty ``{"assets": {}}`` is unnecessary). When a concept is given, its
+    ``concept_id`` / ``concept_name`` are layered onto those realistic assets in this
+    one merge site. Replaces the per-seeder ``status=`` + ``data={"assets": {}}``
+    hand-rolls with a single factory idiom.
+    """
+    from tests.factories import CreativeFactory
+    from tests.factories.creative_asset import build_assets, image_spec
+
+    kwargs: dict[str, Any] = {"tenant": tenant, "principal": principal, "approved": True}
+    if fmt is not None:
+        kwargs["format"] = fmt
+    if concept_id or concept_name:
+        data: dict[str, Any] = {"assets": build_assets(image_spec("banner"))}
+        if concept_id:
+            data["concept_id"] = concept_id
+        if concept_name:
+            data["concept_name"] = concept_name
+        kwargs["data"] = data
+    return CreativeFactory(**kwargs)
+
+
 # ── Given ────────────────────────────────────────────────────────────
 
 
@@ -94,12 +129,11 @@ def given_buyer_authenticated_as_principal(ctx: dict, principal_id: str) -> None
     and records the principal so the seed steps own their creatives under the same id
     the query authenticates as (list_creatives is principal-scoped — a mismatch returns
     an empty library).
+
+    The helper owns the switch, the canonical ``ctx["principal_id"]``, and the
+    identity post-condition.
     """
-    env = authenticate_env_as(ctx, principal_id)
-    ctx["principal_id"] = principal_id
-    # Post-condition: verify the identity mutation took effect.
-    actual = env.identity.principal_id
-    assert actual == principal_id, f"env.identity.principal_id is {actual!r} after setting {principal_id!r}"
+    authenticate_env_as(ctx, principal_id)
 
 
 @given("the buyer recently synced three creatives in three different formats via sync_creatives")
@@ -109,25 +143,12 @@ def given_recently_synced_three_creatives(ctx: dict) -> None:
     Seeded via CreativeFactory rather than a live sync_creatives call — see the
     module docstring. Records the synced creative_ids for the Then steps.
     """
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories import PrincipalFactory, TenantFactory
 
     env = ctx["env"]
     tenant = TenantFactory(tenant_id=env._tenant_id)
     principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
-    synced_ids: list[str] = []
-    for fmt in _SYNCED_FORMATS:
-        creative = CreativeFactory(
-            tenant=tenant,
-            principal=principal,
-            format=fmt,
-            status="approved",
-            # An empty-but-present assets object: the repository filters out rows
-            # whose data["assets"] IS NULL (legacy guard), so the key must exist;
-            # keeping it empty stays schema-valid (no asset-union coupling — the
-            # storyboard grades the listing contract, not asset shape).
-            data={"assets": {}},
-        )
-        synced_ids.append(creative.creative_id)
+    synced_ids = [_seed_creative(tenant, principal, fmt).creative_id for fmt in _SYNCED_FORMATS]
     ctx["tenant"] = tenant
     ctx["principal"] = principal
     ctx["synced_creative_ids"] = synced_ids
@@ -239,44 +260,32 @@ def given_creatives_grouped_under_concept(ctx: dict, concept_id: str) -> None:
     all. A broken filter that returned the whole library would surface a decoy
     whose concept_id != the requested one (or is absent), failing the Then steps.
 
-    Seeded via CreativeFactory rather than a live sync (CreativeListEnv has no sync
-    patches; the obligation under test is the listing/filter contract). The
-    empty-but-present ``assets`` is mandatory — the repository drops rows whose
-    ``data["assets"]`` IS NULL (legacy guard).
+    Seeded via ``_seed_creative`` rather than a live sync (CreativeListEnv has no
+    sync patches; the obligation under test is the listing/filter contract). The
+    helper supplies the factory's realistic default ``assets`` (the repository drops
+    rows whose ``data["assets"]`` IS NULL) and layers the concept fields on top.
     """
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories import PrincipalFactory, TenantFactory
 
     env = ctx["env"]
     tenant = TenantFactory(tenant_id=env._tenant_id)
     principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
 
-    in_concept_ids: list[str] = []
-    for fmt in _CONCEPT_FORMATS:
-        creative = CreativeFactory(
-            tenant=tenant,
-            principal=principal,
-            format=fmt,
-            status="approved",
-            data={"assets": {}, "concept_id": concept_id, "concept_name": _CONCEPT_NAME},
-        )
-        in_concept_ids.append(creative.creative_id)
+    in_concept_ids = [
+        _seed_creative(tenant, principal, fmt, concept_id=concept_id, concept_name=_CONCEPT_NAME).creative_id
+        for fmt in _CONCEPT_FORMATS
+    ]
 
     # Decoy under a different concept.
-    CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        format=_CONCEPT_FORMATS[0],
-        status="approved",
-        data={"assets": {}, "concept_id": _DECOY_CONCEPT_ID, "concept_name": "Winter 2025 Campaign"},
+    _seed_creative(
+        tenant,
+        principal,
+        _CONCEPT_FORMATS[0],
+        concept_id=_DECOY_CONCEPT_ID,
+        concept_name="Winter 2025 Campaign",
     )
     # Decoy with no concept at all.
-    CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        format=_CONCEPT_FORMATS[0],
-        status="approved",
-        data={"assets": {}},
-    )
+    _seed_creative(tenant, principal, _CONCEPT_FORMATS[0])
 
     ctx["tenant"] = tenant
     ctx["principal"] = principal
@@ -367,12 +376,18 @@ def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
 # creatives, never another principal's, even within the same tenant.
 #
 # Spec ground (Spec-Grounding Gate): this is an AdCP normative MUST, pinned at
-# v3.1-04f59d2d5 — principals-and-security.mdx §Data Isolation ("the server MUST verify
-# that the principal_id from the request matches ... one principal can never view or
-# modify another principal's data"; reference/security.mdx:714,721). It is
-# ungraded-by-storyboard: no conformance storyboard grades multi-principal isolation
-# (universal/security.yaml grades authentication, not authenticated isolation), so these
-# two scenarios are the ONLY executable guard of that MUST.
+# v3.1-04f59d2d5 — docs/media-buy/advanced-topics/accounts-and-security.mdx §Data
+# Isolation (L33-37): a created object is "permanently associated with the account",
+# and for any later read "the server MUST verify that the agent has access to that
+# account", else it "MUST return a permission denied error". The deeper normative
+# reference is docs/building/by-layer/L1/security.mdx §Agent and Account Isolation
+# (L159), incl. §"Client-side isolation: cross-principal tool-call confusion" (L229).
+# (At the pin the superseded 2.5.3 principals-and-security.mdx was renamed to
+# accounts-and-security.mdx; the source docs/ paths resolve at the pin — the built
+# dist/docs/3.1.0-beta.3/ tree is only on later commits.) It is ungraded-by-storyboard:
+# no conformance storyboard grades multi-principal isolation (universal/security.yaml
+# grades authentication, not authenticated isolation), so these two scenarios are the
+# ONLY executable guard of that MUST.
 #
 # Enforcement site: CreativeRepository.get_by_principal's ``principal_id=principal_id``
 # filter (src/core/database/repositories/creative.py). Dropping that filter leaks
@@ -405,7 +420,7 @@ def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) ->
     Two ``@given`` phrasings map to this one body: ``parsers.parse`` requires a
     whole-string match, so the "in the same tenant" variant needs its own decorator.
     """
-    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories import PrincipalFactory, TenantFactory
 
     env = ctx["env"]
     tenant = ctx.get("tenant")
@@ -414,13 +429,7 @@ def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) ->
         ctx["tenant"] = tenant
     principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
     seeded: dict[str, list[str]] = ctx.setdefault(_ISOLATION_CREATIVES_KEY, {})
-    seeded[principal_id] = [
-        # ``approved`` trait -> status="approved"; CreativeFactory's default ``data``
-        # is a realistic {"assets": build_assets(...)}, which already satisfies the
-        # repository's data["assets"] IS NOT NULL guard.
-        CreativeFactory(tenant=tenant, principal=principal, approved=True).creative_id
-        for _ in range(count)
-    ]
+    seeded[principal_id] = [_seed_creative(tenant, principal).creative_id for _ in range(count)]
 
 
 @when(parsers.parse('the Buyer Agent authenticated as "{principal_id}" sends a list_creatives request'))
@@ -438,7 +447,6 @@ def when_authenticated_principal_lists_creatives(ctx: dict, principal_id: str) -
     from tests.bdd.steps.generic.when_request import _call_via
 
     authenticate_env_as(ctx, principal_id)
-    ctx["principal_id"] = principal_id
     _call_via(ctx, ctx.get("transport"))
 
 

@@ -44,21 +44,20 @@ def _inject_privilege_error(ctx: dict) -> None:
 
 @given(parsers.parse('the Buyer is authenticated as principal "{principal_id}"'))
 def given_buyer_authenticated_as(ctx: dict, principal_id: str) -> None:
-    """Override the authenticated principal to a specific principal_id.
+    """Authenticate as *principal_id* and mark the auth state.
 
-    Sets ctx['principal_override'] so the When step can build an identity
-    with a different principal_id. Also marks the auth state.
+    Delegates the principal switch, the canonical ``ctx["principal_id"]``, and the
+    identity post-condition to the shared ``authenticate_env_as`` helper; adds only
+    the use-case-specific ``has_auth`` flag.
+
+    NOTE: this module is currently dormant (see ``steps/generic/_auth.py``) — it is
+    not registered in ``tests/bdd/conftest.py`` ``pytest_plugins`` and UC-003 is not
+    wired into the BDD harness, so these steps do not execute (UC-003 update
+    scenarios auto-xfail). Kept on the shared helper so it is correct when UC-003 is
+    activated.
     """
-    ctx["principal_override"] = principal_id
+    authenticate_env_as(ctx, principal_id)
     ctx["has_auth"] = True
-    # Update the env identity to use this principal_id (shared helper).
-    env = authenticate_env_as(ctx, principal_id)
-    # Post-condition: verify the identity mutation took effect
-    actual = env.identity.principal_id
-    assert actual == principal_id, (
-        f"env.identity.principal_id is {actual!r} after setting "
-        f"env._principal_id to {principal_id!r} — cache not rebuilt"
-    )
 
 
 @given(parsers.parse('the principal "{principal_id}" does not exist in the database'))

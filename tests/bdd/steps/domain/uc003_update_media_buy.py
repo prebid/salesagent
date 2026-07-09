@@ -2050,13 +2050,14 @@ def given_media_buy_owned_by_principal(ctx: dict, owner_id: str) -> None:
 
 @given(parsers.parse("the authenticated principal is {principal}"))
 def given_authenticated_principal(ctx: dict, principal: str) -> None:
-    """Set the authenticated principal for the request.
+    """Set the authenticated principal for the request via the shared helper.
 
-    Updates the env's identity to use the specified principal_id.
+    ``authenticate_env_as`` owns the switch, the canonical ``ctx["principal_id"]``,
+    and the identity post-condition. Currently dormant — see the note on
+    ``given_buyer_authenticated_as`` / ``steps/generic/_auth.py``; retained on the
+    shared helper so the DRY convention holds when UC-003 is activated.
     """
-    principal_id = principal.strip()
-    authenticate_env_as(ctx, principal_id)
-    ctx["principal_override"] = principal_id
+    authenticate_env_as(ctx, principal.strip())
 
 
 # ═══════════════════════════════════════════════════════════════════════
