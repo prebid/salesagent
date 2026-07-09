@@ -335,6 +335,25 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
 
 
+@then(parsers.parse('the wire error envelope should carry code "{code}" with recovery "{recovery}"'))
+def then_wire_error_envelope_shape(ctx: dict, code: str, recovery: str) -> None:
+    """Assert the two-layer AdCP envelope shape on the captured wire envelope.
+
+    Wire-envelope variant of the error-code/recovery steps above (tests/CLAUDE.md
+    § Error Verification Policy): asserts on ``ctx["wire_error_envelope"]``, the
+    envelope captured off the wire by the dispatching When step, rather than the
+    lossy reconstructed exception in ``ctx["error"]``.
+    """
+    from tests.helpers import assert_envelope_shape
+
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, (
+        f"No wire error envelope captured in ctx — the operation succeeded or the "
+        f"When step does not populate ctx['wire_error_envelope']. response={ctx.get('response')!r}"
+    )
+    assert_envelope_shape(envelope, code, recovery=recovery)
+
+
 @then('the error should include a "suggestion" field')
 @then('the error should include "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:

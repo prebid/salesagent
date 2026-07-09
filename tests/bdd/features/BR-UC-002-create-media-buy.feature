@@ -218,6 +218,7 @@ Feature: BR-UC-002 Create Media Buy
     When the buyer sends a natural-language "create a media buy" request
     Then the error code should be "UNSUPPORTED_FEATURE"
     And the error recovery should be "correctable"
+    And the wire error envelope should carry code "UNSUPPORTED_FEATURE" with recovery "correctable"
     # grounded: AdCP 3.1.0-beta.3 building/operating/transport-errors.mdx "Layer Separation"
     # storyboard: ungraded, pending upstream obligation (#1574)
     # drives the top-level on_message_send except -> failed Task envelope, not JSON-RPC

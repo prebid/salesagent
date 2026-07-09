@@ -19,11 +19,12 @@ from a2a.server.routes.common import ServerCallContext
 from a2a.types import Message, SendMessageRequest, Task, TaskState
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from tests.a2a_helpers import make_nl_send_message_request
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, create_a2a_text_message, extract_data_from_artifact
+from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -362,8 +363,7 @@ class TestA2AErrorPropagation:
 
         set_current_tenant(test_tenant)
 
-        message = create_a2a_text_message("create a media buy")
-        params = SendMessageRequest(message=message)
+        params = make_nl_send_message_request("create a media buy")
 
         result = await handler.on_message_send(params, ServerCallContext())
 

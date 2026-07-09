@@ -142,7 +142,7 @@ async def test_nl_media_buy_returns_failed_task_with_envelope():
     assert task.status.state == TaskState.TASK_STATE_FAILED, f"Expected failed Task, got state {task.status.state!r}"
     envelope = extract_processing_error_envelope(task)
     # AdCPCapabilityNotSupportedError → UNSUPPORTED_FEATURE (correctable —
-    # documented intentional divergence, see AdCPCapabilityNotSupportedError).
+    # matches AdCP error-code.json enumMetadata).
     assert_envelope_shape(
         envelope,
         "UNSUPPORTED_FEATURE",

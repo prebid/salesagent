@@ -66,13 +66,8 @@ def make_mock_a2a_identity():
 
 def make_nl_send_message_request(text: str):
     """Build a minimal A2A SendMessageRequest carrying NL text (no skills)."""
-    import uuid
+    from a2a.types import SendMessageRequest
 
-    from a2a.types import Message, Part, Role, SendMessageRequest
+    from tests.utils.a2a_helpers import create_a2a_text_message
 
-    message = Message(
-        message_id=str(uuid.uuid4()),
-        role=Role.ROLE_USER,
-    )
-    message.parts.append(Part(text=text))
-    return SendMessageRequest(message=message)
+    return SendMessageRequest(message=create_a2a_text_message(text))
