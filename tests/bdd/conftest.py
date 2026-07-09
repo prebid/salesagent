@@ -2659,11 +2659,15 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
     # the A2A + MCP wire transports only — including a REST variant would 404.
-    if any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names):
+    no_rest = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
+    if no_rest:
         transports = [Transport.A2A, Transport.MCP]
         ids = ["a2a", "mcp"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true":
+    # e2e_rest is a REST transport (real HTTP to the REST route), so it must ALSO
+    # be excluded for no-REST UCs — dispatching e.g. UC-019 get_media_buys over
+    # e2e_rest 404s. Only append when the UC actually exposes a REST endpoint.
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest:
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 
