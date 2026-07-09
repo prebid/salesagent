@@ -730,12 +730,132 @@ class TestAssignmentProcessing:
                 f"Cross-principal creative reference must not fail the request "
                 f"(was a raw FK 500): {result.wire_error_envelope}"
             )
+            # Mutation-proofing (salesagent-9qpj): the skipped assignment must be
+            # VISIBLE on the wire as a synthesized failed entry — no-error+no-row
+            # alone survives deletion of the error recording.
+            entries = {e.get("creative_id"): e for e in (result.wire_response or {}).get("creatives", [])}
+            assert entries.get("c_owned_by_other", {}).get("action") == "failed", (
+                f"Skipped cross-principal assignment must surface as action='failed': {result.wire_response}"
+            )
 
         with get_db_session() as session:
             rows = session.scalars(
                 select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_owned_by_other")
             ).all()
             assert rows == [], f"No assignment may be created from a cross-principal reference, got {len(rows)}"
+
+    @pytest.mark.parametrize(
+        "orphan_creative_id, seed_other_principal",
+        [
+            ("c_never_synced", False),
+            ("c_owned_by_other", True),  # cross-principal reference: same uniform surface
+        ],
+    )
+    def test_orphan_assignment_error_surfaces_as_failed_result_on_wire(
+        self, integration_db, orphan_creative_id, seed_other_principal
+    ):
+        """creatives=[] + assignments referencing an unknown creative_id (lenient
+        mode) MUST surface the skipped assignment as a per-item result entry with
+        action='failed' — not return bare success the buyer can't distinguish
+        from a completed assignment.
+
+        Spec grounding (pinned 3.1, static/schemas/source/creative/
+        sync-creatives-response.json @ adcp 04f59d2d5): the success branch
+        FORBIDS a response-level errors array (mutually-exclusive oneOf), so
+        per-item failures ride creatives[] with action='failed' ("Items with
+        action='failed' indicate per-item validation/processing failures"),
+        errors[] "only present when action='failed'", assignment_errors keyed
+        by package id, and status "MUST be omitted when action is failed".
+        BR-RULE-033 INV-4 pins the principle: assignment errors are always
+        recorded in the response. salesagent-9qpj: the result merge only
+        decorated entries of creatives synced in the SAME request, so this
+        shape returned bare success.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            requester = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            if seed_other_principal:
+                owner = PrincipalFactory(tenant=tenant, principal_id="other_principal")
+                CreativeFactory(
+                    tenant=tenant,
+                    principal=owner,
+                    creative_id=orphan_creative_id,
+                    format="display_300x250",
+                    agent_url="https://creative.adcontextprotocol.org",
+                )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=requester)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[],
+                assignments={orphan_creative_id: [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            assert not result.is_error, (
+                f"Lenient orphan-assignment must stay on the success branch: {result.wire_error_envelope}"
+            )
+            wire = result.wire_response
+            assert wire is not None, "REST success must expose the wire body"
+            entries = {e.get("creative_id"): e for e in wire.get("creatives", [])}
+            assert orphan_creative_id in entries, (
+                f"Orphan assignment reference must produce a per-item action='failed' "
+                f"result entry — bare success hides the skipped assignment from the "
+                f"buyer (BR-RULE-033 INV-4). Wire: {wire}"
+            )
+            entry = entries[orphan_creative_id]
+            assert entry.get("action") == "failed", f"Expected action='failed', got: {entry}"
+            assignment_errors = entry.get("assignment_errors") or {}
+            assert assignment_errors.get(pkg_id), f"assignment_errors must name the skipped package {pkg_id}: {entry}"
+            assert entry.get("errors"), f"failed entry must carry errors[] per spec: {entry}"
+            assert "status" not in entry or entry.get("status") is None, (
+                f"status MUST be omitted when action='failed': {entry}"
+            )
+
+    def test_assign_only_existing_creative_surfaces_assigned_to_on_wire(self, integration_db):
+        """creatives=[] + assignments referencing an EXISTING library creative:
+        the successful assignment must surface as a synthesized 'unchanged'
+        entry with assigned_to — not vanish from the response (same merge hole
+        as the orphan-error shape, success-info variant). salesagent-9qpj.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_preexisting",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+            )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[],
+                assignments={"c_preexisting": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            assert not result.is_error
+            entries = {e.get("creative_id"): e for e in (result.wire_response or {}).get("creatives", [])}
+            entry = entries.get("c_preexisting")
+            assert entry is not None, (
+                f"Assign-only reference to an existing creative must produce a result "
+                f"entry carrying assigned_to: {result.wire_response}"
+            )
+            assert entry.get("action") == "unchanged", f"Sync didn't modify the creative: {entry}"
+            assert entry.get("assigned_to") == [pkg_id], f"assigned_to must name the package: {entry}"
 
     def test_none_assignments_produces_no_records(self, integration_db):
         """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01 — None assignments = no assignment records."""

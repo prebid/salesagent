@@ -5649,10 +5649,27 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
 
 @then("the sync operation should not fail")
 def then_sync_did_not_fail(ctx: dict) -> None:
-    """The cross-principal reference must be skipped — never a raw FK 500."""
+    """The cross-principal reference must be skipped — never a raw FK 500 —
+    and the skip must be VISIBLE: a synthesized per-item action='failed'
+    result naming the package in assignment_errors (salesagent-9qpj;
+    the spec's success branch forbids response-level errors, so the outcome
+    rides creatives[]). A bare no-error check survives deletion of the
+    error recording — this assertion does not.
+    """
     error = ctx.get("error")
     assert error is None, f"sync_creatives failed on a cross-principal assignment reference: {error!r}"
-    assert ctx.get("response") is not None, "Expected a sync_creatives response"
+    response = ctx.get("response")
+    assert response is not None, "Expected a sync_creatives response"
+    entries = {r.creative_id: r for r in (getattr(response, "creatives", None) or [])}
+    entry = entries.get("creative-xp")
+    assert entry is not None, (
+        f"Skipped cross-principal assignment must surface as a per-item result entry, got creatives={sorted(entries)}"
+    )
+    assert entry.action == "failed", f"Expected action='failed' for the skipped reference, got {entry.action!r}"
+    pkg_id = ctx["xp_package_id"]
+    assert (entry.assignment_errors or {}).get(pkg_id), (
+        f"assignment_errors must name the skipped package {pkg_id}: {entry.assignment_errors!r}"
+    )
 
 
 @then('no assignment should exist for creative "creative-xp" in the tenant')

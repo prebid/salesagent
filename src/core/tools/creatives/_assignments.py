@@ -6,6 +6,7 @@ from typing import Any
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPCreativeRejectedError, AdCPPackageNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
+from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
 
@@ -296,5 +297,44 @@ def _process_assignments(
             errors = assignment_errors_by_creative[sync_result.creative_id]
             if errors:
                 sync_result.assignment_errors = errors
+
+    # Referenced-but-unsynced creatives (assignment-only references to existing
+    # library creatives, or ids that don't exist at all) have NO entry in
+    # `results` — synthesize one so their recorded outcome reaches the buyer.
+    # The spec's success branch FORBIDS a response-level errors array; per-item
+    # failures ride creatives[] with action='failed' (errors[] required, status
+    # omitted), and BR-RULE-033 INV-4 pins that assignment errors are always
+    # recorded in the response. Without this, creatives=[] + assignments
+    # returned bare success and the buyer never learned the assignment was
+    # skipped (salesagent-9qpj).
+    present_ids = {r.creative_id for r in results}
+    for creative_id in sorted(assignments_by_creative.keys() | assignment_errors_by_creative.keys()):
+        if creative_id in present_ids:
+            continue
+        assigned = assignments_by_creative.get(creative_id) or []
+        errors = assignment_errors_by_creative.get(creative_id) or {}
+        if not assigned and not errors:
+            continue
+        if assigned:
+            # Existing library creative referenced only via assignments: the
+            # sync didn't modify it — 'unchanged', with its assignment outcome
+            # (and any partial failures) attached.
+            entry = SyncCreativeResult(
+                creative_id=creative_id,
+                action="unchanged",
+                status=None,
+                platform_id=None,
+                review_feedback=None,
+                assigned_to=assigned,
+                assignment_errors=errors or None,
+            )
+        else:
+            # Nothing assigned: every referenced package failed (creative not
+            # found, package not found, ...). Buyer-correctable — same
+            # VALIDATION_ERROR the strict-mode raise carries.
+            message = "; ".join(sorted(set(errors.values())))
+            entry = _failed_sync_result(creative_id, message, recovery="correctable", code="VALIDATION_ERROR")
+            entry.assignment_errors = errors
+        results.append(entry)
 
     return assignment_list
