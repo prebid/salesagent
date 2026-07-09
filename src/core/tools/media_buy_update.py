@@ -355,7 +355,17 @@ def _update_media_buy_impl(
                 _dry_run_mb = uow.media_buys.get_by_id(req.media_buy_id)
                 _dry_run_status = _dry_run_mb.status if _dry_run_mb else ""
 
-                # Build simulated response
+                # Build simulated response.
+                # The adcp-6.6 UpdateMediaBuySuccess default status="completed" is
+                # KEPT for dry_run and is spec-correct (salesagent-6tc3): spec 3.1.1
+                # update-media-buy-response.json has exactly three variants
+                # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
+                # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the
+                # spec is SILENT on a dry_run response status -> production authoritative.
+                # Unlike pending-approval (salesagent-5dxc -> Submitted) and reject
+                # (salesagent-88e2 -> Error), a dry_run buyer asked to SIMULATE the would-be
+                # outcome, which IS completion -> "completed" is a truthful preview, not a
+                # lie. Guarded by tests/unit/test_media_buy_dry_run_status.py.
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
                     affected_packages=simulated_affected,

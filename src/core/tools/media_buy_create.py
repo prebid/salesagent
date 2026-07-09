@@ -3500,6 +3500,15 @@ async def _create_media_buy_impl(
                 )
                 for pkg in packages
             ]
+            # The adcp-6.6 CreateMediaBuySuccess default status="completed" is KEPT for
+            # dry_run and is spec-correct (salesagent-6tc3): spec 3.1.1
+            # create-media-buy-response.json has exactly three variants
+            # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
+            # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the spec
+            # is SILENT on a dry_run response status -> production authoritative. A dry_run
+            # buyer asked to SIMULATE the would-be outcome, which IS completion, so
+            # "completed" is a truthful preview (unlike salesagent-5dxc/-88e2, where the op
+            # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
             simulated_response = CreateMediaBuySuccess.sync_success(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
