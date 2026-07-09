@@ -25,7 +25,7 @@ def _process_assignments(
     results: list[SyncCreativeResult],
     tenant: dict[str, Any],
     validation_mode: str,
-    principal_id: str | None = None,
+    principal_id: str,
 ) -> list:
     """Process creative-to-package assignments and update results in-place.
 
@@ -230,6 +230,7 @@ def _process_assignments(
                         media_buy_id=media_buy_id,
                         package_id=actual_package_id,
                         creative_id=creative_id,
+                        principal_id=principal_id,
                     )
 
                     if existing_assignment:

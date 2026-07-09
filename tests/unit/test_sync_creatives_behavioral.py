@@ -123,6 +123,7 @@ class TestMediaBuyStatusTransitions:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
     def test_draft_with_approved_at_transitions_to_pending_creatives(self, tenant, _make_db_package):
@@ -215,6 +216,7 @@ class TestMediaBuyStatusTransitions:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
         # Status should be pending_creatives (transitioned once, not twice)
@@ -256,6 +258,7 @@ class TestMediaBuyStatusTransitions:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
         assert db_media_buy.status == "pending_creatives"
@@ -286,6 +289,7 @@ class TestStrictAssignmentAbort:
                     results=results,
                     tenant=tenant,
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
 
@@ -313,6 +317,7 @@ class TestLenientAssignmentSkip:
                 results=results,
                 tenant=tenant,
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
         # No ToolError raised, no assignments created
@@ -357,6 +362,7 @@ class TestLenientAssignmentSkip:
                 results=results,
                 tenant=tenant,
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
         assert len(assignment_list) == 0
@@ -403,6 +409,7 @@ class TestLenientAssignmentSkip:
                 results=results,
                 tenant=tenant,
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
         # Valid assignment created
@@ -449,6 +456,7 @@ class TestStrictModeAdCPErrorPropagation:
                     results=results,
                     tenant=tenant,
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
         # After AdCPError, the post-processing loop never ran,
@@ -612,6 +620,7 @@ class TestAssignmentsListFormNormalization:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
     def test_list_form_creates_assignment(self, tenant, _make_db_package):
@@ -670,6 +679,7 @@ class TestAssignmentsListFormNormalization:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
         assert len(assignment_list) == 2

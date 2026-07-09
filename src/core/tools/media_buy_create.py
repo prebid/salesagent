@@ -344,6 +344,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
 def _validate_creatives_before_adapter_call(
     packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
     tenant_id: str,
+    principal_id: str,
     session: "Session | None" = None,
 ) -> None:
     """Validate all creatives have required fields BEFORE calling adapter.
@@ -356,16 +357,17 @@ def _validate_creatives_before_adapter_call(
     Args:
         packages: List of Package objects with creative_ids
         tenant_id: Tenant ID for database lookup
+        principal_id: Owning principal — the creatives PK is composite
+            (creative_id, tenant_id, principal_id), so the existence gate must
+            match the full key: another principal's creative resolves to
+            "not found" (uniform, no field leak) instead of passing the gate
+            on their row and violating the composite FK on assignment insert.
         session: SQLAlchemy session (from UoW).
 
     Raises:
         AdCPCreativeRejectedError: If any creative is missing required fields (URL,
             dimensions), is in a terminal state, or has an incompatible format.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative as DBCreative
-
     if session is None:
         raise ValueError("session is required for _validate_creatives_before_adapter_call")
 
@@ -380,11 +382,8 @@ def _validate_creatives_before_adapter_call(
         # No creatives to validate
         return
 
-    # Fetch all creatives in one query
-    stmt = select(DBCreative).where(
-        DBCreative.tenant_id == tenant_id, DBCreative.creative_id.in_(list(all_creative_ids))
-    )
-    creatives_list = list(session.scalars(stmt).all())
+    # Fetch all creatives in one principal-scoped query
+    creatives_list = CreativeRepository(session, tenant_id).get_by_ids(list(all_creative_ids), principal_id)
 
     # Referenced creative_ids that don't exist are rejected up front so BOTH
     # approval paths fail identically before anything is persisted (the pending
@@ -523,6 +522,7 @@ def _validate_creatives_before_adapter_call(
 def _pre_validate_package_creatives(
     packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
     tenant_id: str,
+    principal_id: str,
     ctx_manager: Any,
     step: Any,
 ) -> None:
@@ -540,7 +540,7 @@ def _pre_validate_package_creatives(
         with MediaBuyUoW(tenant_id) as pre_validate_uow:
             # FIXME(salesagent-9f2): creative validation should use a repository
             assert pre_validate_uow.session is not None
-            _validate_creatives_before_adapter_call(packages, tenant_id, session=pre_validate_uow.session)
+            _validate_creatives_before_adapter_call(packages, tenant_id, principal_id, session=pre_validate_uow.session)
     except AdCPError:
         # Validation failed - creative validation errors already logged
         # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
@@ -1012,12 +1012,15 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 logger.error(f"[APPROVAL] {error_msg}")
                 return False, error_msg
 
-            # Get the Principal object (needed for adapter)
+            # Get the Principal object (needed for adapter). Capture the id while
+            # the session is open — media_buy detaches (attributes expired) when
+            # this block commits, and the creative reload below runs in a later UoW.
             from src.core.auth import get_principal_object
 
-            principal = get_principal_object(media_buy.principal_id, tenant_id=tenant_id)
+            buy_principal_id = media_buy.principal_id
+            principal = get_principal_object(buy_principal_id, tenant_id=tenant_id)
             if not principal:
-                error_msg = f"Principal {media_buy.principal_id} not found"
+                error_msg = f"Principal {buy_principal_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
                 return False, error_msg
 
@@ -1031,7 +1034,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
             # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
             # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-            _validate_creatives_before_adapter_call(packages, tenant_id, session=session)
+            _validate_creatives_before_adapter_call(packages, tenant_id, buy_principal_id, session=session)
 
         # Execute adapter creation (outside session to avoid conflicts)
         response = _execute_adapter_media_buy_creation(
@@ -1106,10 +1109,14 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         }
                     )
 
-                # Load all creatives (scoped to tenant)
+                # Load all creatives scoped to the buy's principal: the composite PK
+                # (creative_id, tenant_id, principal_id) allows the same creative_id
+                # under two principals — a tenant-only load keyed by bare creative_id
+                # could upload the wrong principal's creative to the ad server.
                 all_creative_ids = list(packages_by_creative.keys())
                 stmt_creatives = select(CreativeModel).filter(
                     CreativeModel.tenant_id == tenant_id,
+                    CreativeModel.principal_id == buy_principal_id,
                     CreativeModel.creative_id.in_(all_creative_ids),
                 )
                 creatives = session.scalars(stmt_creatives).all()
@@ -2691,7 +2698,7 @@ async def _create_media_buy_impl(
             # path previously skipped missing ids (pending success) and emitted
             # VALIDATION_ERROR for format mismatch.
             if req.packages:
-                _pre_validate_package_creatives(req.packages, tenant["tenant_id"], ctx_manager, step)
+                _pre_validate_package_creatives(req.packages, tenant["tenant_id"], principal_id, ctx_manager, step)
             # Update existing workflow step to require approval
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -2979,6 +2986,7 @@ async def _create_media_buy_impl(
                 with MediaBuyUoW(tenant["tenant_id"]) as assign_uow:
                     # FIXME(salesagent-9f2): assignment creation should use repository methods
                     assert assign_uow.session is not None
+                    assert assign_uow.creatives is not None
                     session = assign_uow.session
                     # Batch load all creatives upfront
                     all_creative_ids = []
@@ -2989,11 +2997,11 @@ async def _create_media_buy_impl(
 
                     creatives_map: dict[str, Any] = {}
                     if all_creative_ids:
-                        creative_stmt = select(DBCreative).where(
-                            DBCreative.tenant_id == tenant["tenant_id"],
-                            DBCreative.creative_id.in_(all_creative_ids),
-                        )
-                        creatives_list = session.scalars(creative_stmt).all()
+                        # Principal-scoped: the assignment rows below are inserted under
+                        # the requester's principal_id, so a cross-principal creative in
+                        # the map would violate the composite FK (creative_id, tenant_id,
+                        # principal_id) — it must resolve to "not found" here instead.
+                        creatives_list = assign_uow.creatives.get_by_ids(all_creative_ids, principal_id)
                         creatives_map = {str(c.creative_id): c for c in creatives_list}
                         logger.info(f"[CREATIVE_ASSIGN_DEBUG] Loaded {len(creatives_map)} creatives from database")
 
@@ -3495,7 +3503,7 @@ async def _create_media_buy_impl(
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-        _pre_validate_package_creatives(packages, tenant["tenant_id"], ctx_manager, step)
+        _pre_validate_package_creatives(packages, tenant["tenant_id"], principal_id, ctx_manager, step)
 
         # Pre-validate adapter-specific constraints (pricing models, budget limits)
         # This runs regardless of dry_run so adapter restrictions are always enforced.
@@ -3734,6 +3742,7 @@ async def _create_media_buy_impl(
             with MediaBuyUoW(tenant["tenant_id"]) as creative_uow:
                 # FIXME(salesagent-9f2): creative assignment should use repository methods
                 assert creative_uow.session is not None
+                assert creative_uow.creatives is not None
                 session = creative_uow.session
                 # Batch load all creatives upfront to avoid N+1 queries
                 all_creative_ids = []
@@ -3744,11 +3753,10 @@ async def _create_media_buy_impl(
 
                 creatives_by_id: dict[str, Any] = {}
                 if all_creative_ids:
-                    creative_stmt = select(DBCreative).where(
-                        DBCreative.tenant_id == tenant["tenant_id"],
-                        DBCreative.creative_id.in_(all_creative_ids),
-                    )
-                    creatives_list = session.scalars(creative_stmt).all()
+                    # Principal-scoped: assignment rows below are inserted under the
+                    # requester's principal_id (composite FK) — a cross-principal
+                    # creative must resolve to "not found" here, never load.
+                    creatives_list = creative_uow.creatives.get_by_ids(all_creative_ids, principal_id)
                     creatives_by_id = {str(c.creative_id): c for c in creatives_list}
 
                     # Validate all creative IDs exist (match update_media_buy behavior)

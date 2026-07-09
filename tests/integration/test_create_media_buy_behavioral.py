@@ -332,7 +332,9 @@ class TestCreativeMissingUrl:
             mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
@@ -369,7 +371,9 @@ class TestCreativeMissingUrl:
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
@@ -542,7 +546,9 @@ class TestMultipleInvalidCreativesAccumulated:
             mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             error_message = str(exc_info.value)
             assert "creative_errors" in exc_info.value.details

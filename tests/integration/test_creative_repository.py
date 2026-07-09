@@ -351,7 +351,7 @@ class TestAssignmentRepoGetExisting:
 
             session = env.get_session()
             repo = CreativeAssignmentRepository(session, "test_tenant")
-            result = repo.get_existing(media_buy.media_buy_id, pkg.package_id, "c1")
+            result = repo.get_existing(media_buy.media_buy_id, pkg.package_id, "c1", "p1")
 
         assert result is not None
         assert result.assignment_id == assignment.assignment_id
@@ -362,7 +362,7 @@ class TestAssignmentRepoGetExisting:
             TenantFactory(tenant_id="test_tenant")
             session = env.get_session()
             repo = CreativeAssignmentRepository(session, "test_tenant")
-            result = repo.get_existing("mb_none", "pkg_none", "c_none")
+            result = repo.get_existing("mb_none", "pkg_none", "c_none", "p_none")
 
         assert result is None
 

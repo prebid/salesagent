@@ -72,6 +72,26 @@ class CreativeRepository:
             )
         ).first()
 
+    def get_by_ids(self, creative_ids: list[str], principal_id: str) -> list[Creative]:
+        """Get multiple creatives by their IDs for a principal within the tenant.
+
+        The creatives PK is composite (creative_id, tenant_id, principal_id) —
+        buyer-path bulk loads must match the full key so another principal's
+        creative resolves to "not found" instead of passing existence gates
+        (and then violating the composite FK on assignment insert).
+        """
+        if not creative_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(Creative).where(
+                    Creative.tenant_id == self._tenant_id,
+                    Creative.principal_id == principal_id,
+                    Creative.creative_id.in_(creative_ids),
+                )
+            ).all()
+        )
+
     # ------------------------------------------------------------------
     # List queries
     # ------------------------------------------------------------------
@@ -373,14 +393,21 @@ class CreativeAssignmentRepository:
         media_buy_id: str,
         package_id: str,
         creative_id: str,
+        principal_id: str,
     ) -> CreativeAssignment | None:
-        """Get an existing assignment by its unique composite key."""
+        """Get an existing assignment by its unique composite key.
+
+        principal_id is part of the key: the same creative_id can exist under
+        two principals in one tenant (composite creatives PK), so an assignment
+        match must pin the owning principal.
+        """
         return self._session.scalars(
             select(CreativeAssignment).filter_by(
                 tenant_id=self._tenant_id,
                 media_buy_id=media_buy_id,
                 package_id=package_id,
                 creative_id=creative_id,
+                principal_id=principal_id,
             )
         ).first()
 

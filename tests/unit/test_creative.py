@@ -1319,6 +1319,7 @@ class TestAssignmentProcessing:
             results=[],
             tenant={"tenant_id": "t1"},
             validation_mode="strict",
+            principal_id="principal_1",
         )
         assert result == []
 
@@ -1335,6 +1336,7 @@ class TestAssignmentProcessing:
             results=[],
             tenant={"tenant_id": "t1"},
             validation_mode="strict",
+            principal_id="principal_1",
         )
         assert result == []
 
@@ -1366,6 +1368,7 @@ class TestAssignmentProcessing:
                     results=results,
                     tenant={"tenant_id": "t1"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
     def test_lenient_mode_package_not_found_continues(self):
@@ -1394,6 +1397,7 @@ class TestAssignmentProcessing:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
             assert assignment_list == []
 
@@ -3142,6 +3146,7 @@ class TestValidationModeSemantics:
                     results=results,
                     tenant={"tenant_id": "t1"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
     def test_lenient_mode_continues_on_assignment_error(self):
@@ -3200,6 +3205,7 @@ class TestValidationModeSemantics:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             # c1 should have assignment error, c2 should succeed
@@ -3288,6 +3294,7 @@ class TestAssignmentPackageValidationGaps:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Weight should be reset to 100
@@ -3324,6 +3331,7 @@ class TestAssignmentPackageValidationGaps:
                     results=results,
                     tenant={"tenant_id": "t2"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
 
@@ -3425,6 +3433,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # URL normalization should strip /mcp and trailing / so formats match
@@ -3455,6 +3464,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             # No assignment created due to mismatch
@@ -3487,6 +3497,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Should succeed regardless of creative format
@@ -3517,6 +3528,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Should match via 'format_id' key
@@ -3547,6 +3559,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Should succeed without format check
@@ -3608,6 +3621,7 @@ class TestMediaBuyStatusTransition:
             results=results,
             tenant={"tenant_id": "t1"},
             validation_mode="strict",
+            principal_id="principal_1",
         )
         return mock_media_buy
 
@@ -4364,6 +4378,7 @@ class TestExtensionGaps:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             assert results[0].assignment_errors is not None
@@ -4394,6 +4409,7 @@ class TestExtensionGaps:
                     results=results,
                     tenant={"tenant_id": "t1"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
     def test_ext_k_format_mismatch_lenient(self):
@@ -4439,6 +4455,7 @@ class TestExtensionGaps:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             assert assignment_list == []

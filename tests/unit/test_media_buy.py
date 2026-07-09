@@ -791,7 +791,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.return_value.all.return_value = [mock_creative]
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert "creative_errors" in exc_info.value.details
 
@@ -821,7 +821,7 @@ class TestCreateMediaBuyCreativeValidation:
         session.scalars.return_value.all.return_value = [mock_creative]
 
         with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-            _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
         assert "creative_errors" in exc_info.value.details
 
@@ -851,7 +851,7 @@ class TestCreateMediaBuyCreativeValidation:
         session.scalars.return_value.all.return_value = [mock_creative]
 
         with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-            _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
         assert "creative_errors" in exc_info.value.details
 
@@ -903,7 +903,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.side_effect = [creative_result, product_result]
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert "creative_errors" in exc_info.value.details
 
@@ -937,7 +937,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.return_value.all.return_value = [mock_creative]
 
             # Should NOT raise -- generative creatives are skipped
-            _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
     def test_multiple_creative_errors_accumulated(self):
         """UC-002-C06: all creative validation errors collected before raising.
@@ -981,7 +981,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             # Both errors should be accumulated in a single exception
             assert "creative_errors" in exc_info.value.details
@@ -2346,7 +2346,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c1, mock_c2]
+            mock_uow.creatives.get_by_ids.return_value = [mock_c1, mock_c2]
             mock_uow.products.get_by_id.return_value = mock_product
 
             # Existing-assignment lookup still goes through session.scalars.
@@ -2426,7 +2426,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_by_id.return_value = mock_buy
 
             # No creatives found via repository.
-            mock_uow.creatives.admin_get_by_ids.return_value = []
+            mock_uow.creatives.get_by_ids.return_value = []
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)not found"):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2511,7 +2511,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)cannot.*assign|error|state"):
@@ -2597,7 +2597,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)format|not supported"):
@@ -2699,7 +2699,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c2, mock_c4]
+            mock_uow.creatives.get_by_ids.return_value = [mock_c2, mock_c4]
             mock_uow.products.get_by_id.return_value = mock_product
 
             # Existing-assignment lookup still goes through session.scalars.

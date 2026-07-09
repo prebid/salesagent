@@ -159,6 +159,7 @@ def _validate_creatives_for_assignment(
     creative_ids: list[str],
     *,
     uow: "MediaBuyUoW",
+    principal_id: str,
     product: "DBProduct | None",
     product_name: str | None = None,
     context: ContextObject | None = None,
@@ -171,7 +172,11 @@ def _validate_creatives_for_assignment(
     (wire code ``CREATIVE_REJECTED``, correctable) on the first failing
     category, always carrying a ``suggestion`` for buyer recovery:
 
-    1. Existence — every ``creative_id`` exists for this tenant.
+    1. Existence — every ``creative_id`` exists for this principal within the
+       tenant. The creatives PK is composite (creative_id, tenant_id,
+       principal_id): another principal's creative resolves to "not found"
+       (uniform, no field leak) — never passes this gate on their row, which
+       the assignment insert would then violate on the composite FK.
     2. Status — none are in ``error`` or ``rejected`` state.
     3. Format compatibility — each creative's ``(agent_url, format)`` is
        supported by the package's product ``format_ids``. A product with no
@@ -180,6 +185,7 @@ def _validate_creatives_for_assignment(
     Args:
         creative_ids: Creative IDs referenced by the package update.
         uow: Tenant-scoped unit of work exposing ``creatives``.
+        principal_id: The requesting buyer's principal (from ResolvedIdentity).
         product: The package's product ORM record (or ``None`` if the package
             has no resolvable product, in which case the format check is skipped).
         product_name: Display name for error messages (falls back to the
@@ -195,9 +201,9 @@ def _validate_creatives_for_assignment(
 
     requested_ids = list(dict.fromkeys(creative_ids))  # de-dup, preserve order
 
-    # (a) Existence — tenant-scoped multi-get via repository.
+    # (a) Existence — principal-scoped multi-get via repository.
     assert uow.creatives is not None, "MediaBuyUoW.creatives required for creative validation"
-    creatives_list = uow.creatives.admin_get_by_ids(requested_ids)
+    creatives_list = uow.creatives.get_by_ids(requested_ids, principal_id)
     found_by_id = {c.creative_id: c for c in creatives_list}
     missing_ids = [cid for cid in requested_ids if cid not in found_by_id]
     if missing_ids:
@@ -852,6 +858,7 @@ def _update_media_buy_impl(
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
                             uow=uow,
+                            principal_id=principal_id,
                             product=product,
                             context=req.context,
                         )
@@ -1002,6 +1009,7 @@ def _update_media_buy_impl(
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
                             uow=uow,
+                            principal_id=principal_id,
                             product=ca_product,
                             context=req.context,
                         )
@@ -1084,9 +1092,13 @@ def _update_media_buy_impl(
                             weight = ca.weight
                             placement_ids = ca.placement_ids
 
-                            # Find or create assignment record
+                            # Find or create assignment record. principal_id is part of
+                            # the match key: the same creative_id can exist under two
+                            # principals (composite creatives PK), and the create branch
+                            # below inserts under the requester's principal.
                             assign_stmt = select(DBAssignment).where(
                                 DBAssignment.tenant_id == tenant["tenant_id"],
+                                DBAssignment.principal_id == principal_id,
                                 DBAssignment.media_buy_id == actual_media_buy_id,
                                 DBAssignment.package_id == pkg_update.package_id,
                                 DBAssignment.creative_id == creative_id,
