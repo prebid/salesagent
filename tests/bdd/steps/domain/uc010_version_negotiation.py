@@ -91,27 +91,22 @@ def given_seller_build_version(ctx: dict, monkeypatch: pytest.MonkeyPatch, build
 
 @given(parsers.parse("a VERSION_UNSUPPORTED error is produced with details at {boundary_point}"))
 def given_version_unsupported_at_boundary(ctx: dict, boundary_point: str) -> None:
-    """Produce a real VERSION_UNSUPPORTED error, then stage the boundary case.
+    """Produce a REAL VERSION_UNSUPPORTED error through production and stage the boundary case.
 
     The error is produced through the production path (a cross-major pin
-    dispatched over the scenario's transport). The two schema-bounds rows
-    then mutate a COPY of the production details to the boundary shape; the
-    build_version row inspects the production details as-is.
+    dispatched over the scenario's transport). The boundary rows are then
+    graded against production's ACTUAL wire details in the When step — not
+    against a mutated copy validated by the SDK's pydantic model, which would
+    only grade the SDK's constraint rather than our emission.
     """
-    dispatch_request(ctx, adcp_version="4.0")
-    details = dict(_wire_error_details(ctx))
-
-    if boundary_point == "supported_versions empty array":
-        details["supported_versions"] = []
-    elif boundary_point == "supported_versions omitted":
-        del details["supported_versions"]
-    elif boundary_point == "build_version used as negotiation input":
-        pass  # production details, inspected for negotiation-usability below
-    else:
+    if boundary_point not in (
+        "supported_versions empty array",
+        "supported_versions omitted",
+        "build_version used as negotiation input",
+    ):
         raise AssertionError(f"Unknown boundary point: {boundary_point!r}")
-
+    dispatch_request(ctx, adcp_version="4.0")
     ctx["boundary_point"] = boundary_point
-    ctx["boundary_details"] = details
 
 
 # ── When ─────────────────────────────────────────────────────────────
@@ -131,32 +126,39 @@ def when_call_capabilities_with_major_pin(ctx: dict, major: int) -> None:
 
 @when("the Buyer Agent inspects the error details")
 def when_inspect_error_details(ctx: dict) -> None:
-    """Grade the staged boundary details against the version-unsupported schema.
+    """Grade the boundary property against PRODUCTION's real wire details.
 
-    The two schema-bounds rows validate the (mutated) details against the
-    pinned schema's contract via the SDK's generated VersionUnsupportedDetails
-    model (supported_versions REQUIRED, minItems 1). The build_version row is
-    graded on negotiation-usability: a value the buyer could legally re-pin
-    (a release-precision wire value or a supported_versions member) would be
-    "valid" as negotiation input — the schema says it MUST NOT be.
+    Each row asserts a property of what production actually emitted (read off
+    ``ctx["wire_error_envelope"]``), not of a mutated copy fed to the SDK model:
+
+    - ``supported_versions empty array`` / ``supported_versions omitted``:
+      production cannot emit an empty or missing ``supported_versions`` given a
+      configured supported set (it is REQUIRED with minItems 1). The verdict is
+      "invalid" precisely because production's wire array is present and
+      non-empty — a regression that dropped or emptied it would flip the verdict
+      to "valid" and fail the scenario.
+    - ``build_version used as negotiation input``: graded on negotiation-
+      usability of production's build_version — a value the buyer could legally
+      re-pin (a release-precision wire value or a supported_versions member)
+      would be "valid" as negotiation input, and the schema says it MUST NOT be.
     """
-    from adcp.types.generated_poc.error_details.version_unsupported import VersionUnsupportedDetails
-    from pydantic import ValidationError
+    details = _wire_error_details(ctx)
+    boundary_point = ctx["boundary_point"]
 
-    details = ctx["boundary_details"]
-    if ctx["boundary_point"] == "build_version used as negotiation input":
+    if boundary_point == "supported_versions empty array":
+        # "invalid" == production's wire supported_versions is NOT empty.
+        emitted_empty = details.get("supported_versions") == []
+        ctx["details_verdict"] = "valid" if emitted_empty else "invalid"
+    elif boundary_point == "supported_versions omitted":
+        # "invalid" == production's wire details DID carry supported_versions.
+        emitted_omitted = "supported_versions" not in details
+        ctx["details_verdict"] = "valid" if emitted_omitted else "invalid"
+    else:  # build_version used as negotiation input
         build_version = details["build_version"]
         usable_as_pin = bool(re.fullmatch(_RELEASE_PIN_PATTERN, build_version)) or (
             build_version in details["supported_versions"]
         )
         ctx["details_verdict"] = "valid" if usable_as_pin else "invalid"
-        return
-
-    try:
-        VersionUnsupportedDetails.model_validate(details)
-        ctx["details_verdict"] = "valid"
-    except ValidationError:
-        ctx["details_verdict"] = "invalid"
 
 
 # ── Then: error identity ─────────────────────────────────────────────

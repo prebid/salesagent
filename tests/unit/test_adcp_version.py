@@ -34,6 +34,30 @@ def test_build_version_is_full_sdk_semver():
     assert adcp_build_version() == adcp.get_adcp_spec_version()
 
 
+def test_malformed_sdk_spec_pin_raises_typed_configuration_error(monkeypatch):
+    """A malformed SDK spec pin surfaces as a typed AdCPConfigurationError, not a bare ValueError.
+
+    ``supported_adcp_versions()`` runs on the buyer request path
+    (``validate_adcp_version_pins`` -> ``_supported_majors``). A broken seller
+    deployment (unparseable spec pin) must surface as a typed 500 like every
+    other server-side failure, never escape as an untyped unpack/int ValueError.
+    """
+    from src.core import adcp_version as av
+    from src.core.exceptions import AdCPConfigurationError
+
+    av._spec_major_minor.cache_clear()
+    monkeypatch.setattr(adcp, "get_adcp_spec_version", lambda: "banana")
+    try:
+        # Both siblings degrade the same way, and the request-path entry point does too.
+        for call in (av.adcp_major_version, av.supported_adcp_versions):
+            with pytest.raises(AdCPConfigurationError):
+                call()
+        with pytest.raises(AdCPConfigurationError):
+            av.validate_adcp_version_pins({"adcp_major_version": 99})
+    finally:
+        av._spec_major_minor.cache_clear()
+
+
 class TestValidateAdcpVersionPins:
     """Version negotiation per core/version-envelope.json (v3.1.0-beta.3, #1512 Tier 2)."""
 
@@ -255,3 +279,34 @@ class TestA2ADispatchStripsEnvelope:
 
         assert captured["req_type"] == "GetMediaBuysRequest"
         assert result == {"media_buys": []}
+
+    @pytest.mark.asyncio
+    async def test_dropped_negotiation_fields_logged_at_debug(self, caplog):
+        """A2A logs the dropped negotiation fields at DEBUG, parity with the MCP middleware.
+
+        The audit trail for a stripped negotiation field must exist on every
+        transport, not just MCP — otherwise a silently-dropped field is invisible
+        at triage time (#1546).
+        """
+        import logging
+        from unittest.mock import patch
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from tests.factories.principal import PrincipalFactory
+
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1", tenant_id="t1", tenant={"tenant_id": "t1"}, protocol="a2a"
+        )
+        handler = AdCPRequestHandler()
+        parameters = {"adcp_version": "3.1", "adcp_major_version": adcp_major_version()}
+
+        with (
+            patch("src.core.tools.media_buy_list._get_media_buys_impl", return_value={"media_buys": []}),
+            patch.object(AdCPRequestHandler, "_serialize_for_a2a", staticmethod(lambda result: dict(result))),
+            caplog.at_level(logging.DEBUG, logger="src.a2a_server.adcp_a2a_server"),
+        ):
+            await handler._handle_explicit_skill("get_media_buys", parameters, identity)
+
+        drop_logs = [r.message for r in caplog.records if "Dropped AdCP negotiation fields" in r.message]
+        assert drop_logs, "A2A did not log the dropped negotiation fields at DEBUG"
+        assert "adcp_version" in drop_logs[0] and "adcp_major_version" in drop_logs[0]

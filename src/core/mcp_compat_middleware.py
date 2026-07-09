@@ -23,7 +23,7 @@ from src.core.request_compat import (
     strip_undeclared_envelope_fields,
     strip_unknown_params,
 )
-from src.core.tool_error_logging import record_boundary_error, translate_to_tool_error
+from src.core.tool_error_logging import record_boundary_error_for_identity, translate_to_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +91,7 @@ class RequestCompatMiddleware(Middleware):
                     identity = await context.fastmcp_context.get_state("identity")
             except Exception:  # best-effort — never mask the version error
                 identity = None
-            record_boundary_error(
-                "mcp",
-                tool_name,
-                exc,
-                tenant_id=getattr(identity, "tenant_id", None),
-                principal_id=getattr(identity, "principal_id", None) or "anonymous",
-            )
+            record_boundary_error_for_identity("mcp", tool_name, exc, identity)
             translate_to_tool_error(exc)
 
         # Step 3: Drop AdCP version-negotiation envelope fields (all environments).

@@ -71,7 +71,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
-from src.core.tool_error_logging import record_boundary_error
+from src.core.tool_error_logging import record_boundary_error, record_boundary_error_for_identity
 from src.core.tools import (
     create_media_buy_raw as core_create_media_buy_tool,
 )
@@ -192,7 +192,12 @@ def _validate_envelope_tolerant[RequestModelT: BaseModel](
     model does not declare — fields it does declare still flow through. Negotiation
     fields are handled earlier in ``_handle_explicit_skill``. See #1512.
     """
-    cleaned, _ = strip_undeclared_envelope_fields(params, set(model.model_fields))
+    cleaned, dropped_env = strip_undeclared_envelope_fields(params, set(model.model_fields))
+    if dropped_env:
+        # Parity with the MCP RequestCompatMiddleware's DEBUG log for the same
+        # drop — the audit trail for stripped envelope framing exists on every
+        # transport, not just MCP (#1546).
+        logger.debug("Dropped undeclared AdCP envelope fields for %s: %s", model.__name__, ", ".join(dropped_env))
     return model.model_validate(cleaned)
 
 
@@ -677,13 +682,7 @@ class AdCPRequestHandler(RequestHandler):
                         # (AdCPError/ValueError/PermissionError) failures were already
                         # recorded inside _handle_explicit_skill, so this only fires for
                         # genuinely-unexpected exceptions that escaped it.
-                        record_boundary_error(
-                            "a2a",
-                            skill_name,
-                            e,
-                            tenant_id=getattr(identity, "tenant_id", None),
-                            principal_id=getattr(identity, "principal_id", None) or "anonymous",
-                        )
+                        record_boundary_error_for_identity("a2a", skill_name, e, identity)
                         results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
@@ -1400,13 +1399,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             validate_adcp_version_pins(parameters)
         except AdCPError as version_exc:
-            record_boundary_error(
-                "a2a",
-                skill_name,
-                version_exc,
-                tenant_id=getattr(identity, "tenant_id", None),
-                principal_id=getattr(identity, "principal_id", None) or "anonymous",
-            )
+            record_boundary_error_for_identity("a2a", skill_name, version_exc, identity)
             raise
 
         # The buyer's wire payload, captured BEFORE the negotiation-field strip,
@@ -1426,7 +1419,12 @@ class AdCPRequestHandler(RequestHandler):
         # extra="forbid" in dev/CI, so an undeclared adcp_major_version would
         # raise extra_forbidden and make the agent uncallable by conformant
         # SDK clients (#1512).
-        parameters, _dropped_negotiation = strip_negotiation_fields(parameters)
+        parameters, dropped_negotiation = strip_negotiation_fields(parameters)
+        if dropped_negotiation:
+            # Parity with the MCP RequestCompatMiddleware, which logs the same
+            # drop at DEBUG — the audit trail for a stripped negotiation field
+            # must exist on every transport, not just MCP (#1546).
+            logger.debug("Dropped AdCP negotiation fields from %s: %s", skill_name, ", ".join(dropped_negotiation))
 
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
@@ -1511,14 +1509,8 @@ class AdCPRequestHandler(RequestHandler):
 
             # Defensive about identity shape — test fixtures sometimes pass a
             # string or partially-built identity instead of ResolvedIdentity.
-            # record_boundary_error handles None tenant_id internally.
-            record_boundary_error(
-                "a2a",
-                skill_name,
-                normalized,
-                tenant_id=getattr(identity, "tenant_id", None),
-                principal_id=getattr(identity, "principal_id", None) or "anonymous",
-            )
+            # record_boundary_error_for_identity handles None tenant_id internally.
+            record_boundary_error_for_identity("a2a", skill_name, normalized, identity)
 
             if normalized is not e:
                 raise normalized from e

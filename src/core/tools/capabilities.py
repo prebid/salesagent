@@ -45,6 +45,22 @@ from src.services.targeting_capabilities import supports_property_list_filtering
 logger = logging.getLogger(__name__)
 
 
+def _build_adcp_block() -> Adcp:
+    """Build the ``adcp`` version/idempotency envelope block for the response.
+
+    Shared by both response paths (minimal, no-tenant and full-tenant) so the
+    advertised version envelope — SDK-derived ``major_versions`` /
+    ``supported_versions`` / ``build_version`` plus the idempotency posture —
+    is declared in exactly one place and cannot drift between them.
+    """
+    return Adcp(
+        major_versions=[MajorVersion(root=adcp_major_version())],
+        supported_versions=[SupportedVersion(root=v) for v in supported_adcp_versions()],
+        build_version=adcp_build_version(),
+        idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
+    )
+
+
 # Mapping from adapter channel names to MediaChannel enum values
 CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "display": MediaChannel.display,
@@ -92,12 +108,7 @@ def _get_adcp_capabilities_impl(
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
-            adcp=Adcp(
-                major_versions=[MajorVersion(root=adcp_major_version())],
-                supported_versions=[SupportedVersion(root=v) for v in supported_adcp_versions()],
-                build_version=adcp_build_version(),
-                idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-            ),
+            adcp=_build_adcp_block(),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
         )
@@ -266,12 +277,7 @@ def _get_adcp_capabilities_impl(
     # failures don't block merge, and the public declaration forces
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
-        adcp=Adcp(
-            major_versions=[MajorVersion(root=adcp_major_version())],
-            supported_versions=[SupportedVersion(root=v) for v in supported_adcp_versions()],
-            build_version=adcp_build_version(),
-            idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-        ),
+        adcp=_build_adcp_block(),
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,

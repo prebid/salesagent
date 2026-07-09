@@ -260,6 +260,32 @@ def record_boundary_error(
         logger.warning("Failed to log %s error to audit log: %s", transport_upper, e)
 
 
+def record_boundary_error_for_identity(
+    transport: str,
+    operation: str,
+    error: Exception,
+    identity: Any,
+) -> None:
+    """``record_boundary_error`` with the log fields read off a ``ResolvedIdentity``.
+
+    The transport boundaries (MCP middleware, A2A dispatch) that catch an error
+    *before* the tool wrapper runs all need the same identity-to-log-fields
+    projection: ``tenant_id`` and ``principal_id`` off the resolved identity,
+    with ``principal_id`` degrading to ``"anonymous"`` for the downstream sinks.
+    ``getattr`` is used (not attribute access) because a boundary may hold a
+    partially-built or ``None`` identity when the failure is exactly that auth
+    or negotiation ran before a full identity was resolved. Folding it here
+    keeps that projection in one place instead of hand-rolled at each boundary.
+    """
+    record_boundary_error(
+        transport,
+        operation,
+        error,
+        tenant_id=getattr(identity, "tenant_id", None),
+        principal_id=getattr(identity, "principal_id", None) or "anonymous",
+    )
+
+
 def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, principal_id: str | None) -> None:
     """Backwards-compatible MCP wrapper for record_boundary_error.
 

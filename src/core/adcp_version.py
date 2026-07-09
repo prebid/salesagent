@@ -32,16 +32,43 @@ Unpinned legacy clients are unaffected (no pin → nothing to validate).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from functools import cache
 from typing import Any
 
 import adcp
 
-from src.core.exceptions import AdCPVersionUnsupportedError
+from src.core.exceptions import AdCPConfigurationError, AdCPVersionUnsupportedError
+
+logger = logging.getLogger(__name__)
 
 
 @cache
+def _spec_major_minor() -> tuple[int, int]:
+    """Parse ``(major, minor)`` from the SDK spec pin, typed-erroring on garbage.
+
+    Both ``adcp_major_version()`` and ``supported_adcp_versions()`` derive from
+    this single parse so they agree on the SDK version and fail the same way.
+    The pin (``adcp.get_adcp_spec_version()``, e.g. ``"3.1.0-beta.3"``) is a
+    deploy-time constant, but this runs on the buyer request path
+    (``validate_adcp_version_pins`` -> ``_supported_majors`` ->
+    ``supported_adcp_versions``). A malformed pin is a broken *seller*
+    deployment, not a buyer version mismatch: surface it as a typed
+    :class:`AdCPConfigurationError` (500, terminal) — the same contract every
+    other server-side failure honors — rather than letting a bare ``ValueError``
+    (int cast or tuple-unpack) escape as an untyped 500.
+    """
+    raw = adcp.get_adcp_spec_version()
+    parts = raw.split(".")
+    try:
+        return int(parts[0]), int(parts[1])
+    except (IndexError, ValueError) as exc:
+        raise AdCPConfigurationError(
+            f"AdCP SDK spec version {raw!r} is malformed; expected MAJOR.MINOR(.PATCH...)."
+        ) from exc
+
+
 def adcp_major_version() -> int:
     """AdCP major version this build speaks, from the SDK spec pin.
 
@@ -49,7 +76,7 @@ def adcp_major_version() -> int:
     (e.g. ``"3.1.0-beta.3"`` -> ``3``), so a spec bump is reflected here with
     no code change.
     """
-    return int(adcp.get_adcp_spec_version().split(".", 1)[0])
+    return _spec_major_minor()[0]
 
 
 def supported_adcp_versions() -> tuple[str, ...]:
@@ -64,7 +91,7 @@ def supported_adcp_versions() -> tuple[str, ...]:
     This is the authoritative re-pin list carried in VERSION_UNSUPPORTED error
     details (``supported_versions`` is REQUIRED there with minItems 1).
     """
-    major, minor = adcp.get_adcp_spec_version().split(".", 2)[:2]
+    major, minor = _spec_major_minor()
     return (f"{major}.{minor}",)
 
 
@@ -163,5 +190,12 @@ def validate_adcp_version_pins(params: Mapping[str, Any]) -> None:
         if claimed is None:
             continue
         claimed_major = _claimed_major(claimed)
-        if claimed_major is not None and claimed_major not in supported_majors:
+        if claimed_major is None:
+            # Schema-invalid pin (e.g. "banana"): no negotiable major, so it is
+            # tolerated and stripped with the negotiation envelope rather than
+            # misreported as VERSION_UNSUPPORTED. Log it — a silently-dropped
+            # malformed pin is otherwise invisible at triage time (#1546).
+            logger.debug("Tolerating unparseable AdCP version pin %s=%r (no negotiable major)", field, claimed)
+            continue
+        if claimed_major not in supported_majors:
             raise _version_unsupported_error(field, claimed, claimed_major, context=request_context)

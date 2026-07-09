@@ -2576,6 +2576,7 @@ _UC010_VERSION_NEGOTIATION_WIRED: set[str] = {
     "T-UC-010-v31-version-unsupported-major-fallback",
     "T-UC-010-v31-version-unsupported-build-version-advisory",
     "T-UC-010-v31-version-unsupported-details-bounds",
+    "T-UC-010-v31-version-unsupported-cross-major",
 }
 
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
