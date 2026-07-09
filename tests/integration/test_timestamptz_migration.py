@@ -64,8 +64,16 @@ def _insert_test_tenant(engine, test_time):
 
 
 @pytest.mark.requires_db
+@pytest.mark.xdist_group("timestamptz_migration")
 class TestTimestamptzMigration:
-    """Test the TIMESTAMPTZ migration upgrade and downgrade."""
+    """Test the TIMESTAMPTZ migration upgrade and downgrade.
+
+    The downgrade test depends on the upgrade test's side effect on the shared
+    module-scoped ``migration_db``. Pin the class to one xdist worker (xdist_group)
+    so the ordered upgrade->downgrade pair isn't split across workers under
+    ``-n auto`` (default ``--dist load``), which would leave downgrade running
+    against a DB the upgrade never touched.
+    """
 
     def test_upgrade_converts_timestamp_to_timestamptz(self, migration_db):
         """Upgrade should convert all TIMESTAMP columns to TIMESTAMPTZ."""
