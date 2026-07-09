@@ -428,6 +428,19 @@ class BaseTestEnv:
         ).first()
         return token
 
+    def switch_principal(self, principal_id: str) -> None:
+        """Re-point the env at *principal_id*, clearing cached identity.
+
+        Public accessor for the principal-switch mutation (mirrors
+        ``get_session()``): step functions must not reach into the private
+        ``_identity_cache`` / ``_principal_id``. Clearing the cache forces the
+        next ``identity`` / ``identity_for`` access to re-resolve from scratch —
+        picking up a principal row committed after the env was created (in
+        integration mode this re-runs the auth-token lookup).
+        """
+        self._identity_cache.clear()
+        self._principal_id = principal_id
+
     @property
     def identity(self) -> ResolvedIdentity:
         """Default identity (protocol='mcp'). Backward-compatible.
