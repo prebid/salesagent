@@ -232,11 +232,15 @@ def _create_unique_media_buy(
     label: str,
     owner: str,
     status: str = "active",
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> str:
     """Create a media buy with a UUID-based ID, register its Gherkin label.
 
     Generates a unique ``media_buy_id`` so parallel pytest-xdist workers
-    never collide on ``media_buys_pkey``.
+    never collide on ``media_buys_pkey``. ``start_date``/``end_date`` override
+    the factory's default (mid-flight) window when a status needs a specific
+    flight phase (e.g. pending_start must be pre-flight).
     """
     real_id = _generate_unique_id(label)
     _register_media_buy_label(ctx, label, real_id)
@@ -244,15 +248,40 @@ def _create_unique_media_buy(
     if status != "active":
         entry["status"] = status
     ctx.setdefault("media_buys", {})[real_id] = entry
-    _ensure_media_buy_in_db(ctx, real_id, owner, status)
+    _ensure_media_buy_in_db(ctx, real_id, owner, status, start_date=start_date, end_date=end_date)
     return real_id
+
+
+# Flight window per lifecycle phase so the seeded status is stable through the
+# real status scheduler (which the MCP/REST app harnesses run): a pending_start
+# buy MUST be pre-flight, else the scheduler promotes it to active before the
+# query and the status_filter="pending_start" row returns nothing. Pre-serving
+# states (pending_creatives/pending_start) are pre-flight; completed is
+# post-flight; everything else uses the factory's mid-flight default.
+_PRE_FLIGHT = ("2099-01-01", "2099-12-31")
+_POST_FLIGHT = ("2020-01-01", "2020-12-31")
+_STATUS_FLIGHT_WINDOW: dict[str, tuple[str, str]] = {
+    "pending_creatives": _PRE_FLIGHT,
+    "pending_start": _PRE_FLIGHT,
+    "completed": _POST_FLIGHT,
+}
 
 
 @given(parsers.parse('multiple media buys owned by "{owner}" in various statuses'))
 def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
-    """Create media buys in various statuses for partition testing."""
-    for status in ("active", "completed", "paused"):
-        _create_unique_media_buy(ctx, label=f"mb-{status}", owner=owner, status=status)
+    """Create one media buy per canonical status for partition testing.
+
+    Covers every persisted status the status_filter partitions exercise so a
+    single-status filter always has exactly one matching buy to return. Each
+    buy's flight window matches its lifecycle phase (see _STATUS_FLIGHT_WINDOW)
+    so the status survives the real status scheduler on the app-backed
+    transports.
+    """
+    for status in ("active", "completed", "paused", "rejected", "canceled", "pending_creatives", "pending_start"):
+        window = _STATUS_FLIGHT_WINDOW.get(status, (None, None))
+        _create_unique_media_buy(
+            ctx, label=f"mb-{status}", owner=owner, status=status, start_date=window[0], end_date=window[1]
+        )
 
 
 @given(parsers.parse('media buys owned by "{owner}"'))
@@ -701,9 +730,15 @@ def when_request_no_identifiers(ctx: dict) -> None:
     dispatch_request(ctx)
 
 
-@when(parsers.parse("the Buyer Agent requests delivery metrics with {request_params}"))
+# Restricted to the key=value identify-mode form (e.g. media_buy_ids=[...]
+# status_filter=[...]). The unrestricted parse-form matched *every* "...with X"
+# line and, because "{request_params}" sorts last, shadowed the specific steps
+# below (status_filter "X", media_buy_ids [...], the partition steps), silently
+# dropping their params via _parse_request_params. Requiring "\w+=" makes it
+# mutually exclusive with those.
+@when(parsers.re(r"the Buyer Agent requests delivery metrics with (?P<request_params>\w+=.+)"))
 def when_request_with_params(ctx: dict, request_params: str) -> None:
-    """Request with arbitrary params (Scenario Outline)."""
+    """Request with arbitrary key=value params (Scenario Outline)."""
     kwargs = _parse_request_params(request_params)
     dispatch_request(ctx, **kwargs)
 
@@ -726,14 +761,25 @@ def when_request_with_buyer_refs(ctx: dict, refs_json: str) -> None:
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<filter_value>[^"]+)"'))
 def when_request_with_status_filter(ctx: dict, filter_value: str) -> None:
-    """Request with status_filter string."""
-    dispatch_request(ctx, status_filter=[filter_value])
+    """Request with status_filter string.
+
+    Records the requested filter in ctx["request_params"] so then_filter_result
+    can reconstruct it. The "(field absent)" / "(omitted)" sentinels mean "send
+    no status_filter at all" — dispatching the literal would resolve to an empty
+    filter and drop every buy.
+    """
+    ctx.setdefault("request_params", {})["status_filter"] = [filter_value]
+    if filter_value in ("(field absent)", "(omitted)"):
+        dispatch_request(ctx)
+    else:
+        dispatch_request(ctx, status_filter=[filter_value])
 
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics with status_filter (?P<filter_json>\[.+?\])"))
 def when_request_with_status_filter_list(ctx: dict, filter_json: str) -> None:
     """Request with status_filter list."""
     status_filter = _parse_json_list(filter_json)
+    ctx.setdefault("request_params", {})["status_filter"] = status_filter
     dispatch_request(ctx, status_filter=status_filter)
 
 
@@ -1033,12 +1079,9 @@ def when_boundary_account(ctx: dict, value: str) -> None:
     _dispatch_partition(ctx, "account", value)
 
 
-@when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<partition_value>[^"]+)"'))
-def when_partition_status_filter(ctx: dict, partition_value: str) -> None:
-    """Partition test: status_filter value."""
-    dispatch_request(ctx, status_filter=[partition_value])
-
-
+# NOTE: the partition status_filter step is identical to
+# when_request_with_status_filter above (same regex + body); the single
+# definition there serves both the alternative and partition scenarios.
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at status_filter boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
     """Boundary test: status_filter value."""
@@ -1048,13 +1091,13 @@ def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with date range "(?P<partition>[^"]+)"'))
 def when_partition_date_range(ctx: dict, partition: str) -> None:
     """Partition test: date range."""
-    _dispatch_partition(ctx, "date_range", partition)
+    _dispatch_date_range_partition(ctx, partition)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at date boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_date_range(ctx: dict, boundary_point: str) -> None:
     """Boundary test: date range."""
-    _dispatch_partition(ctx, "date_range", boundary_point)
+    _dispatch_date_range_partition(ctx, boundary_point)
 
 
 @when(parsers.re(r'the webhook is configured with credentials "(?P<partition>[^"]+)"'))
@@ -1084,7 +1127,7 @@ def when_boundary_resolution(ctx: dict, boundary_point: str) -> None:
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with principal "(?P<partition>[^"]+)"'))
 def when_partition_principal(ctx: dict, partition: str) -> None:
     """Partition test: principal ownership."""
-    _dispatch_partition(ctx, "principal", partition)
+    _dispatch_ownership_partition(ctx, partition)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at ownership boundary "(?P<boundary_point>[^"]+)"'))
@@ -1351,12 +1394,25 @@ def then_no_error_for_mb_alt(ctx: dict, mb_id: str) -> None:
 
 @then(parsers.parse('the response should include only media buys with status "{status}"'))
 def then_only_status(ctx: dict, status: str) -> None:
-    """Assert all returned media buys have the expected status."""
+    """Assert all returned media buys have the expected status.
+
+    Guards against a vacuous pass: if the scenario filters on a status with no
+    seeded buy, the response is empty and a bare per-item loop would assert
+    nothing (#1545 review). Require at least one matching buy so the filter is
+    actually exercised. ``status`` is normalized off the enum's ``.value`` since
+    MediaBuyDeliveryStatus is an Enum (not a str-enum), so identity-compares
+    against the plain wire string would otherwise fail.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert deliveries, (
+        f"Filter '{status}' returned no media buys — the scenario must seed a buy "
+        f"for this status or the assertion passes vacuously."
+    )
     for d in deliveries:
-        actual = getattr(d, "status", None)
+        raw = getattr(d, "status", None)
+        actual = getattr(raw, "value", raw)  # Enum -> wire string; str passthrough
         assert actual == status, f"Expected status '{status}', got '{actual}' for {d.media_buy_id}"
 
 
@@ -2828,15 +2884,21 @@ def _ensure_media_buy_in_db(
     mb_id: str,
     owner: str,
     status: str = "active",
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> None:
     """Create a media buy in the test database using factories.
 
     Uses the env's integration DB session. If the env doesn't support
     DB operations (unit harness), this is a no-op — ctx state is enough.
+    ``start_date``/``end_date`` (YYYY-MM-DD) override the factory's default
+    mid-flight window when a status needs a specific flight phase.
     """
     env = ctx["env"]
     if env is None or not hasattr(env, "_session"):
         return
+
+    from datetime import date as _date
 
     from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
 
@@ -2859,6 +2921,10 @@ def _ensure_media_buy_in_db(
         "media_buy_id": mb_id,
         "status": status,
     }
+    if start_date is not None:
+        mb_kwargs["start_date"] = _date.fromisoformat(start_date)
+    if end_date is not None:
+        mb_kwargs["end_date"] = _date.fromisoformat(end_date)
 
     MediaBuyFactory(**mb_kwargs)
 
@@ -2978,6 +3044,55 @@ def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
 
     # Pass as string
     dispatch_request(ctx, **{field: value_stripped})
+
+
+def _dispatch_date_range_partition(ctx: dict, label: str) -> None:
+    """Translate a date-range partition label to concrete start_date/end_date.
+
+    The partition names an abstract relationship, not a request field —
+    dispatching the label verbatim leaks a bogus ``date_range=`` kwarg into the
+    request model (extra=forbid -> ValidationError), which is exactly the
+    plumbing bug the #1545 un-shadowing exposed. Map it to real dates so the
+    valid rows succeed and the invalid rows are rejected by the tool's own
+    start<end validation.
+    """
+    norm = label.strip().lower().replace(" ", "_")
+    if "omitted" in norm or "absent" in norm or "not_provided" in norm:
+        dispatch_request(ctx)  # no dates -> tool defaults to the last 30 days
+    elif "before" in norm:
+        dispatch_request(ctx, start_date="2026-01-01", end_date="2026-01-31")
+    elif "equal" in norm:
+        dispatch_request(ctx, start_date="2026-01-15", end_date="2026-01-15")
+    elif "after" in norm:
+        dispatch_request(ctx, start_date="2026-01-31", end_date="2026-01-01")
+    else:
+        _dispatch_partition(ctx, "date_range", label)
+
+
+def _dispatch_ownership_partition(ctx: dict, label: str) -> None:
+    """Translate an ownership partition label to a real identity/query.
+
+    Ownership is decided by the caller's identity, not a request field — the buy
+    is seeded under the default principal (buyer-001). ``owner_matches`` queries
+    as the owner (the buy is returned); ``owner_mismatch`` queries the same buy
+    id as a foreign principal (a real ownership mismatch).
+    """
+    norm = label.strip().lower().replace(" ", "_")
+    media_buys = ctx.get("media_buys", {})
+    owned_ids = _resolve_media_buy_ids(ctx, list(media_buys.keys()))
+    if "mismatch" in norm:
+        # Query the owned buy as a different principal — a genuine ownership
+        # mismatch. (The row is selective-xfailed: production does not yet
+        # reject a non-owned id, it just returns nothing.)
+        from tests.factories import PrincipalFactory
+
+        foreign = PrincipalFactory.make_identity(
+            principal_id="buyer-999-foreign", tenant_id=ctx.get("tenant_id", "test_tenant")
+        )
+        dispatch_request(ctx, identity=foreign, media_buy_ids=owned_ids or ["mb-001"])
+    else:
+        # owner_matches — query as the owning principal (default identity).
+        dispatch_request(ctx, media_buy_ids=owned_ids or None)
 
 
 # ── Restored helpers (from pre-merge 89a6c4bb) ──────────────────────
@@ -3291,7 +3406,14 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
     # Normalize boundary-style names to partition names
     partition_norm = partition_clean.lower().replace(" ", "_")
 
-    if "media_buy_ids" in partition_norm and ("only" in partition_norm or "provided" in partition_norm):
+    if "both_provided" in partition_norm or partition_norm == "both":
+        # Both selectors provided: media_buy_ids AND a status_filter. (buyer_refs
+        # was removed in adcp 3.12, so "both" is now ids + filter.) A concrete
+        # status_filter of "active" matches the seeded active buys.
+        request_params["media_buy_ids"] = real_ids
+        request_params["status_filter"] = ["active"]
+        dispatch_request(ctx, media_buy_ids=real_ids, status_filter=["active"])
+    elif "media_buy_ids" in partition_norm and ("only" in partition_norm or "provided" in partition_norm):
         # Resolve by media_buy_ids ("media_buy_ids only" / "media_buy_ids provided").
         # Both translate to an explicit IDs request; passing the boundary label
         # verbatim would leak it into the request model (extra_forbidden).
@@ -3301,10 +3423,15 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
         # Neither IDs nor refs — should return all owned media buys
         dispatch_request(ctx)
     elif "partial" in partition_norm:
-        # Partial resolution — request includes a nonexistent ID alongside a real one
-        partial_ids = real_ids[:1] + ["mb-nonexistent"]
-        request_params["media_buy_ids"] = partial_ids
-        dispatch_request(ctx, media_buy_ids=partial_ids)
+        # Partial resolution — request includes a nonexistent ID alongside a real
+        # one. This is a partial SUCCESS: the real buy is returned and the
+        # missing id yields a MEDIA_BUY_NOT_FOUND advisory (not a hard failure).
+        # request_params records only the REAL id we expect back, so the "valid"
+        # assertion doesn't demand the deliberately-absent one.
+        real_one = real_ids[:1]
+        dispatch_ids = real_one + ["mb-nonexistent"]
+        request_params["media_buy_ids"] = real_one
+        dispatch_request(ctx, media_buy_ids=dispatch_ids)
     elif "zero" in partition_norm:
         # Zero resolution — request IDs that don't exist
         request_params["media_buy_ids"] = ["mb-nonexistent-1", "mb-nonexistent-2"]

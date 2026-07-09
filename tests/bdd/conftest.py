@@ -1039,36 +1039,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # pass is real, not a weakened assertion.
 
         # UC-004 status filter: "active" works, other values may not
+        # NOTE: the T-UC-004-filter / -empty / -array shadow entries were removed
+        # once the generic `{request_params}` step was restricted to key=value
+        # form (#1545): the specific status_filter step is no longer shadowed, so
+        # values (single, empty-result, array) are all honored and pass.
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
-            (
-                # The generic `requests delivery metrics with {request_params}` step
-                # shadows the specific `with status_filter "X"` step and parses only
-                # the key=value form, so the `status_filter "X"` value is dropped and
-                # the filter defaults to "active". Every non-active value therefore
-                # returns the active buy and fails the "only buys with status X" check.
-                # pending_creatives/pending_start are the v3.1 additions of this same
-                # known step-shadowing gap (pending_activation was stale — not a real
-                # MediaBuyStatus value). Fixing the generic step is tracked separately
-                # and would graduate this whole family.
-                "T-UC-004-filter",
-                {"rejected", "canceled", "paused", "completed", "pending_creatives", "pending_start"},
-                "status_filter for non-active values is dropped by the generic request_params step "
-                "(shadows the specific status_filter step), so the filter defaults to active",
-            ),
             (
                 "T-UC-004-filter-default",
                 set(),  # all examples
                 "default status_filter=active not applied when no explicit IDs",
-            ),
-            (
-                "T-UC-004-filter-empty",
-                set(),
-                "status_filter empty result not returned as empty array",
-            ),
-            (
-                "T-UC-004-filter-array",
-                set(),
-                "status_filter with array not correctly applied",
             ),
         ]
         if any(t.startswith("T-UC-004-filter") for t in marker_names):
@@ -1832,6 +1811,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
+        # (#1545 review) The generic `{request_params}` step was restricted to
+        # key=value form, which un-shadowed the date-range / ownership / resolution
+        # partition steps so their params are now genuinely applied. The latent
+        # step-plumbing bugs that exposed (labels leaking as bogus request kwargs;
+        # a partial-resolution assertion demanding the deliberately-absent id) are
+        # fixed in uc004_delivery.py's _dispatch_date_range_partition /
+        # _dispatch_ownership_partition / _dispatch_resolution, so these rows are
+        # graded rather than deferred. The genuinely-unimplemented rows
+        # (start>=end, owner_mismatch, empty_array) remain in _UC004_PARTITION_SELECTIVE.
+
         # Graduated: T-UC-004-partition-credentials — the When now validates the real
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
@@ -1877,9 +1866,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-partition-approval",
             "T-UC-019-partition-approval-invalid",
             "T-UC-019-boundary-approval",
-            # Invariants that still fail entirely
-            "T-UC-019-inv-150-1",
-            "T-UC-019-inv-150-3",
+            # Graduated (#1545 review), now wired + passing on the A2A/MCP wire:
+            #   inv-150-1 (pre-flight active -> pending_start)
+            #   inv-150-3 (post-flight active -> completed)
             # Graduated: T-UC-019-inv-150-5 (status filter no longer blocks by-ID queries)
             "T-UC-019-inv-151-4",
             "T-UC-019-inv-153-3",
@@ -1890,8 +1879,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-sandbox-validation",
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
-            # Graduated: T-UC-019-ext-a (impl/a2a/mcp pass) — moved to selective block below.
-            # Extension errors — error code mismatches / not implemented
+            # Extension errors — error code mismatches / not implemented.
+            # ext-a (no-auth get_media_buys): once wired, the missing-credentials
+            # path emits AUTH_TOKEN_INVALID, not the spec's AUTH_REQUIRED — a
+            # pre-existing auth-code gap unrelated to this PR's status work.
+            "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
             "T-UC-019-ext-d",
@@ -1908,6 +1900,31 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     strict=False,
                 )
             )
+
+        # --- UC-019: selective boundary xfails for un-implemented sub-features ---
+        # These scenario outlines are mostly graduated; only the rows exercising a
+        # not-yet-implemented sub-feature are xfailed. All are pre-existing gaps
+        # unrelated to this PR's status-taxonomy work.
+        _UC019_BOUNDARY_SELECTIVE: list[tuple[str, set[str], str]] = [
+            # Invalid status_filter VALUES need a dedicated STATUS_FILTER_INVALID_VALUE
+            # code; production raises the generic VALIDATION_ERROR instead.
+            (
+                "T-UC-019-boundary-status-filter",
+                {"pending_activation", "expired"},
+                "status_filter value validation emits VALIDATION_ERROR, not STATUS_FILTER_INVALID_VALUE (unimplemented)",
+            ),
+            # Sandbox echo (sandbox=true/false in the response) is not implemented;
+            # only the production-absent row is graded.
+            (
+                "T-UC-019-boundary-sandbox",
+                {"sandbox account", "explicit production"},
+                "sandbox response echo not implemented (BR-RULE-209)",
+            ),
+        ]
+        for tag, substrings, reason in _UC019_BOUNDARY_SELECTIVE:
+            if tag in marker_names and any(s in nodeid for s in substrings):
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+                break
 
         # --- UC-019: principal_id=null/empty/ghost boundary — unreachable via HTTP ---
         # BR-RULE-154 INV-3 tests defensive behavior when _impl receives a broken
@@ -1960,17 +1977,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (status filter no longer blocks by-ID queries)
             # Graduated: T-UC-019-boundary-status day before/day after
             # (status filter no longer blocks by-ID queries)
-            # Default status filter: multi-status queries fail
-            (
-                "T-UC-019-partition-status-filter",
-                {"multiple_statuses", "all_statuses"},
-                "UC-019: multi-status filter not implemented",
-            ),
-            # Status filter boundary: complex filter variants fail
+            # Graduated (#1545 review): T-UC-019-partition-status-filter
+            # multiple_statuses / all_statuses — multi-status filtering works on the
+            # wire once status_filter is coerced to the MediaBuyStatus enum and the
+            # scenario pins its clock. The remaining status-filter gaps are the
+            # value/empty VALIDATION rows below, not the mapping.
+            # Status filter boundary: STATUS_FILTER_EMPTY (empty array) is not a
+            # dedicated code yet (the value-validation rows are handled by
+            # _UC019_BOUNDARY_SELECTIVE above). "all seven" now grades and passes.
             (
                 "T-UC-019-boundary-status-filter",
-                {"all six", "empty array", "unknown enum", "mix of valid"},
-                "UC-019: complex status filter boundary not implemented",
+                {"empty array"},
+                "STATUS_FILTER_EMPTY not implemented — empty array returns empty success, not an error",
             ),
             # Snapshot: not-requested variant fails (include_snapshot=false path)
             (
@@ -2571,6 +2589,10 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
+# UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
+# variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
+_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
+
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Parametrize BDD scenarios across all 4 transports.
@@ -2607,6 +2629,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # truthful transports are a2a/mcp/rest + e2e_rest (added below when enabled).
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
     ids = ["a2a", "mcp", "rest"]
+
+    # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
+    # the A2A + MCP wire transports only — including a REST variant would 404.
+    if any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names):
+        transports = [Transport.A2A, Transport.MCP]
+        ids = ["a2a", "mcp"]
 
     if os.environ.get("BDD_E2E_ENABLED") == "true":
         transports.append(Transport.E2E_REST)
@@ -2678,7 +2706,7 @@ def _reset_e2e_db(e2e_config) -> None:
 
 
 @pytest.fixture()
-def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
+def ctx(request: pytest.FixtureRequest, e2e_stack) -> Generator[dict, None, None]:
     """Per-scenario mutable context shared across Given/When/Then steps.
 
     When parametrized by pytest_generate_tests, ``request.param`` is a
@@ -2711,7 +2739,21 @@ def ctx(request: pytest.FixtureRequest, e2e_stack) -> dict:
                     "transports only. Refusing to skip — a skipped e2e test is a false green."
                 )
             d["e2e_config"] = e2e_stack
-    return d
+    try:
+        yield d
+    finally:
+        # Stop any step-level patchers stashed on ctx (e.g. given_today_is patches
+        # src.core.tools.media_buy_list.datetime; snapshot/adapter steps patch
+        # get_adapter). These use patch().start() and are NOT tracked by the
+        # harness's context-managed EXTERNAL_PATCHES, so without this teardown they
+        # leak the module patch into later scenarios in the same worker — an
+        # order-dependent contamination (masked today only by the wide factory
+        # flight window). Stop in reverse (LIFO) and ignore already-stopped.
+        for patcher in reversed(d.get("_patchers", [])):
+            try:
+                patcher.stop()
+            except RuntimeError:
+                pass  # already stopped
 
 
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
@@ -2729,6 +2771,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith("T-UC-018") for t in marker_names):
         return "UC-018"
+    if any(t.startswith("T-UC-019") for t in marker_names):
+        return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names:
@@ -2947,6 +2991,21 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
         with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
+            yield
+    elif uc == "UC-019":
+        # get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
+        # its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
+        # read). Scenarios seed buys via factories under ctx["tenant"]/["principal"]
+        # (principal "buyer-001" matches the feature files). Genuine spec-production
+        # gaps stay xfailed via _UC019_XFAIL_TAGS / the selective blocks above.
+        request.getfixturevalue("integration_db")
+        from tests.harness.media_buy_list import MediaBuyListEnv
+
+        with MediaBuyListEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+            tenant, principal = env.setup_default_data()
+            ctx["env"] = env
+            ctx["tenant"] = tenant
+            ctx["principal"] = principal
             yield
     else:
         pytest.xfail(f"No harness wired for {uc}")

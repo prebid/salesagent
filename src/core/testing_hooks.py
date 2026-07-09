@@ -21,12 +21,17 @@ from typing import TYPE_CHECKING, Any
 
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.core.tool_context import ToolContext
+
+
+def _ensure_aware(dt: datetime) -> datetime:
+    """Return *dt* as a UTC-aware datetime, assuming UTC when it is naive."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 class CampaignEvent(StrEnum):
@@ -81,6 +86,21 @@ class AdCPTestContext(BaseModel):
     slow_mode: bool = False
     debug_mode: bool = False
 
+    @field_validator("mock_time")
+    @classmethod
+    def _mock_time_must_be_aware(cls, v: datetime | None) -> datetime | None:
+        """Normalize the simulated clock to UTC-aware at the construction boundary.
+
+        Every downstream comparator (TimeSimulator.calculate_campaign_progress,
+        NextEventCalculator.calculate_next_event_time, the delivery status
+        refinement) compares ``mock_time`` against UTC-aware flight datetimes.
+        A naive clock — e.g. an X-Mock-Time header parsed without an offset —
+        raises ``TypeError: can't compare offset-naive and offset-aware
+        datetimes`` deep in the request path, so coerce once here instead of
+        per-comparator.
+        """
+        return _ensure_aware(v) if v is not None else v
+
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AdCPTestContext | None":
         """Extract testing context from a raw HTTP headers dict.
@@ -112,8 +132,13 @@ class AdCPTestContext(BaseModel):
         if mock_time_header:
             try:
                 if mock_time_header.isdigit():
-                    mock_time = datetime.fromtimestamp(int(mock_time_header))
+                    # Epoch seconds are UTC-anchored: parse directly to an aware
+                    # UTC datetime. A naive fromtimestamp() would yield *local*
+                    # time, which the mock_time validator would then mislabel UTC.
+                    mock_time = datetime.fromtimestamp(int(mock_time_header), tz=UTC)
                 else:
+                    # A naive result (offset omitted, or Z stripped) is coerced
+                    # to UTC-aware by the mock_time field validator.
                     time_str = mock_time_header.rstrip("Z")
                     mock_time = datetime.fromisoformat(time_str)
             except (ValueError, OverflowError):
@@ -256,6 +281,14 @@ class NextEventCalculator:
         if current_time is None:
             current_time = datetime.now(UTC)
 
+        # Same invariant as calculate_campaign_progress (its sibling in the
+        # apply_testing_hooks pair): flight datetimes may arrive naive, the
+        # simulated clock is always UTC-aware, and a mixed comparison below
+        # raises TypeError. Coerce all inputs to UTC-aware.
+        start_date = _ensure_aware(start_date)
+        end_date = _ensure_aware(end_date)
+        current_time = _ensure_aware(current_time)
+
         # Use existing event timing logic
         next_event_time = TimeSimulator.jump_to_event_time(next_event, start_date, end_date)
 
@@ -346,6 +379,13 @@ class TimeSimulator:
         """Calculate campaign progress as percentage (0.0 to 1.0)."""
         if current_time is None:
             current_time = datetime.now(UTC)
+
+        # Callers may pass flight datetimes built from a naive date.combine();
+        # the simulated clock is always UTC-aware. Coerce naive inputs to UTC so
+        # the comparisons below never raise TypeError (offset-naive vs -aware).
+        start_date = _ensure_aware(start_date)
+        end_date = _ensure_aware(end_date)
+        current_time = _ensure_aware(current_time)
 
         if current_time <= start_date:
             return 0.0
@@ -594,8 +634,14 @@ def apply_testing_hooks(
     # Calculate progress and next event information
     response_headers: dict[str, str] = {}
     if campaign_info and any([testing_ctx.auto_advance, testing_ctx.mock_time, testing_ctx.jump_to_event]):
+        # Normalize once at the hook boundary: callers may build campaign_info
+        # dates from a naive date.combine(), and both TimeSimulator and
+        # NextEventCalculator below compare them against the (aware) simulated
+        # clock. mock_time itself is aware by field-validator invariant.
         start_date = campaign_info.get("start_date")
         end_date = campaign_info.get("end_date")
+        start_date = _ensure_aware(start_date) if start_date else start_date
+        end_date = _ensure_aware(end_date) if end_date else end_date
         current_time = testing_ctx.mock_time or datetime.now(UTC)
 
         if start_date and end_date:

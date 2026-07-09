@@ -134,9 +134,12 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-filter @alternative @status-filter
   Scenario Outline: Status filter - <filter_value>
-    Given a media buy "mb-active" owned by "buyer-001" with status "active"
-    And a media buy "mb-completed" owned by "buyer-001" with status "completed"
-    And a media buy "mb-paused" owned by "buyer-001" with status "paused"
+    # Seed one buy per canonical status (active, completed, paused, rejected,
+    # canceled, pending_creatives, pending_start) so EVERY Examples row has a
+    # matching buy to return. Seeding only active/completed/paused made the
+    # pending_*/rejected/canceled rows return empty, so the Then's loop never ran
+    # and the row passed vacuously (#1545 review).
+    Given multiple media buys owned by "buyer-001" in various statuses
     And the ad server adapter has delivery data for all media buys
     When the Buyer Agent requests delivery metrics with status_filter "<filter_value>"
     Then the response should include only media buys with status "<filter_value>"
