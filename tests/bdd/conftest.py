@@ -123,13 +123,18 @@ def pytest_configure(config: pytest.Config) -> None:
     # ever running the 5th transport. The ctx fixture's hard-error can't catch
     # this — collection never happens. Turn the silent drop into a hard error.
     # In-network bdd already pins BDD_XDIST_N=0 (docker-compose.e2e.yml). (#1420)
-    if os.environ.get("BDD_E2E_ENABLED") == "true":
+    # Exception: with E2E_PER_WORKER=1 each xdist worker targets its OWN server +
+    # DB (Phase B), so e2e_rest CAN run in parallel. The worker env inherits
+    # BDD_E2E_ENABLED (verified), so the transport is not dropped. Keep the guard
+    # for the shared-server case (the silent-drop hazard remains there).
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and os.environ.get("E2E_PER_WORKER") != "1":
         numprocesses = getattr(config.option, "numprocesses", None)
         if numprocesses not in (None, 0, "0"):
             raise pytest.UsageError(
                 f"BDD_E2E_ENABLED=true is incompatible with xdist (-n {numprocesses!r}): "
                 "the e2e_rest transport is silently dropped at collection and the suite "
-                "passes without ever running it. Run serially — set BDD_XDIST_N=0."
+                "passes without ever running it. Run serially (BDD_XDIST_N=0) or use "
+                "per-worker servers (E2E_PER_WORKER=1)."
             )
 
     import pathlib
@@ -2860,6 +2865,26 @@ def e2e_stack():
 
     base_url = os.environ.get("E2E_BASE_URL")
     postgres_url = os.environ.get("E2E_POSTGRES_URL")
+
+    # Phase B: per-worker e2e stacks. With E2E_PER_WORKER=1 under xdist, each
+    # worker (PYTEST_XDIST_WORKER="gwN") targets its OWN server container
+    # (network alias "server-gwN", port 8080) and its OWN database (adcp_gwN),
+    # provisioned by run_all_tests.sh — so e2e_rest runs in parallel with no
+    # shared-server/shared-DB contention. Falls back to the shared stack when off.
+    worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
+    if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
+        import re
+
+        # Server containers are named "<project>-server-gwN" (globally-unique so
+        # parallel worktrees don't collide) and reachable by that name on the
+        # compose network. Hit the server directly on :8080 (SKIP_NGINX).
+        proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
+        prefix = f"{proj}-" if proj else ""
+        base_url = f"http://{prefix}server-{worker}:8080"
+        if postgres_url:
+            # swap the database name in the URL path -> adcp_<worker>
+            postgres_url = re.sub(r"/[^/?]+(\?|$)", rf"/adcp_{worker}\1", postgres_url, count=1)
+
     if not base_url:
         return None
     try:

@@ -15,12 +15,22 @@
 services:
   postgres:
     image: postgres:17-alpine
+    # Throwaway test DB: ~79% of BDD wall time is CREATE DATABASE + DDL + writes
+    # (per-test isolated DBs). Putting PGDATA on tmpfs (RAM) makes template
+    # copies and DDL RAM-fast — this is the actual speed win, not durability
+    # flags (on tmpfs, fsync/synchronous_commit are moot: there is no disk to
+    # flush). Data is recreated every run and never persisted. max_connections
+    # is raised for many parallel xdist workers. tmpfs size via PGDATA_TMPFS_SIZE.
+    command:
+      - postgres
+      - -c
+      - max_connections=300
     environment:
       POSTGRES_DB: adcp
       POSTGRES_USER: adcp_user
       POSTGRES_PASSWORD: secure_password_change_me
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+    tmpfs:
+      - /var/lib/postgresql/data:size=${PGDATA_TMPFS_SIZE:-10g}
     # NO host port here — publishing lives in docker-compose.e2e.ports.yml, which
     # only the HOST paths overlay (conftest standalone branch, test-stack.sh). The
     # in-network runner uses this base file alone and reaches Postgres by service
@@ -115,7 +125,7 @@ services:
       # server sees it. E2E_BASE_URL = the in-network proxy; E2E_POSTGRES_URL =
       # the server DB (/adcp). BDD_E2E_ENABLED=true adds the e2e_rest transport to
       # the bdd parametrization (was off everywhere — needs this Docker stack).
-      BDD_E2E_ENABLED: "true"
+      BDD_E2E_ENABLED: "${BDD_E2E_ENABLED:-true}"
       E2E_BASE_URL: http://proxy:8000
       E2E_POSTGRES_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       # Suites that hit the running server reach it in-network (no host port).
@@ -139,7 +149,16 @@ services:
       # (1) all bdd workers share ONE live Postgres in e2e mode -> xdist races; and
       # (2) under xdist BDD_E2E_ENABLED doesn't reach the worker's collection, so
       # the e2e_rest 5th transport is silently dropped. -n0 collects in-process.
-      BDD_XDIST_N: "0"
+      BDD_XDIST_N: "${BDD_XDIST_N:-0}"
+      # xdist distribution mode: loadfile (default; whole feature file -> one
+      # worker) vs load (individual scenarios spread across workers). load
+      # removes the big-file wall-time floor but requires scenarios to be
+      # independent (no intra-file prerequisite coupling).
+      BDD_DIST: "${BDD_DIST:-loadfile}"
+      # Opt-in fast per-test DB path: clone from a schema template + skip the
+      # per-test DROP (throwaway clones wiped on tmpfs Postgres restart). Removes
+      # most per-test DB-lifecycle CPU under heavy xdist. Default off (unset).
+      TEST_DB_TEMPLATE: "${TEST_DB_TEMPLATE:-}"
       # bdd is the only suite using `pytest -n auto`. It MUST run serial in-network:
       # all bdd workers share ONE Postgres (postgres:5432/adcp_test), and the
       # factory-boy fixtures create tenants/principals with fixed IDs, so >1 worker
@@ -148,7 +167,7 @@ services:
       # clean main run). Pinning auto=1 serializes DB access -> deterministic green
       # (verified: 1451 passed / 5122 xfailed / 0 errors). Also keeps memory bounded
       # (the bare `-n auto` would otherwise spawn ~17 app-loading workers -> OOM).
-      PYTEST_XDIST_AUTO_NUM_WORKERS: "1"
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "${PYTEST_XDIST_AUTO_NUM_WORKERS:-1}"
       ADCP_TESTING: "true"
       ADCP_AUTH_TEST_MODE: "true"
       CREATE_SAMPLE_DATA: "true"
