@@ -13,7 +13,7 @@ away by raising ``InternalError`` (a JSON-RPC error) instead of returning the
 Task. These tests pin the returned-failed-Task contract on the wire artifact.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from a2a.types import InvalidRequestError, SendMessageRequest, Task, TaskState
@@ -105,6 +105,37 @@ async def test_typed_adcp_error_keeps_its_own_wire_code_on_failed_task():
         "VALIDATION_ERROR",
         recovery="correctable",
         message_substr="brief must not be empty",
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_extraction_failure_returns_failed_task_before_identity_resolution():
+    """Failure before identity resolution still returns the failed Task envelope.
+
+    This pins the ``identity = None`` hoist: auth-token extraction happens before
+    identity resolution, so the outer handler must not raise ``NameError`` while
+    recording/logging the original failure.
+    """
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(side_effect=RuntimeError("auth context unavailable"))
+    handler._send_protocol_webhook = AsyncMock()
+    ctx = make_a2a_context(headers={"host": "test.example.com"})
+    params = _make_nl_request("Show me available products in the catalog")
+
+    result = await handler.on_message_send(params, context=ctx)
+
+    assert isinstance(result, Task), f"expected a returned Task, got {type(result).__name__}"
+    assert result.status.state == TaskState.TASK_STATE_FAILED
+    assert_envelope_shape(
+        extract_processing_error_envelope(result),
+        "SERVICE_UNAVAILABLE",
+        recovery="terminal",
+        message_substr="auth context unavailable",
+    )
+    handler._send_protocol_webhook.assert_awaited_once_with(
+        result,
+        status="failed",
+        error="auth context unavailable",
     )
 
 

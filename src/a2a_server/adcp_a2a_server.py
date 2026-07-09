@@ -222,6 +222,11 @@ class AdCPRequestHandler(RequestHandler):
             "success": False,
         }
 
+    async def _fail_task_with_webhook(self, task: Task, error: str) -> None:
+        """Mark a task failed and notify protocol webhooks with a required reason."""
+        task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
+        await self._send_protocol_webhook(task, status="failed", error=error)
+
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
 
@@ -736,14 +741,10 @@ class AdCPRequestHandler(RequestHandler):
                 successful_skills = [res["skill"] for res in results if res["success"]]
 
                 if failed_skills and not successful_skills:
-                    # All skills failed - mark task as failed
-                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-
-                    # Send protocol-level webhook notification for failure
                     error_messages = [
                         res["error_envelope"]["errors"][0]["message"] for res in results if not res["success"]
                     ]
-                    await self._send_protocol_webhook(task, status="failed", error="; ".join(error_messages))
+                    await self._fail_task_with_webhook(task, "; ".join(error_messages))
 
                     return task
                 elif successful_skills:
@@ -964,7 +965,6 @@ class AdCPRequestHandler(RequestHandler):
                 principal_id=err_principal_id,
             )
 
-            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
             # Attach error to task artifacts as a spec-compliant two-layer
             # envelope (same shape as failed-skill DataParts) so storyboard
             # runners can ``JSON.parse`` the artifact uniformly regardless of
@@ -981,8 +981,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             )
 
-            # Send protocol-level webhook notification for failure if configured
-            await self._send_protocol_webhook(task, status="failed")
+            await self._fail_task_with_webhook(task, str(e))
 
             # Per AdCP 3.1.x transport rules (spec prose:
             # building/operating/transport-errors.mdx "Layer Separation" and the
@@ -991,7 +990,9 @@ class AdCPRequestHandler(RequestHandler):
             # Task carrying the envelope artifact. JSON-RPC errors are reserved
             # for genuine transport faults (A2AError, re-raised above). So we
             # fall through to the shared store-and-return below — never raise
-            # InternalError here.
+            # InternalError here. Cross-transport execution of the same BDD
+            # scenario is tracked in #1574 once the transport-aware harness
+            # from #1430 is available.
 
         self.tasks[task_id] = task
         return task

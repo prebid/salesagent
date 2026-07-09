@@ -211,6 +211,16 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
+
+  @T-UC-002-ext-nl-unsupported @extension @error @transport-layer-separation @a2a
+  Scenario: NL media-buy request is unsupported -- returned as a failed task, not a transport error
+    Given an authenticated buyer
+    When the buyer sends a natural-language "create a media buy" request
+    Then the error code should be "UNSUPPORTED_FEATURE"
+    And the error recovery should be "correctable"
+    # grounded: AdCP 3.1.0-beta.3 building/operating/transport-errors.mdx "Layer Separation"
+    # storyboard: ungraded, pending upstream obligation (#1574)
+    # drives the top-level on_message_send except -> failed Task envelope, not JSON-RPC
     # --- ext-e: Duplicate Products ---
 
   @T-UC-002-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3

@@ -10,6 +10,9 @@ beads: salesagent-2rq
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import MagicMock
+
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
@@ -59,6 +62,12 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
 def given_valid_request(ctx: dict) -> None:
     """Set up a generic valid create_media_buy request (account populated separately)."""
     ctx.setdefault("account_ref", None)
+
+
+@given("an authenticated buyer")
+def given_authenticated_buyer(ctx: dict) -> None:
+    """Record that this scenario uses the harness-created buyer identity."""
+    ctx["has_auth"] = True
 
 
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
@@ -185,6 +194,47 @@ def given_account_active(ctx: dict) -> None:
         operator=f"{account_id}.com",
     )
     AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+
+
+@when(parsers.parse('the buyer sends a natural-language "{request_text}" request'))
+def when_buyer_sends_nl_a2a_request(ctx: dict, request_text: str) -> None:
+    """Drive real A2A ``on_message_send`` with a natural-language text part."""
+    from a2a.server.routes.common import ServerCallContext
+    from a2a.types import SendMessageRequest, Task, TaskState
+
+    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+    from src.core.config_loader import set_current_tenant
+    from src.core.exceptions import AdCPError
+    from tests.harness._base import _envelope_to_adcp_error
+    from tests.harness.transport import Transport
+    from tests.utils.a2a_helpers import create_a2a_text_message, extract_data_from_artifact
+
+    env = ctx["env"]
+    identity = env.identity_for(Transport.A2A)
+    set_current_tenant(identity.tenant)
+
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value=identity.auth_token)
+    handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+    async def _call() -> Task:
+        message = create_a2a_text_message(request_text)
+        return await handler.on_message_send(SendMessageRequest(message=message), ServerCallContext())
+
+    try:
+        result = asyncio.run(_call())
+    except Exception as exc:
+        ctx["error"] = exc
+        return
+
+    ctx["response"] = result
+    if result.status.state == TaskState.TASK_STATE_FAILED:
+        if not result.artifacts:
+            ctx["error"] = AdCPError(f"A2A task failed without artifacts: {result.status}")
+            return
+        envelope = extract_data_from_artifact(result.artifacts[0])
+        ctx["wire_error_envelope"] = envelope
+        ctx["error"] = _envelope_to_adcp_error(envelope, fallback_message="A2A natural-language request failed")
 
 
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))

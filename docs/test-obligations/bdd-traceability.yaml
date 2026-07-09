@@ -858,6 +858,12 @@ mappings:
       upstream_refs: ["BR-UC-002-ext-d"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-ext-nl-unsupported"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["transport-errors.mdx#Layer-Separation"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-ext-e"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null

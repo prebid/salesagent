@@ -2566,6 +2566,9 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-replay",
     "T-UC-002-v31-idempotency-missing",
 }
+_UC002_MEDIA_BUY_CREATE_WIRED: set[str] = _UC002_IDEMPOTENCY_WIRED | {
+    "transport-layer-separation",
+}
 
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
@@ -2799,13 +2802,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
-        elif marker_names & _UC002_IDEMPOTENCY_WIRED:
-            # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
-            # real create_media_buy through every transport (the replay scenario
-            # creates once, then sends the same key again to exercise the
-            # production replay path). Only the two wired tags go live here; the
-            # remaining @idempotency-key scenarios (in-flight, expired, conflict,
-            # pattern, canonical) stay blanket-xfailed below until their
+        elif marker_names & _UC002_MEDIA_BUY_CREATE_WIRED:
+            # Wired create-media-buy scenarios — MediaBuyCreateEnv seeds the
+            # tenant/principal/product chain and drives the real transport path.
+            # Most UC-002 scenarios stay blanket-xfailed below until their
             # production gaps + steps are wired.
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv

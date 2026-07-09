@@ -16,14 +16,14 @@ from unittest.mock import MagicMock
 
 import pytest
 from a2a.server.routes.common import ServerCallContext
-from a2a.types import Message, SendMessageRequest, Task
+from a2a.types import Message, SendMessageRequest, Task, TaskState
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+from tests.utils.a2a_helpers import create_a2a_message_with_skill, create_a2a_text_message, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -338,6 +338,47 @@ class TestA2AErrorPropagation:
         # vs the rendered message substring) — both envelope layers carry it.
         wire_field = artifact_data["errors"][0].get("field") or ""
         assert "budget" in wire_field, f"expected a budget field path on the wire, got {wire_field!r}"
+
+    async def test_nl_create_media_buy_unsupported_returns_failed_task_envelope(
+        self, handler, test_tenant, test_principal
+    ):
+        """NL create-media-buy is an application failure in a failed Task, not JSON-RPC.
+
+        Grounding: AdCP 3.1.0-beta.3
+        ``building/operating/transport-errors.mdx`` "Layer Separation";
+        storyboard: ungraded, pending upstream obligation (#1574).
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        message = create_a2a_text_message("create a media buy")
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.status.state == TaskState.TASK_STATE_FAILED
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(
+            artifact_data,
+            "UNSUPPORTED_FEATURE",
+            recovery="correctable",
+            message_substr="Natural-language create_media_buy is not supported",
+        )
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
