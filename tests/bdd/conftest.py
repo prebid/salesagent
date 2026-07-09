@@ -483,6 +483,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # E2E_REST: RestE2EDispatcher has no update-endpoint support — it POSTs the
+        # update body to the fixed create endpoint and never sets _active_update, so
+        # update_media_buy submitted responses don't parse (resp is None). The 3 UC-003
+        # manual-approval scenarios grade green on a2a/mcp/rest (incl. the async A2A
+        # submitted path); e2e_rest is xfailed pending RestE2EDispatcher update support.
+        _UC003_E2E_MANUAL_APPROVAL_TAGS = {
+            "T-UC-003-alt-manual",
+            "T-UC-003-approval-tenant",
+            "T-UC-003-approval-adapter",
+        }
+        if is_e2e_rest and (marker_names & _UC003_E2E_MANUAL_APPROVAL_TAGS):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="RestE2EDispatcher lacks update-endpoint support (salesagent-3aec)",
+                    strict=True,
+                )
+            )
+
         # FIXME(salesagent-nmg9, salesagent-rwly, salesagent-hamk): E2E_REST —
         # set_registry_formats has no sidecar mock path. Docker's real creative
         # agent serves its own catalog, so scenarios that inject specific format
