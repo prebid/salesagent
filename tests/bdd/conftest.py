@@ -2609,13 +2609,20 @@ _UC003_WIRED: set[str] = {
 # queries run through every transport). The rest stay blanket-xfailed in
 # _harness_env until their steps are wired.
 _UC019_WIRED: set[str] = {
-    # AdCP 3.1.0-beta.3 revision/confirmed_at invariants (#1544)
+    # AdCP 3.1.0-beta.3 revision/confirmed_at invariants (#1544). These scenarios
+    # create a REAL buy (via create_default_buy) and drive real revision/
+    # confirmed_at transitions, so they must run on MediaBuyLifecycleEnv (the
+    # list-only MediaBuyListEnv has no create_default_buy). Query-only scenarios
+    # stay on MediaBuyListEnv (the else branch).
     "T-UC-019-inv-291-1",
     "T-UC-019-inv-291-4",
     "T-UC-019-inv-291-5",
     "T-UC-019-inv-confirmed-at-present",
     "T-UC-019-inv-confirmed-at-stable",
     "T-UC-019-lifecycle-approval",
+    "T-UC-019-partition-revision",
+    "T-UC-019-boundary-revision",
+    "T-UC-019-partition-confirmed-at",
 }
 
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
@@ -2623,8 +2630,10 @@ _UC019_WIRED: set[str] = {
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
-_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
+# variant would 404). Currently empty: get_media_buys (UC-019) gained its REST
+# binding (POST /api/v1/media-buys/query) in #1544, and both UC-019 harness envs
+# (MediaBuyListEnv, MediaBuyLifecycleEnv) dispatch it, so UC-019 now runs a2a/mcp/rest.
+_NO_REST_UC_TAG_PREFIXES: tuple[str, ...] = ()
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -2913,18 +2922,31 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-019":
         marker_names = {m.name for m in request.node.iter_markers()}
+        request.getfixturevalue("integration_db")
         if marker_names & _UC019_WIRED:
             # Wired revision/confirmed_at invariants — MediaBuyLifecycleEnv
             # composes create/update/get so Given steps drive real transitions
-            # and the query runs through every transport.
-            request.getfixturevalue("integration_db")
+            # and the query runs through every transport (incl. REST). #1544.
             from tests.harness.media_buy_lifecycle import MediaBuyLifecycleEnv
 
             with MediaBuyLifecycleEnv(e2e_config=ctx.get("e2e_config")) as env:
                 _seed_media_buy_ctx(ctx, env)
                 yield
         else:
-            pytest.xfail("UC-019 harness wired only for the revision/confirmed_at storyboard scenarios (#1544)")
+            # Broader get_media_buys query scenarios — MediaBuyListEnv runs the
+            # real _get_media_buys_impl and its A2A/MCP/REST wrappers against a
+            # real DB (no adapter mock; list is a pure read). Scenarios seed buys
+            # via factories under ctx["tenant"]/["principal"] (principal
+            # "buyer-001" matches the feature files). Genuine spec-production gaps
+            # stay xfailed via _UC019_XFAIL_TAGS / the selective blocks above.
+            from tests.harness.media_buy_list import MediaBuyListEnv
+
+            with MediaBuyListEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+                tenant, principal = env.setup_default_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                yield
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -3052,21 +3074,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
         with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
             ctx["env"] = env
-            yield
-    elif uc == "UC-019":
-        # get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
-        # its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
-        # read). Scenarios seed buys via factories under ctx["tenant"]/["principal"]
-        # (principal "buyer-001" matches the feature files). Genuine spec-production
-        # gaps stay xfailed via _UC019_XFAIL_TAGS / the selective blocks above.
-        request.getfixturevalue("integration_db")
-        from tests.harness.media_buy_list import MediaBuyListEnv
-
-        with MediaBuyListEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
-            tenant, principal = env.setup_default_data()
-            ctx["env"] = env
-            ctx["tenant"] = tenant
-            ctx["principal"] = principal
             yield
     else:
         pytest.xfail(f"No harness wired for {uc}")
