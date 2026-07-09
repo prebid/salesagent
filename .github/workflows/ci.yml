@@ -386,7 +386,7 @@ jobs:
         with:
           paths: ${{ steps.bdd_shard.outputs.paths }}
           coverage_xml: coverage-bdd-${{ matrix.shard }}.xml
-          extra_args: -n auto --dist=loadfile --timeout=60
+          extra_args: -n auto --dist=load --timeout=60
       - name: Combine xdist coverage fragments
         run: |
           shopt -s nullglob
