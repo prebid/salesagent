@@ -18,9 +18,11 @@ from types import SimpleNamespace
 from adcp.types import MediaBuyStatus
 
 from src.core.tools._media_buy_status import (
+    CANONICAL_SERVING,
     CANONICAL_STATUSES,
     NO_MORE_DATA_STATUSES,
     PERSISTED_STATUS_TO_CANONICAL,
+    SERVING_PERSISTED_STATUSES,
     TERMINAL_STATUSES,
     resolve_canonical_status,
 )
@@ -131,6 +133,23 @@ class TestCanonicalVocabularyPinnedToSdk:
         """
         assert NO_MORE_DATA_STATUSES == TERMINAL_STATUSES - {"paused"}
         assert NO_MORE_DATA_STATUSES == {"completed", "rejected", "canceled", "failed"}
+
+    def test_serving_persisted_statuses_membership_is_pinned(self):
+        """Pin the exact SERVING_PERSISTED_STATUSES set (drives the schedulers' queries).
+
+        Regression #1556: the schedulers hardcoded partial copies of this set and
+        stranded legacy "ready" rows — reported active by get_media_buy_delivery
+        but never sent delivery webhooks and never migrated. A silent widen/narrow
+        of the map would change which buys the schedulers process without a
+        failing test unless the membership itself is pinned.
+        """
+        assert SERVING_PERSISTED_STATUSES == {"active", "approved", "ready", "scheduled"}
+
+    def test_serving_persisted_statuses_is_derived_from_the_map(self):
+        """Every member maps to CANONICAL_SERVING and no non-member does."""
+        assert SERVING_PERSISTED_STATUSES == frozenset(
+            k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == CANONICAL_SERVING
+        )
 
 
 class TestAdcpProjectionAgreesWithCanonicalMap:

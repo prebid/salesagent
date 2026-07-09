@@ -1,11 +1,15 @@
-"""Shared persisted-status resolver for the two required read tools.
+"""Shared persisted-status resolver for the two required read tools and the
+status/delivery-webhook schedulers.
 
 ``get_media_buy_delivery`` and ``get_media_buys`` each map the persisted
 ``MediaBuy.status`` column onto a wire status vocabulary, refining generic
 serving states against the flight window. That map + date-refinement is ONE
 logical operation (CLAUDE.md DRY invariant), so it lives here once instead of
 being mirrored in two modules where the copies drifted (delivery dropped
-unmapped rows; list showed them).
+unmapped rows; list showed them). The background schedulers
+(``media_buy_status_scheduler.py``, ``delivery_webhook_scheduler.py``) consume
+``SERVING_PERSISTED_STATUSES`` below so their persisted-column queries can
+never drift from what the read tools report as serving.
 
 Canonical output vocabulary — the media-buy lifecycle taxonomy plus the
 delivery-only terminal ``failed``::
@@ -117,6 +121,19 @@ PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
 # the lifecycle enum fails loudly instead of silently making a new status
 # unfilterable.
 CANONICAL_STATUSES: frozenset[str] = frozenset(PERSISTED_STATUS_TO_CANONICAL.values())
+
+# Persisted statuses that mean "this buy is (or may be) serving, subject to the
+# flight window" — everything that maps to CANONICAL_SERVING, including the
+# legacy aliases ("ready", "scheduled", "approved") still resident in
+# production rows. Derived from the map so the schedulers can never drift from
+# the read tools: the delivery webhook scheduler selects exactly this set, and
+# the status scheduler migrates the legacy aliases to "active"/"completed".
+# (Regression #1556: the schedulers hardcoded partial copies and stranded
+# legacy "ready" rows — reported active by get_media_buy_delivery but never
+# sent delivery webhooks and never migrated.)
+SERVING_PERSISTED_STATUSES: frozenset[str] = frozenset(
+    k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == CANONICAL_SERVING
+)
 
 
 def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool = False) -> str:

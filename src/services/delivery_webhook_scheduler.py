@@ -23,6 +23,7 @@ from src.core.database.models import PushNotificationConfig as DBPushNotificatio
 from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
+from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.utils import utc_flight_start
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -92,8 +93,11 @@ class DeliveryWebhookScheduler:
 
         try:
             with get_db_session() as session:
-                # Find all active media buys (cross-tenant scheduler query)
-                media_buys = MediaBuyRepository.get_all_by_statuses(session, ["active", "approved"])
+                # Find all serving media buys (cross-tenant scheduler query).
+                # Uses the derived serving set so legacy aliases ("ready" /
+                # "scheduled") are included — a hardcoded partial list stranded
+                # them without webhooks (#1556).
+                media_buys = MediaBuyRepository.get_all_by_statuses(session, sorted(SERVING_PERSISTED_STATUSES))
 
                 reports_sent = 0
                 errors = 0
@@ -217,11 +221,12 @@ class DeliveryWebhookScheduler:
             )
 
             # Include active + completed statuses: the scheduler already filters
-            # by DB status (active/approved) at query time, so the delivery impl
-            # should include ended campaigns (dynamic status=completed) rather
-            # than filtering them out and reporting "not found" errors.
-            # We exclude "pending_start" (ready) to avoid returning delivery
-            # data for future-dated campaigns that haven't started yet.
+            # by persisted DB status (SERVING_PERSISTED_STATUSES) at query time,
+            # so the delivery impl should include ended campaigns (dynamic
+            # status=completed) rather than filtering them out and reporting
+            # "not found" errors. A pre-flight buy resolves to "pending_start"
+            # and is excluded, so no delivery data is returned for future-dated
+            # campaigns that haven't started yet.
             from adcp.types import MediaBuyStatus
 
             req = GetMediaBuyDeliveryRequest(

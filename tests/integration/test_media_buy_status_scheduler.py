@@ -595,3 +595,111 @@ async def test_scheduler_idempotent(integration_db):
     # Run scheduler third time - still no-op
     await scheduler._update_statuses()
     assert _get_media_buy_status(tenant_id, media_buy_id) == "active"
+
+
+# =============================================================================
+# Test: legacy serving aliases (ready/approved) are migrated, not stranded (#1556)
+# =============================================================================
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_legacy_ready_transitions_to_active_when_start_time_passed(integration_db):
+    """A legacy mid-flight 'ready' row is migrated to 'active'.
+
+    Regression #1556: the scheduler's query omitted 'ready' entirely, and its
+    activation branch hardcoded a partial status list — so even a fetched
+    'ready' row was ignored mid-flight. 'ready' is a purely date-gated legacy
+    serving alias (already approved), so it must activate without a creative
+    check, exactly like 'scheduled'.
+    """
+    from src.core.database.models import MediaBuy as MediaBuyModel
+    from tests.factories import MediaBuyFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="t_1556_ready", principal_id="p_1556_ready") as env:
+        tenant, principal = env.setup_default_data()
+        buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id="mb_1556_ready_active",
+            status="ready",
+            start_date=(datetime.now(UTC) - timedelta(hours=1)).date(),
+            end_date=(datetime.now(UTC) + timedelta(days=7)).date(),
+            start_time=datetime.now(UTC) - timedelta(hours=1),
+            end_time=datetime.now(UTC) + timedelta(days=7),
+        )
+
+        await MediaBuyStatusScheduler()._update_statuses()
+
+        env.get_session().expire_all()
+        row = env.get_one(MediaBuyModel, media_buy_id=buy.media_buy_id)
+        assert row.status == "active"
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_approved_transitions_to_active_when_start_time_passed(integration_db):
+    """A mid-flight 'approved' row activates without a creative check.
+
+    'approved' maps to the generic serving state in PERSISTED_STATUS_TO_CANONICAL
+    (purely date-gated; creative-gating lives in pending_start/pending_activation),
+    so the scheduler must promote it once the flight starts — even with no
+    creatives assigned.
+    """
+    from src.core.database.models import MediaBuy as MediaBuyModel
+    from tests.factories import MediaBuyFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="t_1556_appr", principal_id="p_1556_appr") as env:
+        tenant, principal = env.setup_default_data()
+        buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id="mb_1556_approved_active",
+            status="approved",
+            start_date=(datetime.now(UTC) - timedelta(hours=1)).date(),
+            end_date=(datetime.now(UTC) + timedelta(days=7)).date(),
+            start_time=datetime.now(UTC) - timedelta(hours=1),
+            end_time=datetime.now(UTC) + timedelta(days=7),
+        )
+
+        await MediaBuyStatusScheduler()._update_statuses()
+
+        env.get_session().expire_all()
+        row = env.get_one(MediaBuyModel, media_buy_id=buy.media_buy_id)
+        assert row.status == "active"
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_legacy_ready_transitions_to_completed_when_end_time_passed(integration_db):
+    """A legacy 'ready' row past its flight end is migrated to 'completed'.
+
+    Pins the deliberate #1556 behavior change: post-flight legacy serving
+    aliases auto-complete, catching the persisted column up with what the read
+    tools already report (resolve_canonical_status date-refines them to
+    'completed').
+    """
+    from src.core.database.models import MediaBuy as MediaBuyModel
+    from tests.factories import MediaBuyFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="t_1556_done", principal_id="p_1556_done") as env:
+        tenant, principal = env.setup_default_data()
+        buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id="mb_1556_ready_completed",
+            status="ready",
+            start_date=(datetime.now(UTC) - timedelta(days=14)).date(),
+            end_date=(datetime.now(UTC) - timedelta(hours=1)).date(),
+            start_time=datetime.now(UTC) - timedelta(days=14),
+            end_time=datetime.now(UTC) - timedelta(hours=1),
+        )
+
+        await MediaBuyStatusScheduler()._update_statuses()
+
+        env.get_session().expire_all()
+        row = env.get_one(MediaBuyModel, media_buy_id=buy.media_buy_id)
+        assert row.status == "completed"

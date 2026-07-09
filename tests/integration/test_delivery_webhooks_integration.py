@@ -24,6 +24,7 @@ from src.core.database.models import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
 
@@ -453,3 +454,43 @@ async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
         # Verify simulator was called (proof that testing_ctx.dry_run was respected)
         assert mock_sim.called
         assert mock_send.call_count == 1
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persisted_status", sorted(SERVING_PERSISTED_STATUSES))
+async def test_serving_persisted_status_receives_delivery_webhook(integration_db, persisted_status):
+    """Every serving persisted status — legacy aliases included — is selected for webhooks.
+
+    Regression #1556: the scheduler queried a hardcoded ["active", "approved"],
+    so a legacy mid-flight "ready" (or "scheduled") row with a configured
+    reporting_webhook was reported active by get_media_buy_delivery yet never
+    received scheduled delivery webhooks. The query must select exactly the
+    serving set derived from the canonical status map.
+    """
+    from tests.factories import MediaBuyFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="t_1556", principal_id="p_1556") as env:
+        tenant, principal = env.setup_default_data()
+        buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id=f"mb_1556_{persisted_status}",
+            status=persisted_status,  # legacy alias, mid-flight
+            start_date=datetime.now(UTC).date() - timedelta(days=7),
+            end_date=datetime.now(UTC).date() + timedelta(days=7),
+            raw_request={
+                "reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"},
+            },
+        )
+
+        scheduler = DeliveryWebhookScheduler()
+        with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send:
+            await scheduler._send_reports()
+
+        assert mock_send.call_count == 1, (
+            f"persisted status {persisted_status!r} with a reporting_webhook must be "
+            f"selected by the delivery webhook scheduler (got {mock_send.call_count} sends)"
+        )
+        assert mock_send.call_args.args[0].media_buy_id == buy.media_buy_id
