@@ -105,6 +105,7 @@ class TestAuthBeforeVersionOnMcpMiddleware:
     async def test_auth_rejection_short_circuits_version_check(self):
         from src.core.exceptions import AdCPAuthenticationError
         from src.core.mcp_auth_middleware import MCPAuthMiddleware
+        from src.core.tool_error_logging import AdCPToolError
 
         fastmcp_ctx = MagicMock()
 
@@ -122,13 +123,15 @@ class TestAuthBeforeVersionOnMcpMiddleware:
         # call_next stands in for the downstream RequestCompatMiddleware version gate.
         call_next = AsyncMock()
 
-        # An invalid token makes resolve_identity raise AUTH inside the middleware.
+        # An invalid token makes resolve_identity raise AUTH inside the middleware,
+        # which the middleware translates to the two-layer AUTH envelope.
         with patch(
             "src.core.mcp_auth_middleware.resolve_identity_from_context",
             side_effect=AdCPAuthenticationError("Invalid token"),
         ):
-            with pytest.raises(AdCPAuthenticationError):
+            with pytest.raises(AdCPToolError) as exc:
                 await MCPAuthMiddleware().on_call_tool(ctx, call_next)
 
-        # The version gate downstream was never reached — AUTH short-circuited it.
+        # AUTH won (not VERSION) and the version gate downstream was never reached.
+        assert exc.value.envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
         call_next.assert_not_awaited()

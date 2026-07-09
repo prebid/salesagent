@@ -148,8 +148,14 @@ class TestMCPAuthMiddlewareBehavior:
 
     @pytest.mark.asyncio
     async def test_auth_failure_raises_before_tool_runs(self, middleware, mock_context):
-        """Auth-required tool with invalid token: error before tool body."""
+        """Auth-required tool with invalid token: translated AUTH envelope before the tool body.
+
+        The middleware translates the AdCPError to the two-layer envelope
+        (AdCPToolError) itself, since a raw middleware raise bypasses the tool
+        wrapper's error logging and would surface on the wire without a code.
+        """
         from src.core.exceptions import AdCPAuthenticationError
+        from src.core.tool_error_logging import AdCPToolError
 
         mock_context.message = MagicMock()
         mock_context.message.name = "create_media_buy"
@@ -160,9 +166,11 @@ class TestMCPAuthMiddlewareBehavior:
             "src.core.mcp_auth_middleware.resolve_identity_from_context",
             side_effect=AdCPAuthenticationError("Invalid token"),
         ):
-            with pytest.raises(AdCPAuthenticationError):
+            with pytest.raises(AdCPToolError) as exc:
                 await middleware.on_call_tool(mock_context, call_next)
 
+        # Wire envelope carries the auth code — not a code-less error.
+        assert exc.value.envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
         # Tool was NOT called
         call_next.assert_not_awaited()
 
@@ -174,9 +182,10 @@ class TestMCPAuthMiddlewareBehavior:
         but returns a principal-less identity for a MISSING one. Without the
         middleware guard the request would fall through to the version check and
         flip the error ordering on missing-vs-invalid. The middleware rejects the
-        principal-less identity so the order is stable across both cases.
+        principal-less identity, translating it to the same AUTH_TOKEN_INVALID
+        envelope, so the order and wire shape are stable across both cases.
         """
-        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.tool_error_logging import AdCPToolError
 
         mock_context.message = MagicMock()
         mock_context.message.name = "create_media_buy"  # auth-required
@@ -189,9 +198,10 @@ class TestMCPAuthMiddlewareBehavior:
             "src.core.mcp_auth_middleware.resolve_identity_from_context",
             return_value=principal_less,
         ):
-            with pytest.raises(AdCPAuthenticationError):
+            with pytest.raises(AdCPToolError) as exc:
                 await middleware.on_call_tool(mock_context, call_next)
 
+        assert exc.value.envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
         call_next.assert_not_awaited()
 
     @pytest.mark.asyncio
