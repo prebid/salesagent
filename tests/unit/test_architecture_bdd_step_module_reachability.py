@@ -30,21 +30,35 @@ _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _CONFTEST = _STEPS_DIR.parent / "conftest.py"
 _STEPDEF_PREFIX = "pytestbdd_stepdef_"
 
-# Step-defining modules not yet in pytest_plugins. RATCHETING baseline — may
-# only shrink, never grow. Each entry is actively-maintained pending-harness
-# work (recently strengthened, serving real feature scenarios) that is dead
-# today because (a) it is unregistered AND (b) no per-UC harness exists, so its
-# scenarios xfail at the harness gate (conftest.py) regardless of registration.
-# Wiring them now yields zero behavioral benefit and would turn 15 step-text
-# collisions into live shadows that break test_architecture_bdd_no_shadowed_steps.
-# Resolution per module: add the per-UC harness, resolve the step-text
-# collisions, register it, and REMOVE it from this set.
-# FIXME(salesagent-mdhh): wire each module + harness, then delete its entry.
+# Step-defining modules not in conftest's pytest_plugins. RATCHETING baseline —
+# may only shrink, never grow. Two DISTINCT reasons an entry is allowed:
+#
+# (A) Dead-pending-harness: unregistered AND no per-UC harness exists, so the
+#     scenarios xfail at the harness gate (conftest.py) regardless of
+#     registration. Wiring now yields zero behavioral benefit and would turn
+#     step-text collisions into live shadows (test_architecture_bdd_no_shadowed_steps).
+#     Resolution: add the per-UC harness, resolve the collisions, register it,
+#     and REMOVE the entry.
+#     FIXME(salesagent-mdhh): wire each module + harness, then delete its entry.
+#
+# (B) Intentionally-local: the module IS live, but registered LOCALLY in its test
+#     module (``from … import *``) rather than globally via pytest_plugins — on
+#     purpose, so its intentional generic-step overrides stay scoped to that UC
+#     instead of shadowing every other UC. Global registration would be a
+#     regression, so this kind of entry is a PERMANENT exception, not pending work.
 _ALLOWED_UNREGISTERED: set[str] = {
+    # (A) dead-pending-harness:
     "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc002_task_query",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc026_package_media_buy",
+    # (B) intentionally-local (live via test_uc019_query_media_buys.py `import *`;
+    # kept out of pytest_plugins so its 8 generic-step overrides stay UC-019-scoped):
+    "tests.bdd.steps.domain.uc019_query_media_buys",
+    # NOTE: uc003_update_media_buy, given_media_buy, and then_media_buy are
+    # globally registered in conftest pytest_plugins (the #1544 wired UC-002/003/019
+    # revision/confirmed_at scenarios need them and they do not redefine generic
+    # steps), so they are intentionally NOT allowlisted here.
 }
 
 

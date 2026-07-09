@@ -1649,6 +1649,16 @@ class AssetStatus(SalesAgentBaseModel):
     status: str  # Status: draft, active, submitted, failed, etc.
     message: str | None = None  # Status message
     workflow_step_id: str | None = None  # HITL workflow step ID for manual approval
+    # Seller-side concept enrichment (#1506). AdCP exposes read-only
+    # concept_id/concept_name on list_creatives but carries no concept on
+    # sync_creatives, so there is no protocol writer. An adapter may derive a
+    # fallback concept from its native creative grouping (e.g. the GAM Order)
+    # and surface it here. This is explicitly NOT the authoritative buyer-side
+    # concept: concept_source records the provenance so a future
+    # buyer-supplied concept can be distinguished and take precedence.
+    concept_id: str | None = None  # Seller-derived concept grouping id
+    concept_name: str | None = None  # Human-readable concept name
+    concept_source: str | None = None  # Provenance marker, e.g. "gam_order"
 
 
 # Unified update models

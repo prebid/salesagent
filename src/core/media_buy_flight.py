@@ -26,6 +26,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.utils import utc_flight_end, utc_flight_start
+
 
 def _as_utc(value: datetime) -> datetime:
     """Normalize a naive-or-aware datetime to UTC-aware (naive is assumed UTC)."""
@@ -35,22 +37,23 @@ def _as_utc(value: datetime) -> datetime:
 def resolve_flight_window_utc(media_buy: Any) -> tuple[datetime | None, datetime | None]:
     """Resolve ``(start, end)`` flight bounds as UTC-aware datetimes.
 
-    Prefers ``start_time``/``end_time``; falls back to ``start_date`` at the
-    start of the day (00:00:00) and ``end_date`` at the end of the day
-    (23:59:59.999999). A bound is ``None`` when neither its ``*_time`` nor
-    ``*_date`` source is set.
+    Prefers ``start_time``/``end_time``; falls back to the date-only
+    ``start_date``/``end_date`` via the canonical day-bound helpers
+    (:func:`src.core.utils.utc_flight_start` / :func:`utc_flight_end`), so there
+    is a single definition of "start/end of a flight date". A bound is ``None``
+    when neither its ``*_time`` nor ``*_date`` source is set.
     """
     start: datetime | None = None
     if media_buy.start_time:
         start = _as_utc(media_buy.start_time)
     elif media_buy.start_date:
-        start = datetime.combine(media_buy.start_date, datetime.min.time(), tzinfo=UTC)
+        start = utc_flight_start(media_buy.start_date)
 
     end: datetime | None = None
     if media_buy.end_time:
         end = _as_utc(media_buy.end_time)
     elif media_buy.end_date:
-        end = datetime.combine(media_buy.end_date, datetime.max.time(), tzinfo=UTC)
+        end = utc_flight_end(media_buy.end_date)
 
     return start, end
 

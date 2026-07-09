@@ -2040,14 +2040,14 @@ class TestAdCPContract:
             impressions=25000.0,
             spend=500.75,
             clicks=125.0,
-            video_completions=None,
+            completed_views=None,
             pacing_index=1.0,
         )
 
         daily_breakdown = DailyBreakdown(date="2025-01-15", impressions=1250.0, spend=25.05)
 
         delivery_totals = DeliveryTotals(
-            impressions=25000.0, spend=500.75, clicks=125.0, ctr=0.005, video_completions=None, completion_rate=None
+            impressions=25000.0, spend=500.75, clicks=125.0, ctr=0.005, completed_views=None, completion_rate=None
         )
 
         delivery_data = MediaBuyDeliveryData(
@@ -2063,7 +2063,7 @@ class TestAdCPContract:
         reporting_period_dict = {"start": "2025-01-01T00:00:00Z", "end": "2025-01-31T23:59:59Z"}
 
         aggregated_totals = AggregatedTotals(
-            impressions=25000.0, spend=500.75, clicks=125.0, video_completions=None, media_buy_count=1
+            impressions=25000.0, spend=500.75, clicks=125.0, completed_views=None, media_buy_count=1
         )
 
         # Create AdCP-compliant response

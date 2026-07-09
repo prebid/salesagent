@@ -38,6 +38,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -126,6 +127,7 @@ from src.core.helpers.creative_helpers import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object, to_reporting_webhook
 from src.core.schemas import (
+    AssetStatus,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
@@ -185,6 +187,59 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
         List of creative IDs if present, None otherwise
     """
     return getattr(package, "creative_ids", None)
+
+
+def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) -> dict:
+    """Merge an adapter's push result into a creative's ``data`` blob.
+
+    Returns a new dict; does not mutate the input. Two enrichments are folded in,
+    both fill-only-when-absent so an existing value is never overwritten:
+
+    - ``platform_creative_id`` — the ad server's creative id, used to associate
+      already-synced creatives and to skip re-pushing on re-approval.
+    - ``concept_id`` / ``concept_name`` / ``concept_source`` — the seller-side
+      concept enrichment (#1506). AdCP exposes concept_id/concept_name read-only on
+      list_creatives but carries no concept on sync_creatives, so an adapter may
+      derive a fallback (e.g. the GAM Order). ``concept_source`` records provenance;
+      because we only fill when absent, a buyer-supplied concept (a future
+      spec-defined field) is preserved and takes precedence over this fallback.
+    """
+    data = dict(existing_data or {})
+    if status.creative_id and not data.get("platform_creative_id"):
+        data["platform_creative_id"] = status.creative_id
+    if status.concept_id and not data.get("concept_id"):
+        data["concept_id"] = status.concept_id
+        data["concept_name"] = status.concept_name
+        # Every current producer sets concept_source (GAM → "gam_order"); the fallback
+        # only fires for a future non-GAM adapter that derives a concept without tagging
+        # provenance, so the marker is never silently empty.
+        data["concept_source"] = status.concept_source or "adapter_enrichment"
+    return data
+
+
+def _apply_creative_enrichment(creative: DBCreative, status: AssetStatus) -> dict | None:
+    """Merge an adapter push result into a creative's ``data`` blob, ready to persist.
+
+    Wraps :func:`_merge_creative_enrichment` with the change detection + provenance log
+    shared by all three GAM push paths (auto-approval create, manual-approval execution,
+    and retroactive per-creative push — #1506). Returns the merged dict when the merge
+    adds something the caller must persist, or ``None`` when it is a no-op (nothing to
+    write). Callers persist the returned dict through ``CreativeRepository.update_data``
+    so the enrichment has a single persistence path::
+
+        merged = _apply_creative_enrichment(creative, status)
+        if merged is not None:
+            creatives_repo.update_data(creative, merged)
+    """
+    merged = _merge_creative_enrichment(creative.data, status)
+    if merged == (creative.data or {}):
+        return None
+    logger.info(
+        f"Enriched creative {creative.creative_id} from adapter push "
+        f"(platform_creative_id={merged.get('platform_creative_id')}, "
+        f"concept_source={merged.get('concept_source')})"
+    )
+    return merged
 
 
 def _determine_media_buy_status(
@@ -1052,12 +1107,25 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                             )
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
-                            # Log any failures
+                            # Enrich creatives (concept + platform id) on success; log failures.
+                            # This is the manual-approval push path — the third of three GAM push
+                            # sites, wired here so admin-approved buys enrich like the other two
+                            # (#1506). uow2 commits the writeback on block exit.
+                            creatives_repo = CreativeRepository(session, tenant_id)
                             for status in asset_statuses:
                                 if status.status == "failed":
                                     logger.error(
                                         f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"
                                     )
+                                    continue
+                                if not status.creative_id:
+                                    continue
+                                creative = creative_map.get(status.creative_id)
+                                if creative is None:
+                                    continue
+                                merged = _apply_creative_enrichment(creative, status)
+                                if merged is not None:
+                                    creatives_repo.update_data(creative, merged)
                         else:
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
@@ -1207,13 +1275,9 @@ def push_creative_to_existing_buy(
                 if status.creative_id == creative_id:
                     if status.status == "failed":
                         return False, status.message or "Adapter reported upload failure"
-                    if status.creative_id and not (creative.data or {}).get("platform_creative_id"):
-                        updated_data = dict(creative.data or {})
-                        updated_data["platform_creative_id"] = status.creative_id
-                        uow.creatives.update_data(creative, updated_data)
-                        logger.info(
-                            f"[GATE-PUSH] Updated creative {creative_id} with platform_creative_id={status.creative_id}"
-                        )
+                    merged_data = _apply_creative_enrichment(creative, status)
+                    if merged_data is not None:
+                        uow.creatives.update_data(creative, merged_data)
                     logger.info(
                         f"[GATE-PUSH] Pushed creative {creative_id} to live buy "
                         f"{media_buy_id} (platform order {platform_order_id})"
@@ -3816,21 +3880,14 @@ async def _create_media_buy_impl(
 
                                     if upload_result and len(upload_result) > 0:
                                         uploaded_status = upload_result[0]
-                                        if uploaded_status.creative_id and not creative.data.get(
-                                            "platform_creative_id"
-                                        ):
-                                            creative.data["platform_creative_id"] = uploaded_status.creative_id
-                                            session.add(creative)
-                                            platform_creative_ids.append(uploaded_status.creative_id)
-                                            logger.info(
-                                                f"Updated creative {creative_id} with platform_creative_id={uploaded_status.creative_id}"
+                                        merged_data = _apply_creative_enrichment(creative, uploaded_status)
+                                        if merged_data is not None:
+                                            CreativeRepository(session, tenant["tenant_id"]).update_data(
+                                                creative, merged_data
                                             )
-                                        elif creative.data.get("platform_creative_id"):
-                                            logger.info(
-                                                f"Preserving existing platform_creative_id={creative.data.get('platform_creative_id')} "
-                                                f"for creative {creative_id}, not overwriting with upload result"
-                                            )
-                                            platform_creative_ids.append(creative.data["platform_creative_id"])
+                                        pcid = (creative.data or {}).get("platform_creative_id")
+                                        if pcid:
+                                            platform_creative_ids.append(pcid)
                                 except AdCPError:
                                     raise
                                 except Exception as upload_error:
@@ -3874,6 +3931,10 @@ async def _create_media_buy_impl(
                                             f"  ✗ Failed to associate creative {result['creative_id']}: {result.get('error', 'Unknown error')}"
                                         )
                             except Exception as e:
+                                # FIXME(#1566): silent per-item failure — association failure
+                                # is logged only; the response carries no signal that creatives
+                                # were not attached. Allowlisted in
+                                # test_architecture_no_silent_loop_failures.py.
                                 logger.error(
                                     f"Failed to associate creatives with line item {platform_line_item_id}: {e}"
                                 )
