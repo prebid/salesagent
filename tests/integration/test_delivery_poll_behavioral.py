@@ -93,17 +93,18 @@ class TestWebhookNotificationTypeScheduled:
 
 @pytest.mark.requires_db
 class TestWebhookNotificationTypeFinal:
-    """Completed campaign's webhook is 'final' with an explicit null next_expected_at.
+    """Completed campaign's webhook is 'final' and OMITS next_expected_at.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
 
     @pytest.mark.asyncio
     async def test_completed_campaign_webhook_is_final(self, integration_db):
-        """A flight-ended buy's webhook carries notification_type='final' and an
-        explicit next_expected_at=null (spec: next_expected_at only present when
-        notification_type is not 'final'; the null tells consumers no further
-        reports are expected).
+        """A flight-ended buy's webhook carries notification_type='final' with
+        next_expected_at omitted from the wire body (spec: the field is a
+        non-nullable date-time "only present in webhook deliveries when
+        notification_type is not 'final'" — an explicit null would fail a
+        strict buyer's schema validation).
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
         """
@@ -127,8 +128,7 @@ class TestWebhookNotificationTypeFinal:
             wire = await env.send_delivery_webhook(buy)
 
             assert wire["result"]["notification_type"] == "final"
-            assert "next_expected_at" in wire["result"]
-            assert wire["result"]["next_expected_at"] is None
+            assert "next_expected_at" not in wire["result"]
 
             # The poll for the same completed buy reports the status but no
             # webhook metadata (#1570).
@@ -266,6 +266,56 @@ class TestWebhookSequenceNumber:
             # The poll never assigns a sequence (and writes no log row).
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             assert response.sequence_number is None
+
+    @pytest.mark.asyncio
+    async def test_failed_send_does_not_consume_a_sequence_number(self, integration_db):
+        """A failed webhook attempt must not burn a sequence number.
+
+        The counter derives from SUCCESSFUL WebhookDeliveryLog rows only:
+        failed/retrying rows also record the sequence they attempted, and
+        counting them would make the buyer's first received webhook start
+        above 1 (spec: sequence_number "starts at 1", strictly increasing
+        per media buy).
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+        """
+        from src.core.database.repositories.delivery import DeliveryRepository
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="active",
+                start_date=datetime.now(UTC).date() - timedelta(days=30),
+                end_date=datetime.now(UTC).date() + timedelta(days=30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            # A prior attempt that failed after consuming what would be seq 1.
+            session = env.get_session()
+            repo = DeliveryRepository(session, "t1")
+            repo.create_log(
+                log_id="failed-attempt-1",
+                principal_id="p1",
+                media_buy_id=buy.media_buy_id,
+                webhook_url="https://example.com/webhook",
+                task_type="media_buy_delivery",
+                status="failed",
+                sequence_number=1,
+            )
+            session.commit()
+
+            # The failed row is invisible to the counter...
+            assert repo.get_max_sequence_number(buy.media_buy_id, task_type="media_buy_delivery") == 0
+
+            # ...so the buyer's first delivered webhook still starts at 1.
+            wire = await env.send_delivery_webhook(buy)
+            assert wire["result"]["sequence_number"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -16,15 +16,20 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.helpers import enum_value
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
-from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES, derive_notification_type
+from src.core.tools._media_buy_status import (
+    SERVING_PERSISTED_STATUSES,
+    derive_notification_type,
+    resolve_canonical_status,
+)
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.utils import utc_flight_start
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -34,6 +39,13 @@ logger = logging.getLogger(__name__)
 # 1 hour because AdCP protocol has frequency options hourly, daily and monthly
 # Configurable via env var for testing
 SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
+
+# The canonical statuses the delivery impl reports on — used both as the
+# impl request's status_filter and as the scheduler's pre-send skip: a
+# selected buy resolving outside this set (pre-flight pending_start, paused)
+# has no delivery data, and asking the impl for it produces a
+# MEDIA_BUY_NOT_FOUND advisory for a buy that exists.
+REPORTABLE_CANONICAL_STATUSES = ("active", "completed")
 
 
 class DeliveryWebhookScheduler:
@@ -112,9 +124,20 @@ class DeliveryWebhookScheduler:
                         if not reporting_webhook:
                             continue
 
-                        # Send delivery report
-                        await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
-                        reports_sent += 1
+                        # The status-only selection also matches pre-flight and
+                        # paused rows the impl cannot report on. Resolve the
+                        # same canonical status the impl would and skip them
+                        # here, instead of invoking the full delivery impl
+                        # every hour only to misread its MEDIA_BUY_NOT_FOUND
+                        # advisory as a warning-worthy failure.
+                        canonical = resolve_canonical_status(media_buy, datetime.now(UTC).date())
+                        if canonical not in REPORTABLE_CANONICAL_STATUSES:
+                            continue
+
+                        # Send delivery report; only count it when a webhook
+                        # actually went out (dedup/frequency skips return False).
+                        if await self._send_report_for_media_buy(media_buy, reporting_webhook, session):
+                            reports_sent += 1
 
                     except Exception as e:
                         logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
@@ -154,15 +177,14 @@ class DeliveryWebhookScheduler:
                     return False
 
                 # Force sending even if already sent today (for testing)
-                await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
-                return True
+                return await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
         except Exception as e:
             logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
             return False
 
     async def _send_report_for_media_buy(
         self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
-    ) -> None:
+    ) -> bool:
         """Send a delivery report for a single media buy.
 
         Args:
@@ -170,6 +192,12 @@ class DeliveryWebhookScheduler:
             reporting_webhook: Webhook configuration dict
             session: Database session
             force: If True, bypass frequency checks and duplicate checks
+
+        Returns:
+            True when a webhook was actually delivered; False when the buy was
+            legitimately skipped (unsupported frequency, dedup, no data, no
+            URL). A failed delivery RAISES so the caller counts it as an
+            error instead of a send.
         """
         try:
             # Determine reporting frequency from AdCP config (hourly, daily, monthly)
@@ -182,16 +210,18 @@ class DeliveryWebhookScheduler:
                     raw_freq,
                     media_buy.media_buy_id,
                 )
-                return
+                return False
 
             # Calculate reporting period for daily frequency: yesterday (full day)
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
             end_date_obj = datetime.now(UTC)
 
-            # Check if we've already sent a delivery_report webhook for this media buy
-            # and reporting date. We use created_at::date as the period key. Any
-            # notification_type counts (#1570): a sent "final" must also dedup —
-            # filtering on "scheduled" only would re-send daily after a final.
+            # Check if we've already sent a delivery report webhook for this
+            # media buy within the last 24 hours (rolling window on created_at,
+            # success rows only). Any notification_type counts (#1570): a sent
+            # "final" must also dedup within the window — the durable stopper
+            # is the status scheduler flipping the buy out of the serving
+            # selection, not this check.
             if not force:
                 # Look back 24 hours to find recent successful webhooks
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
@@ -209,7 +239,7 @@ class DeliveryWebhookScheduler:
                         end_date_obj,
                         existing_log.id,
                     )
-                    return
+                    return False
 
             # Fetch delivery metrics
             # Create a ResolvedIdentity for the delivery call
@@ -222,18 +252,17 @@ class DeliveryWebhookScheduler:
                 protocol="rest",
             )
 
-            # Include active + completed statuses: the scheduler already filters
-            # by persisted DB status (SERVING_PERSISTED_STATUSES) at query time,
-            # so the delivery impl should include ended campaigns (dynamic
-            # status=completed) rather than filtering them out and reporting
-            # "not found" errors. A pre-flight buy resolves to "pending_start"
-            # and is excluded, so no delivery data is returned for future-dated
-            # campaigns that haven't started yet.
+            # The impl reports on exactly REPORTABLE_CANONICAL_STATUSES: the
+            # scheduler already filters by persisted DB status
+            # (SERVING_PERSISTED_STATUSES) at query time and skips buys that
+            # resolve outside the reportable set, so ended campaigns (dynamic
+            # status=completed) are included rather than filtered out and
+            # reported as "not found" errors.
             from adcp.types import MediaBuyStatus
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=[media_buy.media_buy_id],
-                status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
+                status_filter=[MediaBuyStatus(s) for s in REPORTABLE_CANONICAL_STATUSES],
                 start_date=start_date_obj.strftime("%Y-%m-%d"),
                 end_date=end_date_obj.strftime("%Y-%m-%d"),
                 context=None,
@@ -245,25 +274,28 @@ class DeliveryWebhookScheduler:
                 logger.warning(
                     f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
                 )
-                return
+                return False
 
             if delivery_response.errors is not None:
                 logger.warning(
                     f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
                 )
-                return
+                return False
 
-            # Get sequence number for this webhook (get max sequence + 1)
-            sequence_number = 1
-            try:
-                stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
-                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                    WebhookDeliveryLog.task_type == "media_buy_delivery",
+            # Sequence number for this webhook: max SUCCESSFULLY DELIVERED
+            # sequence + 1 (spec: "Sequential notification number ... starts at
+            # 1"). Failed/retrying sends also log the sequence they attempted;
+            # counting them — while the dedup above counts only successes —
+            # would burn numbers the buyer never received, so a buyer's
+            # first-ever webhook could start above 1. A query failure
+            # propagates and aborts this send loudly: a quiet fallback to 1
+            # would put an already-consumed sequence on the wire.
+            sequence_number = (
+                DeliveryRepository(session, media_buy.tenant_id).get_max_sequence_number(
+                    media_buy.media_buy_id, task_type="media_buy_delivery"
                 )
-                max_seq = session.scalar(stmt)
-                sequence_number = (max_seq or 0) + 1
-            except Exception as e:
-                logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
+                + 1
+            )
 
             # Set webhook-specific metadata directly on the response model (#1570).
             # These fields are webhook-only ("only present in webhook deliveries" —
@@ -281,8 +313,10 @@ class DeliveryWebhookScheduler:
             delivery_response.notification_type = NotificationType(derived) if derived else None
 
             # next_expected_at: only present when notification_type is not "final"
-            # (spec, same schema). Daily frequency -> start of next day (UTC). The
-            # response's model_dump override serializes the explicit null for final.
+            # (spec, same schema — a non-nullable date-time, so a final webhook
+            # must OMIT the field; leaving it None lets the response's
+            # exclude-None serialization drop it from the wire). Daily
+            # frequency -> start of next day (UTC).
             if derived == "final":
                 delivery_response.next_expected_at = None
             else:
@@ -297,7 +331,7 @@ class DeliveryWebhookScheduler:
             webhook_url = reporting_webhook.get("url")
             if not webhook_url:
                 logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
-                return
+                return False
 
             # Try to find existing push notification config or create a temporary one
             auth_config = reporting_webhook.get("authentication", {})
@@ -362,11 +396,22 @@ class DeliveryWebhookScheduler:
 
             # Send webhook notification OUTSIDE the session context
             # This ensures the session is closed before async webhook call
-            await self.webhook_service.send_notification(
+            delivered = await self.webhook_service.send_notification(
                 push_notification_config=push_notification_config, payload=media_buy_delivery_payload, metadata=metadata
             )
 
+            if not delivered:
+                # send_notification returns False (never raises) on permanent
+                # 4xx / exhausted retries and has already written the failed
+                # WebhookDeliveryLog row. Raise so the batch counts an error
+                # instead of logging "Sent" for a webhook the buyer never got.
+                raise RuntimeError(
+                    f"Delivery report webhook send failed for media buy {media_buy.media_buy_id} "
+                    "(see webhook service logs for the HTTP failure detail)"
+                )
+
             logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
+            return True
 
         except Exception as e:
             logger.error(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)

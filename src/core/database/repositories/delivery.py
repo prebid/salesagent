@@ -210,15 +210,22 @@ class DeliveryRepository:
         *,
         task_type: str,
     ) -> int:
-        """Get the maximum sequence number for a media buy's delivery logs.
+        """Get the maximum successfully-delivered sequence number for a media buy.
 
-        Returns 0 if no logs exist (caller should add 1 for the next sequence).
+        Only ``status == "success"`` rows count: failed/retrying sends also
+        record the sequence they attempted, and counting those would burn
+        numbers the buyer never received — the wire contract is a strictly
+        increasing sequence that "starts at 1".
+
+        Returns 0 if no successful logs exist (caller should add 1 for the
+        next sequence).
         """
         result = self._session.scalar(
             select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
                 WebhookDeliveryLog.tenant_id == self._tenant_id,
                 WebhookDeliveryLog.media_buy_id == media_buy_id,
                 WebhookDeliveryLog.task_type == task_type,
+                WebhookDeliveryLog.status == "success",
             )
         )
         return result or 0

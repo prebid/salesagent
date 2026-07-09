@@ -308,7 +308,14 @@ async def test_delivery_webhook_sends_gam_based_reporting_data_only_on_gam_avail
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date_passed(integration_db):
-    """Test that we handle media buys with future start dates gracefully (empty delivery)."""
+    """A pre-flight buy is skipped before the delivery impl is ever invoked.
+
+    The status-only selection also matches pre-flight rows ("scheduled" is what
+    admin approval writes for future-dated buys). Asking the impl for them
+    produced an hourly MEDIA_BUY_NOT_FOUND advisory for a buy that exists and
+    counted the early return as a sent report — the scheduler now resolves the
+    canonical status itself and skips anything outside the reportable set.
+    """
     tenant_id, principal_id = _create_test_tenant_and_principal()
 
     # Start date is tomorrow
@@ -319,18 +326,12 @@ async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date
 
     scheduler = DeliveryWebhookScheduler()
 
-    async def fake_send_notification(*args, **kwargs):
-        return True
-
-    with patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send:
+    with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send:
         await scheduler._send_reports()
 
-        # Should send a webhook (since status=active in DB) but with empty deliveries (since dynamic status=ready)
-        if mock_send.call_count > 0:
-            args, kwargs = mock_send.call_args
-            payload = kwargs.get("payload")
-            result = payload.result
-            assert len(result.get("media_buy_deliveries", [])) == 0
+    assert mock_send.await_count == 0, (
+        "pre-flight buy (dynamic status pending_start) must be skipped without invoking the delivery path"
+    )
 
 
 @pytest.mark.requires_db
