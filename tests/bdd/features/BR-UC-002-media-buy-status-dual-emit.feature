@@ -1,7 +1,7 @@
 # Hand-authored feature — not compiled from adcp-req (safe from compile_bdd.py --merge overwrite).
 # Grounds AdCP 3.1 create-/update-media-buy-response status fields to the target GA behavior,
-# asserted on the REAL wire. Graded by the 3.1.0-rc.12 storyboard pending_creatives_to_start.yaml
-# (latest published compliance; no GA 3.1.0 dir exists yet). rc.12 grades `media_buy_status`
+# asserted on the REAL wire. Graded by the GA 3.1.0/3.1.1 storyboard pending_creatives_to_start.yaml
+# (published GA compliance; grading unchanged from the release-candidate series). GA grades `media_buy_status`
 # `field_value` (REQUIRED, the PREFERRED DOMAIN status, MediaBuyStatus enum) and the top-level
 # `status` `field_value` 'completed' (the PROTOCOL TaskStatus). This DIVERGES from the pinned
 # SDK's beta.3 storyboard (which graded `status` field_value_or_absent MUST-equal media_buy_status,
@@ -45,9 +45,9 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     # Pin the exact DOMAIN value (not mere membership): a protocol value in the
     # MediaBuyStatus∩TaskStatus overlap {completed,canceled,rejected} leaked into
     # media_buy_status would pass a membership check. A fresh auto-approved buy with
-    # no creatives is pending_creatives (rc.12 storyboard L147-149).
+    # no creatives is pending_creatives (GA 3.1.0/3.1.1 storyboard L146-149).
     And the wire media_buy_status should be "pending_creatives"
-    # Pin the exact PROTOCOL value: rc.12 grades top-level status = field_value
+    # Pin the exact PROTOCOL value: GA grades top-level status = field_value
     # 'completed' on synchronous create success (protocol-envelope.json
     # required: [status], storyboard L150-153). Without this pin a regression
     # emitting status='submitted' or dropping status entirely would pass.
@@ -75,8 +75,8 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     # a protocol value {completed,canceled,rejected} leaked into media_buy_status would
     # still pass a MediaBuyStatus membership check.
     And the wire media_buy_status should be "pending_start"
-    # Pin the exact PROTOCOL value: rc.12 grades top-level status = field_value
-    # 'completed' on synchronous update success (storyboard L245-248).
+    # Pin the exact PROTOCOL value: GA grades top-level status = field_value
+    # 'completed' on synchronous update success (GA 3.1.0/3.1.1 storyboard L257-260).
     And the wire status should be "completed"
 
   # salesagent-3ec1: a pre-flight 'scheduled' persisted status (set by admin approval)
