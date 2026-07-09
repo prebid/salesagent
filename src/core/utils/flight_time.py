@@ -6,10 +6,13 @@ calls, the status schedulers — needs timezone-aware datetimes: the simulated
 clock is always UTC-aware and a naive value raises ``TypeError: can't compare
 offset-naive and offset-aware datetimes``.
 
-These two helpers are the single home for the date -> aware-datetime policy
-(all reporting is UTC per the AdCP spec). Before extraction the same
-one-liners were open-coded across the delivery tool, the update tool, and the
-schedulers, so a timezone-policy change had to find every copy by hand.
+These two helpers are the shared home for the date -> aware-datetime policy
+(all reporting is UTC per the AdCP spec) across the core tools and schedulers:
+the delivery tool, the update tool, and the status/webhook schedulers all use
+them. Several admin/GAM call sites still open-code the same one-liner
+(admin/blueprints/creatives.py, admin/blueprints/operations.py,
+admin/services/media_buy_readiness_service.py, services/gam_orders_service.py) —
+converting those is tracked separately (out of scope for the delivery-wire work).
 """
 
 from __future__ import annotations

@@ -19,7 +19,9 @@ from adcp.types import MediaBuyStatus
 
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
+    NO_MORE_DATA_STATUSES,
     PERSISTED_STATUS_TO_CANONICAL,
+    TERMINAL_STATUSES,
     resolve_canonical_status,
 )
 from src.core.tools.media_buy_list import _compute_status
@@ -109,6 +111,26 @@ class TestCanonicalVocabularyPinnedToSdk:
         # The lifecycle enum has no "failed"; delivery adds it as a delivery-only
         # terminal. Every other canonical value must be an SDK lifecycle value.
         assert CANONICAL_STATUSES == {s.value for s in MediaBuyStatus} | {"failed"}
+
+    def test_terminal_statuses_membership_is_pinned(self):
+        """Pin the exact TERMINAL_STATUSES set, not just its derived behavior.
+
+        The reporting_delayed override and the terminal date-refinement skip both
+        key off this set; a silent widen/narrow (e.g. an SDK bump moving a status
+        in or out of terminal) would change buyer-visible status without a failing
+        test unless the membership itself is pinned.
+        """
+        assert TERMINAL_STATUSES == {"paused", "completed", "rejected", "canceled", "failed"}
+
+    def test_no_more_data_statuses_is_terminal_minus_paused(self):
+        """Pin NO_MORE_DATA_STATUSES (drives notification_type=final / next_expected_at).
+
+        Derived as TERMINAL_STATUSES - {paused}: a paused buy may resume and report
+        again, so it is NOT a no-more-data state. Pin both the derivation and the
+        resulting membership so neither can drift silently.
+        """
+        assert NO_MORE_DATA_STATUSES == TERMINAL_STATUSES - {"paused"}
+        assert NO_MORE_DATA_STATUSES == {"completed", "rejected", "canceled", "failed"}
 
 
 class TestLegacyAndUnknownStatusesNotDropped:

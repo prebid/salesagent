@@ -60,7 +60,19 @@ FIX_HINT = (
 
 
 def _handler_is_silent(handler: ast.ExceptHandler) -> bool:
-    """True when the handler swallows the failure without surfacing it."""
+    """True when the handler swallows the failure without surfacing it.
+
+    KNOWN OVER-APPROXIMATION: a handler is treated as *surfacing* if it raises OR
+    calls any ``.append``/``.extend``/``.add`` — regardless of the target. A
+    handler that appends to an unrelated scratch buffer (``log; scratch.append(x);
+    continue``) is therefore a FALSE NEGATIVE this guard will not catch: proving,
+    via AST alone, that the append target is the response's ``errors[]`` list
+    would require whole-function dataflow the guard deliberately avoids. So an
+    empty allowlist means "no handler that both loops-and-continues AND does
+    nothing list-like was found" — NOT "every dropped item is provably surfaced."
+    The append-to-``errors[]`` convention is the enforceable proxy; genuine
+    surfacing is still a human-review responsibility.
+    """
     has_continue = False
     for node in ast.walk(handler):
         if isinstance(node, ast.Raise):

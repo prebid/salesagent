@@ -80,12 +80,16 @@ from contextlib import asynccontextmanager
 def _background_schedulers_enabled() -> bool:
     """Whether to start the background schedulers on app startup.
 
-    Defaults to enabled. The test harness sets ``ADCP_RUN_BACKGROUND_SCHEDULERS=false``
-    because the schedulers run a batch immediately on startup, on the *real*
-    wall clock, and mutate media-buy status rows — which silently rewrites the
-    rows a test just seeded (e.g. promoting a seeded ``pending_start`` buy to
-    ``active`` before the assertion runs). Read at runtime (not import) so the
-    harness can set the env var before the MCP app's lifespan runs.
+    ``ADCP_RUN_BACKGROUND_SCHEDULERS`` is a **test-only** knob that defaults to
+    ENABLED (schedulers run in production unless the value is exactly ``"false"``,
+    read at runtime). The test harness sets it to ``false`` because the schedulers
+    run a batch immediately on startup, on the *real* wall clock, and mutate
+    media-buy status rows — which silently rewrites the rows a test just seeded
+    (e.g. promoting a seeded ``pending_start`` buy to ``active`` before the
+    assertion runs). It is NOT an operator control: disabling it in production
+    stops automatic pending->active->completed status transitions and delivery
+    webhooks, so an accidental disable is logged at WARNING (below) to make it
+    visible in production logs.
     """
     import os
 
@@ -98,7 +102,14 @@ async def lifespan_context(app):
     """Handle application startup and shutdown."""
     schedulers_enabled = _background_schedulers_enabled()
     if not schedulers_enabled:
-        logger.info("Background schedulers disabled (ADCP_RUN_BACKGROUND_SCHEDULERS=false)")
+        # WARNING, not INFO: this is a test-only knob (see
+        # _background_schedulers_enabled). If it is ever set in production the
+        # status/webhook schedulers do not run — surface that loudly.
+        logger.warning(
+            "Background schedulers DISABLED via ADCP_RUN_BACKGROUND_SCHEDULERS=false — "
+            "media-buy status transitions and delivery webhooks will NOT run. "
+            "This is a test-only knob; unset it in production."
+        )
 
     if schedulers_enabled:
         # Startup: Initialize delivery webhook scheduler

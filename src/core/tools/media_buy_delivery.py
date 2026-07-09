@@ -21,7 +21,7 @@ from rich.console import Console
 from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
-    translate_error_code,
+    to_wire_error_code,
 )
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
@@ -141,6 +141,24 @@ def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt:
         )
         return simulated, True
     return default_dt, False
+
+
+def _normalize_advisory_errors(errors: list[Error]) -> list[Error]:
+    """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes.
+
+    Unlike a raised ``AdCPError`` (translated at the transport boundary), advisory
+    entries serialize verbatim, so an internal-only code would leak to the buyer.
+    ``to_wire_error_code`` both translates mapped codes AND collapses anything
+    still non-standard to ``SERVICE_UNAVAILABLE``, so no internal code can reach
+    the buyer even if a future advisory is built with an unmapped internal code.
+    """
+    return [
+        Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+            code=to_wire_error_code(e.code),
+            message=e.message,
+        )
+        for e in errors
+    ]
 
 
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
@@ -553,7 +571,7 @@ def _get_media_buy_delivery_impl(
         # NOT paused, which may resume), "scheduled" otherwise. Deriving from
         # NO_MORE_DATA_STATUSES instead of a hardcoded "completed" keeps a
         # rejected/canceled/failed buy from being promised a next report that
-        # will never come (#1552; next_expected_at is "only present ... when
+        # will never come (next_expected_at is "only present ... when
         # notification_type is not 'final'" per
         # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
         #
@@ -611,19 +629,9 @@ def _get_media_buy_delivery_impl(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
-        # Normalize advisory error codes to their wire-compliant form. Unlike a
-        # raised AdCPError (translated by the boundary), hand-built errors[]
-        # advisories serialize verbatim, so an internal-only code (e.g.
-        # INTERNAL_ERROR) would otherwise leak to the buyer. Running every
-        # advisory through translate_error_code() at assembly makes that class
-        # of leak structurally impossible.
-        advisory_errors = [
-            Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                code=translate_error_code(e.code),
-                message=e.message,
-            )
-            for e in (not_found_errors + adapter_errors)
-        ]
+        # Normalize advisory error codes to guaranteed-standard wire codes
+        # (see _normalize_advisory_errors for why this can't leak an internal code).
+        advisory_errors = _normalize_advisory_errors(not_found_errors + adapter_errors)
 
         # Create AdCP-compliant response
         context_val = req.context

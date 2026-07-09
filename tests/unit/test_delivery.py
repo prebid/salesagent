@@ -1721,6 +1721,29 @@ class TestDeliveryAdapterError:
         assert len(advisory_errors) == 1
         assert "mb_bad" in advisory_errors[0].message
 
+    def test_advisory_normalization_collapses_internal_code_to_standard(self):
+        """A hand-built advisory carrying a non-standard/internal code is re-coded to a
+        STANDARD wire code before it reaches the response.
+
+        Advisory errors[] entries serialize verbatim (no boundary translation), so this
+        is the only thing standing between an internal code and the buyer. Reddens if
+        _normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
+        """
+        from adcp.types import Error
+
+        from src.core.tools.media_buy_delivery import _normalize_advisory_errors
+
+        out = _normalize_advisory_errors(
+            [
+                Error(code="API_ERROR", message="internal adapter detail for mb_x"),  # internal, unmapped
+                Error(code="INTERNAL_ERROR", message="mapped internal for mb_y"),  # internal, mapped
+                Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
+            ]
+        )
+        assert [e.code for e in out] == ["SERVICE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "MEDIA_BUY_NOT_FOUND"]
+        # Messages are preserved verbatim.
+        assert out[0].message == "internal adapter detail for mb_x"
+
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
 

@@ -236,6 +236,22 @@ class TestResolveStatusFilter:
         result = _resolve_status_filter(StatusFilter([MediaBuyStatus.pending_start]))
         assert result == {MediaBuyStatus.pending_start}
 
+    def test_invalid_value_raises_validation_error(self):
+        """An unknown status_filter value is a bad request, not a 500.
+
+        On the wire the filter arrives as bare strings; an unmapped value must
+        surface as VALIDATION_ERROR (recovery correctable), never let the
+        underlying ValueError escape as an INTERNAL_ERROR/500.
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _resolve_status_filter(["active", "expired"])  # "expired" is not a MediaBuyStatus
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        # A single bare invalid string is rejected the same way.
+        with pytest.raises(AdCPValidationError):
+            _resolve_status_filter("not_a_status")
+
 
 class TestFetchTargetMediaBuys:
     """status_filter applies consistently regardless of which filter key is used."""

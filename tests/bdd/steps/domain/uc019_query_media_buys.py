@@ -2281,8 +2281,15 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
 
 @then(parsers.parse('only media buys with status "{status}" are returned'))
 def then_only_status(ctx: dict, status: str) -> None:
-    """Assert only media buys with specified status are in response."""
+    """Assert only media buys with the specified status are in the response.
+
+    Non-empty guard (mirrors the uc004 sibling and this module's other status
+    Thens): a filter that regresses to ``[]`` must NOT false-green here — the
+    single_status / null_default rows route through this step and each seeds a
+    matching buy, so an empty result is a real failure, not a vacuous pass.
+    """
     buys = _get_media_buys(ctx)
+    assert buys, f"Filter '{status}' returned no media buys — expected at least the seeded matching buy."
     for buy in buys:
         actual = getattr(buy, "status", None)
         actual_str = actual.value if hasattr(actual, "value") else str(actual)

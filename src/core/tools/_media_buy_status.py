@@ -22,11 +22,18 @@ The two callers adapt this single result to their own surface:
 - ``get_media_buys`` collapses ``failed`` to ``rejected`` (the lifecycle enum
   has no ``failed``) and converts to ``MediaBuyStatus``.
 
-Both use the SAME map and the SAME date-refinement, so the same buy is
-described identically by both tools **outside time simulation** (pinned by
-``tests/unit/test_media_buy_status_consistency.py``). Under time simulation
+Both use the SAME map and the SAME date-refinement, so a buy evaluated against
+the SAME reference date gets the SAME status from either tool (pinned by
+``tests/unit/test_media_buy_status_consistency.py``, which feeds both a shared
+reference date). The two tools do NOT always pass the same reference date in
+production, though: ``get_media_buys`` refines against *today*
+(``media_buy_list.py``), while ``get_media_buy_delivery`` refines against the
+request's *end_date* (``media_buy_delivery.py``) — current-state vs
+period-scoped. So for a serving buy near its flight boundary the two may
+legitimately report different date-refined statuses; the mapping is identical,
+the reference date is the buyer-visible difference. Under time simulation
 (``mock_time`` / ``jump_to_event``) only ``get_media_buy_delivery`` advances the
-clock, so the two tools may legitimately differ there.
+clock, a further legitimate divergence.
 """
 
 from __future__ import annotations
@@ -61,21 +68,29 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({"paused", "completed", "rejected"
 # completes" — optimization-reporting.mdx §Publisher Commitment). Derived from
 # TERMINAL_STATUSES minus ``paused``: pausing is an explicit decision but the
 # buy may resume and report again, so a next scheduled report is still a
-# truthful promise for it. Resolves #1552 (option 1).
+# truthful promise for it.
 NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
 
 # Persisted ``MediaBuy.status`` -> canonical status. Written by
 # media_buy_create.py, the lifecycle transitions, the status scheduler, and the
 # admin blueprints. Includes the legacy aliases still resident in production
 # rows so an existing buy is never dropped:
-#   - "ready" (PR #375) / "scheduled": approved buys whose serving is purely
-#     date-gated — they resolve to the generic serving state and date-refine
-#     exactly like "active".
+#   - "ready" / "scheduled": approved buys whose serving is purely date-gated —
+#     they resolve to the generic serving state and date-refine exactly like
+#     "active".
 #   - "pending_activation": held un-promoted by the status scheduler until
 #     creatives are approved (media_buy_status_scheduler.py), exactly like
 #     "pending_start" — so it maps to "pending_start", NOT the serving state.
 #     Date-refining it to "active" made a past-start buy with unapproved
 #     creatives read as serving.
+#   - "pending_approval" -> "pending_start" (INTERPRETATION, graded but not
+#     spec-mandated): AdCP 3.1 has no "awaiting seller approval" wire status. Of
+#     the two pre-serving states, pending_start ("ready to serve, waiting for its
+#     flight date") is the closest — a buy the seller has yet to accept is not
+#     "serving" and has no creatives gap to report (that is pending_creatives).
+#     The literal reading of pending_start ("ready") slightly overstates an
+#     awaiting-approval buy; the spec offers no better pre-serving bucket. If a
+#     future spec adds an approval-queue status, revisit this row.
 PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
     "active": "active",
     "approved": "active",
