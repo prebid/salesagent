@@ -88,6 +88,10 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
   Scenario: update_media_buy on a scheduled buy normalizes status and reports valid_actions
     Given the Buyer owns an existing media buy with media_buy_id "mb_existing"
     And the media buy is in "scheduled" status
+    # Genuinely pre-flight (future start) so 'scheduled' date-refines to pending_start
+    # on BOTH the update path (109m) and get_media_buys — the parity the un-refined
+    # persisted path masked for a past-start buy (which both now report as active).
+    And the existing media buy has start_time "2099-01-01T00:00:00Z" and end_time "2099-02-01T00:00:00Z"
     And the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field        | value       |
@@ -103,3 +107,32 @@ Feature: AdCP 3.1 media_buy_status on create/update responses
     And the wire media_buy_status should be "pending_start"
     And the wire valid_actions should include "update_budget"
     And the wire valid_actions should include "cancel"
+
+  # salesagent-109m: update_media_buy must date-refine media_buy_status through the SAME
+  # resolver get_media_buys uses (_compute_status / resolve_canonical_status), so the two
+  # required tools describe the same buy identically. A persisted 'active' buy whose flight
+  # window has ended reports 'completed' (the scheduler that transitions the column may lag),
+  # NOT the un-refined persisted 'active'. Internal-consistency invariant with mainline #1545
+  # (get_media_buys date-refines on read); the AdCP 3.1 lifecycle prose is silent on read-time
+  # refinement, so the grounding is agreement-with-get_media_buys, not a GA storyboard grade.
+  @T-UC-003-ext-status-date-refine @main-flow
+  Scenario: update_media_buy date-refines media_buy_status for a past-end buy (parity with get_media_buys)
+    Given the Buyer owns an existing media buy with media_buy_id "mb_existing"
+    And the media buy is in "active" status
+    And the existing media buy has start_time "2020-01-01T00:00:00Z" and end_time "2020-02-01T00:00:00Z"
+    And the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 5000    |
+    And the package "pkg_001" exists in the media buy
+    And the updated daily spend does not exceed max_daily_package_spend
+    When the Buyer Agent sends the update_media_buy request
+    Then the response should succeed
+    # Flight ended (end_time 2020-02) → resolve_canonical_status refines 'active' → 'completed'.
+    # Before the 109m fix the update dual-emit emitted the un-refined persisted 'active'.
+    # Mutation: revert the fix → this asserts 'active' again, red.
+    And the wire media_buy_status should be "completed"
