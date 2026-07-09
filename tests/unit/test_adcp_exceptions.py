@@ -717,6 +717,32 @@ class TestErrorCodeWireTranslation:
             assert translate_error_code(internal) == expected_wire
             assert expected_wire in STANDARD_ERROR_CODES
 
+    def test_to_wire_error_code_guarantees_standard(self):
+        """``to_wire_error_code`` never returns a non-standard code.
+
+        Advisory errors[] entries serialize verbatim (they never pass through the
+        boundary translator), so a hand-built internal code must be collapsed to a
+        STANDARD_ERROR_CODES value. Unlike ``translate_error_code`` (which passes
+        unmapped codes through), this MUST guarantee the result is standard.
+        """
+        from adcp.server.helpers import STANDARD_ERROR_CODES
+
+        from src.core.exceptions import INTERNAL_CODES, to_wire_error_code
+
+        # Mapped internal code -> its standard target.
+        assert to_wire_error_code("INTERNAL_ERROR") == "SERVICE_UNAVAILABLE"
+        # Internal-only codes that have NO mapping entry would pass through
+        # translate_error_code verbatim; to_wire_error_code collapses them.
+        for unmapped_internal in ("API_ERROR", "FLIGHT_NOT_FOUND", "API_UPDATE_FAILED"):
+            assert unmapped_internal in INTERNAL_CODES
+            assert to_wire_error_code(unmapped_internal) == "SERVICE_UNAVAILABLE"
+        # A genuinely-unknown code (in neither map nor enum) also collapses.
+        assert to_wire_error_code("SOME_UNKNOWN_CODE_THAT_IS_NOT_MAPPED") == "SERVICE_UNAVAILABLE"
+        # Already-standard codes pass through unchanged.
+        for standard in ("MEDIA_BUY_NOT_FOUND", "SERVICE_UNAVAILABLE", "VALIDATION_ERROR"):
+            assert standard in STANDARD_ERROR_CODES
+            assert to_wire_error_code(standard) == standard
+
     def test_wire_error_code_property_translates(self):
         """``wire_error_code`` exposes the translated code on an instance."""
         from src.core.exceptions import AdCPError
