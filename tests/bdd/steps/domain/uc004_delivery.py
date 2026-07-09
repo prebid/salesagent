@@ -1065,12 +1065,14 @@ def when_boundary_daily_breakdown(ctx: dict, value: str) -> None:
 @when(parsers.parse("the Buyer Agent requests delivery metrics with account {value}"))
 def when_partition_account(ctx: dict, value: str) -> None:
     """Partition test: account value."""
+    _seed_valid_account_if_named(ctx, value)
     _dispatch_partition(ctx, "account", value)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics at account boundary {value}"))
 def when_boundary_account(ctx: dict, value: str) -> None:
     """Boundary test: account value."""
+    _seed_valid_account_if_named(ctx, value)
     _dispatch_partition(ctx, "account", value)
 
 
@@ -2993,6 +2995,80 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
             f"boundary, but the base request failed elsewhere: {sorted(offending)}"
         )
         ctx["error"] = exc
+
+
+# The account values the UC-004 delivery_account/boundary scenarios assert are
+# VALID (BR-UC-004 feature Examples). Only these are seeded — the invalid rows
+# (acc_nonexistent, acc_001+x.com, {}) name accounts we deliberately never seed
+# so production still raises ACCOUNT_NOT_FOUND / INVALID_REQUEST for them.
+_VALID_ACCOUNT_ID = "acc_acme_001"
+_VALID_BRAND_DOMAIN = "acme-corp.com"
+_VALID_OPERATOR = "acme-corp.com"
+
+
+def _seed_valid_account_if_named(ctx: dict, value: str) -> None:
+    """Seed the account a VALID delivery_account row names, so resolution succeeds.
+
+    The delivery_account partition/boundary scenarios share one media-buy Given
+    step across valid AND invalid rows, so account seeding must happen here in the
+    When step where the account value is known. We seed ONLY the exact valid
+    values the feature Examples mark ``valid`` (explicit acc_acme_001, the
+    acme-corp.com natural key, and its sandbox:true variant); every other value —
+    including the invalid rows — is left unseeded so production correctly emits
+    ACCOUNT_NOT_FOUND / INVALID_REQUEST. Historically these rows only passed
+    because the a2a account param was wire-dropped (salesagent-xpcd); now that
+    resolution runs, a valid row REQUIRES its account to exist.
+    """
+    env = ctx.get("env")
+    if env is None or not hasattr(env, "_session"):
+        return
+
+    try:
+        parsed = json.loads(value.strip())
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(parsed, dict):
+        return
+
+    tenant = ctx.get("db_tenant")
+    principal = ctx.get(f"db_principal_{getattr(env, '_principal_id', '')}")
+    if tenant is None or principal is None:
+        return
+
+    from tests.bdd.steps.generic._account_resolution import seed_account_with_access
+
+    # Explicit account_id ONLY (the invalid oneOf row also carries account_id but
+    # pairs it with brand/operator — exclude it so it still errors).
+    if set(parsed) == {"account_id"} and parsed["account_id"] == _VALID_ACCOUNT_ID:
+        seed_account_with_access(
+            tenant,
+            principal,
+            account_id=_VALID_ACCOUNT_ID,
+            status="active",
+            brand_domain=_VALID_BRAND_DOMAIN,
+            operator=_VALID_OPERATOR,
+        )
+        return
+
+    # Natural key (brand + operator), optionally sandbox:true. Non-sandbox and
+    # sandbox variants are distinct accounts (the repo scopes the query by the
+    # sandbox flag), so each valid row resolves to exactly one match.
+    brand = parsed.get("brand")
+    if (
+        isinstance(brand, dict)
+        and brand.get("domain") == _VALID_BRAND_DOMAIN
+        and parsed.get("operator") == _VALID_OPERATOR
+    ):
+        sandbox = bool(parsed.get("sandbox", False))
+        seed_account_with_access(
+            tenant,
+            principal,
+            account_id=f"acc-acme-corp{'-sandbox' if sandbox else ''}",
+            status="active",
+            brand_domain=_VALID_BRAND_DOMAIN,
+            operator=_VALID_OPERATOR,
+            sandbox=sandbox,
+        )
 
 
 def _dispatch_partition(ctx: dict, field: str, value: str) -> None:

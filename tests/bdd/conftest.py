@@ -1078,18 +1078,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # (integration CircuitBreakerEnv now has make_webhook_config/set_db_webhooks
         # so webhook POST fires on all transports)
 
-        # --- UC-004: boundary-account a2a — dict serialization mismatch ---
-        # A2A transport returns dict objects that lack .root attribute needed
-        # by the Then step's account validation logic.
-        if is_a2a and "T-UC-004-boundary-account" in marker_names:
-            _acc_valid_a2a = any(s in nodeid for s in ("account exists", "single match"))
-            if _acc_valid_a2a:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="A2A transport: account dict lacks .root attribute — serialization gap",
-                        strict=False,
-                    )
-                )
+        # Graduated (salesagent-jr5b): UC-004 boundary-account a2a valid rows
+        # ("account exists" / "single match" / "sandbox account exists") now resolve
+        # once their accounts are seeded — the former "dict lacks .root serialization
+        # gap" xfail was masking the missing seed, not a real transport gap.
 
         # --- UC-004: xfails for unimplemented production features ---
         # FIXME(salesagent-ckb): These production features are not yet implemented.
@@ -1396,41 +1388,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-account_not_found",
                     "impl-empty_object",
                     # valid rows (explicit_account_id / natural_key) now resolve the
-                    # account on a2a/mcp/rest (wire-drop confirmed XPASS, #1417)
-                    # — removed. Invalid-account rows still raise ValidationError-not-
-                    # AdCPError on a2a/mcp/rest, kept.
+                    # account on a2a/mcp/rest (seeded, salesagent-jr5b) — removed.
+                    # account_not_found now correctly raises ACCOUNT_NOT_FOUND on
+                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the
+                    # unseeded id 404s) — removed. Only invalid_oneOf_both / empty_object
+                    # still raise ValidationError-not-AdCPError on the wire, kept.
                     "a2a-invalid_oneOf_both",
-                    "a2a-account_not_found",
                     "a2a-empty_object",
                     "mcp-invalid_oneOf_both",
                     "mcp-empty_object",
                     "rest-invalid_oneOf_both",
                     "rest-empty_object",
                 },
-                "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
-                "boundary; invalid-account rows raise ValidationError not AdCPError. "
+                "a2a/mcp/rest do not parse/resolve the invalid oneOf/empty account "
+                "reference into an AdCPError(INVALID_REQUEST) at the transport boundary; "
+                "these rows raise ValidationError instead. "
                 "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
             ),
             (
                 "T-UC-004-boundary-account",
                 {
                     "impl-account_id present + not found",
-                    "a2a-account_id present + account exists",
-                    "a2a-brand + operator present",
-                    # a2a invalid-account rows (both / not found / empty) now raise
-                    # AdCPError (wire-drop confirmed XPASS, #1417) — removed.
-                    "mcp-account_id present + account exists",
-                    "mcp-brand + operator present",
+                    # Valid rows (account exists / single match = "brand + operator
+                    # present", incl. the sandbox:true variant) now resolve on
+                    # a2a/mcp/rest once their accounts are seeded (salesagent-jr5b)
+                    # — removed. a2a invalid rows (both / not found / empty) already
+                    # raise AdCPError (wire-drop XPASS, #1417) — removed.
                     "mcp-both account_id and brand/operator",
                     # mcp-account_id present + not found genuinely passes
                     # (ValidationError satisfies 'invalid') — NOT marked.
                     "mcp-empty object {}",
-                    "rest-account_id present + account exists",
-                    "rest-brand + operator present",
                 },
-                "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
-                "boundary; invalid-account rows raise ValidationError not AdCPError. "
-                "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
+                "mcp does not parse/resolve the invalid oneOf/empty account reference "
+                "into an AdCPError(INVALID_REQUEST) at the transport boundary; these rows "
+                "raise ValidationError instead. See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
             ),
             # sampling (salesagent-03q): sampling_method is NOT a
             # GetMediaBuyDeliveryRequest field — the artifact-sampling feature
@@ -1764,12 +1755,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # "omitted": already PASS everywhere.
         if "T-UC-004-boundary-account" in marker_names:
             # a2a now raises AdCPError on invalid-account rows (both / empty / not found)
-            # (wire-drop confirmed XPASS, #1417); mcp still gaps on both/empty,
-            # impl still gaps on not-found.
-            _acc_valid_fail = (is_mcp or is_rest) and any(s in nodeid for s in ("account exists", "single match"))
+            # (wire-drop confirmed XPASS, #1417). Valid rows (account exists / single
+            # match / sandbox account exists) now pass on mcp/rest once their accounts
+            # are seeded (salesagent-jr5b) — the former "production gaps" mask hid the
+            # missing seed. mcp still gaps on the oneOf/empty invalid rows; impl still
+            # gaps on not-found (impl is not in the default BDD parametrization).
             _acc_invalid_fail = is_mcp and any(s in nodeid for s in ("both account_id", "empty object"))
             _acc_notfound_fail = is_impl and "not found" in nodeid
-            if _acc_valid_fail or _acc_invalid_fail or _acc_notfound_fail:
+            if _acc_invalid_fail or _acc_notfound_fail:
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="delivery account boundary: production gaps on this transport", strict=False
@@ -1927,11 +1920,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"non_boolean"},
                 "include_package_daily_breakdown validation not implemented — production accepts non-boolean",
             ),
-            # account: production doesn't validate oneOf constraint or account existence
+            # account: production doesn't validate the oneOf constraint / empty object
+            # on the wire (raises ValidationError, not AdCPError(INVALID_REQUEST)).
+            # account_not_found is NOT here: with the valid siblings seeded
+            # (salesagent-jr5b), resolution runs and the unseeded id correctly
+            # raises ACCOUNT_NOT_FOUND on every transport.
             (
                 "T-UC-004-partition-account",
-                {"invalid_oneOf_both", "account_not_found", "empty_object"},
-                "delivery account validation not implemented — production accepts invalid account configs",
+                {"invalid_oneOf_both", "empty_object"},
+                "delivery account oneOf/empty-object validation not implemented — "
+                "production raises ValidationError not AdCPError(INVALID_REQUEST)",
             ),
             # Graduated: T-UC-004-partition-sampling (transport-aware block below)
             # "not_provided" passes all transports; valid named methods pass on REST only.
