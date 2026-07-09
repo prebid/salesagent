@@ -168,11 +168,30 @@ class TestValidateAdcpVersionPins:
         """version-envelope.json: same-major pins downshift to the served release."""
         validate_adcp_version_pins({"adcp_version": f"{adcp_major_version()}.99"})
 
-    def test_unparseable_claim_tolerated(self):
-        # A malformed pin carries no negotiable major; it is stripped with the
-        # negotiation envelope rather than misreported as VERSION_UNSUPPORTED.
-        validate_adcp_version_pins({"adcp_major_version": "not-a-number"})
-        validate_adcp_version_pins({"adcp_version": "not-a-version"})
+    def test_malformed_pin_rejected_as_validation_error(self):
+        """A present-but-unparseable pin is a VALIDATION_ERROR, not silently stripped.
+
+        version-envelope.json constrains adcp_version to ^\\d+\\.\\d+(-...)?$ and
+        types adcp_major_version as an integer; the spec defines a fallback only
+        for an OMITTED pin. A garbage value is a malformed request, so it must
+        surface a typed VALIDATION_ERROR (correctable) rather than be treated as
+        absent — which would erase a protocol-version claim the client made.
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        for pin in ({"adcp_major_version": "not-a-number"}, {"adcp_version": "banana"}):
+            with pytest.raises(AdCPValidationError) as exc:
+                validate_adcp_version_pins(pin)
+            assert exc.value.error_code == "VALIDATION_ERROR"
+            assert exc.value.recovery == "correctable"
+
+    def test_malformed_pin_echo_truncated(self):
+        """The malformed value echoed in the error is capped (buyer-controlled, unbounded)."""
+        from src.core.exceptions import AdCPValidationError
+
+        with pytest.raises(AdCPValidationError) as exc:
+            validate_adcp_version_pins({"adcp_version": "z" * 5000})
+        assert len(exc.value.details["adcp_version"]) == 64
 
 
 class TestRESTVersionNegotiation:

@@ -146,6 +146,38 @@ def create_product_with_empty_pricing(**overrides) -> Product:
     return create_test_product(pricing_options=[], **overrides)
 
 
+def make_get_products_response_with_pricing(fixed_price: float | None = None, floor_price: float | None = None):
+    """A GetProductsResponse with one product carrying a single CPM pricing option.
+
+    The pricing option is a real ``adcp.CpmPricingOption`` model (not a dict), so
+    ``apply_version_compat`` can read ``fixed_price`` / ``floor_price`` off it to
+    derive the v2-compat fields (is_fixed / rate / price_guidance.floor). Shared
+    by the version-compat registry tests and the REST transport-wrapper tests.
+    """
+    from adcp import CpmPricingOption
+
+    from src.core.schemas import GetProductsResponse
+
+    option_kwargs: dict[str, Any] = {"pricing_option_id": "cpm_usd_test", "pricing_model": "cpm", "currency": "USD"}
+    if fixed_price is not None:
+        option_kwargs["fixed_price"] = fixed_price
+    if floor_price is not None:
+        option_kwargs["floor_price"] = floor_price
+        option_kwargs["price_guidance"] = {"p50": floor_price * 2}
+
+    product = Product(
+        product_id="p1",
+        name="Test",
+        description="Test",
+        format_ids=[create_test_format_id("banner")],
+        delivery_type="guaranteed",
+        delivery_measurement={"provider": "test", "notes": "test"},
+        publisher_properties=[create_test_publisher_properties_by_tag()],
+        pricing_options=[CpmPricingOption(**option_kwargs)],
+    )
+    return GetProductsResponse(products=[product])
+
+
 def create_test_format_id(
     format_id: str = "display_300x250", agent_url: str = "https://creative.adcontextprotocol.org"
 ) -> FormatId:

@@ -32,16 +32,13 @@ Unpinned legacy clients are unaffected (no pin → nothing to validate).
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from functools import cache
 from typing import Any
 
 import adcp
 
-from src.core.exceptions import AdCPConfigurationError, AdCPVersionUnsupportedError
-
-logger = logging.getLogger(__name__)
+from src.core.exceptions import AdCPConfigurationError, AdCPValidationError, AdCPVersionUnsupportedError
 
 
 @cache
@@ -133,8 +130,7 @@ def _version_unsupported_error(
     responses).
     """
     supported = supported_adcp_versions()
-    if isinstance(echo_value, str) and len(echo_value) > _ECHO_MAX_LEN:
-        echo_value = echo_value[:_ECHO_MAX_LEN]
+    echo_value = _truncate_echo(echo_value)
     return AdCPVersionUnsupportedError(
         f"AdCP major version {claimed_major} is not supported; "
         f"this agent speaks major(s) {', '.join(str(m) for m in _supported_majors())}.",
@@ -149,14 +145,39 @@ def _version_unsupported_error(
     )
 
 
+def _truncate_echo(value: Any) -> Any:
+    """Cap a buyer-controlled pin value before it is reflected into an error/log."""
+    if isinstance(value, str) and len(value) > _ECHO_MAX_LEN:
+        return value[:_ECHO_MAX_LEN]
+    return value
+
+
+def _version_malformed_error(field: str, echo_value: Any, *, context: Any = None) -> AdCPValidationError:
+    """Build the VALIDATION_ERROR for a pin that is present but not parseable.
+
+    ``version-envelope.json`` constrains ``adcp_version`` to the release pattern
+    ``^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$`` and types ``adcp_major_version`` as an
+    integer; a value violating either is a malformed request, not an omitted pin.
+    """
+    echo = _truncate_echo(echo_value)
+    return AdCPValidationError(
+        f"AdCP version pin {field}={echo!r} is malformed; expected a release-precision "
+        f'version like "3.1" for adcp_version, or an integer for adcp_major_version.',
+        field=field,
+        details={field: echo},
+        suggestion="Send a well-formed adcp_version (MAJOR.MINOR) or omit the field.",
+        context=context if isinstance(context, dict) else None,
+    )
+
+
 def _claimed_major(value: Any) -> int | None:
     """Parse the major component from a version pin (int or release string).
 
-    Returns None when the value carries no parseable major. An unparseable pin
-    cannot be negotiated; because the negotiation fields are stripped from the
-    request before any schema sees them, it is tolerated rather than rejected
-    (masking a malformed value as VERSION_UNSUPPORTED would misreport it as a
-    version mismatch).
+    Returns None when the value carries no parseable major (a malformed pin —
+    e.g. ``"banana"`` — that violates the ``version-envelope.json`` release
+    pattern). The caller rejects that as a VALIDATION_ERROR; it is not a version
+    mismatch (VERSION_UNSUPPORTED), which is reserved for a well-formed pin whose
+    major this build does not speak.
     """
     if isinstance(value, bool):
         return None
@@ -182,6 +203,14 @@ def validate_adcp_version_pins(params: Mapping[str, Any]) -> None:
 
     Same-major pins downshift to the release this build serves (no error) —
     see the module docstring for the spec grounding.
+
+    A pin that is present but malformed (does not parse to a major — e.g.
+    ``adcp_version: "banana"``, violating ``version-envelope.json``'s
+    ``^\\d+\\.\\d+(-...)?$`` pattern, or a non-integer ``adcp_major_version``) is
+    rejected with :class:`AdCPValidationError` (``VALIDATION_ERROR``, correctable).
+    The spec defines a fallback only for an OMITTED pin, so a garbage value is a
+    malformed request, not an absent one — silently stripping it would erase a
+    protocol-version claim the client explicitly (if incorrectly) made.
     """
     supported_majors = set(_supported_majors())
     request_context = params.get("context")
@@ -191,11 +220,6 @@ def validate_adcp_version_pins(params: Mapping[str, Any]) -> None:
             continue
         claimed_major = _claimed_major(claimed)
         if claimed_major is None:
-            # Schema-invalid pin (e.g. "banana"): no negotiable major, so it is
-            # tolerated and stripped with the negotiation envelope rather than
-            # misreported as VERSION_UNSUPPORTED. Log it — a silently-dropped
-            # malformed pin is otherwise invisible at triage time (#1546).
-            logger.debug("Tolerating unparseable AdCP version pin %s=%r (no negotiable major)", field, claimed)
-            continue
+            raise _version_malformed_error(field, claimed, context=request_context)
         if claimed_major not in supported_majors:
             raise _version_unsupported_error(field, claimed, claimed_major, context=request_context)

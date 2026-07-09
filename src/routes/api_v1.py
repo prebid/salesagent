@@ -239,8 +239,12 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
         filters=body.filters,
     )
     response = await products_module._get_products_impl(req, identity)
-    result = response.model_dump(mode="json")
-    return apply_version_compat("get_products", result, body.adcp_version)
+    # Pass the MODEL, not a pre-dumped dict: apply_version_compat short-circuits
+    # on a dict (the legacy pass-through) and would never derive the v2-compat
+    # pricing fields (is_fixed / rate / price_guidance.floor) from the
+    # pricing-option models. Dumping here made the "1.0.0" Body default a no-op,
+    # so unpinned legacy clients silently got clean v3 responses (#1546 review).
+    return apply_version_compat("get_products", response, body.adcp_version)
 
 
 @router.get("/capabilities", dependencies=[Depends(_version_after_resolve)])

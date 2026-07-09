@@ -36,7 +36,7 @@ Business logic is mocked via _get_products_impl.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.server.context import Context
@@ -50,6 +50,18 @@ from tests.factories import PrincipalFactory
 def _mock_response() -> GetProductsResponse:
     """Build a minimal GetProductsResponse for testing wrapper logic."""
     return GetProductsResponse(products=[])
+
+
+def _response_with_fixed_price(fixed_price: float = 5.0) -> GetProductsResponse:
+    """A GetProductsResponse whose single product carries a fixed-price CPM option.
+
+    The pricing-option model is what apply_version_compat reads to derive the
+    v2-compat fields (is_fixed / rate), so the response must carry a real model
+    (not a pre-dumped dict) for the transform to fire.
+    """
+    from tests.helpers.adcp_factories import make_get_products_response_with_pricing
+
+    return make_get_products_response_with_pricing(fixed_price=fixed_price)
 
 
 # ---------------------------------------------------------------------------
@@ -293,27 +305,19 @@ class TestRestGetProductsWrapper:
         data = response.json()
         assert "products" in data
 
-    def test_rest_applies_version_compat(self):
-        """REST endpoint threads the body's adcp_version into version compat.
+    def _post_products(self, body: dict):
+        """POST /api/v1/products with a fixed-price product wired into the impl.
 
-        An explicit pre-3.0 pin is now rejected at the router dependency
-        (VERSION_UNSUPPORTED — majors are validated by membership in the
-        supported set), so the compat path is exercised the way legacy
-        clients actually reach it: no pin, falling back to the *Body model's
-        "1.0.0" default.
+        apply_version_compat is NOT mocked — the assertion is on the real wire
+        JSON, so the transform must actually run against the returned model.
         """
         identity = PrincipalFactory.make_identity(protocol="rest")
 
-        with (
-            patch(
-                "src.core.tools.products._get_products_impl",
-                new_callable=AsyncMock,
-                return_value=_mock_response(),
-            ),
-            patch("src.routes.api_v1.apply_version_compat") as mock_compat,
+        with patch(
+            "src.core.tools.products._get_products_impl",
+            new_callable=AsyncMock,
+            return_value=_response_with_fixed_price(fixed_price=5.0),
         ):
-            mock_compat.return_value = {"products": [], "legacy": True}
-
             from starlette.testclient import TestClient
 
             from src.app import app
@@ -322,16 +326,37 @@ class TestRestGetProductsWrapper:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
             try:
-                client = TestClient(app)
-                response = client.post(
-                    "/api/v1/products",
-                    json={"brief": "ads"},
-                )
+                return TestClient(app).post("/api/v1/products", json=body)
             finally:
                 app.dependency_overrides.clear()
 
-        mock_compat.assert_called_once_with("get_products", ANY, "1.0.0")
+    def test_rest_unpinned_client_gets_v2_compat_fields_on_the_wire(self):
+        """Unpinned REST client (Body "1.0.0" default) gets v2-compat pricing on the wire.
+
+        Regression for the dict-passthrough no-op (#1546 review): the endpoint must
+        pass the response MODEL to apply_version_compat, not a pre-dumped dict, or
+        the v2 fields are never derived. Asserts the ACTUAL REST JSON, not that the
+        helper was merely called.
+        """
+        response = self._post_products({"brief": "ads"})  # no adcp_version → "1.0.0" default
+
         assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert po["is_fixed"] is True, f"unpinned legacy client should get v2-compat is_fixed: {po}"
+        assert po["rate"] == 5.0, f"v2-compat rate must mirror fixed_price: {po}"
+
+    def test_rest_v3_pin_gets_clean_response_no_compat_fields(self):
+        """A same-major v3 pin gets a clean v3 response — proving the compat is version-gated.
+
+        Guards against a regression that unconditionally applies v2 compat: pinning
+        a supported release must NOT inject the v2 is_fixed/rate fields.
+        """
+        response = self._post_products({"brief": "ads", "adcp_version": "3.1"})
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"v3 client must get a clean response, got v2 fields: {po}"
+        assert "rate" not in po
 
 
 # ---------------------------------------------------------------------------

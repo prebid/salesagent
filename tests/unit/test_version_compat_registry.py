@@ -10,40 +10,13 @@ Validates that:
 beads: salesagent-b61l.14
 """
 
-from adcp import CpmPricingOption
-
-from src.core.schemas import GetProductsResponse, Product
-from tests.helpers.adcp_factories import (
-    create_test_format_id,
-    create_test_publisher_properties_by_tag,
-)
+from src.core.schemas import GetProductsResponse
+from tests.helpers.adcp_factories import make_get_products_response_with_pricing
 
 
 def _make_response(fixed_price: float | None = None, floor_price: float | None = None) -> GetProductsResponse:
     """Build a GetProductsResponse with a single product and pricing option."""
-    kwargs = {
-        "pricing_option_id": "cpm_usd_test",
-        "pricing_model": "cpm",
-        "currency": "USD",
-    }
-    if fixed_price is not None:
-        kwargs["fixed_price"] = fixed_price
-    if floor_price is not None:
-        kwargs["floor_price"] = floor_price
-        kwargs["price_guidance"] = {"p50": floor_price * 2}
-
-    cpm = CpmPricingOption(**kwargs)
-    product = Product(
-        product_id="p1",
-        name="Test",
-        description="Test",
-        format_ids=[create_test_format_id("banner")],
-        delivery_type="guaranteed",
-        delivery_measurement={"provider": "test", "notes": "test"},
-        publisher_properties=[create_test_publisher_properties_by_tag()],
-        pricing_options=[cpm],
-    )
-    return GetProductsResponse(products=[product])
+    return make_get_products_response_with_pricing(fixed_price=fixed_price, floor_price=floor_price)
 
 
 # ---------------------------------------------------------------------------
