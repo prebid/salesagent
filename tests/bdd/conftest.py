@@ -1306,26 +1306,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # buyer-supplied start_date/end_date in response.reporting_period,
             # so T-UC-004-daterange now genuinely passes (no strict xfail).
             #
-            # date-range partition/boundary (salesagent-04zf, 18h.10 Phase-2):
-            # when_partition/boundary_date_range now translate the descriptor
-            # into real start_date/end_date (previously the axis name was sent
-            # as a literal request field and rejected by extra=forbid, so the
-            # blanket _UC004_{PARTITION,BOUNDARY}_TAGS strict=False masked a
-            # broken step). With real wiring: the "valid" rows
-            # (start_before_end / dates_omitted) genuinely PASS on all 4
-            # transports (no marker). Only the "invalid" rows genuinely fail —
-            # production does not reject start>=end (same real gap as
-            # T-UC-004-daterange-invalid / -equal). strict=True forces marker
-            # removal the moment start>=end validation lands. See
-            # docs/test-debt-bdd-strict-markers.md item C4.
-            (
-                "T-UC-004-partition-date-range",
-                {"start_after_end", "start_equals_end"},
-                "production does not validate start_date>=end_date (same gap as "
-                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # date-range partition (salesagent-x18x, #1545): GRADUATED. The Examples
+            # now name the wire code — error "VALIDATION_ERROR" with suggestion — and
+            # production emits exactly that on the a2a wire ("Start date must be before
+            # end date", media_buy_delivery.py:209-218 via AdCPValidationError). Only the
+            # [a2a-…] rows are parametrized for this partition (mcp/rest/impl not
+            # collected), and they pass the named code, so no partition marker remains.
+            # (The boundary counterpart below still masks mcp/rest — those transports
+            # ARE parametrized there and still gap.)
             # Transport-scoped: impl genuinely PASSES start>=end on the _impl
-            # path now. a2a/mcp/rest still don't enforce the gap.
+            # path now. mcp/rest boundary rows still don't enforce the gap.
             (
                 "T-UC-004-boundary-date-range",
                 {
@@ -1476,17 +1466,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "field); ValidationError not AdCPError (rest silently drops it). "
                 "See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            # resolution (salesagent-lghk): all valid resolution modes pass on
-            # all transports; the empty-array reject passes on impl/mcp/rest
-            # (Pydantic ValidationError satisfies 'invalid'). Only a2a fails —
-            # the A2A boundary wraps the min_length ValidationError in a bare
-            # RuntimeError instead of AdCPError(INVALID_REQUEST).
-            (
-                "T-UC-004-partition-resolution",
-                {"a2a-empty_array"},
-                "A2A wraps the empty-array Pydantic ValidationError in a bare RuntimeError "
-                "(not AdCPError). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # resolution (salesagent-x18x, #1545): GRADUATED on all transports. The
+            # Examples now name error "VALIDATION_ERROR" with suggestion, and the empty
+            # media_buy_ids=[] hits the SDK min_length=1 constraint, surfacing as
+            # AdCPValidationError(VALIDATION_ERROR)+suggestion on the a2a/mcp/rest wire
+            # (empirically verified: a2a/mcp/rest all PASS the named code). The earlier
+            # INVALID_REQUEST framing (and the "A2A wraps in RuntimeError" note) were both
+            # stale — production emits VALIDATION_ERROR here, not INVALID_REQUEST — so no
+            # partition marker remains.
             # T-UC-004-boundary-resolution: a2a now raises AdCPError on the empty-array
             # reject (wire-drop confirmed XPASS, #1417); the only remaining
             # transport-aware failure (a2a empty array) is handled below — entry removed
@@ -1726,23 +1713,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # INVALID_REQUEST mis-pin per the AdCP graded error-compliance storyboard), the
         # step asserts it on the harness wire envelope. interval=0 / unit=weeks /
         # model=last_click PASS on a2a/mcp/rest (VALIDATION_ERROR).
-        # GRADUATED (#1417): the boundary "campaign with interval=2" now passes
-        # on a2a (and e2e_rest, already unmarked) — both carry attribution_window.post_click
-        # to production, so INV-5 fires (VALIDATION_ERROR) and the wire-envelope assertion
-        # holds. The old #1462 "request path drops post_click" framing was wrong for the wire
-        # transports; #1462 is the in-process _impl path, which BDD does not parametrize.
-        _aw_partition_campaign = (
-            "T-UC-004-partition-attribution" in marker_names and "campaign_interval_not_one" in nodeid
-        )
-        # The partition shape's error rows STILL fail, but NOT because of #1462: the generic
-        # "with {request_params}" step shadows the specific "with attribution_window {value}"
-        # step, and _parse_request_params drops the space-form window, so the window never
-        # reaches production (#1417). e2e_rest INVALID_REQUEST rows assert
-        # server-side. Marker kept until the step-binding bug is fixed.
+        # GRADUATED (salesagent-x18x, #1545): the partition "campaign with interval=2"
+        # (campaign_interval_not_one) now passes on a2a — the only transport parametrized
+        # for that row — because the attribution_window.post_click reaches production and
+        # INV-5 fires (VALIDATION_ERROR "interval must be 1 when unit is 'campaign'"), which
+        # the Examples now name and the step asserts on the wire. So the former strict=True
+        # _aw_partition_campaign leg is dropped; the row passes unmasked. (The old #1462
+        # "request path drops post_click" framing was wrong for the wire transports; #1462 is
+        # the in-process _impl path, which BDD does not parametrize.)
+        # The partition shape's error "INVALID_REQUEST" rows STILL fail on e2e_rest: the
+        # generic "with {request_params}" step shadows the specific "with attribution_window
+        # {value}" step and _parse_request_params drops the space-form window, so the window
+        # never reaches the live server (#1417). Marker kept for e2e_rest until the step-
+        # binding bug is fixed.
         _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
-        _partition_window_dropped = (_aw_partition_campaign and (is_a2a or is_mcp or is_rest)) or (
-            _aw_partition_error and is_e2e_rest
-        )
+        _partition_window_dropped = _aw_partition_error and is_e2e_rest
         if _partition_window_dropped:
             item.add_marker(
                 pytest.mark.xfail(
@@ -1913,9 +1898,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # "with {request_params}" step shadows the specific "with attribution_window
             # {value}" step and _parse_request_params drops the space-form window
             # (#1417) — a TEST step-binding bug, not the #1462 in-process gap.
+            # campaign_interval_not_one removed (salesagent-x18x, #1545): the only
+            # transport parametrized for it (a2a) now emits VALIDATION_ERROR+suggestion
+            # for the named Example and passes unmasked. interval_zero/negative/unit/model
+            # remain: those rows XPASS on a2a/rest but genuinely XFAIL on mcp under the
+            # salesagent-50hl generic-step-shadowing debt (out of scope for x18x).
             (
                 "T-UC-004-partition-attribution",
-                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model", "campaign_interval_not_one"},
+                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model"},
                 "attribution_window partition rows never reach validation — generic with-{request_params} "
                 "step shadows the specific partition step and drops the window (salesagent-50hl)",
             ),
@@ -1944,18 +1934,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"unknown_value", "empty_array"},
                 "status_filter validation not implemented — production accepts invalid values",
             ),
-            # date range: production doesn't validate start>=end
-            (
-                "T-UC-004-partition-date-range",
-                {"start_equals_end", "start_after_end"},
-                "date range validation not implemented — production accepts start>=end",
-            ),
-            # resolution: production doesn't validate empty array
-            (
-                "T-UC-004-partition-resolution",
-                {"empty_array"},
-                "resolution validation not implemented — production accepts empty array",
-            ),
+            # date range partition GRADUATED (salesagent-x18x, #1545): only [a2a-…] is
+            # parametrized for start_equals_end/start_after_end, and a2a now emits
+            # VALIDATION_ERROR+suggestion ("Start date must be before end date",
+            # media_buy_delivery.py:209-218) for the named Examples — passes unmasked. Entry
+            # removed. (mcp/rest are only parametrized on the BOUNDARY counterpart, which
+            # stays masked in _UC004_GENUINE_XFAIL_ROWS above.)
+            # resolution partition GRADUATED (salesagent-x18x, #1545): empty media_buy_ids=[]
+            # hits the SDK min_length=1 constraint -> VALIDATION_ERROR+suggestion on the
+            # a2a/mcp/rest wire (all three empirically PASS the named Example). Entry removed.
             # ownership: production doesn't validate principal mismatch
             (
                 "T-UC-004-partition-ownership",
