@@ -48,7 +48,16 @@ def resolve_account(
         AdCPAccountSetupRequiredError: Account requires setup before use.
         AdCPAccountSuspendedError: Account is suspended.
         AdCPAccountPaymentRequiredError: Account has outstanding payment.
+        AdCPAuthenticationError: No authenticated principal_id in the identity.
     """
+    # Self-defending entry guard: reject a falsy principal_id up front so neither
+    # variant runs a scoped query before rejection. The natural-key path skips the
+    # access-scope join on a None principal and could otherwise disclose a
+    # tenant-wide match count; require_principal_id raises AUTH_REQUIRED first (#1417).
+    from src.core.auth import require_principal_id
+
+    require_principal_id(identity)
+
     inner = account_ref.root
 
     if isinstance(inner, AccountReferenceById):
@@ -87,9 +96,16 @@ def _check_account_status(account_id: str, status: str | None) -> None:
 
 
 def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: AccountRepository) -> None:
-    """Raise if the agent's principal lacks access to the account."""
-    principal_id = identity.principal_id
-    if principal_id and not repo.has_access(principal_id, account_id):
+    """Raise if the agent's principal lacks access to the account.
+
+    Self-defending: a falsy principal_id is rejected as AUTH_REQUIRED via
+    require_principal_id, independent of any caller-side guard, so the access
+    check can never be silently skipped by an empty/None principal (#1417).
+    """
+    from src.core.auth import require_principal_id
+
+    principal_id = require_principal_id(identity)
+    if not repo.has_access(principal_id, account_id):
         raise AdCPAuthorizationError(
             f"Agent '{principal_id}' does not have access to account '{account_id}'.",
             suggestion="Use list_accounts to find accounts accessible to this agent.",
