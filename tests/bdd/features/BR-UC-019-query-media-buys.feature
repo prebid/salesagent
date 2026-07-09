@@ -196,6 +196,10 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
     Given the principal "buyer-001" owns media buys in various statuses
+    # Pin the clock: the "various statuses" seed builds each buy's flight window
+    # around this date, so the query MUST evaluate status against it too (else all
+    # windows are in the past under the real clock and every buy reads completed).
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
     # BR-RULE-151: Status filter defaults and validation
@@ -224,6 +228,9 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given the principal "buyer-001" owns media buys in various statuses
+    # Pin the clock so the seed's flight windows and the query's status
+    # computation agree (see the partition scenario above).
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
     # BR-RULE-151: Boundary test for status filter
@@ -231,7 +238,7 @@ Feature: BR-UC-019 Query Media Buys
     Examples: Boundary values
       | boundary_point                              | filter_config                                          | expected_behavior                                               |
       | status_filter omitted, media_buy_ids omitted| no status_filter                                       | only media buys with status "active" are returned               |
-      | status_filter omitted, media_buy_ids non-empty | no status_filter and media_buy_ids ["mb-1","mb-2"]   | every matching buy returned regardless of status                |
+      | status_filter omitted, media_buy_ids non-empty | no status_filter and media_buy_ids ["mb-active","mb-completed"]   | every matching buy returned regardless of status                |
       | single valid enum value                     | status_filter "active"                                 | only media buys with status "active" are returned               |
       | array with one valid value                  | status_filter ["completed"]                            | only media buys with status "completed" are returned            |
       | array with all seven enum values            | all seven v3.1 status values in status_filter          | media buys in any status are returned                           |
@@ -379,12 +386,14 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-154 INV-5: Results filtered to principal only
 
   @T-UC-019-inv-150-1 @invariant @BR-RULE-150
-  Scenario: INV-1 holds - pre-flight media buy has pending_activation status
+  Scenario: INV-1 holds - pre-flight media buy has pending_start status
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-04-01" and end_date "2026-04-30"
     And today is "2026-03-15"
-    When the Buyer Agent sends a get_media_buys request with status_filter "pending_activation"
-    Then the response should include media buy "mb-001" with status "pending_activation"
-    # BR-RULE-150 INV-1: today < start_date yields pending_activation
+    When the Buyer Agent sends a get_media_buys request with status_filter "pending_start"
+    Then the response should include media buy "mb-001" with status "pending_start"
+    # BR-RULE-150 INV-1: today < start_date yields pending_start.
+    # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: pre-flight is pending_start
+    # ("ready to serve, waiting for its flight date"); "pending_activation" is not a 3.1 wire value.
 
   @T-UC-019-inv-150-2 @invariant @BR-RULE-150
   Scenario: INV-2 holds - in-flight media buy has active status
@@ -405,6 +414,10 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-inv-151-1 @invariant @BR-RULE-151
   Scenario: INV-1 holds - default filter returns only active media buys
     Given the principal "buyer-001" owns active media buy "mb-001" and completed media buy "mb-002"
+    # Pin the clock: the seed builds mb-001/mb-002 flight windows around this same
+    # "today" (mock_today), so the query MUST evaluate status against it too, else
+    # mb-001's window is in the past under the real clock and it reads as completed.
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no status_filter
     Then the response should include media buy "mb-001"
     And the response should not include media buy "mb-002"
@@ -501,18 +514,22 @@ Feature: BR-UC-019 Query Media Buys
       | canceled  | canceled  |
 
   @T-UC-019-inv-150-8 @invariant @BR-RULE-150 @schema-v3.1
-  Scenario Outline: INV-8 holds - pre-serving persisted states collapse to pending_start
+  Scenario Outline: INV-8 holds - pre-serving persisted states map to their pending status
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "pending_start"
-    # BR-RULE-150 INV-8: draft/pending/pending_approval -> pending_start; no flight refinement
+    Then the media buy "mb-001" should have status "<expected>"
+    # BR-RULE-150 INV-8: pre-serving persisted states map to their pending status; no flight refinement.
+    # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: a draft buy has no creatives
+    # assigned, so it is pending_creatives ("approved but has no creatives"), NOT pending_start
+    # ("ready to serve, waiting for its flight date"). pending / pending_approval are pre-serving
+    # ready states -> pending_start.
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
-      | persisted        |
-      | draft            |
-      | pending          |
-      | pending_approval |
+      | persisted        | expected          |
+      | draft            | pending_creatives |
+      | pending          | pending_start     |
+      | pending_approval | pending_start     |
 
   @T-UC-019-inv-150-9 @invariant @BR-RULE-150 @schema-v3.1
   Scenario: INV-9 holds - persisted failed maps to rejected
@@ -537,7 +554,10 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-150-11 @invariant @BR-RULE-150 @schema-v3.1
   Scenario: INV-11 holds - unknown persisted status defaults to active then flight-refines
-    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "some_unmapped_internal_state" and is_paused false
+    # Unmapped status must fit the status column (varchar(20)); the exact
+    # string is irrelevant — any value absent from PERSISTED_STATUS_TO_CANONICAL
+    # exercises the defensive default-to-active path.
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "unmapped_state" and is_paused false
     And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]

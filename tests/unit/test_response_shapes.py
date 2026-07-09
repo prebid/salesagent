@@ -349,7 +349,7 @@ class TestGetMediaBuyDeliveryResponseShape:
                 impressions=50000.0,
                 spend=500.0,
                 clicks=250.0,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=1,
             ),
             media_buy_deliveries=[
