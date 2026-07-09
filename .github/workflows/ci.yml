@@ -327,6 +327,9 @@ jobs:
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
+          # No host uvx in this job (no _setup-env); the dedicated Security
+          # Audit check owns the uv-secure scan.
+          RUN_ALL_SKIP_AUDIT: 1
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
