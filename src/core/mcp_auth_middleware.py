@@ -49,6 +49,20 @@ class MCPAuthMiddleware(Middleware):
             require_valid_token=require_auth,
         )
 
+        # AUTH before VERSION (cross-transport parity, #1546). resolve_identity
+        # raises for an INVALID token, but a MISSING token returns a
+        # principal-less identity — without this guard an auth-required tool
+        # would fall through to RequestCompatMiddleware's version check and
+        # reject a bad pin with VERSION_UNSUPPORTED (disclosing supported_versions)
+        # before the auth gap is reported. Reject the missing token here, at the
+        # same boundary and with the same envelope as the invalid-token path, so
+        # the ordering no longer flips on missing-vs-invalid. A2A enforces the
+        # same order in on_message_send; REST via the version-after-auth deps.
+        if require_auth and (identity is None or not identity.principal_id):
+            from src.core.exceptions import AdCPAuthenticationError
+
+            raise AdCPAuthenticationError("Authentication required")
+
         if context.fastmcp_context:
             await context.fastmcp_context.set_state("identity", identity, serializable=False)
 

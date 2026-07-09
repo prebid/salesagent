@@ -62,7 +62,35 @@ async def _validate_version_pins(request: Request) -> None:
             validate_adcp_version_pins(body)
 
 
-router = APIRouter(prefix="/api/v1", tags=["api-v1"], dependencies=[Depends(_validate_version_pins)])
+async def _version_after_resolve(request: Request, _identity=resolve_auth) -> None:
+    """Version negotiation AFTER auth resolution (discovery / auth-optional routes).
+
+    ``resolve_auth`` is a sub-dependency here, so FastAPI resolves identity
+    before the version check runs. Discovery routes never reject on auth, so the
+    ordering is a no-op for them, but keeping the same shape as the auth-required
+    variant makes the version gate uniform across every route. ``_identity`` is
+    unused (the sub-dependency is the point) and intentionally unannotated so it
+    does not depend on the TYPE_CHECKING-only ResolvedIdentity import.
+    """
+    await _validate_version_pins(request)
+
+
+async def _version_after_require(request: Request, _identity=require_auth) -> None:
+    """Version negotiation AFTER auth ENFORCEMENT (auth-required routes).
+
+    AUTH before VERSION (#1546): ``require_auth`` is a sub-dependency, so an
+    unauthenticated caller is rejected with AUTH_TOKEN_INVALID before the version
+    check runs — you don't disclose ``supported_versions`` (a VERSION_UNSUPPORTED
+    body) to a caller who hasn't authenticated. Parity with the MCP auth
+    middleware and the A2A ``on_message_send`` auth gate, which enforce the same
+    order at their boundaries.
+    """
+    await _validate_version_pins(request)
+
+
+# Version negotiation now runs per-route AFTER auth (below) rather than as a
+# blanket router dependency, which would have rejected a bad pin before auth.
+router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
 # Note: ToolError handling lives entirely in the global ``@app.exception_handler``
@@ -198,7 +226,7 @@ class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (
 # ---------------------------------------------------------------------------
 
 
-@router.post("/products")
+@router.post("/products", dependencies=[Depends(_version_after_resolve)])
 async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
     """Get available products matching the brief (auth-optional discovery skill).
 
@@ -215,14 +243,14 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     return apply_version_compat("get_products", result, body.adcp_version)
 
 
-@router.get("/capabilities")
+@router.get("/capabilities", dependencies=[Depends(_version_after_resolve)])
 async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
     response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
     return response.model_dump(mode="json")
 
 
-@router.post("/creative-formats")
+@router.post("/creative-formats", dependencies=[Depends(_version_after_resolve)])
 async def list_creative_formats(body: ListCreativeFormatsBody, identity: ResolvedIdentity | None = resolve_auth):
     """List available creative formats (auth-optional discovery skill)."""
     from src.core.schemas import ListCreativeFormatsRequest
@@ -234,7 +262,7 @@ async def list_creative_formats(body: ListCreativeFormatsBody, identity: Resolve
     return response.model_dump(mode="json")
 
 
-@router.post("/authorized-properties")
+@router.post("/authorized-properties", dependencies=[Depends(_version_after_resolve)])
 async def list_authorized_properties(
     body: ListAuthorizedPropertiesBody, identity: ResolvedIdentity | None = resolve_auth
 ):
@@ -274,7 +302,7 @@ async def _raw_json_body(request: Request) -> dict[str, Any]:
 raw_json_body = Depends(_raw_json_body)
 
 
-@router.post("/media-buys")
+@router.post("/media-buys", dependencies=[Depends(_version_after_require)])
 async def create_media_buy(
     body: CreateMediaBuyBody,
     identity: ResolvedIdentity = require_auth,
@@ -300,7 +328,7 @@ async def create_media_buy(
     return response.model_dump(mode="json")
 
 
-@router.put("/media-buys/{media_buy_id}")
+@router.put("/media-buys/{media_buy_id}", dependencies=[Depends(_version_after_require)])
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
     response = media_buy_update_module.update_media_buy_raw(
@@ -317,7 +345,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
     return response.model_dump(mode="json")
 
 
-@router.post("/media-buys/delivery")
+@router.post("/media-buys/delivery", dependencies=[Depends(_version_after_require)])
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
     if body.account is not None:
@@ -341,7 +369,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
     return response.model_dump(mode="json")
 
 
-@router.post("/creatives/sync")
+@router.post("/creatives/sync", dependencies=[Depends(_version_after_require)])
 async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
     response = creatives_sync_module.sync_creatives_raw(
@@ -356,7 +384,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     return response.model_dump(mode="json")
 
 
-@router.post("/creatives")
+@router.post("/creatives", dependencies=[Depends(_version_after_require)])
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
     filters = coerce_creative_filters(body.filters)
@@ -371,7 +399,7 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
     return response.model_dump(mode="json")
 
 
-@router.post("/performance-index")
+@router.post("/performance-index", dependencies=[Depends(_version_after_require)])
 async def update_performance_index(body: UpdatePerformanceIndexBody, identity: ResolvedIdentity = require_auth):
     """Update performance index for a media buy (auth required)."""
     response = performance_module.update_performance_index_raw(
@@ -382,7 +410,7 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
     return response.model_dump(mode="json")
 
 
-@router.post("/accounts")
+@router.post("/accounts", dependencies=[Depends(_version_after_require)])
 async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = require_auth):
     """List accounts accessible to the authenticated agent (auth required)."""
     from src.core.schemas.account import ListAccountsRequest
@@ -392,7 +420,7 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
     return response.model_dump(mode="json")
 
 
-@router.post("/accounts/sync")
+@router.post("/accounts/sync", dependencies=[Depends(_version_after_require)])
 async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest

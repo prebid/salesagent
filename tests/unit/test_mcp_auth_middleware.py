@@ -100,6 +100,10 @@ class TestMCPAuthMiddlewareBehavior:
         mock_context.message.name = "create_media_buy"  # auth-required
 
         mock_identity = MagicMock(spec=ResolvedIdentity)
+        # Auth-required tools now require an authenticated identity (AUTH before
+        # VERSION, #1546): the middleware rejects a principal-less identity, so
+        # this resolved identity must carry a principal_id to proceed.
+        mock_identity.principal_id = "principal-1"
         call_next = AsyncMock(return_value=MagicMock())
 
         with patch(
@@ -163,12 +167,41 @@ class TestMCPAuthMiddlewareBehavior:
         call_next.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_missing_token_rejected_before_tool_runs(self, middleware, mock_context):
+        """Auth-required tool with a MISSING token: AUTH rejected before the tool body.
+
+        AUTH before VERSION (#1546): resolve_identity raises for an INVALID token
+        but returns a principal-less identity for a MISSING one. Without the
+        middleware guard the request would fall through to the version check and
+        flip the error ordering on missing-vs-invalid. The middleware rejects the
+        principal-less identity so the order is stable across both cases.
+        """
+        from src.core.exceptions import AdCPAuthenticationError
+
+        mock_context.message = MagicMock()
+        mock_context.message.name = "create_media_buy"  # auth-required
+
+        principal_less = MagicMock(spec=ResolvedIdentity)
+        principal_less.principal_id = None
+        call_next = AsyncMock()
+
+        with patch(
+            "src.core.mcp_auth_middleware.resolve_identity_from_context",
+            return_value=principal_less,
+        ):
+            with pytest.raises(AdCPAuthenticationError):
+                await middleware.on_call_tool(mock_context, call_next)
+
+        call_next.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_context_id_extracted_from_headers(self, middleware, mock_context):
         """x-context-id extracted from headers and stored on state."""
         mock_context.message = MagicMock()
         mock_context.message.name = "create_media_buy"
 
         mock_identity = MagicMock(spec=ResolvedIdentity)
+        mock_identity.principal_id = "principal-1"  # authenticated (AUTH before VERSION, #1546)
         call_next = AsyncMock(return_value=MagicMock())
 
         with (
