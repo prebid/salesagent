@@ -105,3 +105,36 @@ def test_validate_assets_list_value():
 
     with pytest.raises(ValueError, match="Asset 'main_image' data must be a dict.*got list"):
         _validate_creative_assets(assets)
+
+
+def test_validate_assets_uppercase_key_rejected():
+    """Asset slot keys must be lowercase per AdCP creative-manifests spec (^[a-z0-9_]+$)."""
+    assets = make_legacy_asset_dict("MainImage", asset_type="image", url="https://example.com/image.jpg")
+
+    with pytest.raises(ValueError, match=r"asset_id must match \^\[a-z0-9_\]\+\$"):
+        _validate_creative_assets(assets)
+
+
+def test_validate_assets_hyphenated_key_rejected():
+    """Asset slot keys must not contain hyphens per AdCP creative-manifests spec."""
+    assets = make_legacy_asset_dict("main-image", asset_type="image", url="https://example.com/image.jpg")
+
+    with pytest.raises(ValueError, match=r"asset_id must match \^\[a-z0-9_\]\+\$"):
+        _validate_creative_assets(assets)
+
+
+def test_validate_assets_dotted_key_rejected():
+    """Asset slot keys must not contain periods per AdCP creative-manifests spec."""
+    assets = make_legacy_asset_dict("main.image", asset_type="image", url="https://example.com/image.jpg")
+
+    with pytest.raises(ValueError, match=r"asset_id must match \^\[a-z0-9_\]\+\$"):
+        _validate_creative_assets(assets)
+
+
+def test_validate_assets_lowercase_underscore_key_accepted():
+    """A key matching ^[a-z0-9_]+$ (lowercase + digits + underscore) is valid."""
+    assets = make_legacy_asset_dict("main_image_2", asset_type="image", url="https://example.com/image.jpg")
+
+    result = _validate_creative_assets(assets)
+
+    assert result == assets

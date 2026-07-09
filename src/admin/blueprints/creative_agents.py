@@ -9,6 +9,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAgent, Tenant
+from src.core.security.url_validator import check_url_ssrf
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,12 @@ def add_creative_agent(tenant_id):
                 flash("Agent URL is required", "error")
                 return redirect(url_for("creative_agents.add_creative_agent", tenant_id=tenant_id))
 
+            is_safe, ssrf_error = check_url_ssrf(agent_url)
+            if not is_safe:
+                logger.warning("[SECURITY] Creative agent add rejected unsafe URL %r: %s", agent_url, ssrf_error)
+                flash(f"Agent URL is not allowed: {ssrf_error}", "error")
+                return redirect(url_for("creative_agents.add_creative_agent", tenant_id=tenant_id))
+
             if not name:
                 flash("Agent name is required", "error")
                 return redirect(url_for("creative_agents.add_creative_agent", tenant_id=tenant_id))
@@ -174,6 +181,8 @@ def edit_creative_agent(tenant_id, agent_id):
                 flash("Creative agent not found", "error")
                 return redirect(url_for("creative_agents.list_creative_agents", tenant_id=tenant_id))
 
+            # Assign new form values to ORM object (in-memory only — not yet committed).
+            # The SSRF check below reads agent.agent_url which is now the *submitted* value.
             agent.agent_url = request.form.get("agent_url", "").strip()
             agent.name = request.form.get("name", "").strip()
             agent.enabled = request.form.get("enabled") == "on"
@@ -187,6 +196,13 @@ def edit_creative_agent(tenant_id, agent_id):
 
             if not agent.agent_url:
                 flash("Agent URL is required", "error")
+                return redirect(url_for("creative_agents.edit_creative_agent", tenant_id=tenant_id, agent_id=agent_id))
+
+            # Validate the newly submitted URL — agent.agent_url is the form value set above.
+            is_safe, ssrf_error = check_url_ssrf(agent.agent_url)
+            if not is_safe:
+                logger.warning("[SECURITY] Creative agent edit rejected unsafe URL %r: %s", agent.agent_url, ssrf_error)
+                flash(f"Agent URL is not allowed: {ssrf_error}", "error")
                 return redirect(url_for("creative_agents.edit_creative_agent", tenant_id=tenant_id, agent_id=agent_id))
 
             if not agent.name:
@@ -245,6 +261,17 @@ def test_creative_agent(tenant_id, agent_id):
             from src.core.creative_agent_registry import CreativeAgentRegistry
 
             registry = CreativeAgentRegistry()
+
+            # Validate URL before making outbound request (defence-in-depth: stored URLs
+            # may pre-date the add/edit SSRF checks)
+            is_safe, ssrf_error = check_url_ssrf(agent.agent_url)
+            if not is_safe:
+                logger.warning(
+                    "[SECURITY] Creative agent test-connection rejected unsafe URL %r: %s",
+                    agent.agent_url,
+                    ssrf_error,
+                )
+                return jsonify({"success": False, "error": f"Agent URL is not allowed: {ssrf_error}"}), 400
 
             # Build agent config
             auth = None

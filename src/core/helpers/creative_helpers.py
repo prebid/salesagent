@@ -1,11 +1,4 @@
-"""Creative format parsing and asset conversion helpers.
-
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [attr-defined] on lines ~694, ~696, ~816, ~826, ~884, ~896:
-  AssetSpec (ImageFormatAsset) is a RootModel proxy; .asset_type and .asset_id
-  exist at runtime but mypy cannot see through __getattr__. Fixable when the SDK
-  ships typed accessors or a shared unwrapper helper.
-"""
+"""Creative format parsing and asset conversion helpers."""
 
 import logging
 import re
@@ -175,6 +168,9 @@ def _normalize_format_value(format_value: Any) -> str:
     return format_id
 
 
+_ASSET_SLOT_KEY_PATTERN = re.compile(r"^[a-z0-9_]+$")
+
+
 def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
     """Validate that creative assets are in AdCP v2.1+ dictionary format.
 
@@ -216,6 +212,16 @@ def _validate_creative_assets(assets: Any) -> dict[str, dict[str, Any]] | None:
             )
         if not asset_id.strip():
             raise ValueError("Asset key (asset_id) cannot be empty or whitespace-only")
+
+        # Per AdCP creative-manifests spec, asset slot keys (asset_id) must match
+        # ^[a-z0-9_]+$ (lowercase alphanumeric + underscore). Pre-validate here so a
+        # bad key fails with a clear, actionable message instead of surfacing later
+        # as an opaque error deep inside CreativeManifest.model_validate().
+        if not _ASSET_SLOT_KEY_PATTERN.match(asset_id):
+            raise ValueError(
+                f"Asset key '{asset_id}' is invalid: asset_id must match ^[a-z0-9_]+$ "
+                "(lowercase letters, digits, and underscores only) per the AdCP creative-manifests spec"
+            )
 
         # Asset data must be a dict or Pydantic model (typed Asset from CreativeAsset)
         if not isinstance(asset_data, dict) and not isinstance(asset_data, BaseModel):

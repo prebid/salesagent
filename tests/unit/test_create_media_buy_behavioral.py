@@ -298,6 +298,77 @@ class TestBrandStrToRef:
         assert result.domain == "ads.example.com"
 
 
+class TestToBrandReferenceNormalization:
+    """to_brand_reference() is the single str/dict/model → BrandReference converter.
+
+    Routes create_media_buy's raw ``BrandReference(domain=brand)`` construction
+    (media_buy_create.py) through the same normalizer the creative-build path
+    uses, so scheme-bearing/uppercase shorthand is accepted on both paths
+    instead of raising an unhandled ValidationError on this one.
+    """
+
+    def test_scheme_bearing_string_normalized(self):
+        """A scheme-bearing string ("https://Example.COM/path") no longer raises —
+        it is normalized to a bare lowercase hostname like the creative path.
+        """
+        from src.core.schema_helpers import to_brand_reference
+
+        result = to_brand_reference("https://Example.COM/path")
+        assert result is not None
+        assert result.domain == "example.com"
+
+    def test_bare_domain_string_passthrough(self):
+        """A bare domain string is accepted unchanged (already spec-compliant)."""
+        from src.core.schema_helpers import to_brand_reference
+
+        result = to_brand_reference("acme.com")
+        assert result is not None
+        assert result.domain == "acme.com"
+
+    def test_dict_input_still_validated(self):
+        """A dict brand is still routed through BrandReference validation."""
+        from src.core.schema_helpers import to_brand_reference
+
+        result = to_brand_reference({"domain": "acme.com"})
+        assert result is not None
+        assert result.domain == "acme.com"
+
+    def test_invalid_dict_raises_typed_correctable_error(self):
+        """A malformed dict brand raises AdCPValidationError (correctable), not a raw
+        pydantic ValidationError crash.
+        """
+        from src.core.exceptions import AdCPValidationError
+        from src.core.schema_helpers import to_brand_reference
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            to_brand_reference({"domain": 12345})  # wrong type — not coercible to str
+
+        assert exc_info.value.recovery == "correctable"
+
+    def test_media_buy_create_raw_construction_uses_same_converter(self):
+        """media_buy_create._build_create_media_buy_request routes brand through
+        to_brand_reference(), matching the creative-build path's normalization —
+        pins the "one converter" invariant against regressing to a raw
+        BrandReference(domain=brand) construction.
+        """
+        from src.core.tools.media_buy_create import _build_create_media_buy_request
+
+        req = _build_create_media_buy_request(
+            brand="https://Example.COM/path",
+            packages=None,
+            start_time="asap",
+            end_time=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            po_number=None,
+            reporting_webhook=None,
+            context=None,
+            ext=None,
+            account=None,
+            idempotency_key="test-idempotency-key-0001",
+        )
+        assert req.brand is not None
+        assert req.brand.domain == "example.com"
+
+
 def _make_brand_propagation_env(product: MagicMock) -> tuple:
     """Build the shared mock scaffolding for TestMediaBuyBrandPropagation tests.
 

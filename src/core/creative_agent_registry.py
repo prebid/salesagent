@@ -36,12 +36,12 @@ from adcp.types import (
     ImageFormatAsset,
     VideoFormatAsset,
 )
+from adcp.types import (
+    BuildCreativeRequest as _BuildCreativeRequestConcrete,
+)
 from adcp.types import Error as AdCPResponseError
 from adcp.types.generated_poc.core.creative_manifest import CreativeManifest
 from adcp.types.generated_poc.core.format import BaseIndividualAsset
-from adcp.types.generated_poc.media_buy.build_creative_request import (
-    BuildCreativeRequest as _BuildCreativeRequestConcrete,
-)
 from pydantic import ValidationError
 from yarl import URL as _URL
 
@@ -50,7 +50,6 @@ from src.core.exceptions import (
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
-from src.core.helpers.creative_helpers import _brand_str_to_ref
 from src.core.schema_helpers import to_brand_reference
 from src.core.schemas import Format, FormatId, canonical_agent_url, url
 
@@ -65,8 +64,16 @@ def _known_asset_types() -> frozenset[str]:
     The pre-5.7 annotation-walk over Format.assets collected nothing under
     the Annotated[…, Discriminator] shape introduced in 5.7, so we derive
     from the enum directly instead.
+
+    AssetContentType (14 members) is the response-level content-type enum
+    and doesn't cover every asset_type Literal the SDK's asset-shape models
+    use as a discriminator: "zip" (individual zip-bundle asset) and "card"
+    (RepeatableAssetGroup member asset) are modeled elsewhere in the schema
+    but absent from AssetContentType. Union them in explicitly so the
+    tolerant-ingestion set matches the SDK's full known asset_type surface,
+    not just the subset AssetContentType happens to enumerate.
     """
-    return frozenset(m.value for m in AssetType)
+    return frozenset(m.value for m in AssetType) | {"zip", "card"}
 
 
 _KNOWN_ASSET_TYPES = _known_asset_types()
@@ -220,15 +227,18 @@ def _create_mock_format_multi(format_id_str: str, name: str, asset_types: list[s
     ``asset_type`` Literals (image, video, …).  Rather than fighting the
     validator, we represent each logical asset slot with an ``image`` asset
     whose ``asset_id`` encodes the intended type.  The format is registered and
-    discoverable; the ``_KNOWN_ASSET_TYPES`` extension (Change 4) is what
-    actually makes the validator accept ``"url"`` assets from real agents.
+    discoverable; the ``_KNOWN_ASSET_TYPES`` extension (see ``_known_asset_types()``
+    above) is what actually makes the validator accept ``"url"`` assets from
+    real agents.
     """
-    # FIXME(#1490): The SDK's discriminated union only accepts a closed set of
-    # asset_type Literals (image, video, …).  We encode the intended type in
-    # asset_id (e.g. asset_id="url") and force asset_type="image" to satisfy
-    # the validator.  Any code that reads format.assets[i].asset_type will see
-    # "image" for all slots — including the "url" slot — which is incorrect.
-    # Track upstream fix: adcontextprotocol/adcp-client-python#913 (StrEnum).
+    # FIXME(adcontextprotocol/adcp-client-python#742): The SDK's discriminated
+    # union only accepts a closed set of asset_type Literals (image, video,
+    # …).  We encode the intended type in asset_id (e.g. asset_id="url") and
+    # force asset_type="image" to satisfy the validator.  Any code that reads
+    # format.assets[i].asset_type will see "image" for all slots — including
+    # the "url" slot — which is incorrect. #742 tracks the upstream fix
+    # (open/unknown discriminator arm for the closed union); #1490 is an
+    # unrelated, already-merged salesagent PR and must not be cited here.
     assets: list[BaseIndividualAsset] = []
     for i, asset_type in enumerate(asset_types):
         asset_id = asset_type if i == 0 else f"{asset_type}_{i}"
@@ -980,8 +990,7 @@ class CreativeAgentRegistry:
         message: str,
         promoted_offerings: dict[str, Any] | None = None,
         context_id: str | None = None,
-        finalize: bool = False,
-        brand: Any | None = None,
+        brand: dict[str, Any] | BrandReference | str | None = None,
         creative_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build a creative using AI generation via the creative agent.
@@ -996,7 +1005,6 @@ class CreativeAgentRegistry:
             message: Creative brief or refinement instructions
             promoted_offerings: Brand and product information for AI generation
             context_id: Session ID for iterative refinement (optional)
-            finalize: Set to true to finalize the creative (default: False)
             brand: Optional brand value (str, dict, or Pydantic model) forwarded
                 to the creative agent as a ``BrandRef``-shaped dict.
             creative_manifest: Optional pre-built creative manifest dict.
@@ -1007,12 +1015,26 @@ class CreativeAgentRegistry:
             - context_id: Session ID for refinement
             - status: "draft" or "finalized"
             - creative_output: Generated creative manifest with output_format
+
+        Note:
+            AdCP 3.1's ``build_creative`` has no ``finalize`` field — the closest
+            spec concept is ``quality`` (``"draft"`` | ``"production"``, output
+            fidelity, not a finalize/commit action). A previous version of this
+            method accepted a ``finalize: bool`` parameter that rode through via
+            ``extra="allow"`` and was always ``False`` in practice (callers read
+            ``getattr(creative, "approved", False)``, but ``CreativeAsset`` has no
+            ``approved`` field) — i.e. it was dead code, not a working feature.
+            It was removed rather than silently reinterpreted as ``quality``,
+            since the caller-visible semantics (draft vs. production fidelity)
+            differ from a boolean finalize/commit flag and need an explicit
+            product decision before wiring.
         """
         # Resolve brand to a typed BrandReference for the SDK request.
-        # to_brand_reference() handles str/dict/model → BrandReference uniformly.
-        brand_typed: BrandReference | None = (
-            _brand_str_to_ref(brand) if isinstance(brand, str) else to_brand_reference(brand)
-        )
+        # to_brand_reference() is the single str/dict/model → BrandReference
+        # converter used everywhere in the codebase (also used by
+        # create_get_products_request and the create_media_buy boundary) —
+        # it normalizes scheme/path/case for strings internally.
+        brand_typed: BrandReference | None = to_brand_reference(brand)
 
         # Validate creative_manifest via model_validate (not model_construct) so its
         # field validators are enforced rather than silently skipped. (The
@@ -1033,7 +1055,6 @@ class CreativeAgentRegistry:
                 id=format_id,
             ),
             idempotency_key=idempotency_key,
-            finalize=finalize,  # rides via extra="allow"
             creative_manifest=manifest,
             brand=brand_typed,
         )

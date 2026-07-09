@@ -363,6 +363,58 @@ class TestKnownAssetTypes:
             "'text' must be in _KNOWN_ASSET_TYPES — derivation from AssetContentType enum is broken"
         )
 
+    def test_zip_in_known_asset_types(self):
+        """'zip' must be in _KNOWN_ASSET_TYPES.
+
+        'zip' is a valid asset_type Literal on the SDK's individual-asset shapes
+        (Assets32/Assets43 in the generated union) but is absent from the
+        AssetContentType response enum, so deriving _KNOWN_ASSET_TYPES from the
+        enum alone silently drops it.
+        """
+        assert "zip" in _KNOWN_ASSET_TYPES, (
+            "'zip' must be in _KNOWN_ASSET_TYPES — it's a real SDK asset_type Literal "
+            "not covered by the AssetContentType enum"
+        )
+
+    def test_card_in_known_asset_types(self):
+        """'card' must be in _KNOWN_ASSET_TYPES.
+
+        'card' is the asset_type discriminator for RepeatableAssetGroup member
+        assets (CardAsset) but is absent from the AssetContentType response enum.
+        """
+        assert "card" in _KNOWN_ASSET_TYPES, (
+            "'card' must be in _KNOWN_ASSET_TYPES — it's a real SDK asset_type Literal "
+            "not covered by the AssetContentType enum"
+        )
+
+    def test_known_asset_types_covers_full_sdk_union(self):
+        """_KNOWN_ASSET_TYPES must match all 16 asset_type Literals the SDK's
+        Format.assets discriminated union actually accepts (14 from
+        AssetContentType + zip + card), not just the 14-member response enum.
+        """
+        expected = {
+            "image",
+            "video",
+            "audio",
+            "text",
+            "markdown",
+            "html",
+            "css",
+            "javascript",
+            "vast",
+            "daast",
+            "url",
+            "webhook",
+            "brief",
+            "catalog",
+            "zip",
+            "card",
+        }
+        assert _KNOWN_ASSET_TYPES == expected, (
+            f"_KNOWN_ASSET_TYPES drifted from the SDK's full asset_type union: "
+            f"missing={expected - _KNOWN_ASSET_TYPES}, extra={_KNOWN_ASSET_TYPES - expected}"
+        )
+
     def test_text_ad_search_mock_format_present(self):
         """text_ad_search mock format must be in _get_mock_formats() (Change 4)."""
         mock_formats = _get_mock_formats()
@@ -579,3 +631,94 @@ class TestBuildCreativeUsesADCPClient:
                 )
 
         assert exc_info.value.recovery == "transient", "A timeout may succeed on retry — recovery must be transient"
+
+
+class TestBuildCreativeManifestValidation:
+    """build_creative validates creative_manifest via model_validate (not model_construct).
+
+    Covers the review's "untested strictness" gap: a realistic complete manifest
+    must pass through to the request, and a realistic partial/malformed manifest
+    (missing required asset fields) must raise rather than silently forward a
+    broken manifest to the creative agent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_realistic_complete_manifest_forwarded(self):
+        """A complete, valid creative_manifest dict is forwarded as a typed CreativeManifest."""
+        from adcp import BuildCreativeRequest
+        from adcp.types.generated_poc.core.creative_manifest import CreativeManifest
+
+        registry = CreativeAgentRegistry()
+
+        captured_request: list[BuildCreativeRequest] = []
+
+        async def capture_build(request):
+            captured_request.append(request)
+            return {"status": "draft"}
+
+        mock_agent_client = Mock()
+        mock_agent_client.build_creative = capture_build
+
+        mock_adcp_client = Mock()
+        mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+
+        manifest_dict = {
+            "format_id": {"id": "display_300x250", "agent_url": "https://creative.example.com"},
+            "assets": {
+                "main_image": {
+                    "asset_type": "image",
+                    "url": "https://example.com/img.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            },
+        }
+
+        with patch.object(registry, "_build_adcp_client", return_value=mock_adcp_client):
+            await registry.build_creative(
+                agent_url="https://creative.example.com",
+                format_id="display_300x250",
+                message="Build a banner ad",
+                creative_manifest=manifest_dict,
+            )
+
+        assert len(captured_request) == 1
+        req = captured_request[0]
+        assert req.creative_manifest is not None
+        assert isinstance(req.creative_manifest, CreativeManifest), (
+            "creative_manifest must be a typed CreativeManifest (validated, not constructed unchecked)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_realistic_partial_manifest_raises(self):
+        """A partial manifest (image asset missing required width/height) raises rather than
+        silently forwarding a broken manifest to the creative agent.
+
+        model_validate() (not model_construct()) enforces the asset schema's field
+        validators — this pins that strictness against silent regression to a lenient
+        construction path.
+        """
+        from pydantic import ValidationError
+
+        registry = CreativeAgentRegistry()
+
+        mock_agent_client = Mock()
+        mock_agent_client.build_creative = AsyncMock(return_value={"status": "draft"})
+
+        mock_adcp_client = Mock()
+        mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+
+        # Missing required width/height on the image asset.
+        partial_manifest = {
+            "format_id": {"id": "display_300x250", "agent_url": "https://creative.example.com"},
+            "assets": {"main_image": {"asset_type": "image", "url": "https://example.com/img.png"}},
+        }
+
+        with patch.object(registry, "_build_adcp_client", return_value=mock_adcp_client):
+            with pytest.raises(ValidationError):
+                await registry.build_creative(
+                    agent_url="https://creative.example.com",
+                    format_id="display_300x250",
+                    message="Build a banner ad",
+                    creative_manifest=partial_manifest,
+                )

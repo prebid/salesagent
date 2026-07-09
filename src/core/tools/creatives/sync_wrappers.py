@@ -4,7 +4,7 @@ from typing import Annotated
 
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import BrandReference, ContextObject, CreativeAsset, ValidationMode
+from adcp.types import ContextObject, CreativeAsset, ValidationMode
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
@@ -85,7 +85,6 @@ def sync_creatives_raw(
     account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
-    media_buy_brand: BrandReference | None = None,
 ):
     """Sync creative assets to the centralized creative library (raw function for A2A server use).
 
@@ -105,6 +104,14 @@ def sync_creatives_raw(
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
+
+    Note:
+        No ``media_buy_brand`` parameter: it is populated only by internal
+        orchestration (``process_and_upload_package_creatives``, called during
+        ``create_media_buy``/``update_media_buy``) which calls
+        ``_sync_creatives_impl`` directly — no wire transport (MCP, A2A, REST)
+        exposes it to buyers, so it does not belong on this or the MCP
+        ``sync_creatives`` wrapper's public signature.
     """
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context
@@ -126,5 +133,4 @@ def sync_creatives_raw(
         push_notification_config=push_notification_config,
         context=context,
         identity=identity,
-        media_buy_brand=media_buy_brand,
     )

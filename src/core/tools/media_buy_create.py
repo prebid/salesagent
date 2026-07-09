@@ -125,7 +125,7 @@ from src.core.helpers.creative_helpers import (
     process_and_upload_package_creatives,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_context_object, to_reporting_webhook
+from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -4247,9 +4247,14 @@ def _build_create_media_buy_request(
     ``to_context_object``) happen at the call site; this builder receives
     already-typed values.
     """
-    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
+    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com").
+    # to_brand_reference() is the single str/dict/model → BrandReference converter
+    # used everywhere (also used by build_creative and create_get_products_request),
+    # so scheme-bearing/uppercase shorthand ("https://Example.COM") normalizes the
+    # same way here as on the creative path, instead of this raw construction
+    # raising an unhandled ValidationError on input the creative path accepts.
     if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
+        brand = to_brand_reference(brand)
     try:
         return CreateMediaBuyRequest(
             brand=brand,

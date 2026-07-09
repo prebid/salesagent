@@ -282,7 +282,7 @@ def _update_existing_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format using normalized composite key (Change 1)
+            # Find matching format using canonicalized composite (agent_url, id) key
             format_obj = _find_format(all_formats, creative_format)
             format_agent_url = _get_format_agent_url(format_obj) if format_obj else None
 
@@ -333,7 +333,6 @@ def _update_existing_creative(
                                 message=message,
                                 promoted_offerings=promoted_offerings,
                                 context_id=context_id,
-                                finalize=getattr(creative, "approved", False),
                                 brand=media_buy_brand,
                                 creative_manifest=_build_generative_manifest(creative_format, format_obj, creative),
                             )
@@ -405,7 +404,7 @@ def _update_existing_creative(
                     preview_result = None
                 else:
                     # Static creative - use preview_creative
-                    # Build AdCP-compliant creative manifest (Change 2)
+                    # Build AdCP-compliant creative manifest
                     creative_manifest: dict[str, Any] = _build_generative_manifest(
                         creative_format, format_obj, creative
                     )
@@ -591,7 +590,7 @@ def _create_new_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format using normalized composite key (Change 1)
+            # Find matching format using canonicalized composite (agent_url, id) key
             format_obj = _find_format(all_formats, creative_format)
             format_agent_url = _get_format_agent_url(format_obj) if format_obj else None
 
@@ -623,7 +622,7 @@ def _create_new_creative(
                                 promoted_offerings = asset
                                 break
 
-                    # Call build_creative via ADCPMultiAgentClient (Change 3)
+                    # Call build_creative via ADCPMultiAgentClient
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling build_creative for generative format: "
@@ -638,7 +637,6 @@ def _create_new_creative(
                             message=message,
                             promoted_offerings=promoted_offerings,
                             context_id=getattr(creative, "context_id", None),
-                            finalize=getattr(creative, "approved", False),
                             brand=media_buy_brand,
                             creative_manifest=_build_generative_manifest(creative_format, format_obj, creative),
                         )
@@ -689,7 +687,7 @@ def _create_new_creative(
                     preview_result = None
                 else:
                     # Static creative - use preview_creative
-                    # Build AdCP-compliant creative manifest (Change 2)
+                    # Build AdCP-compliant creative manifest
                     creative_manifest: dict[str, Any] = _build_generative_manifest(
                         creative_format, format_obj, creative
                     )

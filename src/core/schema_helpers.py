@@ -10,6 +10,7 @@ Philosophy:
 - Custom logic (validators, conversions) lives here, not in wrapper classes
 """
 
+import re
 from typing import Any
 
 # FIXME(#1388): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
@@ -29,6 +30,20 @@ from pydantic import ValidationError
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
 from src.core.validation_helpers import format_validation_error
+
+
+def _normalize_brand_domain_string(brand_str: str) -> str:
+    """Normalize a plain brand string to a bare lowercase hostname.
+
+    ``brand-ref.json`` requires ``domain`` to be a bare lowercase hostname (no
+    scheme, path, query, or fragment). Buyer-supplied shorthand strings
+    ("https://example.com/path?q=1", "Example.COM") are common, so this strips
+    scheme/path/query/fragment and lowercases the result before it reaches
+    ``BrandReference``.
+    """
+    domain = re.sub(r"^https?://", "", brand_str, flags=re.IGNORECASE)
+    domain = domain.split("/")[0].split("?")[0].split("#")[0]
+    return domain.lower().strip()
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -70,20 +85,39 @@ def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> R
 def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> BrandReference | None:
     """Convert dict/string brand to BrandReference for adcp 3.6.0 compatibility.
 
+    The single converter for all str/dict/model → BrandReference paths in the
+    codebase (creative build, get_products, create_media_buy) — routing every
+    caller through here means a scheme-bearing or uppercase string ("https://
+    Example.COM/path") is normalized the same way everywhere, instead of
+    raising an unhandled ``ValidationError`` on paths that construct
+    ``BrandReference`` directly with the raw string. ``brand-ref.json``
+    requires ``domain`` to be a bare lowercase hostname.
+
     Args:
         brand: Brand as dict, string domain shorthand, BrandReference, or None
 
     Returns:
         BrandReference or None
+
+    Raises:
+        AdCPValidationError: when ``brand`` is a dict/string that fails
+            BrandReference validation (e.g. malformed domain) — a typed,
+            correctable error rather than a raw ``ValidationError`` crash.
     """
     if brand is None:
         return None
     if isinstance(brand, BrandReference):
         return brand
-    if isinstance(brand, str):
-        return BrandReference(domain=brand)
-    if isinstance(brand, dict):
-        return BrandReference(**brand)
+    try:
+        if isinstance(brand, str):
+            return BrandReference(domain=_normalize_brand_domain_string(brand))
+        if isinstance(brand, dict):
+            return BrandReference.model_validate(brand)
+    except ValidationError as e:
+        raise AdCPValidationError(
+            format_validation_error(e, context="brand"),
+            suggestion="brand.domain must be a bare lowercase hostname, e.g. 'acme.com'.",
+        ) from e
     return None  # Fallback for unexpected types
 
 
