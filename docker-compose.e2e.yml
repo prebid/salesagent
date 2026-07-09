@@ -155,6 +155,13 @@ services:
       # removes the big-file wall-time floor but requires scenarios to be
       # independent (no intra-file prerequisite coupling).
       BDD_DIST: "${BDD_DIST:-loadfile}"
+      # Integration/unit xdist worker counts (0/unset = serial). Plumbed so the
+      # box fast-profile (INTEGRATION_XDIST_N=auto) actually reaches pytest inside
+      # the runner container. integration_db creates a uuid-named DB per test, so
+      # parallel workers never share rows -> race-free. UNIT_XDIST_N stays 0 by
+      # default (unit -n auto has flaked); exposed for parity.
+      INTEGRATION_XDIST_N: "${INTEGRATION_XDIST_N:-0}"
+      UNIT_XDIST_N: "${UNIT_XDIST_N:-0}"
       # Opt-in fast per-test DB path: clone from a schema template + skip the
       # per-test DROP (throwaway clones wiped on tmpfs Postgres restart). Removes
       # most per-test DB-lifecycle CPU under heavy xdist. Default off (unset).
