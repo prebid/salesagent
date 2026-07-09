@@ -1554,10 +1554,15 @@ class AdCPRequestHandler(RequestHandler):
         push_notification_config = params.pop("push_notification_config", None)
 
         # Normalize explicit brand through the shared coercion funnel (#1324).
+        # Keep params JSON-serializable: raw_wire_payload falls back to params for
+        # direct handler callers, and idempotency hashes RFC 8785 over that dict.
         if params.get("brand") is not None:
             from src.core.schema_helpers import to_brand_reference
 
-            params["brand"] = to_brand_reference(params["brand"])
+            coerced_brand = to_brand_reference(params["brand"])
+            if coerced_brand is None:
+                raise AdCPValidationError("Invalid brand", field="brand")
+            params["brand"] = coerced_brand.model_dump(mode="json")
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).
         # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
