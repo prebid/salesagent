@@ -15,7 +15,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -26,19 +26,35 @@ from src.core.exceptions import (
 from src.core.schemas import GetMediaBuyDeliveryResponse
 
 # ---------------------------------------------------------------------------
+# Webhook-path coverage for UC-004-ALT-WEBHOOK-PUSH-REPORTING
+#
+# The webhook-only fields (notification_type / sequence_number /
+# next_expected_at) are attached by the delivery webhook scheduler, not the
+# polling impl (#1570: "only present in webhook deliveries" —
+# get-media-buy-delivery-response.json @ v3.1-04f59d2d5). The tests below
+# drive a real scheduler send via DeliveryPollEnv.send_delivery_webhook()
+# (only the outbound HTTP POST is mocked), asserting on the actual wire body
+# the buyer's webhook would receive.
+# ---------------------------------------------------------------------------
+
+_DAILY_WEBHOOK = {"url": "https://example.com/webhook", "frequency": "daily"}
+
+
+# ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.requires_db
 class TestWebhookNotificationTypeScheduled:
-    """Normal periodic delivery sets notification_type to 'scheduled'.
+    """Normal periodic webhook delivery sets notification_type to 'scheduled'.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
     """
 
-    def test_periodic_delivery_sets_scheduled_type(self, integration_db):
-        """Normal periodic delivery should auto-set notification_type to 'scheduled'.
+    @pytest.mark.asyncio
+    async def test_periodic_webhook_sets_scheduled_type_and_poll_omits_it(self, integration_db):
+        """The webhook wire carries notification_type='scheduled'; the poll omits it.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
         """
@@ -51,15 +67,23 @@ class TestWebhookNotificationTypeScheduled:
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 12, 31),
+                status="active",
+                start_date=datetime.now(UTC).date() - timedelta(days=30),
+                end_date=datetime.now(UTC).date() + timedelta(days=30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
             )
             env.set_adapter_response(buy.media_buy_id, impressions=5000)
 
-            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            wire = await env.send_delivery_webhook(buy)
+            assert wire["result"]["notification_type"] == "scheduled"
 
+            # The synchronous poll for the same buy carries none of the
+            # webhook-only fields (#1570).
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             dumped = response.model_dump(mode="json")
-            assert dumped["notification_type"] == "scheduled"
+            assert "notification_type" not in dumped
+            assert "sequence_number" not in dumped
+            assert "next_expected_at" not in dumped
 
 
 # ---------------------------------------------------------------------------
@@ -69,13 +93,17 @@ class TestWebhookNotificationTypeScheduled:
 
 @pytest.mark.requires_db
 class TestWebhookNotificationTypeFinal:
-    """Completed campaign sets notification_type to 'final' with no next_expected_at.
+    """Completed campaign's webhook is 'final' with an explicit null next_expected_at.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
 
-    def test_completed_campaign_sets_final_type(self, integration_db):
-        """Completed campaign should set notification_type='final' and omit next_expected_at.
+    @pytest.mark.asyncio
+    async def test_completed_campaign_webhook_is_final(self, integration_db):
+        """A flight-ended buy's webhook carries notification_type='final' and an
+        explicit next_expected_at=null (spec: next_expected_at only present when
+        notification_type is not 'final'; the null tells consumers no further
+        reports are expected).
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
         """
@@ -92,30 +120,41 @@ class TestWebhookNotificationTypeFinal:
                 status="active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 6, 30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
             )
             env.set_adapter_response(buy.media_buy_id, impressions=5000)
 
-            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            wire = await env.send_delivery_webhook(buy)
 
+            assert wire["result"]["notification_type"] == "final"
+            assert "next_expected_at" in wire["result"]
+            assert wire["result"]["next_expected_at"] is None
+
+            # The poll for the same completed buy reports the status but no
+            # webhook metadata (#1570).
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             dumped = response.model_dump(mode="json")
-            assert dumped["notification_type"] == "final"
-            assert dumped["next_expected_at"] is None
+            assert dumped["media_buy_deliveries"][0]["status"] == "completed"
+            assert "notification_type" not in dumped
+            assert "next_expected_at" not in dumped
 
 
 @pytest.mark.requires_db
 class TestSimulationReachesFinalThroughRealHook:
-    """A time-simulation client advancing the clock past flight end reaches 'final'.
+    """A time-simulation client advancing the clock past flight end reaches 'completed'.
 
     Exercises the FULL mock_time path through the real apply_testing_hooks — the
     branch that previously built naive campaign_info datetimes and raised
     TypeError against the aware simulated clock (#1545 K1), and the status-filter
     path that must agree with the reported status (#1545 O2). A pending_creatives
-    buy under mock_time past flight end must report 'completed' + 'final'.
+    buy under mock_time past flight end must report 'completed' — the status that
+    feeds the webhook path's 'final' derivation. The webhook-only fields
+    themselves never appear on this polling response (#1570).
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
 
-    def test_mock_time_past_flight_reaches_completed_and_final(self, integration_db):
+    def test_mock_time_past_flight_reaches_completed(self, integration_db):
         from src.core.testing_hooks import AdCPTestContext
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -144,11 +183,11 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "completed"
-            assert dumped["notification_type"] == "final"
-            assert dumped["next_expected_at"] is None
+            assert "notification_type" not in dumped
+            assert "next_expected_at" not in dumped
 
-    def test_mock_time_in_flight_reports_active_and_scheduled(self, integration_db):
-        """The in-flight companion: simulated clock inside the window -> active/scheduled."""
+    def test_mock_time_in_flight_reports_active(self, integration_db):
+        """The in-flight companion: simulated clock inside the window -> active."""
         from src.core.testing_hooks import AdCPTestContext
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -175,8 +214,8 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "active"
-            assert dumped["notification_type"] == "scheduled"
-            assert dumped["next_expected_at"] is not None
+            assert "notification_type" not in dumped
+            assert "next_expected_at" not in dumped
 
 
 # ---------------------------------------------------------------------------
@@ -186,13 +225,19 @@ class TestSimulationReachesFinalThroughRealHook:
 
 @pytest.mark.requires_db
 class TestWebhookSequenceNumber:
-    """Monotonically increasing sequence_number per media buy.
+    """Monotonically increasing sequence_number per media buy on the webhook wire.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
     """
 
-    def test_sequence_number_auto_assigned(self, integration_db):
-        """Delivery response should auto-assign sequence_number starting from 1.
+    @pytest.mark.asyncio
+    async def test_sequence_number_increments_across_webhook_sends(self, integration_db):
+        """Consecutive webhook sends carry sequence_number 1 then 2; the poll carries none.
+
+        The sequence is backed by WebhookDeliveryLog rows written by the real
+        send path (only the outbound HTTP POST is mocked), so this pins the
+        scheduler's own counter — not the poll-path counter it silently
+        inherited before #1570.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
         """
@@ -205,15 +250,22 @@ class TestWebhookSequenceNumber:
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 12, 31),
+                status="active",
+                start_date=datetime.now(UTC).date() - timedelta(days=30),
+                end_date=datetime.now(UTC).date() + timedelta(days=30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
             )
             env.set_adapter_response(buy.media_buy_id, impressions=5000)
 
-            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            first = await env.send_delivery_webhook(buy)
+            second = await env.send_delivery_webhook(buy)
 
-            assert response.sequence_number is not None, "sequence_number should be auto-assigned"
-            assert response.sequence_number >= 1
+            assert first["result"]["sequence_number"] == 1
+            assert second["result"]["sequence_number"] == 2
+
+            # The poll never assigns a sequence (and writes no log row).
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            assert response.sequence_number is None
 
 
 # ---------------------------------------------------------------------------
@@ -223,13 +275,14 @@ class TestWebhookSequenceNumber:
 
 @pytest.mark.requires_db
 class TestWebhookNextExpectedAt:
-    """next_expected_at computed for non-final deliveries.
+    """next_expected_at computed for non-final webhook deliveries.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
     """
 
-    def test_next_expected_at_set_for_active_delivery(self, integration_db):
-        """Scheduled delivery for active buy should compute next_expected_at.
+    @pytest.mark.asyncio
+    async def test_next_expected_at_set_for_active_delivery_webhook(self, integration_db):
+        """A non-final webhook carries a concrete next_expected_at; the poll omits it.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
         """
@@ -242,14 +295,66 @@ class TestWebhookNextExpectedAt:
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 12, 31),
+                status="active",
+                start_date=datetime.now(UTC).date() - timedelta(days=30),
+                end_date=datetime.now(UTC).date() + timedelta(days=30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
             )
             env.set_adapter_response(buy.media_buy_id, impressions=5000)
 
-            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            wire = await env.send_delivery_webhook(buy)
 
-            assert response.next_expected_at is not None, "next_expected_at must be set for non-final delivery"
+            assert wire["result"]["notification_type"] == "scheduled"
+            assert wire["result"]["next_expected_at"] is not None
+
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            assert response.next_expected_at is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-transport: poll omits webhook-only fields on every wire (#1570)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestPollOmitsWebhookOnlyFieldsOnEveryTransport:
+    """The poll's actual wire body omits the webhook-only fields on MCP, A2A and REST.
+
+    The three fields are "only present in webhook deliveries" (spec, #1570).
+    MCP is the transport that regressed differently: fastmcp serializes
+    structured content via pydantic_core, bypassing model_dump — so before the
+    fix MCP emitted explicit nulls that A2A/REST omitted. Asserting on
+    wire_response (the real serialized body per transport) pins all three
+    transports to the same shape.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
+    """
+
+    def test_wire_omits_webhook_only_fields(self, integration_db):
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+        from tests.harness.transport import Transport
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="active",
+                start_date=date(2025, 1, 1),
+                end_date=date(2027, 12, 31),
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            for transport in [Transport.MCP, Transport.A2A, Transport.REST, Transport.IMPL]:
+                result = env.call_via(transport, media_buy_ids=[buy.media_buy_id])
+                assert result.is_success, f"{transport}: {result.error}"
+                # IMPL has no wire; serialize the payload through the production
+                # serializer instead (see tests/CLAUDE.md § wire_response).
+                wire = result.wire_response or result.payload.model_dump(mode="json")
+                for field in ("notification_type", "sequence_number", "next_expected_at"):
+                    assert field not in wire, f"{transport} wire must omit webhook-only {field!r}"
 
 
 # ---------------------------------------------------------------------------

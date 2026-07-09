@@ -86,7 +86,6 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
-from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -109,7 +108,6 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
-    NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
 from src.core.utils import utc_flight_end, utc_flight_start
@@ -584,58 +582,12 @@ def _get_media_buy_delivery_impl(
                 )
                 # Skip this media buy and continue with others
 
-        # --- Compute response-level webhook metadata (u5hf, uelj, 8g9e) ---
-
-        # notification_type: "final" when every returned buy is in a state that
-        # will never produce more data (completed, rejected, canceled, failed —
-        # NOT paused, which may resume), "scheduled" otherwise. Deriving from
-        # NO_MORE_DATA_STATUSES instead of a hardcoded "completed" keeps a
-        # rejected/canceled/failed buy from being promised a next report that
-        # will never come (next_expected_at is "only present ... when
-        # notification_type is not 'final'" per
-        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
-        #
-        # UNGRADED: the schema/storyboard describe "final" narrowly as "the
-        # campaign completes" (optimization-reporting.mdx §Publisher Commitment).
-        # Extending "final" to the other no-more-data terminals (rejected /
-        # canceled / failed) is our reading of the same "no next_expected_at when
-        # no more data" invariant, not a directly graded conformance step — no
-        # storyboard exercises a rejected/canceled/failed buy's notification_type.
-        if deliveries and all(enum_value(d.status) in NO_MORE_DATA_STATUSES for d in deliveries):
-            notification_type = "final"
-        elif deliveries:
-            notification_type = "scheduled"
-        else:
-            notification_type = None
-
-        # next_expected_at: set for non-final deliveries (default 24h interval)
-        if notification_type and notification_type != "final":
-            next_expected_at = datetime.now(UTC) + timedelta(hours=24)
-        else:
-            next_expected_at = None
-
-        # sequence_number: persistent auto-increment per media buy via WebhookDeliveryLog
-        sequence_number = None
-        # FIXME(salesagent-9f2): delivery UoW should provide DeliveryRepository directly
-        if deliveries and uow.session is not None:
-            delivery_repo = DeliveryRepository(uow.session, tenant["tenant_id"])
-            # Use the first media buy's sequence as the response-level sequence
-            first_mb_id = deliveries[0].media_buy_id
-            max_seq = delivery_repo.get_max_sequence_number(first_mb_id, task_type="delivery_poll")
-            sequence_number = max_seq + 1
-            # Persist the new sequence number
-            from uuid import uuid4
-
-            delivery_repo.create_log(
-                log_id=str(uuid4()),
-                principal_id=principal_id,
-                media_buy_id=first_mb_id,
-                webhook_url="delivery_poll://internal",
-                task_type="delivery_poll",
-                status="success",
-                sequence_number=sequence_number,
-                notification_type=notification_type,
-            )
+        # NOTE (#1570): notification_type / next_expected_at / sequence_number
+        # are webhook-only fields ("only present in webhook deliveries" —
+        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so this
+        # polling impl does NOT set them. The delivery webhook scheduler
+        # decorates the response with them (derive_notification_type +
+        # its own WebhookDeliveryLog-backed sequence) before sending.
 
         # Resolve campaign flight length (whole days) from the first target
         # buy so a ``unit=campaign`` attribution window echoes a concrete
@@ -688,9 +640,6 @@ def _get_media_buy_delivery_impl(
             attribution_window=attribution_window,
             errors=advisory_errors or None,
             context=context_val,
-            notification_type=notification_type,
-            sequence_number=sequence_number,
-            next_expected_at=next_expected_at,
         )
 
         # Apply testing hooks if needed
@@ -805,7 +754,13 @@ async def get_media_buy_delivery(
         context=context,
     )
     response = _get_media_buy_delivery_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+
+    # Serialize via model_dump so the MCP structured content matches the
+    # A2A/REST wire shape (#1570): passing the model object would have
+    # fastmcp serialize it via pydantic_core, bypassing AdCPBaseModel's
+    # exclude_none default and this response's model_dump override — every
+    # unset optional would appear as an explicit null only on MCP.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 def get_media_buy_delivery_raw(

@@ -25,6 +25,7 @@ Available mocks via env.mock:
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
@@ -83,3 +84,27 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
         """Parse REST JSON into GetMediaBuyDeliveryResponse."""
         return GetMediaBuyDeliveryResponse(**data)
+
+    async def send_delivery_webhook(self, buy: Any) -> dict[str, Any]:
+        """Force one delivery-webhook scheduler send for ``buy``; return the wire payload.
+
+        Drives the REAL scheduler path (``_send_report_for_media_buy`` with
+        ``force=True``) — delivery impl, sequence computation from
+        WebhookDeliveryLog, payload serialization — mocking only the outbound
+        HTTP POST. Returns the JSON body the buyer's webhook would receive
+        (the webhook-only fields notification_type / sequence_number /
+        next_expected_at live under ``result``; #1570).
+
+        ``buy.raw_request`` must contain a ``reporting_webhook`` config.
+        """
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+
+        scheduler = DeliveryWebhookScheduler()
+        mock_response = MagicMock(status_code=200, text="OK")
+        mock_response.raise_for_status.return_value = None
+        with patch.object(scheduler.webhook_service._session, "post", return_value=mock_response) as mock_post:
+            await scheduler._send_report_for_media_buy(
+                buy, buy.raw_request["reporting_webhook"], self.get_session(), force=True
+            )
+        assert mock_post.call_count == 1, "scheduler must send exactly one webhook"
+        return mock_post.call_args.kwargs["json"]

@@ -22,8 +22,9 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
+from src.core.helpers import enum_value
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
-from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
+from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES, derive_notification_type
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.utils import utc_flight_start
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -187,15 +188,16 @@ class DeliveryWebhookScheduler:
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
             end_date_obj = datetime.now(UTC)
 
-            # Check if we've already sent a scheduled delivery_report webhook for this media buy
-            # and reporting date. We use created_at::date as the period key.
+            # Check if we've already sent a delivery_report webhook for this media buy
+            # and reporting date. We use created_at::date as the period key. Any
+            # notification_type counts (#1570): a sent "final" must also dedup —
+            # filtering on "scheduled" only would re-send daily after a final.
             if not force:
                 # Look back 24 hours to find recent successful webhooks
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
                 existing_stmt = select(WebhookDeliveryLog).where(
                     WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
                     WebhookDeliveryLog.task_type == "media_buy_delivery",
-                    WebhookDeliveryLog.notification_type == "scheduled",
                     WebhookDeliveryLog.status == "success",
                     WebhookDeliveryLog.created_at > one_day_ago,
                 )
@@ -263,14 +265,31 @@ class DeliveryWebhookScheduler:
             except Exception as e:
                 logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
 
-            # Calculate next_expected_at for daily frequency: start of next day (UTC)
-            next_day = datetime.now(UTC).date() + timedelta(days=1)
-            next_expected_at = utc_flight_start(next_day)
+            # Set webhook-specific metadata directly on the response model (#1570).
+            # These fields are webhook-only ("only present in webhook deliveries" —
+            # get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so the polling
+            # impl never sets them; this webhook path is the single place they are
+            # attached to the wire.
+            #
+            # notification_type: derived from the reported statuses — "final" when
+            # every buy will never produce more data ("one final notification when
+            # the campaign completes", optimization-reporting.mdx §Publisher
+            # Commitment), "scheduled" otherwise.
+            derived = derive_notification_type(
+                enum_value(d.status) for d in delivery_response.media_buy_deliveries or []
+            )
+            delivery_response.notification_type = NotificationType(derived) if derived else None
 
-            # Set webhook-specific metadata directly on the response model
-            # These fields are defined on the library's GetMediaBuyDeliveryResponse
-            delivery_response.notification_type = NotificationType.scheduled
-            delivery_response.next_expected_at = next_expected_at
+            # next_expected_at: only present when notification_type is not "final"
+            # (spec, same schema). Daily frequency -> start of next day (UTC). The
+            # response's model_dump override serializes the explicit null for final.
+            if derived == "final":
+                delivery_response.next_expected_at = None
+            else:
+                next_day = datetime.now(UTC).date() + timedelta(days=1)
+                delivery_response.next_expected_at = utc_flight_start(next_day)
+
+            delivery_response.sequence_number = sequence_number
             delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
             delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
 

@@ -332,6 +332,11 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuy
         The base AdCPBaseModel excludes None values, but the AdCP protocol requires
         next_expected_at to be explicitly present (as null) when notification_type
         is 'final' so consumers know no further reports are expected.
+
+        Only the webhook path triggers this (#1570): notification_type is
+        webhook-only ("only present in webhook deliveries"), the polling impl
+        never sets it, and the delivery webhook scheduler serializes through
+        this method (via adcp's create_mcp_webhook_payload).
         """
         result = super().model_dump(**kwargs)
         if self.notification_type is not None and "next_expected_at" not in result:
