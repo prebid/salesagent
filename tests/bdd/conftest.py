@@ -1294,11 +1294,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # a2a now normalizes these to AdCPError(INVALID_REQUEST) (wire-drop
                     # confirmed XPASS, salesagent-tddx) — removed. mcp/rest still gap.
                     "mcp-geo without geo_level",
-                    "rest-geo without geo_level",
+                    "[rest-geo without geo_level",
                     "mcp-limit=0 (below minimum)",
-                    "rest-limit=0 (below minimum)",
+                    "[rest-limit=0 (below minimum)",
                     "mcp-limit negative",
-                    "rest-limit negative",
+                    "[rest-limit negative",
                 },
                 "Pydantic rejects (missing geo_level / limit>=1) but error not normalized to "
                 "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
@@ -1311,11 +1311,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # a2a now normalizes these to AdCPError(INVALID_REQUEST) (wire-drop
                     # confirmed XPASS, salesagent-tddx) — removed. mcp/rest still gap.
                     "mcp-interval=0 (below minimum)",
-                    "rest-interval=0 (below minimum)",
+                    "[rest-interval=0 (below minimum)",
                     "mcp-unit=weeks (not in enum)",
-                    "rest-unit=weeks (not in enum)",
+                    "[rest-unit=weeks (not in enum)",
                     "mcp-model=last_click (not in enum)",
-                    "rest-model=last_click (not in enum)",
+                    "[rest-model=last_click (not in enum)",
                 },
                 "Pydantic rejects (interval>=1 / unit enum / model enum) but error not normalized to "
                 "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
@@ -1346,7 +1346,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 # a2a rows GRADUATED at the main merge (strict XPASS observed
                 # 2026-07-09): the merged wire path validates start>=end on a2a
                 # (same evidence class as the boundary-date-range rows below).
-                {"mcp-start_after_end", "mcp-start_equals_end", "rest-start_after_end", "rest-start_equals_end"},
+                {"mcp-start_after_end", "mcp-start_equals_end", "[rest-start_after_end", "[rest-start_equals_end"},
                 "production does not validate start_date>=end_date (same gap as "
                 "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
@@ -1358,9 +1358,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
                     # salesagent-tddx) — removed. mcp/rest still gap.
                     "mcp-start_date after end_date",
-                    "rest-start_date after end_date",
+                    "[rest-start_date after end_date",
                     "mcp-start_date equals end_date",
-                    "rest-start_date equals end_date",
+                    "[rest-start_date equals end_date",
                 },
                 "production does not validate start_date>=end_date on a2a/mcp/rest "
                 "(impl passes). Same gap as T-UC-004-daterange-invalid/-equal. "
@@ -1437,10 +1437,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-natural_key",
                     "mcp-invalid_oneOf_both",
                     "mcp-empty_object",
-                    "rest-explicit_account_id",
-                    "rest-natural_key",
-                    "rest-invalid_oneOf_both",
-                    "rest-empty_object",
+                    "[rest-explicit_account_id",
+                    "[rest-natural_key",
+                    "[rest-invalid_oneOf_both",
+                    "[rest-empty_object",
                 },
                 "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
                 "boundary; invalid-account rows raise ValidationError not AdCPError. "
@@ -1461,8 +1461,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # mcp-account_id present + not found genuinely passes
                     # (ValidationError satisfies 'invalid') — NOT marked.
                     "mcp-empty object {}",
-                    "rest-account_id present + account exists",
-                    "rest-brand + operator present",
+                    "[rest-account_id present + account exists",
+                    "[rest-brand + operator present",
                 },
                 "a2a/mcp/rest do not parse/resolve AccountReference at the transport "
                 "boundary; invalid-account rows raise ValidationError not AdCPError. "
@@ -1492,7 +1492,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-recent",
                     "mcp-failures_only",
                     "mcp-unknown_value-systematic",
-                    "rest-unknown_value-systematic",
+                    "[rest-unknown_value-systematic",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
                 "field); ValidationError not AdCPError (rest silently drops it). "
@@ -1510,7 +1510,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-random (first enum value)",
                     "mcp-failures_only (last enum value)",
                     "mcp-Unknown string not in enum",
-                    "rest-Unknown string not in enum",
+                    "[rest-Unknown string not in enum",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
                 "field); ValidationError not AdCPError (rest silently drops it). "
@@ -1543,7 +1543,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # access (wire-drop confirmed XPASS, salesagent-tddx) — removed.
                     # mcp/rest still return 200+empty (C3 gap remains).
                     "mcp-principal differs from owner",
-                    "rest-principal differs from owner",
+                    "[rest-principal differs from owner",
                 },
                 "cross-principal access returns 200+empty instead of "
                 "AdCPError(MEDIA_BUY_NOT_FOUND). impl genuinely passes. "
@@ -1565,10 +1565,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # still raise ValidationError-not-AdCPError on a2a/mcp/rest, kept.
                     "a2a-empty_array",
                     "mcp-empty_array",
-                    "rest-empty_array",
+                    "[rest-empty_array",
                     "a2a-unknown_value",
                     "mcp-unknown_value",
-                    "rest-unknown_value",
+                    "[rest-unknown_value",
                 },
                 "single_pending: Gherkin 'pending_activation' is not a valid AdCP "
                 "MediaBuyStatus (item B1) — impl normalizes the legacy label, "
@@ -1589,7 +1589,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # salesagent-tddx) — removed. mcp still fails (mcp-failed kept).
                     "mcp-pending_activation (first enum value)",
                     "mcp-failed (not in AdCP enum",
-                    "rest-pending_activation (first enum value)",
+                    "[rest-pending_activation (first enum value)",
                 },
                 "pending_activation: Gherkin value not a valid AdCP MediaBuyStatus "
                 "(item B1). failed/[]: ValidationError not AdCPError on a2a/mcp (item C4). "
@@ -1602,8 +1602,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (same shape as the reconciled date-range valid rows).
         ]
         # e2e_rest items must NOT be marked by this loop. Its row substrings use
-        # bare transport prefixes ("rest-…", not the "[rest-" bracket guard at :402),
-        # so a "rest-…" row substring-matches an "[e2e_rest-…]" nodeid and would stamp
+        # bare transport prefixes ("[rest-…", not the "[rest-" bracket guard at :402),
+        # so a "[rest-…" row substring-matches an "[e2e_rest-…]" nodeid and would stamp
         # a strict=True in-process "impl passes" reason onto e2e_rest items —
         # contradicting the ledger's non-strict policy and, once e2e_rest reaches the
         # real boundary and passes (e.g. INVALID_REQUEST now emitted), turning the pass
@@ -1729,15 +1729,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # FIXME(#1270): e2e_rest: Docker doesn't validate date range params —
-            # invalid cases (equals, after) succeed instead of failing.
-            if is_e2e_rest and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date")):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: Docker does not validate date range — invalid cases succeed",
-                        strict=True,
-                    )
-                )
+            # #1270 tripwire FIRED (strict XPASS on the first in-network CI run,
+            # 2026-07-09): the live server now validates start>=end (the merged
+            # #1417 validation embed) — tripwire removed, ledger entries graduated.
 
         # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
         # in-process — when only end_date is given, production defaults start to
@@ -2398,22 +2392,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Immutable: only REST success-path update tests fail (error tests pass)
             (
                 "T-UC-026-partition-immutable",
-                {"rest-update_mutable_only", "rest-no_immutable_fields_present"},
+                {"[rest-update_mutable_only", "[rest-no_immutable_fields_present"},
                 "REST update dispatch not wired for partition immutable success tests",
             ),
             (
                 "T-UC-026-boundary-immutable",
-                {"rest-update with only mutable"},
+                {"[rest-update with only mutable"},
                 "REST update dispatch not wired for boundary immutable success tests",
             ),
             # Keyword add partition: only REST success-path tests fail
             (
                 "T-UC-026-partition-keyword-add",
                 {
-                    "rest-new_keyword",
-                    "rest-existing_keyword_update_bid",
-                    "rest-mixed_new_and_update",
-                    "rest-same_keyword_different_match",
+                    "[rest-new_keyword",
+                    "[rest-existing_keyword_update_bid",
+                    "[rest-mixed_new_and_update",
+                    "[rest-same_keyword_different_match",
                 },
                 "REST update dispatch not wired for partition keyword-add success tests",
             ),
@@ -2421,10 +2415,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-partition-keyword-remove",
                 {
-                    "rest-remove_existing_pair",
-                    "rest-remove_nonexistent_pair",
-                    "rest-remove_all_keywords",
-                    "rest-mixed_existing_and_nonexistent",
+                    "[rest-remove_existing_pair",
+                    "[rest-remove_nonexistent_pair",
+                    "[rest-remove_all_keywords",
+                    "[rest-mixed_existing_and_nonexistent",
                 },
                 "REST update dispatch not wired for partition keyword-remove success tests",
             ),
@@ -2436,10 +2430,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-empty keyword string",
                     "a2a-empty keyword string",
                     "mcp-empty keyword string",
-                    "rest-single new keyword target",
-                    "rest-existing (keyword, match_type) pair",
-                    "rest-same keyword with broad and exact",
-                    "rest-bid_price = 0",
+                    "[rest-single new keyword target",
+                    "[rest-existing (keyword, match_type) pair",
+                    "[rest-same keyword with broad and exact",
+                    "[rest-bid_price = 0",
                 },
                 "empty keyword validation not implemented / REST update not wired",
             ),
@@ -2451,10 +2445,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-empty keyword string",
                     "a2a-empty keyword string",
                     "mcp-empty keyword string",
-                    "rest-remove single existing",
-                    "rest-remove non-existent pair",
-                    "rest-remove all keyword targets",
-                    "rest-mix of existing and non-existent",
+                    "[rest-remove single existing",
+                    "[rest-remove non-existent pair",
+                    "[rest-remove all keyword targets",
+                    "[rest-mix of existing and non-existent",
                 },
                 "empty keyword validation not implemented / REST update not wired",
             ),
@@ -2466,15 +2460,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_add",
-                    "rest-add_with_bid_price",
-                    "rest-add_without_bid_price",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
-                    "rest-upsert_existing",
-                    "rest-zero_bid_price",
+                    "[rest-typical_add",
+                    "[rest-add_with_bid_price",
+                    "[rest-add_without_bid_price",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
+                    "[rest-upsert_existing",
+                    "[rest-zero_bid_price",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2484,12 +2478,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_remove",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
-                    "rest-remove_nonexistent",
+                    "[rest-typical_remove",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
+                    "[rest-remove_nonexistent",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2501,13 +2495,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
                     "a2a-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
                     "mcp-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-keyword_targets_add WITH targeting_overlay.negative_keywords",
-                    "rest-keyword_targets_add WITHOUT",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-keyword_targets_add WITH targeting_overlay.negative_keywords",
+                    "[rest-keyword_targets_add WITHOUT",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
@@ -2517,14 +2511,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
                     "a2a-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
                     "mcp-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-keyword_targets_remove WITHOUT",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
-                    "rest-remove pair that does NOT exist",
-                    "rest-remove pair that exists",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-keyword_targets_remove WITHOUT",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
+                    "[rest-remove pair that does NOT exist",
+                    "[rest-remove pair that exists",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
@@ -2536,12 +2530,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_add",
-                    "rest-add_duplicate",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
+                    "[rest-typical_add",
+                    "[rest-add_duplicate",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2551,12 +2545,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_remove",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
-                    "rest-remove_nonexistent",
+                    "[rest-typical_remove",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
+                    "[rest-remove_nonexistent",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2568,14 +2562,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
                     "a2a-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
                     "mcp-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
-                    "rest-negative_keywords_add WITHOUT",
-                    "rest-negative_keywords_add WITH targeting_overlay.keyword_targets",
-                    "rest-add pair that already exists",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
+                    "[rest-negative_keywords_add WITHOUT",
+                    "[rest-negative_keywords_add WITH targeting_overlay.keyword_targets",
+                    "[rest-add pair that already exists",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
@@ -2585,21 +2579,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
                     "a2a-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
                     "mcp-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
-                    "rest-negative_keywords_remove WITHOUT",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
-                    "rest-remove pair that does NOT exist",
-                    "rest-remove pair that exists",
+                    "[rest-negative_keywords_remove WITHOUT",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
+                    "[rest-remove pair that does NOT exist",
+                    "[rest-remove pair that exists",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
             # Paused: only REST update-path tests fail (create-path passes)
             (
                 "T-UC-026-partition-paused",
-                {"rest-pause_on_update", "rest-resume_on_update"},
+                {"[rest-pause_on_update", "[rest-resume_on_update"},
                 "REST update dispatch not wired for partition paused update tests",
             ),
             # d09y: boundary scenarios exposing real production gaps after step-parser fix.
@@ -2613,9 +2607,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-boundary-paused",
                 {
-                    "rest-paused=false on update",
-                    "rest-paused=true on update",
-                    "rest-paused=true on already-paused",
+                    "[rest-paused=false on update",
+                    "[rest-paused=true on update",
+                    "[rest-paused=true on already-paused",
                 },
                 "REST update dispatch not wired for boundary paused update tests",
             ),
@@ -2626,9 +2620,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "creative_assignments",
                     "optimization_goals",
-                    "rest-omit_array_fields",
-                    "rest-replace_catalogs",
-                    "rest-replace_targeting_overlay",
+                    "[rest-omit_array_fields",
+                    "[rest-replace_catalogs",
+                    "[rest-replace_targeting_overlay",
                 },
                 "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
             ),
@@ -2637,10 +2631,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "creative_assignments",
                     "optimization_goals",
-                    "rest-all array fields omitted",
-                    "rest-catalogs provided",
-                    "rest-only scalar fields updated",
-                    "rest-targeting_overlay replacement",
+                    "[rest-all array fields omitted",
+                    "[rest-catalogs provided",
+                    "[rest-only scalar fields updated",
+                    "[rest-targeting_overlay replacement",
                 },
                 "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
             ),
@@ -2831,11 +2825,17 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
     # the A2A + MCP wire transports only — including a REST variant would 404.
-    if any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names):
+    # This applies to e2e_rest too: it dispatches real HTTP REST to the live
+    # server, so a tool with no REST route 404s there identically (confirmed by
+    # the first in-network CI run: every UC-019 e2e_rest param died on a live
+    # 404). Skip the e2e append for these UCs instead of parking ~40 ledger
+    # entries for a definitionally-unsupported transport.
+    no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
+    if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]
         ids = ["a2a", "mcp"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true":
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 

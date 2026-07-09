@@ -30,7 +30,7 @@
 # Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
 # (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
-# --- uc004 invalid-input validation — accepted by live server (9) ---
+# --- uc004 invalid-input validation — accepted by live server (7) ---
 # GENUINE GAP: the live server accepts these inputs that the spec marks invalid
 # (start==end / start>end date ranges, owner-mismatch principal, out-of-enum sampling,
 # string "true" daily-breakdown, geo metro without system).
@@ -39,8 +39,10 @@
 # scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
 # the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
 # in-network on main — absent from main's ledger.)
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]
+# date-range BOUNDARY rows GRADUATED (first in-network CI run 2026-07-09): the
+# #1270 strict tripwires FIRED — the live server now validates start>=end (the
+# merged #1417 validation embed). The partition twins below stay pending their
+# own positive evidence on the next in-network run.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_equals_end-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
@@ -48,6 +50,16 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boun
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
+
+# --- uc004 delivery account valid rows — referenced account not seeded (2) ---
+# MERGED-UPSTREAM surface (main's #1545 feature regen; first e2e run on this
+# branch's CI 2026-07-09): the valid account rows dispatch a delivery request
+# referencing acc_acme_001 / acme-corp.com, the live server resolves accounts
+# for real, and no uc004 step seeds them -> honest ACCOUNT_NOT_FOUND. Real fix
+# = seed the referenced account in the delivery Given (same family as the
+# in-process xfail rows in conftest's account selective lists).
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-valid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-natural_key-{"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}-valid]
 
 # --- uc006 account billing-state resolution — GRADUATED (#1417 merge) ---
 # Was: ACCOUNT_PAYMENT_REQUIRED / ACCOUNT_SETUP_REQUIRED / ACCOUNT_SUSPENDED /
