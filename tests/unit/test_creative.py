@@ -716,7 +716,7 @@ class TestCrossPrincipalIsolation:
         with (
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context"),
+            patch("src.core.format_resolver.fetch_format_spec"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
@@ -772,7 +772,7 @@ class TestCrossPrincipalIsolation:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -949,22 +949,30 @@ class TestCreativeValidation:
         assert result.creative_id == "c_test_1"
 
     def test_unreachable_agent_raises_with_retry(self):
-        """Unreachable creative agent raises ValueError with retry suggestion.
+        """Unreachable creative agent propagates the typed transient error.
+
+        Production-grounded (salesagent-mpo1): the registry types every
+        network failure (connect/timeout -> AdCPServiceUnavailableError), and
+        the shared fetch path propagates typed errors with their recovery
+        semantics instead of rewrapping them — a down agent is a transient
+        request failure, not a creative problem.
 
         Spec: UNSPECIFIED (implementation-defined error handling for agent connectivity).
         Covers: UC-006-CREATIVE-FORMAT-VALIDATION-03
         """
+        from src.core.exceptions import AdCPServiceUnavailableError
         from src.core.tools.creatives._validation import _validate_creative_input
 
         creative = _make_creative_asset()
         mock_registry = MagicMock()
 
         with patch(
-            "src.core.tools.creatives._validation.run_async_in_sync_context",
-            side_effect=ConnectionError("Agent down"),
+            "src.core.format_resolver.fetch_format_spec",
+            side_effect=AdCPServiceUnavailableError("Connection failed: agent unreachable"),
         ):
-            with pytest.raises(AdCPAdapterError, match="unreachable"):
+            with pytest.raises(AdCPServiceUnavailableError, match="unreachable") as exc_info:
                 _validate_creative_input(creative, mock_registry, "p1")
+        assert exc_info.value.recovery == "transient"
 
     def test_unknown_format_raises_with_discovery_hint(self):
         """Known agent but unknown format raises ValueError mentioning list_creative_formats.
@@ -978,7 +986,7 @@ class TestCreativeValidation:
         mock_registry = MagicMock()
 
         with patch(
-            "src.core.tools.creatives._validation.run_async_in_sync_context",
+            "src.core.format_resolver.fetch_format_spec",
             return_value=None,  # Format not found
         ):
             with pytest.raises(AdCPValidationError, match="list_creative_formats"):
@@ -2537,7 +2545,7 @@ class TestDeleteMissing:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -2613,7 +2621,7 @@ class TestDryRun:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3067,7 +3075,7 @@ class TestValidationModeSemantics:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
+            patch("src.core.format_resolver.fetch_format_spec") as mock_val_async,
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -3728,7 +3736,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3782,7 +3790,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3901,7 +3909,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3951,7 +3959,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),  # format found
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -4037,7 +4045,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
+            patch("src.core.format_resolver.fetch_format_spec") as mock_val_async,
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -4103,7 +4111,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
+            patch("src.core.format_resolver.fetch_format_spec") as mock_val_async,
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -4266,7 +4274,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context", return_value=None),
+            patch("src.core.format_resolver.fetch_format_spec", return_value=None),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._workflow.WorkflowUoW"),
@@ -4317,7 +4325,7 @@ class TestExtensionGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 side_effect=ConnectionError("Agent unreachable"),
             ),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -4492,7 +4500,7 @@ class TestA2ATransportGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -4769,7 +4777,7 @@ class TestDeleteMissingDefault:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -4884,7 +4892,7 @@ class TestCreativeIdsScopeFilterGap:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),

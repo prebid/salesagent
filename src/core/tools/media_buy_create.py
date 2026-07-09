@@ -305,40 +305,15 @@ def _determine_media_buy_status(
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     """Get format specification synchronously from the async registry.
 
-    This helper function wraps the async registry.get_format() call to make it
-    usable in synchronous contexts. The registry uses in-memory cache (30min TTL)
-    and falls back to the creative agent if not cached.
-
-    Uses run_async_in_sync_context (not bare asyncio.run) because this runs
-    inside the live server's async transports, where asyncio.run() raises
-    "cannot be called from a running event loop" — which previously made every
-    format lookup fail on the server and reject valid catalog formats as
-    unknown (PR #1430 review).
-
-    Args:
-        agent_url: Creative agent URL
-        format_id: Format ID to fetch
-
-    Returns:
-        Format specification object or None if not found
+    Thin delegate kept for its patch surface (tests/harness envs patch this
+    name). The behavior — typed AdCPError propagates (transient agent failures
+    keep their recovery semantics, PR #1430 review), untyped errors log and
+    become None (unknown-format) — lives in the SINGLE shared fetch path,
+    format_resolver.fetch_format_spec (salesagent-mpo1).
     """
-    from src.core.creative_agent_registry import get_creative_agent_registry
-    from src.core.validation_helpers import run_async_in_sync_context
+    from src.core.format_resolver import fetch_format_spec
 
-    registry = get_creative_agent_registry()
-
-    try:
-        return run_async_in_sync_context(registry.get_format(agent_url, format_id))
-    except AdCPError:
-        # Typed errors from the registry (rate limit, timeout, connect failure)
-        # carry their own recovery semantics — propagate so a TRANSIENT agent
-        # failure reaches the buyer as SERVICE_UNAVAILABLE instead of being
-        # swallowed into None, which downstream validation converts to a
-        # terminal CREATIVE_REJECTED (PR #1430 review).
-        raise
-    except Exception as e:
-        logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
-        return None
+    return fetch_format_spec(agent_url, format_id)
 
 
 def _validate_creatives_before_adapter_call(
@@ -679,20 +654,37 @@ def _build_adapter_asset_from_creative(
     """
     creative_data = creative.data or {}
     format_spec = None
-    # Prefer cached spec (same as auto-approval path); fall back to live get_format on miss.
+    # Prefer cached spec (same as auto-approval path); fall back to the resolver
+    # (product overrides + agent search) on an UNKNOWN-format miss (None). A
+    # typed transient AdCPError from either fetch PROPAGATES — a rate-limited
+    # agent must not be degraded into a missing-spec asset error, and the
+    # fallback must not mask it by re-fetching from the same throttled agent
+    # (salesagent-mpo1). AdCPFormatNotFoundError from the resolver = genuinely
+    # unknown -> proceed without a spec (extraction falls back to raw data).
     if creative.format:
         format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
     if format_spec is None and creative.format:
-        try:
-            from src.core.format_resolver import get_format
+        from src.core.exceptions import AdCPFormatNotFoundError
+        from src.core.format_resolver import get_format
 
+        try:
             format_spec = get_format(
                 str(creative.format),
                 agent_url=creative.agent_url,
                 tenant_id=tenant_id,
                 product_id=None,
             )
+        except AdCPFormatNotFoundError as e:
+            # Genuinely unknown format — proceed without a spec (extraction
+            # falls back to the creative's raw data fields).
+            logger.warning(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}")
+        except AdCPError:
+            # Transient/typed agent failure — propagate with its recovery
+            # semantics rather than degrading to a missing-spec asset error.
+            raise
         except Exception as e:
+            # Resolver internals (e.g. the product-override DB read) — keep the
+            # historical resilience: log and build from raw creative data.
             logger.warning(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}")
 
     url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)

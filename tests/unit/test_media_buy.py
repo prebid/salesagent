@@ -756,6 +756,92 @@ class TestCreateMediaBuyValidation:
             )
 
 
+class TestBuildAdapterAssetFormatFallback:
+    """_build_adapter_asset_from_creative format-spec fallback (salesagent-mpo1 TQ-04).
+
+    Cache-miss (None) falls back to format_resolver.get_format; a genuinely
+    unknown format proceeds with no spec (raw-data extraction); a typed
+    transient AdCPError propagates from EITHER fetch — never degraded into a
+    missing-spec asset error.
+    """
+
+    def _creative(self):
+        creative = MagicMock()
+        creative.creative_id = "c_fb"
+        creative.format = "display_300x250"
+        creative.agent_url = "https://creative.adcontextprotocol.org"
+        creative.name = "FB"
+        creative.data = {"url": "https://example.com/a.jpg", "width": 300, "height": 250}
+        return creative
+
+    def test_cache_miss_uses_format_resolver_fallback(self):
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        spec = MagicMock()
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+            patch("src.core.format_resolver.get_format", return_value=spec) as resolver,
+        ):
+            asset, err = _build_adapter_asset_from_creative(
+                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+            )
+        resolver.assert_called_once_with(
+            "display_300x250",
+            agent_url="https://creative.adcontextprotocol.org",
+            tenant_id="t1",
+            product_id=None,
+        )
+        assert err is None and asset is not None
+
+    def test_unknown_format_proceeds_without_spec(self):
+        from src.core.exceptions import AdCPFormatNotFoundError
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+            patch("src.core.format_resolver.get_format", side_effect=AdCPFormatNotFoundError("nope")),
+        ):
+            asset, err = _build_adapter_asset_from_creative(
+                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+            )
+        # Raw creative data carries url/width/height, so the asset still builds.
+        assert err is None and asset is not None
+        assert asset["url"] == "https://example.com/a.jpg"
+
+    def test_transient_error_from_cached_fetch_propagates_without_fallback(self):
+        from src.core.exceptions import AdCPRateLimitError
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        with (
+            patch(
+                "src.core.tools.media_buy_create._get_format_spec_sync",
+                side_effect=AdCPRateLimitError("429"),
+            ),
+            patch("src.core.format_resolver.get_format") as resolver,
+        ):
+            with pytest.raises(AdCPRateLimitError):
+                _build_adapter_asset_from_creative(
+                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                )
+        resolver.assert_not_called()
+
+    def test_transient_error_from_resolver_fallback_propagates(self):
+        from src.core.exceptions import AdCPServiceUnavailableError
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+            patch(
+                "src.core.format_resolver.get_format",
+                side_effect=AdCPServiceUnavailableError("503"),
+            ),
+        ):
+            with pytest.raises(AdCPServiceUnavailableError):
+                _build_adapter_asset_from_creative(
+                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                )
+
+
 class TestCreateMediaBuyCreativeValidation:
     """UC-002 creative validation: pre-adapter creative checks."""
 
