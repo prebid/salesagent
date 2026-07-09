@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
+from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 
@@ -75,6 +76,35 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     assert db_mb is not None, (
         f"Media buy '{mb.media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
         "step claims 'Buyer owns an existing media buy' but it is not persisted"
+    )
+
+
+@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
+def given_buyer_owns_media_buy_with_id(ctx: dict, media_buy_id: str) -> None:
+    """Verify the seeded existing media buy carries the exact id AND is persisted.
+
+    The Background table pins the id literally ("mb_existing") — the conftest
+    UC-003 harness seeds a MediaBuy with that id. Verify both the ctx state and
+    DB persistence (same verify logic as given_buyer_owns_media_buy) so a
+    mis-seeded / phantom media buy fails loudly here rather than deep in the
+    update path. Uses MediaBuyRepository (not raw select) per repository pattern.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — conftest UC-003 harness setup failed"
+    assert mb.media_buy_id == media_buy_id, (
+        f"Seeded media buy id '{mb.media_buy_id}' does not match the Background id '{media_buy_id}'"
+    )
+    env = ctx["env"]
+    env._commit_factory_data()
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — cannot verify media buy ownership"
+    repo = MediaBuyRepository(env._session, tenant.tenant_id)
+    db_mb = repo.get_by_id(media_buy_id)
+    assert db_mb is not None, (
+        f"Media buy '{media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
+        "Background claims 'the Buyer owns an existing media buy' but it is not persisted"
     )
 
 
@@ -202,15 +232,11 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-@given("the request does NOT include an idempotency_key")
-def given_request_omits_idempotency_key(ctx: dict) -> None:
-    """Declarative guard — ensure idempotency_key is NOT in update_kwargs.
-
-    The default update_kwargs only contains media_buy_id, so idempotency_key is
-    already absent. This step explicitly strips it in case prior Given steps added it.
-    """
-    kwargs = _ensure_update_defaults(ctx)
-    kwargs.pop("idempotency_key", None)
+# "the request does NOT include an idempotency_key" is owned by
+# uc002_create_media_buy (canonical) to avoid a cross-module shadow now that this
+# module is registered. No graded UC-003 scenario uses that text; when the dormant
+# UC-003 idempotency scenarios graduate (salesagent-x5le) they need an update-kwargs
+# strip under a distinct step text (create/update behaviours genuinely differ).
 
 
 @given("the request does not include any updatable fields")
@@ -1008,6 +1034,43 @@ def then_response_has_errors_array(ctx: dict) -> None:
     assert error.message, f"Promoted error missing required 'message' field: {error!r}"
 
 
+def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
+    """Return the success-path response as the buyer sees it on the serialized wire.
+
+    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
+    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
+    through the production serializer — the same path that produces wire bytes for
+    the other transports. A real-wire transport that did NOT stash wire_response is
+    a loud failure, not a silent fallback to the typed model (which would let the
+    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
+    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
+    """
+    from tests.harness.transport import Transport
+
+    wire = ctx.get("wire_response")
+    transport = ctx.get("transport")
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if wire is not None:
+        return wire
+    return _require_response(ctx).model_dump(mode="json")
+
+
+@then("the response should contain a task_id")
+def then_response_contains_task_id(ctx: dict) -> None:
+    """Assert the submitted envelope carries a non-empty task_id on the real wire.
+
+    POST-S8: the buyer receives a task_id to poll tasks/get. Graded on the
+    serialized wire (ctx['wire_response']) so an A2A/MCP/REST regression that
+    drops task_id is caught — not on the coerced typed payload.
+    """
+    data = _submitted_wire_dict(ctx)
+    task_id = data.get("task_id")
+    assert isinstance(task_id, str) and task_id, (
+        f"Submitted response must carry a non-empty task_id on the wire, got {task_id!r} (wire keys: {sorted(data)})"
+    )
+
+
 @then(parsers.parse('the response should NOT contain "{field_name}" field'))
 def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     """Assert the response does NOT contain a given field.
@@ -1015,18 +1078,22 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
     and error responses must not contain success-specific fields. Handles both
     directions by checking ctx['response'] (success) first, then error_response/error.
+
+    The success-path check reads the REAL serialized wire (``ctx["wire_response"]``
+    via ``_submitted_wire_dict``), not ``response.model_dump()``: media_buy_id and
+    implementation_date are not declared on UpdateMediaBuySubmitted, so a
+    model-level check passes vacuously and can never catch a wire regression (e.g.
+    the A2A submitted reconstruction leaking a field). Absent-or-null on the wire
+    satisfies "does NOT contain" (a null field is not conveyed); a real value is a
+    contract violation. This is the Core Invariant / Design-Refinement Q5.
     """
-    # Success-path response
+    # Success-path response — assert against the buyer-facing serialized wire.
     response = ctx.get("response")
     if response is not None:
-        if hasattr(response, "model_dump"):
-            data = response.model_dump(exclude_none=True)
-        elif isinstance(response, dict):
-            data = {k: v for k, v in response.items() if v is not None}
-        else:
-            data = {}
-        assert field_name not in data, (
-            f"Response should NOT contain '{field_name}' field (BR-RULE-018), but found: {data.get(field_name)!r}"
+        data = _submitted_wire_dict(ctx)
+        assert data.get(field_name) is None, (
+            f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
+            f"but found: {data.get(field_name)!r}"
         )
         return
     # Error-path response (BR-RULE-018 INV-2)

@@ -170,3 +170,30 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+
+
+def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> AdapterConfig:
+    """Upsert the mock-adapter ``test_behavior`` for a tenant (BDD/E2E support).
+
+    The Docker-hosted mock adapter reads injected behavior — ``manual_approval_required``,
+    ``fail_on_create``, ``fail_on_update``, ``error_message``, ``error_details``,
+    ``recovery`` — from ``AdapterConfig.config_json["test_behavior"]`` (see
+    ``mock_ad_server._read_test_behavior``). In-process transports use the env's
+    MagicMock adapter directly and ignore this row; it exists so the same BDD Given
+    steps also drive the real adapter over E2E.
+
+    Merges ``behavior`` into any existing ``test_behavior``. Factory-based upsert —
+    no raw model construction in step bodies.
+    """
+    session = env.get_session()
+    row = session.get(AdapterConfig, tenant_id)
+    if row is None:
+        tenant = session.get(Tenant, tenant_id)
+        row = AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+    config = dict(row.config_json or {})
+    test_behavior = dict(config.get("test_behavior", {}))
+    test_behavior.update(behavior)
+    config["test_behavior"] = test_behavior
+    row.config_json = config
+    env._commit_factory_data()
+    return row

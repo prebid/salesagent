@@ -58,6 +58,13 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
                 ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
             else:
                 ctx["response"] = result.payload
+                # Stash the real serialized success-path wire (REST HTTP body;
+                # A2A/MCP artifact only when the env routes through
+                # _run_a2a_handler/_run_mcp_client, else None). Then steps that
+                # must grade the buyer-facing wire (not the coerced typed
+                # payload) read ctx["wire_response"] — see tests/CLAUDE.md
+                # "TransportResult.wire_response".
+                ctx["wire_response"] = result.wire_response
         except Exception as exc:
             ctx["error"] = exc
     else:

@@ -87,6 +87,10 @@ class UpdateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    # Package-level updates (budget/targeting/pacing per package). Part of the
+    # canonical UpdateMediaBuyRequest contract (accepted on MCP/A2A/impl); REST was
+    # an incomplete mirror. Raw dicts — coerced by UpdateMediaBuyRequest downstream.
+    packages: list[dict[str, Any]] = []
     adcp_version: str = "1.0.0"
 
 
@@ -289,6 +293,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         currency=body.currency,
         start_time=body.start_time,
         end_time=body.end_time,
+        packages=body.packages or None,
         identity=identity,
     )
     return response.model_dump(mode="json")

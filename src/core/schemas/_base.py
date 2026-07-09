@@ -1806,13 +1806,20 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         if not isinstance(values, dict):
             return values
 
-        # Unwrap RootModel packages (FastMCP produces library PackageUpdate RootModel,
-        # but JSON/dict input arrives as plain dicts — guard needed in pre-validator)
+        # Normalize package instances to dicts so the list[AdCPPackageUpdate] field
+        # validates them. FastMCP coerces the incoming param to its annotated type
+        # before the wrapper runs: on older adcp that was a PackageUpdate RootModel,
+        # on adcp 6.6 it is a plain BaseModel PackageUpdate (isinstance RootModel is
+        # False there — the else branch used to leak the typed instance through and
+        # fail as "not a valid dictionary or instance of AdCPPackageUpdate"). JSON/dict
+        # input (A2A/REST) already arrives as plain dicts and passes through untouched.
         if "packages" in values and values["packages"]:
             unwrapped = []
             for pkg in values["packages"]:
                 if isinstance(pkg, RootModel):
                     unwrapped.append(pkg.root.model_dump(mode="json"))
+                elif isinstance(pkg, BaseModel):
+                    unwrapped.append(pkg.model_dump(mode="json"))
                 else:
                     unwrapped.append(pkg)
             values["packages"] = unwrapped

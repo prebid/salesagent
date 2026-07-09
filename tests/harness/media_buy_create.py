@@ -163,6 +163,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
                 principal_id=kwargs.get("principal_id", self._principal_id),
             )
 
+        def _get_or_create_context(*_args: Any, **kwargs: Any):
+            # The update path (media_buy_update.py:263) resolves its context via
+            # get_or_create_context, not create_context. Delegate to the real one so
+            # persistent_ctx.context_id is a real value the workflow_step INSERT can
+            # persist (a MagicMock context_id fails psycopg2 with "can't adapt").
+            return real.get_or_create_context(
+                tenant_id=kwargs.get("tenant_id", self._tenant_id),
+                principal_id=kwargs.get("principal_id", self._principal_id),
+                context_id=kwargs.get("context_id"),
+                is_async=kwargs.get("is_async", True),
+            )
+
         def _create_workflow_step(*_args: Any, **kwargs: Any):
             kwargs.setdefault("step_type", "media_buy_creation")
             kwargs.setdefault("owner", "system")
@@ -174,6 +186,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
         mgr.create_context.side_effect = _create_context
         mgr.get_context.return_value = None
+        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.create_workflow_step.side_effect = _create_workflow_step
         mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
         mgr.update_workflow_step.return_value = None

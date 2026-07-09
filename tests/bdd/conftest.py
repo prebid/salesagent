@@ -53,8 +53,10 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_success",
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
+    "tests.bdd.steps.generic.given_media_buy",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
+    "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
@@ -2719,6 +2721,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     marker_names = {m.name for m in request.node.iter_markers()}
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
+    if any(t.startswith("T-UC-003") for t in marker_names):
+        return "UC-003"
     if any(t.startswith("T-UC-006") for t in marker_names):
         return "UC-006"
     if any(t.startswith("T-UC-005") for t in marker_names):
@@ -2820,6 +2824,47 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
+
+    elif uc == "UC-003":
+        # BOUNDED (salesagent-8hu9): only the 3 manual-approval submitted-envelope
+        # scenarios are graded (they exercise UpdateMediaBuySubmitted cross-transport).
+        # Every other UC-003 scenario stays dormant exactly as before this ticket —
+        # graduating the full UC-003 file is tracked by salesagent-x5le. This guard is
+        # what keeps un-dormanting UC-003 from turning the suite red.
+        marker_names = {m.name for m in request.node.iter_markers()}
+        _UC003_WIRED_TAGS = {
+            "T-UC-003-alt-manual",
+            "T-UC-003-approval-tenant",
+            "T-UC-003-approval-adapter",
+        }
+        if not (marker_names & _UC003_WIRED_TAGS):
+            pytest.xfail("UC-003 harness graduation pending (salesagent-x5le)")
+
+        # UpdateMediaBuy manual-approval scenarios. MediaBuyDualEnv (an IntegrationEnv)
+        # routes an UpdateMediaBuyRequest through IMPL/A2A/MCP/REST. Seed the full create
+        # dependency chain plus a standalone MediaBuy with the literal id the
+        # Background references ("mb_existing") so the update path has a target.
+        request.getfixturevalue("integration_db")
+        from tests.factories import MediaBuyFactory
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
+            tenant, principal, product, pricing_option = env.setup_media_buy_data()
+            existing_media_buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_existing",
+                status="active",
+            )
+            env._commit_factory_data()
+            env._seeded_media_buy_id = "mb_existing"
+            ctx["env"] = env
+            ctx["tenant"] = tenant
+            ctx["principal"] = principal
+            ctx["default_product"] = product
+            ctx["default_pricing_option"] = pricing_option
+            ctx["existing_media_buy"] = existing_media_buy
+            yield
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
