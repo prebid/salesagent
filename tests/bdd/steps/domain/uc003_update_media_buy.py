@@ -124,7 +124,7 @@ def then_wire_media_buy_status_value(ctx: dict, status: str) -> None:
 
     Used to pin that a persisted status whose name differs from its AdCP
     value (e.g. 'scheduled') is normalized to the correct domain MediaBuyStatus on
-    the update response (salesagent-3ec1)."""
+    the update response (#1417)."""
     _assert_wire_field_equals(ctx, "media_buy_status", status)
 
 
@@ -145,7 +145,7 @@ def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
 
     valid_actions must be derived from the NORMALIZED AdCP status, so a persisted
     'scheduled' buy reports pending_start's actions (not [] from the raw string)
-    (salesagent-3ec1)."""
+    (#1417)."""
     from tests.bdd.steps._outcome_helpers import wire_dict
 
     wire = wire_dict(ctx)
@@ -268,7 +268,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "invoice_recipient":
             # BusinessEntity requires legal_name; the override is rejected by production
             # only when authorized — that authorization check is a production gap
-            # (salesagent-javy), so the scenario is xfailed (T-UC-003-ext-t).
+            # (#1417), so the scenario is xfailed (T-UC-003-ext-t).
             kwargs["invoice_recipient"] = {"legal_name": value}
 
 
@@ -278,7 +278,7 @@ def given_invoice_recipient_not_authorized(ctx: dict, recipient: str) -> None:
 
     No authorization record links this recipient to the account, so an
     authorized-invoice-recipient check would reject the update. Production does
-    not yet implement that check (BR-RULE-214, salesagent-javy), so the scenario
+    not yet implement that check (BR-RULE-214, #1417), so the scenario
     is xfailed (T-UC-003-ext-t) until production catches up. Assert the request
     carries the override so the resolution path is exercised when implemented.
     """
@@ -325,7 +325,7 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     # product_id is intentionally accepted here so the immutable-field override
     # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
     # rejected — currently as VALIDATION_ERROR rather than the spec-expected
-    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (salesagent-kxzs).
+    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
     _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "product_id"}
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
@@ -1945,7 +1945,7 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         # A complete package-request added mid-flight. Production has no
         # midflight-additions capability check (BR-RULE-217 -> UNSUPPORTED_FEATURE),
         # so it accepts new_packages unhandled instead of rejecting — T-UC-003-ext-u
-        # is xfailed (salesagent-u35g).
+        # is xfailed (#1417).
         kwargs["new_packages"] = [
             {
                 "product_id": "guaranteed_display",

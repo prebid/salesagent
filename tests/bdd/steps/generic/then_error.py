@@ -23,7 +23,7 @@ def _wire_code(ctx: dict) -> str | None:
     contract; prefer it over the lossy reconstructed ``ctx['error']`` (which
     collapses distinct wire codes onto one exception class — e.g. yields
     ``RuntimeError`` for an unmapped code). Returns ``None`` on IMPL / no-wire
-    scenarios so callers fall back to the reconstructed exception (salesagent-ztl6.6).
+    scenarios so callers fall back to the reconstructed exception (#1417).
     """
     result = ctx.get("result")
     envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
@@ -41,10 +41,10 @@ def _wire_suggestion(ctx: dict) -> str | None:
     STRICT error.json conformance: only the top-level ``suggestion`` on the
     error object (``errors[0]`` or ``adcp_error`` layer) counts — a suggestion
     buried in ``details`` is a conformance bug the harness surfaces, not masks
-    (salesagent-9val). Same canonical lookup as
+    (#1417). Same canonical lookup as
     ``TransportResult.assert_wire_error``. Returns ``None`` on IMPL / no-wire
     scenarios so callers fall back to the reconstructed exception
-    (salesagent-ztl6.6).
+    (#1417).
     """
     from tests.harness.transport import extract_wire_suggestion
 
@@ -61,7 +61,7 @@ def _wire_error_object(ctx: dict) -> dict | None:
     real envelope's error object, not the lossy reconstructed ``ctx['error']``.
     Prefers the ``errors[0]`` layer (per-error fields like ``field``) and falls
     back to the envelope-level ``adcp_error``. Returns ``None`` on IMPL / no-wire
-    scenarios so callers fall back to the reconstructed exception (salesagent-ztl6.8).
+    scenarios so callers fall back to the reconstructed exception (#1417).
     """
     result = ctx.get("result")
     envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
@@ -120,7 +120,7 @@ def _get_error_dict(error: object) -> dict:
         # Map to the assertion vocabulary used in feature files.
         # Deliberately NO promotion of details["suggestion"]: error.json places
         # suggestion at the top level, and to_dict() already carries it there
-        # when the emitter is conformant (salesagent-9val).
+        # when the emitter is conformant (#1417).
         d["code"] = d.get("error_code", "")
         return d
     # adcp.types.Error model (from partial success response.errors) — has code,
@@ -689,7 +689,7 @@ def then_real_validation_error(ctx: dict) -> None:
 # Fields defined at the TOP LEVEL of the error.json protocol schema. Presence of
 # these MUST be asserted at the top level of the wire error object — a copy buried
 # in the free-form ``details`` dict does NOT satisfy the protocol contract (same
-# burial disease removed from extract_wire_suggestion, salesagent-9val/ioni).
+# burial disease removed from extract_wire_suggestion, #1417/ioni).
 _ERROR_JSON_TOP_LEVEL_FIELDS = frozenset(
     {"code", "message", "field", "suggestion", "retry_after", "issues", "details", "recovery"}
 )

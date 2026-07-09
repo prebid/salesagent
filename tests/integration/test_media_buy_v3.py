@@ -227,7 +227,7 @@ class TestCreateMediaBuyCurrencyValidation:
         )
 
         # Currency support is a seller capability, not a malformed request:
-        # unsupported currency -> UNSUPPORTED_FEATURE (salesagent-gh8p.3).
+        # unsupported currency -> UNSUPPORTED_FEATURE (#1417).
         with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
             await _create_media_buy_impl(req=req, identity=identity)
 
@@ -925,7 +925,7 @@ class TestUpdateMediaBuyAdapterError:
         # Move the buy to 'active' so 'pause' passes the state-machine gate and
         # actually reaches the adapter — a pending_creatives buy (no creatives)
         # rejects 'pause' with AdCPGoneError BEFORE any adapter call, so the
-        # network-failure path would never be exercised (salesagent-clsi).
+        # network-failure path would never be exercised (#1417).
         with get_db_session() as session:
             buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
             assert buy is not None
@@ -947,7 +947,7 @@ class TestUpdateMediaBuyAdapterError:
             # The pause path calls adapter.update_media_buy() with no local try/except
             # and _update_media_buy_impl has no outer handler, so the adapter's
             # ConnectionError propagates to the caller. Assert that deterministically
-            # OUTSIDE any catch-all (salesagent-clsi: the prior try/except swallowed
+            # OUTSIDE any catch-all (#1417: the prior try/except swallowed
             # both the propagated error and the unreachable assert, making this vacuous).
             with pytest.raises(ConnectionError, match="Simulated network failure"):
                 _update_media_buy_impl(req=update_req, identity=mb_identity)

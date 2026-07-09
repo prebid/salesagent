@@ -80,7 +80,7 @@ class TestGetMediaBuysA2ASuggestionParity:
     ``_handle_get_media_buys_skill``) via the harness A2A dispatch. The
     previous version of this test drove ``get_media_buys_raw`` — a wrapper
     with ZERO production callers — so its green was false confidence
-    (salesagent-klkg): the real skill handler builds ``GetMediaBuysRequest``
+    (#1417): the real skill handler builds ``GetMediaBuysRequest``
     with no ``adcp_validation_boundary`` and leaks a bare ValidationError
     that ``normalize_to_adcp_error`` flattens into a suggestion-less envelope.
     """
@@ -357,7 +357,7 @@ class TestCreateMediaBuyA2AWebhookSuggestionParity:
     skill handler full-request-validates inside ``adcp_validation_boundary``
     BEFORE ``create_media_buy_raw`` runs, which is the only thing standing
     between a malformed ``reporting_webhook`` and the raw wrapper's
-    boundary-less ``to_reporting_webhook`` call (salesagent-oygh: the
+    boundary-less ``to_reporting_webhook`` call (#1417: the
     raise-capable ``to_*`` coercions depend on every caller pre-validating).
     This test pins that pre-validation: remove the handler's boundary or its
     full-request validation and the envelope loses its suggestion.

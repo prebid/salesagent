@@ -1634,7 +1634,7 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
         """Reject a malformed idempotency_key with VALIDATION_ERROR (AdCP 16-255).
 
         Parity with UpdateMediaBuyRequest: create now emits the same tailored
-        suggestion on a malformed key (salesagent-f7u4).
+        suggestion on a malformed key (#1417).
         """
         validate_idempotency_key_shape(self.idempotency_key)
         return self

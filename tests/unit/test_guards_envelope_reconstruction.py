@@ -1,6 +1,6 @@
 """Guard: _envelope_to_adcp_error must extract all wire fields including suggestion.
 
-Regression for salesagent-kjfy: _envelope_to_adcp_error extracted code/message/
+Regression for #1417: _envelope_to_adcp_error extracted code/message/
 recovery/details from the two-layer envelope but NOT suggestion. After REST round-
 trip, result.error.suggestion was None even though the wire had it.
 
@@ -30,7 +30,7 @@ def _find_function(tree: ast.AST, name: str) -> ast.FunctionDef | ast.AsyncFunct
 def _is_empty_constant(node: ast.AST) -> bool:
     """True if the node is a literal ``None`` or empty string/collection.
 
-    salesagent-ixmh: ``suggestion=None`` satisfies "the kwarg is present" but
+    #1417: ``suggestion=None`` satisfies "the kwarg is present" but
     still drops the suggestion on the wire, so an empty literal must NOT count
     as passing the value through.
     """
@@ -41,7 +41,7 @@ def _calls_with_keyword(fn_node: ast.AST, callee: str, kwarg: str) -> bool:
     """Return True if the function body calls `callee` passing a NON-EMPTY `kwarg`.
 
     A literal ``kwarg=None`` (or empty string) does not count — it is present but
-    drops the value (salesagent-ixmh).
+    drops the value (#1417).
     """
     for node in ast.walk(fn_node):
         if not isinstance(node, ast.Call):
@@ -81,7 +81,7 @@ class TestEnvelopeReconstructionPassesSuggestion:
         assert _calls_with_keyword(fn, CALLED_FN, REQUIRED_KWARG), (
             f"{TARGET_FN} does not pass '{REQUIRED_KWARG}' to {CALLED_FN}. "
             "This means REST error reconstruction drops the suggestion field. "
-            "salesagent-kjfy regression: add suggestion extraction and pass it."
+            "#1417 regression: add suggestion extraction and pass it."
         )
 
     def test_guard_catches_missing_suggestion(self):
@@ -104,7 +104,7 @@ def _envelope_to_adcp_error(envelope):
         assert not result, "Negative meta-test: guard should detect missing suggestion"
 
     def test_guard_catches_literal_none_suggestion(self):
-        """Negative meta-test (salesagent-ixmh): a literal suggestion=None is not a pass-through."""
+        """Negative meta-test (#1417): a literal suggestion=None is not a pass-through."""
         source = """
 def _adcp_error_from_code(code, msg, recovery=None, details=None, suggestion=None, field=None):
     pass

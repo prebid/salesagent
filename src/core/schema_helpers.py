@@ -38,7 +38,7 @@ def _coerce_wire_object[ModelT: BaseModel](value: Any, model_cls: type[ModelT], 
     ``adcp_validation_boundary`` means a malformed wire dict rejects as a
     typed ``AdCPValidationError`` (message + field + top-level suggestion)
     from EVERY call site — callers cannot forget the boundary
-    (salesagent-oygh; mirrors ``coerce_creative_filters``).
+    (#1417; mirrors ``coerce_creative_filters``).
 
     Returns ``None`` for non-dict unexpected types, preserving the helpers'
     long-standing fallback behavior.

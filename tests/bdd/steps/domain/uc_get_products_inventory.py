@@ -30,7 +30,7 @@ from tests.factories import (
 def _call_get_products(ctx: dict, **kwargs: Any) -> None:
     """Dispatch get_products through ctx['transport'] via the shared wire dispatcher.
 
-    Delegates to the universal ``dispatch_request`` helper (salesagent-dlh8): it
+    Delegates to the universal ``dispatch_request`` helper (#1417): it
     routes through ``env.call_via`` for the parametrized transport, stores the
     normalized ``ctx['result']`` plus ``ctx['response']`` / ``ctx['error']`` /
     ``ctx['wire_error_envelope']``, and fails loudly if no transport is set

@@ -37,7 +37,7 @@ def test_to_account_reference_handles_supported_inputs():
 def test_to_account_reference_rejects_invalid_account_payload():
     """Malformed oneOf account payloads fail as a TYPED error at the shared helper.
 
-    Updated for salesagent-oygh: the to_* coercions carry an internal
+    Updated for #1417: the to_* coercions carry an internal
     ``adcp_validation_boundary`` (the coerce_creative_filters pattern), so the
     rejection is an ``AdCPValidationError`` with a top-level suggestion — the
     previous raw ``pydantic.ValidationError`` leak WAS the disease this test

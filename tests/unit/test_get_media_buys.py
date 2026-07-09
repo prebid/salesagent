@@ -157,13 +157,13 @@ class TestComputeStatus:
     def test_persisted_terminal_status_authoritative_over_flight_window(self, persisted, expected):
         """A buy persisted as a terminal/explicit lifecycle status is reported with
         that status even when its flight window covers today — the persisted column
-        is the source of truth, never re-derived from flight dates (salesagent-36d)."""
+        is the source of truth, never re-derived from flight dates (#1417)."""
         buy = make_media_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31), status=persisted)
         assert _compute_status(buy) == expected
 
     def test_paused_flag_overrides_active(self):
         """is_paused True reports paused for a generic 'active' serving state — a
-        command-driven flag, not a date (salesagent-36d)."""
+        command-driven flag, not a date (#1417)."""
         buy = make_media_buy(start_date=date(2025, 1, 1), end_date=date(2025, 12, 31), status="active", is_paused=True)
         assert _compute_status(buy) == MediaBuyStatus.paused
 

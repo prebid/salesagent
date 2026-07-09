@@ -1,6 +1,6 @@
 """Guard: production must never emit the buyer suggestion inside ``details``.
 
-Regression for salesagent-cx41/58hl (surfaced by salesagent-9val's strict
+Regression for #1417/58hl (surfaced by #1417's strict
 harness): auth and account emitters raised AdCP errors with
 ``details={"suggestion": ...}`` instead of the first-class ``suggestion=``
 param, leaving the error.json TOP-LEVEL ``suggestion`` empty on the wire.
@@ -56,7 +56,7 @@ def test_no_buried_suggestion_emitters_in_src():
         "error.json places `suggestion` at the TOP LEVEL of the error object. "
         "Pass suggestion=... to the AdCPError (serialization promotes it); a "
         "details={'suggestion': ...} copy never reaches the protocol position "
-        "(salesagent-cx41/58hl). Violations:\n  " + "\n  ".join(violations)
+        "(#1417). Violations:\n  " + "\n  ".join(violations)
     )
 
 

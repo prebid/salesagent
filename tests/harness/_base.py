@@ -851,7 +851,7 @@ class BaseTestEnv:
         dependency runs against the token-less request and raises the real
         ``AUTH_REQUIRED`` error — the harness must not hand-copy the production
         raise (a simulated raise drifted from production once already,
-        salesagent-9val/cx41); otherwise both deps return the identity.
+        #1417/cx41); otherwise both deps return the identity.
         """
         from src.app import app
         from src.core.auth_context import _require_auth_dep, _resolve_auth_dep

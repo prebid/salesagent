@@ -287,7 +287,7 @@ class TestRecoveryFieldInErrorResponses:
         cases = [
             (AdCPValidationError("bad"), "correctable"),
             (AdCPRateLimitError("slow"), "transient"),
-            # BUDGET_EXHAUSTED recovery is terminal per the pinned enum (salesagent-xds6).
+            # BUDGET_EXHAUSTED recovery is terminal per the pinned enum (#1417).
             (AdCPBudgetExhaustedError("broke"), "terminal"),
         ]
 

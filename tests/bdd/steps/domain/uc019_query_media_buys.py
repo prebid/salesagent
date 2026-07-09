@@ -1511,7 +1511,7 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = str(error.suggestion or "").lower()
     assert text1.lower() in suggestion or text2.lower() in suggestion, (
         f"Expected '{text1}' or '{text2}' in suggestion: {error.suggestion}"
@@ -1526,7 +1526,7 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = str(error.suggestion or "").lower()
     assert any(t.lower() in suggestion for t in [text1, text2, text3]), (
         f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.suggestion}"
@@ -1624,7 +1624,7 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
     )
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = error.suggestion
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string, got {suggestion!r}"
@@ -2122,7 +2122,7 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
     )
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = error.suggestion
     assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
         f"Expected actionable top-level suggestion string (>= 5 chars), "
@@ -2219,7 +2219,7 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
     assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
     # STRICT error.json conformance: suggestion is a top-level error attribute,
-    # never read from the free-form details dict (salesagent-9val).
+    # never read from the free-form details dict (#1417).
     suggestion = error.suggestion
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string for error code '{code}', got {suggestion!r}"

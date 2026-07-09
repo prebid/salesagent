@@ -1,6 +1,6 @@
 """Guard: no hand-rolled ValidationError→AdCPValidationError translation in src/.
 
-Regression for salesagent-ah98: tools translated pydantic ``ValidationError``
+Regression for #1417: tools translated pydantic ``ValidationError``
 by hand — ``raise AdCPValidationError(format_validation_error(e, ...))`` —
 which dropped the error.json top-level ``suggestion`` (and ``field``) that the
 shared boundary attaches. The ONE sanctioned translation point is
@@ -80,7 +80,7 @@ def test_no_handrolled_validation_boundary_in_src():
     assert not violations, (
         "Hand-rolled ValidationError translation — use `with adcp_validation_boundary"
         "(context=...)` (src/core/validation_helpers.py) so the rejection carries the "
-        "error.json top-level suggestion and field (salesagent-ah98). Violations:\n  " + "\n  ".join(violations)
+        "error.json top-level suggestion and field (#1417). Violations:\n  " + "\n  ".join(violations)
     )
 
 

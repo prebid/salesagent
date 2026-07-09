@@ -1,6 +1,6 @@
 """Guard: no duplicate (unreachable) dispatch tests in the BDD harness dispatcher.
 
-Regression for salesagent-mnyh + salesagent-3k0v (#1417): tests/bdd/conftest.py
+Regression for #1417 + #1417 (#1417): tests/bdd/conftest.py
 grew a second ``elif uc == "UC-003"`` in the SAME if/elif chain (mnyh), and —
 after that was fixed with an elif-only guard — a second identical
 ``if any(t.startswith("T-UC-003") ...): return "UC-003"`` in the EARLY-RETURN
@@ -103,8 +103,7 @@ def test_no_duplicate_dispatch_tests_in_bdd_conftest():
         "Duplicate dispatch test expression — the later branch is unreachable "
         "(shadowed by an earlier identical test in the same chain, or by an "
         "earlier early-return branch in the same block), so its harness route is "
-        "dead code (salesagent-mnyh elif form / salesagent-3k0v early-return "
-        "form, #1417). Merge or delete the shadowed branch. "
+        "dead code (the elif form / the early-return form, #1417). Merge or delete the shadowed branch. "
         "Violations:\n  " + "\n  ".join(violations)
     )
 
@@ -117,7 +116,7 @@ def _detect(snippet: str) -> list[str]:
 
 
 class TestGuardDetector:
-    # -- elif-chain form (salesagent-mnyh) --
+    # -- elif-chain form (#1417) --
 
     def test_positive_duplicate_elif(self):
         assert _detect("if uc == 'UC-002':\n    a()\nelif uc == 'UC-003':\n    b()\nelif uc == 'UC-003':\n    c()")
@@ -140,7 +139,7 @@ class TestGuardDetector:
         # A nested if inside a branch body is its own block, not an elif.
         assert not _detect("if uc == 'UC-003':\n    if uc == 'UC-003':\n        a()")
 
-    # -- early-return form (salesagent-3k0v) --
+    # -- early-return form (#1417) --
 
     def test_positive_duplicate_early_return_if(self):
         # The 3k0v shape: `if X: return "A"` ... `if X: return "B"` in the

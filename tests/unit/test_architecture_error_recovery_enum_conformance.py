@@ -1,10 +1,10 @@
 """Oracle: every ``AdCPError`` subclass's ``_default_recovery`` matches the pinned
-``error-code.json`` ``enumMetadata`` recovery classification (salesagent-xds6).
+``error-code.json`` ``enumMetadata`` recovery classification (#1417).
 
 The ``enumMetadata`` block is normative — its ``$comment`` states: "SDKs MUST
 consume this block ... the recovery classification embedded in that prose is
 normative and MUST match the value here." This oracle locks in the auth-family
-recovery fix (salesagent-xc2j: ``AUTH_REQUIRED`` is ``correctable``) and prevents
+recovery fix (#1417: ``AUTH_REQUIRED`` is ``correctable``) and prevents
 any exception class from drifting away from the spec's buyer-facing retry
 semantics. Per-class tests that assert a hardcoded literal cannot catch a
 divergence between the class and the spec — this parametrized oracle does.

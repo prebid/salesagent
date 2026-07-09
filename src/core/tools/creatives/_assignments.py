@@ -168,7 +168,7 @@ def _process_assignments(
                                 if validation_mode == "strict":
                                     # Converge with the update path (media_buy_update.py:233):
                                     # creative-format-incompatible-with-product is CREATIVE_REJECTED,
-                                    # the canonical code for a rejected creative (salesagent-8j5r).
+                                    # the canonical code for a rejected creative (#1417).
                                     raise AdCPCreativeRejectedError(
                                         error_msg,
                                         suggestion=(

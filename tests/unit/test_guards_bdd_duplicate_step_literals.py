@@ -1,6 +1,6 @@
 """Guard: no two registered BDD step defs may share one parse literal.
 
-Regression for salesagent-fvva: two ``@given`` defs registered the identical
+Regression for #1417: two ``@given`` defs registered the identical
 parse expression ``the Buyer owns an existing media buy with media_buy_id
 "..."`` (the ``{media_buy_id}`` vs ``{mb_id}`` param name is irrelevant to
 pytest-bdd matching — the literal collides). First registration wins, so the
@@ -75,7 +75,7 @@ def test_no_duplicate_step_literals_in_registered_modules():
         "Duplicate BDD step parse literals across registered step modules — "
         "pytest-bdd resolves first-registered-wins, so the later def is dead "
         "code that can silently take over on a resolution-order change "
-        "(salesagent-fvva). Merge or delete the shadowed defs:\n" + "\n".join(lines)
+        "(#1417). Merge or delete the shadowed defs:\n" + "\n".join(lines)
     )
 
 

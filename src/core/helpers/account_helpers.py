@@ -128,7 +128,7 @@ def _resolve_by_natural_key(
         brand_id = str(ref.brand.brand_id.root)
 
     # Single query: fetch up to 2 matches for ambiguity detection, scoped to the
-    # agent's accessible accounts (salesagent-ym1c) so detection — and the count
+    # agent's accessible accounts (#1417) so detection — and the count
     # disclosed below — never observe accounts outside this agent's access.
     principal_id = identity.principal_id
     matches = repo.list_by_natural_key(

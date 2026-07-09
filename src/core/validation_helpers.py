@@ -27,7 +27,7 @@ def adcp_validation_boundary(context: str = "parameters") -> Iterator[None]:
     typed-model constructor) would surface as an untyped error — and the outer
     dispatcher only builds the two-layer error envelope for ``AdCPError``
     subclasses, so the buyer would lose the real code/recovery. This boundary is
-    the SINGLE translation point (salesagent-ah98): every rejection carries the
+    the SINGLE translation point (#1417): every rejection carries the
     buyer-friendly ``format_validation_error`` message, the structured ``field``
     path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
     try/except copy.

@@ -1,6 +1,6 @@
 """Guard: transport boundaries build strict request models only inside adcp_validation_boundary.
 
-Regression guard for the salesagent-0pry family (#1417): REST routes in
+Regression guard for the #1417 family (#1417): REST routes in
 ``src/routes/`` constructed strict ``*Request`` models from the loose wire body
 OUTSIDE ``adcp_validation_boundary``, so buyer-invalid input surfaced as a
 suggestion-less VALIDATION_ERROR envelope carrying the raw pydantic dump instead
@@ -10,7 +10,7 @@ This guard AST-scans the boundary layers and fails on any request construction �
 ``XxxRequest(...)``, ``XxxRequest.model_validate(...)`` /
 ``.model_validate_json(...)`` / ``.parse_obj(...)``, a request-builder call
 (``create_*_request(...)`` / ``build_*_request(...)``), or a raise-capable
-``to_*`` coercion-helper call (salesagent-oygh) — that is not lexically inside
+``to_*`` coercion-helper call (#1417) — that is not lexically inside
 a ``with adcp_validation_boundary(...)`` block.
 
 The raise-capable ``to_*`` set is DERIVED from ``src/core/schema_helpers.py``:
@@ -21,7 +21,7 @@ automatically; a new boundary-less ``to_xyz`` helper is matched at its call
 sites without touching this guard.
 
 Scope is ``src/routes/`` (the REST boundary layer) and ``src/a2a_server/``
-(the A2A skill-handler boundary layer, added by salesagent-klkg after five
+(the A2A skill-handler boundary layer, added by #1417 after five
 skill handlers were found constructing requests bare — the exact disease this
 guard exists to catch). Ships with ZERO violations; no allowlist (repo hard
 rule: allowlists never grow).
@@ -48,7 +48,7 @@ def unguarded_coercion_helpers(schema_helpers_tree: ast.AST) -> frozenset[str]:
 
     These construct typed models from buyer wire input and can raise a bare
     ``ValidationError`` — calling them outside ``adcp_validation_boundary``
-    is the salesagent-oygh disease. Helpers with an internal boundary (the
+    is the #1417 disease. Helpers with an internal boundary (the
     ``coerce_creative_filters`` pattern) are safe from any call site, as are
     helpers that DELEGATE to a module-local function carrying the boundary
     (the shared ``_coerce_wire_object`` coercer — one level of delegation,
@@ -96,7 +96,7 @@ def _request_construction_name(node: ast.Call, coercion_helpers: frozenset[str] 
     - ``create_xxx_request(...)`` / ``build_xxx_request(...)`` — builder
       helpers that construct the request internally (the get_products form)
     - a call to any name in ``coercion_helpers`` — the boundary-less ``to_*``
-      schema_helpers coercions (salesagent-oygh)
+      schema_helpers coercions (#1417)
     """
     fn = node.func
     if isinstance(fn, ast.Name):
@@ -161,8 +161,8 @@ def test_no_unbounded_request_construction_at_transport_boundaries():
         "Strict request construction or raise-capable to_* coercion outside "
         "`with adcp_validation_boundary(context=...)` at a transport boundary "
         "(REST route / A2A skill handler) — buyer-invalid input would surface as a "
-        "suggestion-less envelope with the raw pydantic message (salesagent-0pry / "
-        "salesagent-klkg / salesagent-oygh, #1417). Wrap the call site, or give the "
+        "suggestion-less envelope with the raw pydantic message (#1417). Wrap the "
+        "call site, or give the "
         "helper an internal boundary (the coerce_creative_filters pattern) so it "
         "drops out of the matched set. Violations:\n  " + "\n  ".join(violations)
     )
@@ -211,7 +211,7 @@ class TestGuardDetector:
     def test_negative_non_request_call(self):
         assert not _detect("resp = response.model_dump(mode='json')")
 
-    # -- salesagent-oygh: to_* coercion helpers + extra validate forms --
+    # -- #1417: to_* coercion helpers + extra validate forms --
 
     def test_positive_model_validate_json_form(self):
         assert _detect("req = GetMediaBuysRequest.model_validate_json(raw)")

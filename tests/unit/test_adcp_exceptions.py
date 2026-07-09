@@ -271,7 +271,7 @@ class TestRecoveryClassification:
         assert exc.recovery == "transient"
 
     def test_conflict_error_defaults_to_transient(self):
-        """AdCPConflictError defaults to recovery='transient' (CONFLICT per the pinned enum, salesagent-xds6)."""
+        """AdCPConflictError defaults to recovery='transient' (CONFLICT per the pinned enum, #1417)."""
         from src.core.exceptions import AdCPConflictError
 
         exc = AdCPConflictError("duplicate idempotency key")
@@ -317,7 +317,7 @@ class TestRecoveryClassification:
         """AdCPBudgetExhaustedError defaults to recovery='terminal'.
 
         BUDGET_EXHAUSTED is terminal per the pinned error-code.json enumMetadata
-        (salesagent-xds6): an exhausted budget cannot be recovered autonomously —
+        (#1417): an exhausted budget cannot be recovered autonomously —
         an operator must add budget — so the buyer agent must not retry.
         Covers: salesagent-u60m (PR #1083 review)
         """
@@ -558,7 +558,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        # CONFLICT recovery is transient per the pinned enum (salesagent-xds6).
+        # CONFLICT recovery is transient per the pinned enum (#1417).
         assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_gone_error_returns_410(self, exc_handler_test_app):
@@ -573,7 +573,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/budget")
         assert response.status_code == 422
-        # BUDGET_EXHAUSTED recovery is terminal per the pinned enum (salesagent-xds6).
+        # BUDGET_EXHAUSTED recovery is terminal per the pinned enum (#1417).
         assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED", recovery="terminal")
 
     def test_service_unavailable_error_returns_503(self, exc_handler_test_app):

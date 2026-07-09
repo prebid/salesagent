@@ -98,7 +98,7 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).
     # NOTE: top-level targeting_overlay/creatives are intentionally omitted — the raw
     # wrapper accepts them in its signature but drops them before _build_update_request,
-    # so declaring them here would be a silent no-op (see salesagent-tayq).
+    # so declaring them here would be a silent no-op (see #1417).
     packages: list[dict[str, Any]] | None = None
     pacing: str | None = None
     daily_budget: float | None = None
@@ -395,7 +395,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     """Sync creatives (auth required)."""
     # Coerce the raw account dict into an AccountReference so sync_creatives_raw
     # resolves it at the transport boundary (mirror create_media_buy / the sibling
-    # handlers above — salesagent-hseb).
+    # handlers above — #1417).
     with adcp_validation_boundary(context="sync_creatives request"):
         account_ref = to_account_reference(body.account)
         push_notification_config = to_push_notification_config(body.push_notification_config)

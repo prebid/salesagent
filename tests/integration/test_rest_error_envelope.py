@@ -3,7 +3,7 @@
 Verifies that suggestion (and other fields present in the wire envelope) are
 faithfully restored on the reconstructed AdCPError after a REST round-trip.
 
-Before salesagent-kjfy, _envelope_to_adcp_error extracted code/message/recovery/
+Before #1417, _envelope_to_adcp_error extracted code/message/recovery/
 details but NOT suggestion.  The wire body included suggestion (production code
 correct), but result.error.suggestion was always None after REST dispatch.
 
@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 class TestRestErrorSuggestionPreservation:
     """REST round-trip must preserve the suggestion field on reconstructed errors.
 
-    Regression for salesagent-kjfy.
+    Regression for #1417.
     """
 
     @pytest.fixture
@@ -64,7 +64,7 @@ class TestRestErrorSuggestionPreservation:
     def test_rest_reconstructed_error_has_suggestion(self, env_with_data):
         """After REST round-trip, result.error.suggestion matches the wire suggestion.
 
-        This test FAILS before the salesagent-kjfy fix because _envelope_to_adcp_error
+        This test FAILS before the #1417 fix because _envelope_to_adcp_error
         does not extract suggestion from the wire envelope during reconstruction.
         """
         result = env_with_data.call_via(Transport.REST, req=self._zero_budget_req())

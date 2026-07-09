@@ -2723,7 +2723,7 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         if require_suggestion:
             # STRICT error.json conformance: suggestion is a top-level error
             # attribute; a copy buried in the free-form details dict does not
-            # count (salesagent-9val).
+            # count (#1417).
             assert error.suggestion, f"Expected top-level suggestion in error for {field}, got: {error.suggestion!r}"
         return
 

@@ -462,7 +462,7 @@ def _update_media_buy_impl(
                 if overlay_violations:
                     # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
                     # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
-                    # converges with the create path (salesagent-da07).
+                    # converges with the create path (#1417).
                     raise AdCPInvalidRequestError(
                         f"Targeting validation failed: {'; '.join(overlay_violations)}",
                         suggestion="Check targeting constraints.",

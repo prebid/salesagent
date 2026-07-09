@@ -299,7 +299,7 @@ def _build_get_media_buys_request(
     Shared by the MCP wrapper and the A2A/REST raw wrapper so request
     construction runs inside the ONE validation boundary — previously the raw
     wrapper built the request unprotected and REST leaked a raw pydantic
-    ``ValidationError`` with no top-level suggestion (salesagent-ah98).
+    ``ValidationError`` with no top-level suggestion (#1417).
     """
     with adcp_validation_boundary(context="get_media_buys request"):
         return GetMediaBuysRequest(

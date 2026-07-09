@@ -65,7 +65,7 @@ def _decimal_to_float(value: Any) -> Any:
 
     Money is ``Decimal`` (``get_total_budget()`` — float is wrong for money), but
     JSON has no Decimal type, so both audit sinks must emit it as a number.
-    Non-Decimal values pass through unchanged (salesagent-2882)."""
+    Non-Decimal values pass through unchanged (#1417)."""
     return float(value) if isinstance(value, Decimal) else value
 
 
@@ -78,7 +78,7 @@ def _normalize_audit_details(value: Any) -> Any:
     budget IDENTICALLY as a number. Without this, the DB path (engine-wide
     ``pydantic_core.to_json(fallback=str)``) stringifies a bare Decimal while the
     ``.jsonl`` path emits a number, diverging the two sinks and breaking admin
-    readers that format the budget with ``:,.0f`` (salesagent-2882). Single source
+    readers that format the budget with ``:,.0f`` (#1417). Single source
     of the money rule (reused by ``_audit_json_default``)."""
     if isinstance(value, dict):
         return {k: _normalize_audit_details(v) for k, v in value.items()}
@@ -93,7 +93,7 @@ def _is_high_value_budget(details: dict[str, Any]) -> bool:
     Accepts int | float | Decimal. ``get_total_budget()`` returns ``Decimal``
     (money — float is wrong for money), which the old ``isinstance(.,(int,float))``
     gate silently rejected, disabling the >$10k alert on the create path
-    (salesagent-wvry). One helper covers both the ``budget`` and ``total_budget``
+    (#1417). One helper covers both the ``budget`` and ``total_budget``
     detail keys.
     """
     for key in ("budget", "total_budget"):
@@ -109,7 +109,7 @@ def _audit_json_default(value: Any) -> Any:
     Safety net for the ``.jsonl`` sink: ``_normalize_audit_details`` already
     converts Decimals before serialization, but keep the shared Decimal->float
     rule here too; any other non-serializable leaf falls back to ``str``
-    (salesagent-wvry).
+    (#1417).
     """
     if isinstance(value, Decimal):
         return _decimal_to_float(value)
@@ -150,7 +150,7 @@ class AuditLogger:
         tenant_id = tenant_id or self.tenant_id
 
         # Normalize the payload ONCE so every sink (DB details column + .jsonl log)
-        # serializes a Decimal budget identically as a JSON number (salesagent-2882).
+        # serializes a Decimal budget identically as a JSON number (#1417).
         details = _normalize_audit_details(details) if details else details
 
         # Build log message in security documentation format

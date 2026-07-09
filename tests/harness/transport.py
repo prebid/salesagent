@@ -46,9 +46,9 @@ def extract_wire_suggestion(envelope: dict | None) -> str | None:
     ``errors[0]`` or the envelope-level ``adcp_error`` layer). A suggestion
     buried in the free-form ``details`` dict is NOT at the protocol position
     and deliberately does not satisfy this lookup — emitters that bury it are
-    conformance bugs the harness must surface, not mask (salesagent-9val).
+    conformance bugs the harness must surface, not mask (#1417).
     Single source of truth for both ``TransportResult.assert_wire_error`` and
-    the BDD ``_wire_suggestion`` step (salesagent-hm3r). Returns ``None`` when
+    the BDD ``_wire_suggestion`` step (#1417). Returns ``None`` when
     there is no envelope (IMPL / no-wire).
     """
     if not envelope:

@@ -30,7 +30,7 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
     transport = ctx.get("transport")
     env = ctx["env"]
     # BDD dispatches on a wire transport only (IMPL was dropped from the default
-    # parametrization, salesagent-5yst). A missing transport is a wiring bug, not
+    # parametrization, #1417). A missing transport is a wiring bug, not
     # an IMPL fallback — fail loudly rather than silently bypassing the wire.
     if transport is None:
         raise RuntimeError(
@@ -73,7 +73,7 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
             # Propagate the real serialized success-path wire body so Then steps
             # can assert on what the buyer actually receives (ctx["wire_response"]),
             # not the reconstructed typed payload. None on IMPL / non-stashing envs;
-            # the wire_field() helper guards against silent tautologies (salesagent-d45l).
+            # the wire_field() helper guards against silent tautologies (#1417).
             ctx["wire_response"] = result.wire_response
     except Exception as exc:
         ctx["error"] = exc

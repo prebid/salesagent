@@ -413,7 +413,7 @@ class AdCPAuthenticationError(AdCPError):
     not the ``terminal`` base default. The enum carries operationally distinct
     sub-cases (missing credentials → retry; presented-but-rejected → escalate),
     but its single canonical ``recovery`` classification is ``correctable``,
-    and the wire contract is graded against that enum (salesagent-xc2j,
+    and the wire contract is graded against that enum (#1417,
     superseding the earlier "storyboards grade only the code" judgment).
     """
 
@@ -434,7 +434,7 @@ class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
     Emits ``AUTH_REQUIRED`` with ``correctable`` recovery, matching the pinned
-    AdCP error-code enum and ``AdCPAuthenticationError`` (salesagent-xc2j).
+    AdCP error-code enum and ``AdCPAuthenticationError`` (#1417).
     """
 
     _default_status_code: ClassVar[int] = 403
@@ -504,7 +504,7 @@ class AdCPConflictError(AdCPError):
     a generic resource conflict (e.g. concurrent modification) is resolved by
     retrying with backoff. Subclasses whose specific code the enum classifies as
     correctable (ACCOUNT_AMBIGUOUS, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_EXPIRED)
-    override this (salesagent-xds6).
+    override this (#1417).
     """
 
     _default_status_code: ClassVar[int] = 409
@@ -517,7 +517,7 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
 
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
     # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
-    # an explicit account_id) — override the transient CONFLICT parent (salesagent-xds6).
+    # an explicit account_id) — override the transient CONFLICT parent (#1417).
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -539,7 +539,7 @@ class AdCPBudgetExhaustedError(AdCPError):
 
     Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
     an exhausted budget cannot be recovered autonomously — an operator must add
-    budget — so the buyer agent must not retry (salesagent-xds6).
+    budget — so the buyer agent must not retry (#1417).
     """
 
     _default_status_code: ClassVar[int] = 422

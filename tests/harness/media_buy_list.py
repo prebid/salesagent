@@ -47,7 +47,7 @@ class MediaBuyListEnv(IntegrationEnv):
 
         The production A2A path is ``_handle_get_media_buys_skill`` —
         ``get_media_buys_raw`` has ZERO production callers, so dispatching to it
-        here gave false confidence (salesagent-klkg): a boundary fix on the raw
+        here gave false confidence (#1417): a boundary fix on the raw
         wrapper made 'A2A' tests green while the real skill handler still
         leaked bare ValidationErrors.
         """

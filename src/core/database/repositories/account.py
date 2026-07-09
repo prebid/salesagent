@@ -92,7 +92,7 @@ class AccountRepository:
         When ``principal_id`` is given, the result is scoped to accounts that agent
         can access (AgentAccountAccess join) so ambiguity detection never observes —
         nor later discloses the count of — accounts outside the agent's access
-        (salesagent-ym1c).
+        (#1417).
         """
         stmt = select(Account).where(
             Account.tenant_id == self._tenant_id,
@@ -107,7 +107,7 @@ class AccountRepository:
 
         Centralizes the brand_id/sandbox/access predicates so list_by_natural_key
         and count_by_natural_key cannot drift — the count drifting from the
-        detection scope is exactly the salesagent-ym1c info leak.
+        detection scope is exactly the #1417 info leak.
         """
         if brand_id is not None:
             stmt = stmt.where(Account.brand["brand_id"].as_string() == brand_id)
@@ -141,7 +141,7 @@ class AccountRepository:
         ``principal_id`` MUST mirror the value passed to list_by_natural_key so the
         disclosed count is scoped to the agent's accessible accounts — disclosing a
         tenant-wide count to an agent who can access fewer is an info leak
-        (salesagent-ym1c).
+        (#1417).
         """
         from sqlalchemy import func
 

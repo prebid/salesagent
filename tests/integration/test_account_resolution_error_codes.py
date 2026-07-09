@@ -126,7 +126,7 @@ class TestAccountNotFoundViaTransports:
     def test_account_not_found_via_a2a(self, env_with_data):
         """ACCOUNT_NOT_FOUND surfaces through A2A transport (not stripped by harness).
 
-        Covers: salesagent-l9wn regression test
+        Covers: #1417 regression test
         """
         result = env_with_data.call_via(Transport.A2A, req=self._nonexistent_account_req())
         assert result.is_error, f"Expected ACCOUNT_NOT_FOUND error, got success: {result.payload}"
@@ -142,7 +142,7 @@ class TestAccountNotFoundViaTransports:
         call_mcp calls the tool function directly (not through FastMCP server),
         so the error surfaces as a raw AdCPError on result.error.
 
-        Covers: salesagent-l9wn regression test
+        Covers: #1417 regression test
         """
         result = env_with_data.call_via(Transport.MCP, req=self._nonexistent_account_req())
         assert result.is_error, f"Expected ACCOUNT_NOT_FOUND error, got success: {result.payload}"

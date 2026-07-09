@@ -5,7 +5,7 @@ and partition/boundary scenarios for account_ref.
 
 Steps dispatch a full create_media_buy through the wire transport
 (MediaBuyCreateEnv); production resolves the account at the transport boundary
-and emits the outcome on the wire (salesagent-zh85).
+and emits the outcome on the wire (#1417).
 
 beads: salesagent-2rq, salesagent-zh85
 """
@@ -106,7 +106,7 @@ def given_valid_request(ctx: dict) -> None:
     Populates ctx['request_kwargs'] with the shared valid defaults so the step
     text's claim ("a VALID request") holds for full-create dispatch — without
     this, dispatch fails request validation before ever reaching the gate the
-    scenario targets (e.g. the transport auth gates, salesagent-b0kx).
+    scenario targets (e.g. the transport auth gates, #1417).
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
@@ -131,7 +131,7 @@ def given_account_id_not_found(ctx: dict) -> None:
     surfaces ACCOUNT_NOT_FOUND when production resolves the account at the
     transport boundary. Assert the request carries the account reference so the
     resolution path is actually exercised (a prior version built a partial
-    request via call_impl and crashed with a ValidationError — see salesagent-rkb9).
+    request via call_impl and crashed with a ValidationError — see #1417).
     """
     assert ctx.get("account_ref") is not None, "account_ref must be set by the request Given step"
     assert ctx.get("request_kwargs", {}).get("account") is not None, (
@@ -145,7 +145,7 @@ def given_natural_key_not_found(ctx: dict) -> None:
 
     The full create dispatch surfaces ACCOUNT_NOT_FOUND when production resolves
     the brand+operator natural key. Assert the request carries the account
-    reference so the resolution path is exercised (see salesagent-rkb9).
+    reference so the resolution path is exercised (see #1417).
     """
     assert ctx.get("account_ref") is not None, "account_ref must be set by the request Given step"
     assert ctx.get("request_kwargs", {}).get("account") is not None, (
@@ -201,7 +201,7 @@ def given_multiple_matches(ctx: dict, count: int) -> None:
 def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> None:
     """Create ``total`` active accounts matching the request natural key, granting the
     requesting agent access to only ``accessible`` of them (the rest are accessible to a
-    different agent). Exercises access-scoped natural-key ambiguity (salesagent-ym1c):
+    different agent). Exercises access-scoped natural-key ambiguity (#1417):
     the inaccessible matches must not drive ambiguity nor leak into the disclosed count.
     """
     from tests.factories.principal import PrincipalFactory
@@ -234,7 +234,7 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
         if i < accessible:
             accessible_ids.append(account_id)
     # Record the accessible account id(s) so a Then step can pin the resolved
-    # account to the one the agent can actually access (salesagent-lyb8).
+    # account to the one the agent can actually access (#1417).
     ctx["accessible_account_ids"] = accessible_ids
 
 
@@ -248,7 +248,7 @@ def given_unauthenticated_principal(ctx: dict) -> None:
     resolution at the transport boundary runs with principal_id=None. A2A/REST raise
     on the missing token before this point; forcing the identity here exercises the
     shared ``enrich_identity_with_account`` boundary guard uniformly on every wire
-    transport. See salesagent-fb2l.
+    transport. See #1417.
     """
     from tests.factories.principal import PrincipalFactory
 
@@ -346,7 +346,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         # Schema-shape case: dispatch the create with NO account field at all.
         # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec),
         # so production accepts it and creates the buy — outcome is success, not
-        # a rejection (see salesagent-zh85 empirical trace).
+        # a rejection (see #1417 empirical trace).
         _attach_raw_account_shape(ctx, None)
         return
 
@@ -375,7 +375,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
                 operator="ambiguous.com",
             )
             # Grant the requesting agent access so ambiguity is genuine FOR THIS AGENT —
-            # natural-key resolution is access-scoped (salesagent-ym1c).
+            # natural-key resolution is access-scoped (#1417).
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
@@ -500,7 +500,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
                 brand={"domain": "multi.com"},
                 operator="multi.com",
             )
-            # Access-scoped ambiguity (salesagent-ym1c): grant the agent access so the
+            # Access-scoped ambiguity (#1417): grant the agent access so the
             # two matches are genuinely ambiguous for it.
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
@@ -543,7 +543,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     elif "no account" in config:
         # Schema-shape case: account field omitted entirely. account is OPTIONAL
         # on CreateMediaBuyRequest, so production accepts and creates the buy →
-        # success, not a rejection (salesagent-zh85 empirical trace).
+        # success, not a rejection (#1417 empirical trace).
         _attach_raw_account_shape(ctx, None)
         return
 
@@ -580,7 +580,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — malformed-package error scenarios (salesagent-gh8p.13)
+# GIVEN steps — malformed-package error scenarios (#1417)
 #
 # Each step mutates the first package of the shared create request to introduce
 # the malformed condition the scenario describes, then routes the request
@@ -752,7 +752,7 @@ def _dispatch_full_create(ctx: dict) -> None:
         ctx["error"] = e
         return
 
-    # No-auth scenarios (salesagent-fb2l) stash an unauthenticated identity so the
+    # No-auth scenarios (#1417) stash an unauthenticated identity so the
     # transport-boundary account-resolution guard is exercised on the wire.
     if "dispatch_identity" in ctx:
         dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
@@ -849,7 +849,7 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
 
 @then("the resolved account is the one the agent can access")
 def then_resolved_account_is_accessible(ctx: dict) -> None:
-    """Pin the resolved account to the accessible one (salesagent-lyb8).
+    """Pin the resolved account to the accessible one (#1417).
 
     A bare 'success' assertion proves the create did not error, but not that the
     ACCESS-SCOPED resolution actually returned the account the agent can access
@@ -882,7 +882,7 @@ def _assert_account_resolution_succeeds(ctx: dict) -> None:
     """Assert the create_media_buy succeeded — proving production resolved the account.
 
     Account resolution now runs inside a full create_media_buy on the wire
-    (salesagent-zh85): a successful create proves the account reference resolved
+    (#1417): a successful create proves the account reference resolved
     at the transport boundary, because an unresolved/invalid account would have
     raised before the buy was created. Assert the wire success response carries a
     ``media_buy_id`` rather than inspecting a bare resolved-account string (which
@@ -1302,7 +1302,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
         # STRICT error.json conformance: suggestion is a top-level error
-        # attribute; a copy buried in details does not count (salesagent-9val).
+        # attribute; a copy buried in details does not count (#1417).
         assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
         return
 
@@ -1330,7 +1330,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         if recovery is not None:
             assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
         if require_suggestion:
-            # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+            # STRICT error.json conformance: top-level attribute only (#1417).
             assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
     else:
         # Descriptive: "error unknown sort field"

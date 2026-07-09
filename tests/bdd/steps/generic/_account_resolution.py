@@ -4,7 +4,7 @@ Provides the tenant/principal bootstrap used by UC-002 and UC-006 When steps.
 
 Account *resolution* itself is no longer driven here: account-resolution
 scenarios now dispatch a full ``create_media_buy`` through the wire transport
-(salesagent-zh85), so production resolves the account at the transport boundary
+(#1417), so production resolves the account at the transport boundary
 and emits the outcome (success or ACCOUNT_NOT_FOUND/AMBIGUOUS/SETUP_REQUIRED/
 PAYMENT_REQUIRED/SUSPENDED/VALIDATION_ERROR) on the wire. The former test-side
 ``AdCPValidationError`` construction and the IMPL-only resolve_account call were

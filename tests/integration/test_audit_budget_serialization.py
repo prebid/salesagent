@@ -1,6 +1,6 @@
 """Integration test: Decimal budget must serialize identically across audit sinks.
 
-Regression coverage for salesagent-2882 (PR #1417 re-review, @e1280b368).
+Regression coverage for #1417 (PR #1417 re-review, @e1280b368).
 
 ``AuditLogger.log_operation()`` writes the same ``details`` dict to TWO sinks:
 
@@ -60,7 +60,7 @@ def _read_back_details(env: BareIntegrationEnv, tenant_id: str) -> dict:
 class TestDecimalBudgetSerializesAsNumberInDB:
     """The DB details sink must store a Decimal budget as a JSON number.
 
-    This pins the Core Invariant of salesagent-2882: a Decimal budget serializes
+    This pins the Core Invariant of #1417: a Decimal budget serializes
     identically (as a JSON number) across the DB details column and the .jsonl
     structured log.
     """

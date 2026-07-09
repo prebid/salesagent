@@ -8,8 +8,8 @@ AdCPError propagates instead of an AdCPToolError carrying the two-layer wire
 envelope, so McpDispatcher cannot capture ``wire_error_envelope`` — the MCP
 error path can't be asserted at the wire layer.
 
-This is invisible to ``make quality`` (no BDD) and was the salesagent-ihwl bug
-(update path) — see also the wider disease class in salesagent-ensj.
+This is invisible to ``make quality`` (no BDD) and was the #1417 bug
+(update path) — see also the wider disease class in #1417.
 
 Disease shape (AST-detectable): inside a tests/harness function, a call
 ``<tool>(ctx=...)`` where ``<tool>`` is a known MCP tool wrapper, in a function
@@ -19,7 +19,7 @@ has no direct ``<tool>(ctx=...)`` call, so it is compliant.
 
 AST guard → positive + negative meta-tests suffice (no regex-slip case).
 
-Allowlist shrinks as salesagent-ensj migrates the remaining sites.
+Allowlist shrinks as #1417 migrates the remaining sites.
 
 beads: salesagent-ihwl
 """
@@ -34,7 +34,7 @@ _HARNESS_DIR = Path(__file__).resolve().parents[1] / "harness"
 # Production MCP tool wrappers that must be invoked through with_error_logging.
 _MCP_TOOLS = {"create_media_buy", "update_media_buy"}
 
-# Known-deferred violations (salesagent-ensj). (relative_path, enclosing_function).
+# Known-deferred violations (#1417). (relative_path, enclosing_function).
 # Each entry has a FIXME(salesagent-ensj) at the source site. Allowlist only shrinks.
 # media_buy_create.py:call_mcp was fixed when the harness MCP path moved to
 # _run_mcp_client (no direct create_media_buy(ctx=...) call) — entry removed.
@@ -105,7 +105,7 @@ def test_known_violations_not_stale():
 
 
 def test_migrated_update_site_is_guarded():
-    """The salesagent-ihwl fix: media_buy_dual update MCP path must use with_error_logging."""
+    """The #1417 fix: media_buy_dual update MCP path must use with_error_logging."""
     source = (_HARNESS_DIR / "media_buy_dual.py").read_text()
     assert _func_references_with_error_logging(source, "_call_update_mcp"), (
         "_call_update_mcp must reference with_error_logging (the ihwl fix regressed)."

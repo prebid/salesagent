@@ -218,7 +218,7 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     if brand_domain == "multi.com":
         # Ambiguous: create 3 accounts with same natural key, all accessible to the
         # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
-        # resolution is access-scoped (salesagent-ym1c).
+        # resolution is access-scoped (#1417).
         for i in range(3):
             account = AccountFactory(
                 tenant=tenant,
@@ -432,7 +432,7 @@ def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str |
 
     STRICT error.json conformance: ``suggestion`` is a top-level attribute on
     both shapes — a copy buried in the free-form ``details`` dict is a
-    conformance bug and deliberately does not count (salesagent-9val).
+    conformance bug and deliberately does not count (#1417).
     """
     from src.core.exceptions import AdCPError
 
@@ -456,7 +456,7 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
         "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
         # Idempotency-key length codes — merged from the shadowed duplicate step
-        # def this literal used to have (salesagent-fvva): production does not
+        # def this literal used to have (#1417): production does not
         # validate idempotency_key length yet.
         "IDEMPOTENCY_KEY_TOO_SHORT",
         "IDEMPOTENCY_KEY_TOO_LONG",
@@ -2131,7 +2131,7 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
             self.message = message
             # STRICT error.json conformance: suggestion is top-level ONLY —
             # synthesizing a details copy would feed the exact non-conformant
-            # position the harness must reject (salesagent-9val).
+            # position the harness must reject (#1417).
             self.suggestion = suggestion
             self.details: dict = {}
 

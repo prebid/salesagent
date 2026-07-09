@@ -600,7 +600,7 @@ def given_update_requires_admin(ctx: dict) -> None:
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — mid-flight package addition (ext-u) + cancellation (ext-v)
-#   salesagent-gh8p.13. Both are production gaps: update_media_buy never reads
+#   #1417. Both are production gaps: update_media_buy never reads
 #   new_packages or canceled, and has_updatable_fields() (schemas/_base.py)
 #   omits both — so a request carrying only media_buy_id + one of them trips the
 #   empty-update VALIDATION_ERROR path instead of UNSUPPORTED_FEATURE /

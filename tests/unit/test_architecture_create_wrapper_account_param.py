@@ -5,7 +5,7 @@ function signatures so callers can supply an account reference. Without it, the
 harness and callers silently strip the field before dispatch, bypassing
 enrich_identity_with_account and preventing ACCOUNT_NOT_FOUND from surfacing.
 
-Regression for salesagent-l9wn.
+Regression for #1417.
 """
 
 from __future__ import annotations

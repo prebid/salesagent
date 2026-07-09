@@ -1,6 +1,6 @@
 """Guard: tests must not CALL a src-defined ``*_raw`` wrapper that production never calls.
 
-Regression guard for salesagent-klkg (#1417): the request-validation
+Regression guard for #1417 (#1417): the request-validation
 suggestion-parity test asserted "every transport" but drove
 ``get_media_buys_raw`` — a wrapper with ZERO production callers — while the
 real A2A path (``_handle_get_media_buys_skill``) leaked bare
@@ -102,7 +102,7 @@ def test_no_test_calls_dead_path_raw_wrappers():
     assert not violations, (
         "Test code calls a src-defined *_raw wrapper that has ZERO production call "
         "sites — the test drives a dead path while the live transport path goes "
-        "unexercised (salesagent-klkg, #1417). Re-point the test at the real "
+        "unexercised (#1417). Re-point the test at the real "
         "transport dispatch (harness _run_a2a_handler / REST client / MCP client) "
         "or delete the dead wrapper. Violations:\n  " + "\n  ".join(violations)
     )
