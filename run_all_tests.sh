@@ -77,6 +77,17 @@ if [ "$DELEGATE" = 1 ]; then
     exec "$(dirname "$0")/run_all_tests_host.sh" "$@"
 fi
 
+# Fast bdd path: when per-worker e2e stacks are provisioned (E2E_WORKERS>0), swap
+# the plain serial `bdd` env for the two-pass split — bdd_inprocess (the
+# a2a/mcp/rest bulk, parallelized by BDD_XDIST_N) then bdd_e2e (the e2e_rest
+# transport, fanned across the per-worker servers by BDD_E2E_XDIST_N). Without
+# E2E_WORKERS the plain serial `bdd` runs unchanged, so CI and small runners are
+# unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
+if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
+    SUITES="${SUITES/bdd/bdd_inprocess,bdd_e2e}"
+    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS -> suites=$SUITES"
+fi
+
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
