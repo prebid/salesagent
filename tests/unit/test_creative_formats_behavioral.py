@@ -605,6 +605,7 @@ def _call_impl_raw(
     formats: list[Format],
     registry_side_effect: Exception | None = None,
     errors: list | None = None,
+    agents: list | None = None,
 ):
     """Call _list_creative_formats_impl and return the full response (not just formats).
 
@@ -612,6 +613,7 @@ def _call_impl_raw(
         formats: Formats returned by healthy agents.
         registry_side_effect: If set, get_creative_agent_registry() raises this.
         errors: List of AdCP Error objects to include as per-agent failures.
+        agents: CreativeAgent instances returned by _get_tenant_agents (referrals).
     """
     from src.core.creative_agent_registry import FormatFetchResult
     from src.core.tools.creative_formats import _list_creative_formats_impl
@@ -647,7 +649,7 @@ def _call_impl_raw(
 
         mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
         mock_reg.list_all_formats = mock_list_formats
-        mock_reg._get_tenant_agents = MagicMock(return_value=[])
+        mock_reg._get_tenant_agents = MagicMock(return_value=agents or [])
         mock_registry.return_value = mock_reg
         mock_audit.return_value = MagicMock()
 
@@ -868,3 +870,51 @@ class TestAgentReferralFailureLogsWarning:
         assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
             f"Expected a warning about agent referral failure, got: {warning_msgs}"
         )
+
+
+class TestReferralCapabilitiesAreCommitments:
+    """Advertised creative-agent capabilities must all be backed by real tasks.
+
+    AdCP design principle: capabilities are commitments — the conformance
+    runner probes every advertised capability. Advertising `delivery` commits
+    the agent to variant-level delivery reporting via a `get_creative_delivery`
+    task. This agent does not implement that task, so `delivery` must not
+    appear in the referral capabilities.
+    """
+
+    def test_referral_capabilities_exclude_delivery_while_unimplemented(self):
+        """creative_agents referrals advertise only backed capabilities.
+
+        Guard pair: if get_creative_delivery is ever implemented on the
+        registry, the hasattr assertion below fails, prompting re-evaluation
+        of the advertised set alongside the exclusion assertion.
+        """
+        from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+
+        assert not hasattr(CreativeAgentRegistry, "get_creative_delivery"), (
+            "get_creative_delivery is now implemented — re-evaluate whether "
+            "`delivery` should be added back to ADVERTISED_CREATIVE_AGENT_CAPABILITIES"
+        )
+
+        formats = [_make_format("display_300x250", "Display 300x250")]
+        agents = [
+            CreativeAgent(
+                agent_url=DEFAULT_AGENT_URL,
+                name="AdCP Standard Creative Agent",
+                enabled=True,
+                priority=1,
+            )
+        ]
+
+        response = _call_impl_raw(formats, agents=agents)
+
+        assert response.creative_agents, "Expected creative_agents referrals in response"
+        for referral in response.creative_agents:
+            cap_values = {c.value for c in referral.capabilities}
+            assert "delivery" not in cap_values, (
+                f"`delivery` advertised without a get_creative_delivery task "
+                f"(capabilities are commitments): {cap_values}"
+            )
+            assert cap_values == {"validation", "assembly", "preview"}, (
+                f"Advertised capabilities must be exactly the backed set, got {cap_values}"
+            )

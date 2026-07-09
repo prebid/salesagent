@@ -153,6 +153,22 @@ def translate_error_code(code: str) -> str:
     return ERROR_CODE_MAPPING.get(code, code)
 
 
+def to_wire_error_code(code: str) -> str:
+    """Normalize a hand-built advisory code to a guaranteed-standard wire code.
+
+    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in the
+    spec's ``STANDARD_ERROR_CODES``: an internal-only code that has no mapping
+    entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would otherwise pass through
+    ``translate_error_code`` verbatim and leak. Use this for ``errors[]``
+    advisories, which serialize verbatim and never pass through the boundary
+    translator that handles raised ``AdCPError``s. Anything still non-standard
+    after translation collapses to ``SERVICE_UNAVAILABLE`` (the generic
+    server-side advisory), so no internal code can reach the buyer.
+    """
+    translated = translate_error_code(code)
+    return translated if translated in STANDARD_ERROR_CODES else "SERVICE_UNAVAILABLE"
+
+
 def _serialize_context(
     context: ContextObject | dict[str, Any] | None,
 ) -> dict[str, Any] | None:

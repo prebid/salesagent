@@ -129,6 +129,24 @@ class GAMCreativesManager:
 
         created_asset_statuses = []
 
+        # Seller-side concept enrichment (#1506). GAM has no first-class "creative
+        # group", so we fall back to the GAM Order as the closest native grouping:
+        # creatives trafficked into the same order run together as a campaign. This
+        # is a fallback, NOT the authoritative buyer-side concept — the namespaced
+        # id and the concept_source marker keep it distinguishable from a future
+        # buyer-supplied concept (which must take precedence). See docs/adapters/.
+        concept_id = f"gam-order-{media_buy_id}"
+        concept_name = f"GAM Order {media_buy_id}"
+
+        def _approved(creative_id: str) -> AssetStatus:
+            return AssetStatus(
+                creative_id=creative_id,
+                status="approved",
+                concept_id=concept_id,
+                concept_name=concept_name,
+                concept_source="gam_order",
+            )
+
         # Get line item mapping and creative placeholders
         line_item_map, creative_placeholders = self._get_line_item_info(
             media_buy_id, line_item_service if not self.dry_run else None
@@ -184,7 +202,7 @@ class GAMCreativesManager:
                 # VAST is handled at line item level, not creative level
                 logger.info(f"VAST creative {asset['creative_id']} - configuring at line item level")
                 self._configure_vast_for_line_items(media_buy_id, asset, line_item_map)
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
+                created_asset_statuses.append(_approved(asset["creative_id"]))
                 continue
 
             # Get placeholders for this asset's package assignments
@@ -229,7 +247,7 @@ class GAMCreativesManager:
                     placement_targeting_map,
                 )
 
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
+                created_asset_statuses.append(_approved(asset["creative_id"]))
 
             except Exception as e:
                 logger.error(f"Error creating creative {asset['creative_id']}: {str(e)}")
