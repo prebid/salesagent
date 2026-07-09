@@ -53,4 +53,4 @@ if [[ -n "$UV_SECURE_IGNORED_VULNS" ]]; then
   UV_SECURE_ARGS+=(--ignore-vulns "$UV_SECURE_IGNORED_VULNS" --allow-unused-ignores)
 fi
 
-exec uvx uv-secure "${UV_SECURE_ARGS[@]}" "$@" "$PROJECT_ROOT/uv.lock"
+exec uvx uv-secure "${UV_SECURE_ARGS[@]+"${UV_SECURE_ARGS[@]}"}" "$@" "$PROJECT_ROOT/uv.lock"
