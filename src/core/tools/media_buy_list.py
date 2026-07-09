@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL, resolve_canonical_status
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,10 @@ from adcp.types import ContextObject, MediaBuyStatus
 from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.exceptions import (
+    AdCPCapabilityNotSupportedError,
+    AdCPValidationError,
+)
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -178,7 +182,7 @@ def _get_media_buys_impl(
     # targeting_overlay=None which is indistinguishable from "no targeting".
     hydration_errors: list[Error] = []
     for buy in target_media_buys:
-        status = _compute_status(buy)
+        status = _compute_status(buy, today)
 
         # Build packages
         packages = packages_by_media_buy.get(buy.media_buy_id, [])
@@ -412,7 +416,7 @@ def _fetch_target_media_buys(
             is_paused=buy.is_paused,
         )
         for buy in buys
-        if filter_statuses is None or _compute_status(buy) in filter_statuses
+        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
     ]
 
 
@@ -431,85 +435,79 @@ def _resolve_status_filter(
         # Default: active only
         return {MediaBuyStatus.active}
 
+    # Normalize every element to a MediaBuyStatus enum. On the wire the filter
+    # arrives as bare strings (GetMediaBuysRequest.status_filter is not coerced
+    # to the enum), while _compute_status returns MediaBuyStatus members — so a
+    # raw ``set(status_filter)`` of strings never matches the enum membership
+    # test at the call site, silently dropping every buy. ``MediaBuyStatus(x)``
+    # is idempotent for enum members and coerces valid strings.
     if isinstance(status_filter, RootModel):
-        return set(status_filter.root)
+        raw = status_filter.root
+    elif isinstance(status_filter, list):
+        raw = status_filter
+    else:
+        raw = [status_filter]
 
-    if isinstance(status_filter, list):
-        return set(status_filter)
+    try:
+        return {MediaBuyStatus(s) for s in raw}
+    except ValueError as e:
+        # An unknown status string is a bad request, not a server fault — surface
+        # a clean VALIDATION_ERROR instead of letting the ValueError escape as a
+        # 500. (A dedicated STATUS_FILTER_INVALID_VALUE code is a separate,
+        # unimplemented gap; see the xfailed boundary-status-filter rows.)
+        raise AdCPValidationError(
+            f"Invalid status_filter value: {e}",
+            field="status_filter",
+            suggestion="status_filter values must be valid media-buy statuses",
+        ) from e
 
-    return {status_filter}
 
+def _canonical_to_media_buy_status(canonical: str) -> MediaBuyStatus:
+    """Adapt a canonical status string to the AdCP lifecycle ``MediaBuyStatus``.
 
-# Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
-# transitions) maps onto the AdCP MediaBuyStatus wire vocabulary below.
-# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL but targets
-# the AdCP enum used by list_media_buys
-# instead of the internal delivery filter vocabulary — the two output
-# vocabularies are genuinely different (AdCP has no "failed"/"ready"/"draft"),
-# so per the CLAUDE.md DRY guidance ("not about collapsing two genuinely
-# different operations") the mapping is mirrored, not shared.
-#
-# The persisted status is authoritative: terminal/explicit states
-# (paused, completed, rejected, canceled) are lifecycle decisions that
-# cannot be re-derived from flight dates. "failed" has no AdCP equivalent
-# and is reported as the closest terminal state, "rejected". Pre-serving
-# states (draft/pending/pending_approval) map to "pending_start"
-# (consistent with media_buy_create._compute_initial_media_buy_status).
-# Generic serving states (active/approved) are date-refined below.
-_PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
-    "active": MediaBuyStatus.active,
-    "approved": MediaBuyStatus.active,
-    "paused": MediaBuyStatus.paused,
-    "completed": MediaBuyStatus.completed,
-    "rejected": MediaBuyStatus.rejected,
-    "canceled": MediaBuyStatus.canceled,
-    "failed": MediaBuyStatus.rejected,
-    "draft": MediaBuyStatus.pending_start,
-    "pending": MediaBuyStatus.pending_start,
-    "pending_approval": MediaBuyStatus.pending_start,
-    # "scheduled" is set by admin approval pre-flight (operations.py / workflows.py);
-    # like the other pre-serving states it maps to pending_start.
-    "scheduled": MediaBuyStatus.pending_start,
-    "pending_creatives": MediaBuyStatus.pending_creatives,
-    "pending_start": MediaBuyStatus.pending_start,
-}
+    The canonical vocabulary's delivery-only ``failed`` has no AdCP lifecycle
+    equivalent, so it collapses to the closest terminal state, ``rejected``
+    (enums/media-buy-status.json). Shared by the list read path and the
+    create/update dual-emit coercion so the collapse cannot drift.
+    """
+    if canonical == "failed":
+        return MediaBuyStatus.rejected
+    return MediaBuyStatus(canonical)
 
 
 def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
-    """Map a persisted ``MediaBuy.status`` string to its canonical AdCP ``MediaBuyStatus``.
+    """Map a persisted ``MediaBuy.status`` string to its AdCP ``MediaBuyStatus``.
 
-    Single source of truth for DB-status → AdCP-status coercion (``_PERSISTED_STATUS_TO_ADCP``),
-    so the create/update dual-emit of ``media_buy_status`` cannot inject a non-enum DB
-    value (e.g. legacy ``pending_approval``) into the typed response field. Returns
-    ``None`` for an empty/unknown status so callers omit the field rather than emit a
-    non-spec value.
+    Date-free coercion for the create/update dual-emit of ``media_buy_status``,
+    so a non-enum DB value (e.g. legacy ``pending_approval``) cannot be injected
+    into the typed response field. Built on the shared
+    ``PERSISTED_STATUS_TO_CANONICAL`` map (single source of truth, #1545) with
+    the same lifecycle-surface adaptation as ``_compute_status`` (delivery-only
+    ``failed`` collapses to ``rejected``). Returns ``None`` for an empty/unknown
+    status so callers omit the field rather than emit a non-spec value. Unlike
+    ``_compute_status`` there is no flight-window refinement — the write paths
+    emit the state the action just persisted.
     """
     if not status:
         return None
-    return _PERSISTED_STATUS_TO_ADCP.get(status.lower())
+    canonical = PERSISTED_STATUS_TO_CANONICAL.get(status.lower())
+    if canonical is None:
+        return None
+    return _canonical_to_media_buy_status(canonical)
 
 
-def _compute_status(buy: MediaBuy | _MediaBuyData) -> MediaBuyStatus:
-    """Resolve a media buy's AdCP status from its PERSISTED status column.
+def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
+    """Resolve a media buy's AdCP status from its persisted status column.
 
-    Persisted-status-authoritative, per the AdCP lifecycle requirement "persist
-    status, never recompute from dates" (dist/docs/<version>/media-buy/media-buys/
-    index.mdx: status "MUST be
-    stored as an explicit field and mutated only by protocol events ... date
-    comparison sets the INITIAL status at create_media_buy time; after that, the
-    state machine owns the field"). The ``media_buy_status_scheduler`` owns the
-    date-driven transitions (pending_start -> active -> completed) on the status
-    column, so read paths never recompute from the flight window. This keeps
-    ``get_media_buys`` in agreement with the update-response status pair, which
-    reads the same column via ``normalize_persisted_media_buy_status`` (#1417).
-
-    A serving buy flagged ``is_paused`` reports ``paused`` — a command-driven
-    flag, not a date. Terminal/explicit states come straight from the column.
+    Delegates the persisted-status map + flight-window refinement to the shared
+    ``resolve_canonical_status`` (the single source of truth also used by
+    get_media_buy_delivery, so both required tools describe the same buy with
+    the same status — pinned by test_media_buy_status_consistency). The only
+    adaptation to the lifecycle surface: the canonical vocabulary's delivery-only
+    "failed" has no AdCP lifecycle equivalent, so it collapses to the closest
+    terminal state, "rejected" (enums/media-buy-status.json).
     """
-    mapped = normalize_persisted_media_buy_status(buy.status) or MediaBuyStatus.active
-    if mapped == MediaBuyStatus.active and getattr(buy, "is_paused", False):
-        return MediaBuyStatus.paused
-    return mapped
+    return _canonical_to_media_buy_status(resolve_canonical_status(buy, today))
 
 
 def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:

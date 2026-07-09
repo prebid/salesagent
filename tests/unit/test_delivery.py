@@ -32,6 +32,7 @@ import pytest
 from adcp.types import MediaBuyStatus
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -752,6 +753,62 @@ class TestDeliveryStatusFilter:
         result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date)
 
         assert len(result) == 0
+
+    def test_simulated_clock_filter_matches_reported_status(self):
+        """status_filter resolves against the simulated clock, not the real one.
+
+        Regression (#1545 O2): the filter path used the real reference_date while
+        the display path used mock_time, so a buy the tool would report as
+        "completed" under mock_time was excluded by a status_filter=["completed"]
+        query (and emitted a spurious MEDIA_BUY_NOT_FOUND). Filter and report must
+        agree.
+        """
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 2, 15)  # real clock: inside the flight window
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_sim",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = ["mb_sim"]
+        mock_req.status_filter = [MediaBuyStatus.completed]
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+
+        # Simulated clock strictly past the flight window -> resolves "completed".
+        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
+        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
+
+        assert [buy_id for buy_id, _ in result] == ["mb_sim"]
+
+    def test_simulated_clock_filter_excludes_non_matching_status(self):
+        """The simulated clock also excludes buys whose simulated status differs.
+
+        Same buy as above under mock_time past flight end resolves to "completed",
+        so a status_filter=["active"] query must NOT return it.
+        """
+        from src.core.tools.media_buy_delivery import _get_target_media_buys
+
+        ref_date = date(2025, 2, 15)
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_sim",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        mock_req = MagicMock()
+        mock_req.media_buy_ids = ["mb_sim"]
+        mock_req.status_filter = [MediaBuyStatus.active]
+        mock_repo = MagicMock()
+        mock_repo.get_by_principal.return_value = [buy]
+
+        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
+        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
+
+        assert result == []
 
     def test_valid_status_enum_values_accepted(self):
         """UC-004-FILT-07: valid MediaBuyStatus enum values accepted by schema.
@@ -1588,6 +1645,67 @@ class TestDeliveryAdapterError:
         assert any("mb_err2" in e.message for e in result.errors)
         assert any(e.code == "SERVICE_UNAVAILABLE" for e in result.errors)
 
+    def test_non_adapter_processing_failure_surfaces_advisory(self):
+        """A per-buy failure OUTSIDE the adapter call must not drop the buy silently.
+
+        Regression (#1545 K2): the outer per-buy handler logged and continued with
+        no errors[] advisory, so a failure in the status/model-construction path made
+        the buy vanish from the response with no signal. It must now append a
+        SERVICE_UNAVAILABLE advisory, mirroring the adapter handler. The code is the
+        wire-compliant SERVICE_UNAVAILABLE (not the internal-only INTERNAL_ERROR):
+        advisory errors[] entries serialize verbatim and are normalized through
+        translate_error_code at response assembly.
+        """
+        good = _make_mock_media_buy(media_buy_id="mb_good")
+        bad = _make_mock_media_buy(media_buy_id="mb_bad")
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_good")
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_good", "mb_bad"])
+
+        def _resolve(buy, *args, **kwargs):
+            if buy.media_buy_id == "mb_bad":
+                raise RuntimeError("status resolution blew up")
+            return "active"
+
+        with patch(f"{_PATCH_PREFIX}.resolve_canonical_status", side_effect=_resolve):
+            result = _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_good", good), ("mb_bad", bad)],
+            )
+
+        # Surviving buy is still reported.
+        assert [d.media_buy_id for d in result.media_buy_deliveries] == ["mb_good"]
+        # Failed buy surfaces an advisory instead of vanishing.
+        assert result.errors is not None
+        advisory_errors = [e for e in result.errors if e.code == "SERVICE_UNAVAILABLE"]
+        assert len(advisory_errors) == 1
+        assert "mb_bad" in advisory_errors[0].message
+
+    def test_advisory_normalization_collapses_internal_code_to_standard(self):
+        """A hand-built advisory carrying a non-standard/internal code is re-coded to a
+        STANDARD wire code before it reaches the response.
+
+        Advisory errors[] entries serialize verbatim (no boundary translation), so this
+        is the only thing standing between an internal code and the buyer. Reddens if
+        _normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
+        """
+        from adcp.types import Error
+
+        from src.core.tools.media_buy_delivery import _normalize_advisory_errors
+
+        out = _normalize_advisory_errors(
+            [
+                Error(code="API_ERROR", message="internal adapter detail for mb_x"),  # internal, unmapped
+                Error(code="INTERNAL_ERROR", message="mapped internal for mb_y"),  # internal, mapped
+                Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
+            ]
+        )
+        assert [e.code for e in out] == ["SERVICE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "MEDIA_BUY_NOT_FOUND"]
+        # Messages are preserved verbatim.
+        assert out[0].message == "internal adapter detail for mb_x"
+
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).
 
@@ -1612,8 +1730,10 @@ class TestDeliveryAdapterError:
         assert result.errors is not None and any("mb_log" in e.message for e in result.errors)
         # Error was logged before the advisory error was returned
         mock_logger.error.assert_called()
-        log_message = mock_logger.error.call_args[0][0]
-        assert "mb_log" in log_message
+        # Lazy logging: the media_buy_id is a %-arg, not baked into the format string.
+        call = mock_logger.error.call_args
+        rendered = call[0][0] % call[0][1:] if len(call[0]) > 1 else call[0][0]
+        assert "mb_log" in rendered
 
     def test_adapter_error_no_state_change(self):
         """UC-004-EXT-F4: adapter error is returned (degrade); operation stays read-only.
@@ -2091,7 +2211,7 @@ class TestDeliveryProtocol:
         # Optional fields exist as attributes (may be None)
         assert hasattr(totals, "clicks")
         assert hasattr(totals, "ctr")
-        assert hasattr(totals, "video_completions")
+        assert hasattr(totals, "completed_views")
         assert hasattr(totals, "completion_rate")
 
     def test_unpopulated_fields_handled_gracefully(self):
@@ -2122,7 +2242,315 @@ class TestDeliveryProtocol:
         delivery = response.media_buy_deliveries[0]
         # daily_breakdown is optional and not populated
         assert delivery.daily_breakdown is None
-        # video_completions is optional
-        assert delivery.totals.video_completions is None
+        # completed_views is optional
+        assert delivery.totals.completed_views is None
         # aggregated_totals optional fields
-        assert response.aggregated_totals.video_completions is None
+        assert response.aggregated_totals.completed_views is None
+
+
+class TestCircuitBreakerDoesNotMaskTerminalStatus:
+    """An open reporting circuit breaker may only overwrite an actively serving buy.
+
+    "reporting_delayed" tells the buyer data is temporarily unavailable and a
+    later report will follow. That is a lie for a terminal buy (canceled,
+    rejected, failed, completed), a paused buy, or a pending buy that has never
+    served — none are awaiting fresh delivery data. The override is scoped to
+    status == "active".
+
+    Covers: UC-004-EXT-G-03
+    """
+
+    def test_open_breaker_leaves_canceled_status_intact(self):
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_cancelled",
+            status="canceled",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_cancelled")
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_cancelled"])
+
+        with patch(f"{_PATCH_PREFIX}._is_circuit_breaker_open", return_value=True):
+            response = _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_cancelled", buy)],
+            )
+
+        assert response.media_buy_deliveries[0].status == "canceled"
+
+    def test_open_breaker_still_marks_active_reporting_delayed(self):
+        """The override is still applied to a genuinely serving (active) buy."""
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_live",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2027, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_live")
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_live"])
+
+        with patch(f"{_PATCH_PREFIX}._is_circuit_breaker_open", return_value=True):
+            response = _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_live", buy)],
+            )
+
+        assert response.media_buy_deliveries[0].status == "reporting_delayed"
+
+    def test_open_breaker_leaves_pending_status_intact(self):
+        """A never-served pending buy is not masked as reporting_delayed (#1545 O3).
+
+        pending_creatives / pending_start buys have no delivery data pending, so
+        an open breaker must not relabel them — that would promise a report that
+        never comes and contradict a status_filter that selected the pending buy.
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_pending",
+            status="pending_creatives",
+            start_date=date(2025, 1, 1),
+            end_date=date(2027, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_pending")
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_pending"])
+
+        with patch(f"{_PATCH_PREFIX}._is_circuit_breaker_open", return_value=True):
+            response = _run_impl_with_patches(
+                req,
+                adapter=mock_adapter,
+                target_buys=[("mb_pending", buy)],
+            )
+
+        assert response.media_buy_deliveries[0].status == "pending_creatives"
+
+
+class TestNotificationTypeTerminality:
+    """notification_type derives from NO_MORE_DATA_STATUSES, not just "completed".
+
+    Regression (#1552, made blocking in the #1545 follow-up review): terminal
+    statuses are returned verbatim since #1545, but notification_type was
+    "final" only for all-completed — so a rejected/canceled/failed buy reported
+    "scheduled" with a next_expected_at 24h out, forever, telling the buyer to
+    keep polling a buy that will never report again (and persisting that
+    phantom schedule to the webhook log). Spec: next_expected_at is "only
+    present ... when notification_type is not 'final'"
+    (get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
+    """
+
+    @staticmethod
+    def _poll_single(status: str) -> GetMediaBuyDeliveryResponse:
+        buy = _make_mock_media_buy(
+            media_buy_id=f"mb_{status}",
+            status=status,
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id=f"mb_{status}")
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=[f"mb_{status}"])
+        return _run_impl_with_patches(req, adapter=mock_adapter, target_buys=[(f"mb_{status}", buy)])
+
+    @pytest.mark.parametrize("status", ["rejected", "canceled", "failed", "completed"])
+    def test_no_more_data_status_is_final_with_no_next_expected_at(self, status):
+        response = self._poll_single(status)
+
+        assert enum_value(response.media_buy_deliveries[0].status) == status
+        assert enum_value(response.notification_type) == "final"
+        assert response.next_expected_at is None
+
+    def test_paused_buy_still_schedules_a_next_report(self):
+        """paused is terminal for date-refinement but NOT for notifications —
+        a paused buy may resume, so the next scheduled report is a truthful
+        promise."""
+        response = self._poll_single("paused")
+
+        assert enum_value(response.media_buy_deliveries[0].status) == "paused"
+        assert enum_value(response.notification_type) == "scheduled"
+        assert response.next_expected_at is not None
+
+    def test_mixed_terminal_and_active_is_scheduled(self):
+        """One buy that will still report keeps the response non-final."""
+        buy_done = _make_mock_media_buy(
+            media_buy_id="mb_done",
+            status="canceled",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        buy_live = _make_mock_media_buy(
+            media_buy_id="mb_live",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2027, 12, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = [
+            _make_adapter_response(media_buy_id="mb_done"),
+            _make_adapter_response(media_buy_id="mb_live"),
+        ]
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_done", "mb_live"])
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_done", buy_done), ("mb_live", buy_live)],
+        )
+
+        assert enum_value(response.notification_type) == "scheduled"
+        assert response.next_expected_at is not None
+
+    def test_all_terminal_mix_is_final(self):
+        """completed + canceled together: nothing will report again -> final."""
+        buy_a = _make_mock_media_buy(
+            media_buy_id="mb_a",
+            status="completed",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        buy_b = _make_mock_media_buy(
+            media_buy_id="mb_b",
+            status="canceled",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.side_effect = [
+            _make_adapter_response(media_buy_id="mb_a"),
+            _make_adapter_response(media_buy_id="mb_b"),
+        ]
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_a", "mb_b"])
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_a", buy_a), ("mb_b", buy_b)],
+        )
+
+        assert enum_value(response.notification_type) == "final"
+        assert response.next_expected_at is None
+
+
+class TestTimeSimulationReachesFinalNotification:
+    """A time-simulation client can advance a non-serving buy to completed/final.
+
+    Regression (finding #3): honoring the persisted lifecycle short-circuited
+    date refinement, so a buy created as pending_creatives (creation hardcodes
+    creatives_approved=False) could never reach "completed" under simulation and
+    the "final" delivery notification was unreachable. In simulation mode
+    (mock_time / jump_to_event) a non-terminal buy follows the simulated clock.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
+    """
+
+    def test_simulated_clock_past_flight_yields_completed_and_final(self):
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_sim",
+            status="pending_creatives",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        # Simulated clock strictly past the flight window.
+        identity = _make_identity(testing_context=AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC)))
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_sim"])
+
+        # Runs through the real apply_testing_hooks — the campaign-progress branch
+        # builds flight datetimes via _combine_utc, so the aware simulated clock no
+        # longer raises TypeError against them.
+        response = _run_impl_with_patches(
+            req,
+            identity=identity,
+            target_buys=[("mb_sim", buy)],
+        )
+
+        assert response.media_buy_deliveries[0].status == "completed"
+        assert enum_value(response.notification_type) == "final"
+
+    def test_mid_flight_mock_time_via_from_headers_does_not_raise(self):
+        """A mid-flight X-Mock-Time through the real header boundary succeeds.
+
+        Regression (#1545 K1 follow-up review): from_headers minted mock_time
+        NAIVE, and a *mid-flight* clock (0 < progress < 1) is the one that
+        reaches NextEventCalculator.calculate_next_event_time — whose
+        'next_event_time <= current_time' comparison against the aware flight
+        datetimes raised TypeError and 500'd the whole request. (A past-flight
+        clock never got there: progress 1.0 makes get_next_event return None.)
+        mock_time is now normalized to UTC-aware at the AdCPTestContext
+        construction boundary.
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_midflight",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 12, 31),
+        )
+        # The REAL header boundary — not a directly-constructed aware datetime.
+        ctx = AdCPTestContext.from_headers({"x-mock-time": "2025-06-01T00:00:00Z"})
+        identity = _make_identity(testing_context=ctx)
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_midflight"])
+
+        response = _run_impl_with_patches(
+            req,
+            identity=identity,
+            target_buys=[("mb_midflight", buy)],
+        )
+
+        assert response.media_buy_deliveries[0].status == "active"
+        assert enum_value(response.notification_type) == "scheduled"
+
+    def test_jump_to_event_only_does_not_raise(self):
+        """jump_to_event with no mock_time hits the real hook without a TypeError.
+
+        Regression (#1545 K1): the fallback simulated clock is always UTC-aware,
+        while campaign_info flight dates were built naive — the comparison in
+        TimeSimulator.calculate_campaign_progress raised
+        'can't compare offset-naive and offset-aware datetimes' and failed the
+        whole request. Reachable in production via an X-Jump-To-Event header alone.
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_jump",
+            status="active",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        identity = _make_identity(testing_context=AdCPTestContext(jump_to_event="campaign-complete"))
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_jump"])
+
+        response = _run_impl_with_patches(
+            req,
+            identity=identity,
+            target_buys=[("mb_jump", buy)],
+        )
+
+        assert response.media_buy_deliveries[0].media_buy_id == "mb_jump"
+
+    def test_without_simulation_persisted_pending_status_is_authoritative(self):
+        """The same buy, queried normally, keeps its persisted pending status."""
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_real",
+            status="pending_creatives",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 3, 31),
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id="mb_real")
+
+        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_real"], start_date="2025-05-01", end_date="2025-06-01")
+
+        response = _run_impl_with_patches(
+            req,
+            adapter=mock_adapter,
+            target_buys=[("mb_real", buy)],
+        )
+
+        assert response.media_buy_deliveries[0].status == "pending_creatives"

@@ -27,6 +27,7 @@ from adcp.types import MediaBuyStatus
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import GetMediaBuyDeliveryRequest
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
+from src.core.tools._media_buy_status import CANONICAL_STATUSES
 from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
     _resolve_delivery_status_filter,
@@ -168,17 +169,15 @@ class TestValidStatusValuesAccepted:
 
         Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
         """
-        valid_internal = {"active", "ready", "paused", "completed", "failed"}
-
         # Use a mock with .value = "all" to simulate the "all" special case
         mock_status = MagicMock()
         mock_status.value = "all"
 
         # Act — pure function test, harness not applicable
-        result = _resolve_delivery_status_filter(mock_status, valid_internal, lambda s: s.value)
+        result = _resolve_delivery_status_filter(mock_status, set(CANONICAL_STATUSES))
 
         # Assert — all valid statuses returned
-        assert set(result) == valid_internal
+        assert set(result) == set(CANONICAL_STATUSES)
 
 
 # ---------------------------------------------------------------------------
@@ -801,11 +800,9 @@ class TestStatusFilterRawString:
     """
 
     def test_raw_string_active_is_recognized(self):
-        valid = {"active", "ready", "paused", "completed", "failed"}
-        result = _resolve_delivery_status_filter("active", valid, lambda s: s.value)
+        result = _resolve_delivery_status_filter("active", set(CANONICAL_STATUSES))
         assert result == ["active"]
 
     def test_unknown_raw_string_defaults_to_active(self):
-        valid = {"active", "ready", "paused", "completed", "failed"}
-        result = _resolve_delivery_status_filter("nonexistent", valid, lambda s: s.value)
+        result = _resolve_delivery_status_filter("nonexistent", set(CANONICAL_STATUSES))
         assert result == ["active"]

@@ -302,7 +302,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 50
+    # Measured on the first run: image build ~5m + serial in-network bdd 44m
+    # (2649s pytest) + teardown — 50m fired during teardown with the suite
+    # fully green. 75m leaves headroom without masking a hang.
+    timeout-minutes: 75
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:

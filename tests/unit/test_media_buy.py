@@ -4009,14 +4009,13 @@ class TestDeliveryResponseSerialization:
 
 
 class TestGetMediaBuysStatusComputation:
-    """get_media_buys: _compute_status is PERSISTED-STATUS-AUTHORITATIVE (#1417 / 8plg).
+    """get_media_buys: _compute_status delegates to the shared resolve_canonical_status (#1545).
 
-    Per the AdCP lifecycle requirement "persist status, never recompute from dates",
-    the read path never re-derives status from the flight window — the
-    media_buy_status_scheduler owns the pending_start -> active -> completed
-    transitions on the persisted column, so get_media_buys agrees with the
-    update-response status (which reads the same column via
-    normalize_persisted_media_buy_status).
+    The persisted column is the source of truth for TERMINAL/explicit states
+    (paused, completed, rejected, canceled — never date-derived, preserving
+    #1417's core), while a GENERIC serving state ("active") is refined against
+    the flight window so get_media_buys and get_media_buy_delivery describe the
+    same buy identically (pinned by test_media_buy_status_consistency).
     """
 
     @staticmethod
@@ -4038,15 +4037,15 @@ class TestGetMediaBuysStatusComputation:
             is_paused=is_paused,
         )
 
-    def test_active_persisted_before_flight_reports_active(self):
-        """An 'active'-persisted buy whose flight has not started yet reports active
-        (persisted), NOT date-derived pending_start — the scheduler owns that transition."""
+    def test_active_persisted_before_flight_refines_to_pending_start(self):
+        """A generic 'active'-persisted buy whose flight has not started is
+        date-refined to pending_start (shared resolve_canonical_status taxonomy)."""
         from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _compute_status
 
         buy = self._make_buy(start_offset_days=10, end_offset_days=40)
-        assert _compute_status(buy) == MediaBuyStatus.active
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
     def test_active_when_in_flight(self):
         """An 'active'-persisted buy within its flight window reports active."""
@@ -4055,22 +4054,32 @@ class TestGetMediaBuysStatusComputation:
         from src.core.tools.media_buy_list import _compute_status
 
         buy = self._make_buy(start_offset_days=-5, end_offset_days=25)
-        assert _compute_status(buy) == MediaBuyStatus.active
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.active
 
-    def test_active_persisted_past_end_reports_active_not_completed(self):
-        """An 'active'-persisted buy past its end date reports active (persisted), NOT
-        date-derived completed — the scheduler owns the active->completed transition.
-        This keeps get_media_buys in agreement with the update-response status."""
+    def test_active_persisted_past_end_refines_to_completed(self):
+        """A generic 'active'-persisted buy past its end date is date-refined to
+        completed — the same answer get_media_buy_delivery gives for the buy."""
         from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _compute_status
 
         buy = self._make_buy(start_offset_days=-40, end_offset_days=-10)
-        assert _compute_status(buy) == MediaBuyStatus.active
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
 
-    def test_start_time_no_longer_refines_read_status(self):
-        """Flight dates (start_time/start_date) do not drive the read status: an
-        'active'-persisted buy reports active regardless of a future start_time."""
+    def test_terminal_persisted_never_date_derived(self):
+        """A TERMINAL persisted state is returned verbatim regardless of the
+        flight window (#1417's core, preserved by the shared resolver): a
+        'completed' buy whose dates say in-flight stays completed."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_list import _compute_status
+
+        buy = self._make_buy(status="completed", start_offset_days=-5, end_offset_days=25)
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
+
+    def test_future_start_time_refines_to_pending_start(self):
+        """A future start_time refines a generic serving state to pending_start
+        even when start_date has arrived (time-of-day precision)."""
         from adcp.types import MediaBuyStatus
 
         from src.core.tools.media_buy_list import _compute_status
@@ -4078,7 +4087,7 @@ class TestGetMediaBuysStatusComputation:
         buy = self._make_buy(
             start_offset_days=-5, end_offset_days=25, start_time=datetime.now(UTC) + timedelta(days=10)
         )
-        assert _compute_status(buy) == MediaBuyStatus.active
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
 
 class TestGetMediaBuysStatusFilter:

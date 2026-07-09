@@ -71,7 +71,7 @@ class TestDeliveryTotalsFields:
         "spend",
         "clicks",
         "ctr",
-        "video_completions",
+        "completed_views",
         "completion_rate",
         "conversions",
         # conversion_value: spec core/delivery-metrics.json declares it per buy;
@@ -103,7 +103,7 @@ class TestPackageDeliveryFields:
         "impressions",
         "spend",
         "clicks",
-        "video_completions",
+        "completed_views",
         "pacing_index",
         "pricing_model",
         "rate",
