@@ -65,6 +65,7 @@ async def test_send_reports_no_webhooks(mock_db_session, scheduler):
 @patch("src.services.delivery_webhook_scheduler.get_db_session")
 async def test_send_reports_with_media_buys(mock_db_session, scheduler):
     """Test sending reports for media buys with webhooks."""
+
     # Setup mock media buys. The scheduler resolves each buy's canonical
     # status before sending (pre-flight/paused buys are skipped), so the
     # mocks need real status/flight/pause attributes — bare Mock attributes
