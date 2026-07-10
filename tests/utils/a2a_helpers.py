@@ -7,11 +7,14 @@ Updated for a2a-sdk 1.0 (protobuf API).
 
 import json
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import ANY
 
 from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task
 from google.protobuf import json_format, struct_pb2
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import ResolvedIdentity
 
 
 def assert_delivery_forwarded_account(mock_delivery, expected_account) -> None:
@@ -75,7 +78,7 @@ def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
     return extract_data_from_artifact(artifact)
 
 
-def make_mock_a2a_identity():
+def make_mock_a2a_identity() -> "ResolvedIdentity":
     """Standard mock ResolvedIdentity for A2A handler unit tests."""
     from tests.factories import PrincipalFactory
 

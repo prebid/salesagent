@@ -271,23 +271,24 @@ def _read_failed_a2a_task(
     when-step. Skill-dispatch failures carry the envelope in an ``error_result``
     artifact (loose read); ``on_message_send``'s outer-handler failures carry it
     in ``processing_error`` — pass ``expect_processing_error=True`` to pin that
-    strict shape (artifact present, name, single DataPart). When no envelope can
-    be read or reconstructed, the error falls back to a bare ``AdCPError``
-    describing the task status.
+    strict shape (artifact present, name, single DataPart; violations raise
+    ``AssertionError``, including an artifact-less failed Task). On the loose
+    read, a missing artifact or unreconstructable envelope falls back to a bare
+    ``AdCPError`` describing the task status.
     """
     from src.core.exceptions import AdCPError
     from tests.utils.a2a_helpers import extract_data_from_artifact, extract_processing_error_envelope
 
-    if task.artifacts:
-        if expect_processing_error:
-            envelope = extract_processing_error_envelope(task)
-        else:
-            envelope = extract_data_from_artifact(task.artifacts[0])
-        reconstructed = _envelope_to_adcp_error(envelope, fallback_message=fallback_message)
-        if reconstructed is not None:
-            return envelope, reconstructed
-        return envelope, AdCPError(f"A2A task failed: {task.status}")
-    return None, AdCPError(f"A2A task failed: {task.status}")
+    if expect_processing_error:
+        envelope = extract_processing_error_envelope(task)
+    elif task.artifacts:
+        envelope = extract_data_from_artifact(task.artifacts[0])
+    else:
+        return None, AdCPError(f"A2A task failed: {task.status}")
+    reconstructed = _envelope_to_adcp_error(envelope, fallback_message=fallback_message)
+    if reconstructed is not None:
+        return envelope, reconstructed
+    return envelope, AdCPError(f"A2A task failed: {task.status}")
 
 
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:

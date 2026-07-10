@@ -140,6 +140,40 @@ async def test_auth_extraction_failure_returns_failed_task_before_identity_resol
 
 
 @pytest.mark.asyncio
+async def test_all_skills_failed_webhook_carries_joined_reasons():
+    """Two failed skills → the failed-Task webhook reason joins both messages.
+
+    The all-skills-failed branch forwards ``"; ".join(error_messages)`` to
+    ``_fail_task_with_webhook``. The single-skill integration assertion in
+    ``test_a2a_error_responses.py`` is degenerate for the join itself (a join
+    of one message equals that message), so this pins the multi-skill case:
+    reverting the join to first-message-only fails here.
+    """
+    handler, ctx = _make_handler()
+    handler._send_protocol_webhook = AsyncMock()
+    handler._handle_explicit_skill = AsyncMock(
+        side_effect=[
+            AdCPValidationError("first skill exploded"),
+            AdCPValidationError("second skill exploded"),
+        ]
+    )
+    message = create_a2a_message_with_skill("get_products", {})
+    message.parts.append(create_a2a_message_with_skill("list_creatives", {}).parts[0])
+    params = SendMessageRequest(message=message)
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+        result = await handler.on_message_send(params, context=ctx)
+
+    assert isinstance(result, Task), f"expected a returned Task, got {type(result).__name__}"
+    assert result.status.state == TaskState.TASK_STATE_FAILED
+    handler._send_protocol_webhook.assert_awaited_once_with(
+        result,
+        status="failed",
+        error="first skill exploded; second skill exploded",
+    )
+
+
+@pytest.mark.asyncio
 async def test_genuine_transport_fault_still_raises_json_rpc_error():
     """A transport-protocol fault must still surface as a JSON-RPC error.
 

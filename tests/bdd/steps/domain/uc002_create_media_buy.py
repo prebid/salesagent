@@ -227,13 +227,14 @@ def when_buyer_sends_nl_a2a_request(ctx: dict, request_text: str) -> None:
 
     ctx["response"] = result
     if result.status.state == TaskState.TASK_STATE_FAILED:
+        # Strict mode always yields an envelope (or raises AssertionError on a
+        # violated processing_error artifact contract), so no None-guard needed.
         envelope, error = _read_failed_a2a_task(
             result,
             fallback_message="A2A natural-language request failed",
             expect_processing_error=True,
         )
-        if envelope is not None:
-            ctx["wire_error_envelope"] = envelope
+        ctx["wire_error_envelope"] = envelope
         ctx["error"] = error
 
 
