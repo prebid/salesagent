@@ -481,6 +481,18 @@ class BaseTestEnv:
         self._identity_cache.clear()
         self._principal_id = principal_id
 
+    def switch_tenant(self, tenant_id: str) -> None:
+        """Re-point the env at *tenant_id*, clearing cached identity.
+
+        Sibling of ``switch_principal``: step functions that seed a scenario
+        into its own fresh tenant (isolation in the shared e2e_rest live DB)
+        must not reach into the private ``_identity_cache`` / ``_tenant_id``.
+        Clearing the cache forces the next identity build to resolve the auth
+        token against the new tenant's principal rows.
+        """
+        self._identity_cache.clear()
+        self._tenant_id = tenant_id
+
     @property
     def identity(self) -> ResolvedIdentity:
         """Default identity (protocol='mcp'). Backward-compatible.
