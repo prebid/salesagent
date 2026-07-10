@@ -514,6 +514,22 @@ class MediaBuyRepository:
 
         return self._locked_mutate_and_bump(media_buy_id, _apply)
 
+    def _require_mutated(self, media_buy: MediaBuy | None, media_buy_id: str, action: str) -> MediaBuy:
+        """Shared vanished-row invariant behind the ``*_or_raise`` mutation variants.
+
+        The base mutators return ``None`` for a buy not found in this tenant.
+        Callers that verified the buy exists before mutating (admin routes, the
+        update tool past ``get_by_id_or_raise``) must not tolerate that —
+        proceeding would report success for a write that never happened
+        (No Quiet Failures). Callers that deliberately tolerate a missing buy
+        keep using the base mutators and check the return themselves.
+        """
+        if media_buy is None:
+            raise RuntimeError(
+                f"media buy {media_buy_id!r} disappeared during {action} — it existed when the request began"
+            )
+        return media_buy
+
     def update_status_or_raise(
         self,
         media_buy_id: str,
@@ -522,22 +538,16 @@ class MediaBuyRepository:
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
     ) -> MediaBuy:
-        """``update_status``, raising if the buy vanished mid-request.
+        """``update_status``, raising if the buy vanished mid-request (No Quiet Failures)."""
+        return self._require_mutated(
+            self.update_status(media_buy_id, status, approved_at=approved_at, approved_by=approved_by),
+            media_buy_id,
+            f"status transition to {status!r}",
+        )
 
-        For callers that verified the buy exists before transitioning (the
-        admin approve/reject and workflow-approval routes): ``None`` there
-        means the row disappeared between the check and the write, and
-        proceeding would report success for a transition that never happened
-        (No Quiet Failures). Coexists with ``update_status`` — callers that
-        deliberately tolerate a missing buy keep using that.
-        """
-        media_buy = self.update_status(media_buy_id, status, approved_at=approved_at, approved_by=approved_by)
-        if media_buy is None:
-            raise RuntimeError(
-                f"media buy {media_buy_id!r} disappeared during status transition to {status!r} — "
-                "it existed when the request began"
-            )
-        return media_buy
+    def bump_revision_or_raise(self, media_buy_id: str) -> MediaBuy:
+        """``bump_revision``, raising if the buy vanished mid-request (No Quiet Failures)."""
+        return self._require_mutated(self.bump_revision(media_buy_id), media_buy_id, "revision bump")
 
     def update_fields(self, media_buy_id: str, **kwargs: Any) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.
@@ -560,6 +570,10 @@ class MediaBuyRepository:
                 setattr(media_buy, key, value)
 
         return self._locked_mutate_and_bump(media_buy_id, _apply)
+
+    def update_fields_or_raise(self, media_buy_id: str, **kwargs: Any) -> MediaBuy:
+        """``update_fields``, raising if the buy vanished mid-request (No Quiet Failures)."""
+        return self._require_mutated(self.update_fields(media_buy_id, **kwargs), media_buy_id, "field update")
 
     # ------------------------------------------------------------------
     # MediaPackage writes

@@ -644,7 +644,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                         # Route through the repository seam so the persisted
                         # revision bumps and approved_at/approved_by stamp in one
                         # place (AdCP 3.1.0-beta.3 revision + confirmed_at) — see #1544.
-                        uow2.media_buys.update_status(
+                        uow2.media_buys.update_status_or_raise(
                             action["media_buy_id"],
                             new_status,
                             approved_at=datetime.now(UTC),

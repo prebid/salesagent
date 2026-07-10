@@ -1255,9 +1255,9 @@ def _update_media_buy_impl(
             # bump once directly. Exactly one increment per accepted update — see
             # #1544.
             if pending_field_updates:
-                uow.media_buys.update_fields(req.media_buy_id, **pending_field_updates)
+                uow.media_buys.update_fields_or_raise(req.media_buy_id, **pending_field_updates)
             elif package_level_changed:
-                uow.media_buys.bump_revision(req.media_buy_id)
+                uow.media_buys.bump_revision_or_raise(req.media_buy_id)
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes

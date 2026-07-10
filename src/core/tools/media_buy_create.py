@@ -1168,7 +1168,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # (UC-002:437 — "updates the media buy status to active")
         with MediaBuyUoW(tenant_id) as uow3:
             assert uow3.media_buys is not None
-            uow3.media_buys.update_status(media_buy_id, "active")
+            uow3.media_buys.update_status_or_raise(media_buy_id, "active")
             logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
 
         return True, None

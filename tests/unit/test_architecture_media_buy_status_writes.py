@@ -67,6 +67,8 @@ MEDIA_BUY_SPECIFIC_METHODS = {
     "apply_status_transition",
     "bump_revision",
     "update_status_or_raise",
+    "update_fields_or_raise",
+    "bump_revision_or_raise",
     "find_by_idempotency_key",
     "get_by_id_or_idempotency_key",
     "get_by_id_or_raise",
@@ -222,6 +224,93 @@ def test_no_direct_media_buy_status_writes_outside_repository():
     )
 
 
+# ---------------------------------------------------------------------------
+# Companion guard: no discarded returns from None-tolerant MediaBuy mutators.
+#
+# ``update_status`` / ``update_fields`` / ``bump_revision`` return ``None``
+# when the buy is not found in this tenant. A call whose return value is
+# DISCARDED (a bare expression statement) silently skips the write for a
+# vanished buy while the caller proceeds to report success — the round-6
+# class on GitHub PR #1544 (four admin transition sites plus the
+# creative-approval activation). Callers must use the ``*_or_raise`` variant
+# or bind and check the return.
+# ---------------------------------------------------------------------------
+
+# Mutators whose ``None`` return means "row not found; nothing was written".
+NONE_TOLERANT_MUTATORS = {"update_status", "update_fields", "bump_revision"}
+
+# Pre-existing violations: (relative_file_path, receiver_name, method).
+DISCARDED_MUTATION_ALLOWLIST: set[tuple[str, str, str]] = set()
+
+
+def _media_buy_repo_locals(tree: ast.AST) -> set[str]:
+    """Local names bound (anywhere in the file) from ``MediaBuyRepository(...)``."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "MediaBuyRepository"
+        ):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
+def _detect_discarded_mutations(tree: ast.AST) -> set[tuple[str, str]]:
+    """(receiver, method) pairs where a None-tolerant mutator's return is discarded.
+
+    A receiver is MediaBuy-typed when its attribute chain contains
+    ``media_buys`` (UoW access) or it is a local bound from
+    ``MediaBuyRepository(...)``.
+    """
+    repo_locals = _media_buy_repo_locals(tree)
+    hits: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        func = node.value.func
+        if not (isinstance(func, ast.Attribute) and func.attr in NONE_TOLERANT_MUTATORS):
+            continue
+        receiver = func.value
+        if _attr_chain_contains(receiver, "media_buys") or (
+            isinstance(receiver, ast.Name) and receiver.id in repo_locals
+        ):
+            hits.add((_nearest_ref_name(receiver) or "<expr>", func.attr))
+    return hits
+
+
+def _find_discarded_media_buy_mutations() -> set[tuple[str, str, str]]:
+    """Discarded None-tolerant MediaBuy mutator calls in src/ (outside the repository)."""
+    repo = repo_root()
+    violations: set[tuple[str, str, str]] = set()
+    for py_file in (repo / "src").rglob("*.py"):
+        rel_path = str(py_file.relative_to(repo))
+        if rel_path == REPOSITORY_FILE or "/tests/" in rel_path:
+            continue
+        tree = safe_parse(py_file)
+        if tree is None:
+            continue
+        for receiver, method in _detect_discarded_mutations(tree):
+            violations.add((rel_path, receiver, method))
+    return violations
+
+
+def test_no_discarded_none_tolerant_media_buy_mutations():
+    """Production code must not discard the return of a None-tolerant MediaBuy mutator."""
+    found = _find_discarded_media_buy_mutations()
+    assert_violations_match_allowlist(
+        found,
+        DISCARDED_MUTATION_ALLOWLIST,
+        fix_hint=(
+            "The return of update_status()/update_fields()/bump_revision() is None "
+            "when the buy is not found — discarding it silently skips the write. "
+            "Use the *_or_raise variant, or bind the return and handle None. "
+            "See GitHub PR #1544 (round-6 sweep)."
+        ),
+    )
+
+
 def _detector_hits(snippet: str) -> set[tuple[str, str]]:
     """Run the type-scoped detector over a snippet."""
     return _detect(ast.parse(snippet))
@@ -269,6 +358,36 @@ def test_guard_detects_setattr_bypass():
         "    created_mb = uow.media_buys.create_from_request(req)\n"
         "    setattr(created_mb, 'approved_by', 'admin')\n"
     )
+
+
+def _discard_hits(snippet: str) -> set[tuple[str, str]]:
+    """Run the discarded-mutation detector over a snippet."""
+    return _detect_discarded_mutations(ast.parse(snippet))
+
+
+def test_guard_detects_discarded_mutator_returns():
+    """A bare mutator call on a UoW or a MediaBuyRepository local is flagged."""
+    assert ("media_buys", "update_status") in _discard_hits(
+        "def f(uow, mb_id):\n    uow.media_buys.update_status(mb_id, 'active')\n"
+    )
+    assert ("repo", "update_fields") in _discard_hits(
+        "def f(session, tid, mb_id):\n"
+        "    repo = MediaBuyRepository(session, tid)\n"
+        "    repo.update_fields(mb_id, budget=1)\n"
+    )
+    assert ("media_buys", "bump_revision") in _discard_hits(
+        "def f(uow, mb_id):\n    uow.media_buys.bump_revision(mb_id)\n"
+    )
+
+
+def test_guard_ignores_bound_or_raising_mutator_calls():
+    """Bound returns, *_or_raise variants, and non-MediaBuy repos are NOT flagged."""
+    # return value bound — the caller can (and must) check it
+    assert _discard_hits("def f(uow, mb_id):\n    row = uow.media_buys.update_status(mb_id, 'failed')\n") == set()
+    # the raising variant already surfaces the vanished row
+    assert _discard_hits("def f(uow, mb_id):\n    uow.media_buys.update_status_or_raise(mb_id, 'active')\n") == set()
+    # another repository's update_status is out of scope
+    assert _discard_hits("def f(uow, step_id):\n    uow.workflows.update_status(step_id, 'approved')\n") == set()
 
 
 def test_guard_ignores_non_media_buy_status_writes():

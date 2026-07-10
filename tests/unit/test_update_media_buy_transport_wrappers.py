@@ -51,7 +51,7 @@ def _mock_uow(media_buy, currency_limit):
     uow.currency_limits = MagicMock()
     uow.media_buys.get_by_id.return_value = media_buy
     uow.media_buys.get_packages.return_value = []
-    uow.media_buys.update_fields.return_value = media_buy
+    uow.media_buys.update_fields_or_raise.return_value = media_buy
     uow.currency_limits.get_for_currency.return_value = currency_limit
     return uow
 
@@ -99,4 +99,4 @@ def test_mcp_wrapper_preserves_existing_currency_for_float_budget():
         )
 
     assert result.structured_content["media_buy_id"] == "mb_transport"
-    mock_uow.media_buys.update_fields.assert_called_once_with("mb_transport", budget=5000.0, currency="EUR")
+    mock_uow.media_buys.update_fields_or_raise.assert_called_once_with("mb_transport", budget=5000.0, currency="EUR")

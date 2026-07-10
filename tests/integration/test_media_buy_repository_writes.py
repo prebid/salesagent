@@ -263,6 +263,10 @@ class TestRevisionBumpsOnStatusTransition:
         with MediaBuyUoW(tenant_a) as uow:
             with pytest.raises(RuntimeError, match="mb_never_existed"):
                 uow.media_buys.update_status_or_raise("mb_never_existed", "active")
+            with pytest.raises(RuntimeError, match="mb_never_existed"):
+                uow.media_buys.update_fields_or_raise("mb_never_existed", budget=Decimal("1.00"))
+            with pytest.raises(RuntimeError, match="mb_never_existed"):
+                uow.media_buys.bump_revision_or_raise("mb_never_existed")
 
     def test_apply_status_transition_bumps_revision(self, tenant_a, principal_a):
         """The cross-tenant seam (scheduler / creative-sync) bumps revision too."""

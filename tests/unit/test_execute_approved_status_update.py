@@ -147,7 +147,7 @@ class TestExecuteApprovedStatusUpdate:
         mock_uow_2.session = mock_session_2
         mock_uow_2.media_buys = MagicMock()
 
-        # UoW 4 uses update_status on the repository — track it was called
+        # UoW 4 uses update_status_or_raise on the repository — track it was called
         mock_repo_3 = MagicMock()
         mock_uow_3 = MagicMock()
         mock_uow_3.__enter__ = MagicMock(return_value=mock_uow_3)
@@ -180,5 +180,6 @@ class TestExecuteApprovedStatusUpdate:
         assert success is True, f"Expected success but got error: {error}"
         assert error is None
 
-        # THE KEY ASSERTION: update_status must be called with 'active'
-        mock_repo_3.update_status.assert_called_once_with("mb_test_001", "active")
+        # THE KEY ASSERTION: the activation transition must go through the
+        # raising seam variant (a vanished buy must not silently skip the write)
+        mock_repo_3.update_status_or_raise.assert_called_once_with("mb_test_001", "active")

@@ -138,14 +138,14 @@ def test_combined_campaign_and_package_update():
         # Set up DB return values for the currency validation path:
         # 1. uow.media_buys.get_by_id() -> media_buy (for currency check)
         # 2. session.scalars().first() -> currency_limit (for daily spend check)
-        # 3. uow.media_buys.update_fields() -> updated media buy (for budget update)
+        # 3. uow.media_buys.update_fields_or_raise() -> updated media buy (for budget update)
         # 4. uow.media_buys.get_packages() -> packages (for affected tracking)
         mock_media_buy = _make_mock_media_buy("mb_combined")
         mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
 
         # Configure repo mock for media buy lookups and writes
         env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_media_buy
-        env.mock["uow"].return_value.media_buys.update_fields.return_value = mock_media_buy
+        env.mock["uow"].return_value.media_buys.update_fields_or_raise.return_value = mock_media_buy
 
         # Mock packages for campaign-level budget affected tracking
         mock_pkg_a = MagicMock()
@@ -347,7 +347,7 @@ class TestFlightDateValidationAndPersistence:
             assert isinstance(result, UpdateMediaBuySuccess)
             assert result.media_buy_id == "mb_dates"
             # Date update should have been persisted via repository
-            env.mock["uow"].return_value.media_buys.update_fields.assert_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_called()
 
     def test_invalid_date_range_returns_error(self):
         """When end_time <= start_time, returns code='invalid_date_range'."""
@@ -462,7 +462,7 @@ class TestCampaignBudgetValidationAndPersistence:
             assert result.affected_packages[0].package_id == "pkg_budget_1"
 
             # Budget should have been persisted via repository
-            env.mock["uow"].return_value.media_buys.update_fields.assert_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_called()
             env.mock["uow"].return_value.media_buys.get_packages.assert_called_once_with("mb_budget")
 
     def test_zero_budget_returns_error(self):
@@ -996,8 +996,8 @@ class TestUC003UpdateTiming:
 
             assert isinstance(result, UpdateMediaBuySuccess)
             # update_fields should have been called with both start_time and end_time
-            env.mock["uow"].return_value.media_buys.update_fields.assert_called()
-            call_kwargs = env.mock["uow"].return_value.media_buys.update_fields.call_args
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_called()
+            call_kwargs = env.mock["uow"].return_value.media_buys.update_fields_or_raise.call_args
             assert "start_time" in call_kwargs[1]
             assert "end_time" in call_kwargs[1]
 
@@ -2071,7 +2071,7 @@ class TestUC003ExtA:
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes through UoW
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2101,7 +2101,7 @@ class TestUC003ExtC:
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2557,7 +2557,7 @@ class TestUC003ExtK:
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes through UoW
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2850,7 +2850,7 @@ class TestUC003StateMachine:
             # No adapter call when precondition rejects
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes when precondition rejects
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
     def test_active_status_accepts_pause(self):
         """A non-terminal status (active) accepts pause (state machine allows it)."""
