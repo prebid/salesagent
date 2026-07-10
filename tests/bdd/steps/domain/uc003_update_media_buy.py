@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
+from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 
@@ -2160,15 +2161,14 @@ def given_media_buy_owned_by_principal(ctx: dict, owner_id: str) -> None:
 
 @given(parsers.parse("the authenticated principal is {principal}"))
 def given_authenticated_principal(ctx: dict, principal: str) -> None:
-    """Set the authenticated principal for the request.
+    """Set the authenticated principal for the request via the shared helper.
 
-    Updates the env's identity to use the specified principal_id.
+    ``authenticate_env_as`` owns the switch, the canonical ``ctx["principal_id"]``,
+    and the identity post-condition. Currently dormant — see the note on
+    ``given_buyer_authenticated_as`` / ``steps/generic/_auth.py``; retained on the
+    shared helper so the DRY convention holds when UC-003 is activated.
     """
-    principal_id = principal.strip()
-    env = ctx["env"]
-    env._identity_cache.clear()
-    env._principal_id = principal_id
-    ctx["principal_override"] = principal_id
+    authenticate_env_as(ctx, principal.strip())
 
 
 # ═══════════════════════════════════════════════════════════════════════
