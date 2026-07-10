@@ -291,9 +291,10 @@ def given_adapter_has_data_both(ctx: dict) -> None:
     """Configure adapter mock to return data for both media buys.
 
     Seeds conversions/conversion_value alongside impressions/spend so the
-    roas / cost_per_acquisition aggregated_totals scalars (BR-RULE-220 INV-2)
-    are derivable: with two buys, roas = 1000/500 = 2.0 and
-    cost_per_acquisition = 500/20 = 25.0.
+    roas / cost_per_acquisition aggregated_totals scalars
+    (media-buy/get-media-buy-delivery-response.json, pin 04f59d2d5) are
+    derivable: with two buys, roas = 1000/500 = 2.0 and
+    cost_per_acquisition = 500/20 = 25.0 — the literals the Then steps assert.
     """
     env = ctx["env"]
     media_buys = ctx.get("media_buys", {})
@@ -1350,38 +1351,38 @@ def then_has_aggregated_totals(ctx: dict) -> None:
 
 @then('the aggregated_totals should include "roas" as total conversion_value over total spend')
 def then_aggregated_roas(ctx: dict) -> None:
-    """Assert aggregated_totals.roas == sum(conversion_value) / sum(spend).
+    """Assert aggregated_totals.roas equals the Given-derived literal 2.0.
 
-    BR-RULE-220 INV-2: roas is a top-level aggregated_totals scalar.
-    Fails today: production computes neither roas nor per-delivery
-    conversion_value (declared gap T-UC-004-aggregated-roas-and-cpa).
+    Spec (pin 04f59d2d5): media-buy/get-media-buy-delivery-response.json
+    defines aggregated_totals.roas as "total conversion_value / total spend".
+    The Given seeds two buys at conversion_value=500.0, spend=250.0 each, so
+    roas = 1000 / 500 = 2.0. Asserting the literal (not a quotient recomputed
+    from production's own per-delivery output) means a same-source extraction
+    bug cannot self-validate (PR #1430 review).
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     agg = resp.aggregated_totals
     roas = getattr(agg, "roas", None)
     assert roas is not None, "aggregated_totals.roas is missing — production does not compute roas"
-    deliveries = resp.media_buy_deliveries
-    conversion_values = [getattr(d.totals, "conversion_value", None) for d in deliveries]
+    conversion_values = [getattr(d.totals, "conversion_value", None) for d in resp.media_buy_deliveries]
     assert all(v is not None for v in conversion_values), (
-        f"per-delivery totals.conversion_value missing (needed to verify roas): {conversion_values}"
+        f"per-delivery totals.conversion_value missing (roas input must be reported per buy): {conversion_values}"
     )
-    total_conversion_value = sum(conversion_values)
-    total_spend = sum(d.totals.spend for d in deliveries)
-    assert total_spend > 0, f"Cannot verify roas with zero total spend (deliveries: {len(deliveries)})"
-    expected = total_conversion_value / total_spend
-    assert roas == pytest.approx(expected), (
-        f"aggregated_totals.roas ({roas}) != total conversion_value / total spend ({expected})"
+    assert roas == pytest.approx(2.0), (
+        f"aggregated_totals.roas ({roas}) != 2.0 (Given seeds 2 buys x conversion_value 500.0 / 2 x spend 250.0)"
     )
 
 
 @then('the aggregated_totals should include "cost_per_acquisition" as total spend over total conversions')
 def then_aggregated_cost_per_acquisition(ctx: dict) -> None:
-    """Assert aggregated_totals.cost_per_acquisition == sum(spend) / sum(conversions).
+    """Assert aggregated_totals.cost_per_acquisition equals the Given-derived literal 25.0.
 
-    BR-RULE-220 INV-2: cost_per_acquisition is a top-level aggregated_totals
-    scalar. Fails today: production does not compute it (declared gap
-    T-UC-004-aggregated-roas-and-cpa).
+    Spec (pin 04f59d2d5): media-buy/get-media-buy-delivery-response.json
+    defines aggregated_totals.cost_per_acquisition as "total spend / total
+    conversions". The Given seeds two buys at conversions=10.0, spend=250.0
+    each, so cpa = 500 / 20 = 25.0. Literal assertion for the same
+    same-source-extraction reason as the roas step above.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -1390,17 +1391,12 @@ def then_aggregated_cost_per_acquisition(ctx: dict) -> None:
     assert cpa is not None, (
         "aggregated_totals.cost_per_acquisition is missing — production does not compute cost_per_acquisition"
     )
-    deliveries = resp.media_buy_deliveries
-    conversions = [getattr(d.totals, "conversions", None) for d in deliveries]
+    conversions = [getattr(d.totals, "conversions", None) for d in resp.media_buy_deliveries]
     assert all(c is not None for c in conversions), (
-        f"per-delivery totals.conversions missing (needed to verify cost_per_acquisition): {conversions}"
+        f"per-delivery totals.conversions missing (cpa input must be reported per buy): {conversions}"
     )
-    total_conversions = sum(conversions)
-    assert total_conversions > 0, "Cannot verify cost_per_acquisition with zero total conversions"
-    total_spend = sum(d.totals.spend for d in deliveries)
-    expected = total_spend / total_conversions
-    assert cpa == pytest.approx(expected), (
-        f"aggregated_totals.cost_per_acquisition ({cpa}) != total spend / total conversions ({expected})"
+    assert cpa == pytest.approx(25.0), (
+        f"aggregated_totals.cost_per_acquisition ({cpa}) != 25.0 (Given seeds 2 buys x spend 250.0 / 2 x conversions 10.0)"
     )
 
 

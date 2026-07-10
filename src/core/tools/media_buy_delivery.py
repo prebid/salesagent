@@ -652,8 +652,10 @@ def _get_media_buy_delivery_impl(
         # Derived quotients — top-level aggregated_totals scalars per the AdCP 3.1
         # response schema (media-buy/get-media-buy-delivery-response.json defines
         # roas as "total conversion_value / total spend" and cost_per_acquisition
-        # as "total spend / total conversions"; graded by the uc004
-        # aggregated-roas-and-cpa storyboard scenario).
+        # as "total spend / total conversions"). Conformance-ungraded on this
+        # general delivery path (the storyboard value-grades them only in the
+        # capability-gated performance_buy_flow[_roas]); locally verified by the
+        # T-UC-004-aggregated-roas-and-cpa BDD scenario.
         # Spec semantics: roas = total conversion_value / total spend;
         # cost_per_acquisition = total spend / total conversions. Omitted (None) —
         # never zeroed — when inputs are absent or the denominator is zero.
