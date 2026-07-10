@@ -64,20 +64,11 @@ class MediaBuyLifecycleEnv(MediaBuyDualEnv, MediaBuyListDispatchMixin):
             return self._call_list_mcp(**kwargs)
         return super().call_mcp(**kwargs)
 
-    # In-flight flag mirroring MediaBuyDualEnv._active_update: the graded
-    # dispatch only ever queries (default True), but in e2e mode the Given
-    # plumbing realizes creates/updates over the wire too, so parse must
-    # follow whatever build_rest_body last discriminated.
-    _active_list: bool = True
-
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        self._active_list = _is_list_request(kwargs)
-        if self._active_list:
+        # Selects the list parser alongside the body build; create/update
+        # requests fall through to the dual/create layers, which select
+        # theirs. See MediaBuyCreateEnv._rest_parser.
+        if _is_list_request(kwargs):
+            self._rest_parser = self._parse_list_rest_response
             return self._build_list_rest_body(**kwargs)
         return super().build_rest_body(**kwargs)
-
-    def parse_rest_response(self, data: dict[str, Any]) -> Any:
-        if self._active_list:
-            return self._parse_list_rest_response(data)
-        # Create or update — MediaBuyDualEnv discriminates via _active_update.
-        return super().parse_rest_response(data)

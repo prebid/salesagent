@@ -338,18 +338,16 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """
         # The in-process arm neutralizes the manual-approval gate through the
         # MOCKED adapter (manual_approval_operations=[]); the live server runs
-        # the real adapter, so realize the same auto-approve default on the
-        # real surface — the tenant row — unless the scenario explicitly
-        # pinned a review mode (set_tenant_review_requirement writes both the
-        # row and this override).
+        # the real adapter, so realize the same auto-approve default through
+        # the shared review-mode writer — unless the scenario explicitly
+        # pinned a mode (set_review_requirement records the override).
         if "human_review_required" not in self._tenant_overrides:
             from src.core.database.models import Tenant
 
             tenant_row = self._session.get(Tenant, self._tenant_id)
             if tenant_row is not None and tenant_row.human_review_required:
-                tenant_row.human_review_required = False
+                self.set_review_requirement(tenant_row, False)
 
-        self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
         data = self.live_server_request(
             "post", MediaBuyCreateEnv.REST_ENDPOINT, body=self.build_rest_body(**kwargs), identity=identity
@@ -424,7 +422,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         top-level ``status``, which a plain Pydantic class can't recover.
         """
         return self._run_a2a_handler(
-            "create_media_buy", lambda **data: self.parse_rest_response(data), **self._flatten_request(kwargs)
+            "create_media_buy", lambda **data: self._parse_create_rest_response(data), **self._flatten_request(kwargs)
         )
 
     def call_mcp(self, **kwargs: Any) -> CreateMediaBuyResult:
@@ -437,11 +435,25 @@ class MediaBuyCreateEnv(IntegrationEnv):
         ``parse_rest_response`` for the success|error union discrimination.
         """
         return self._run_mcp_client(
-            "create_media_buy", lambda **data: self.parse_rest_response(data), **self._flatten_request(kwargs)
+            "create_media_buy", lambda **data: self._parse_create_rest_response(data), **self._flatten_request(kwargs)
         )
+
+    # Parse selector stashed by build_rest_body. Dispatcher-driven paths
+    # (in-process REST, RestE2EDispatcher, live_server_request callers) call
+    # build-then-parse with no routing hook in between, so the selector
+    # travels with the body build — composite envs (dual/lifecycle) point it
+    # at their update/list parsers instead of stacking per-layer boolean
+    # flags that go stale across the MRO.
+    _rest_parser: Any = None
+
+    def parse_rest_response(self, data: dict[str, Any]) -> Any:
+        """Parse a REST body with the parser selected by the last ``build_rest_body``."""
+        parser = self._rest_parser or self._parse_create_rest_response
+        return parser(data)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Build REST request body from kwargs."""
+        self._rest_parser = self._parse_create_rest_response
         kwargs.pop("identity", None)
         req = kwargs.pop("req", None)
         if req is not None:
@@ -451,7 +463,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
             return body
         return _ensure_idempotency_key(kwargs)
 
-    def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
+    def _parse_create_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
         """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.
 
         ``CreateMediaBuyResult`` serializes flat: the response fields plus a

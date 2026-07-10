@@ -530,6 +530,10 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     """
     if outcome.startswith("account resolution succeeds"):
         _assert_account_resolution_succeeds(ctx)
+    elif outcome.strip() == "success":
+        # Plain-success partition arm: the operation returned a response, no error.
+        assert ctx.get("error") is None, f"Expected success, got error: {ctx.get('error')!r}"
+        _require_success_response(ctx)
     elif outcome.startswith("error"):
         _assert_error_outcome(ctx, outcome)
     elif _is_pipeline_routing_outcome(outcome):
@@ -971,13 +975,18 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
         return
 
-    # Check if first word is a structured error code (UPPER_CASE with _)
+    # Check if first word is a structured error code — UPPER_CASE with an
+    # underscore, or an explicitly quoted code (e.g. 'error "CONFLICT" with
+    # suggestion' from the revision partition outlines, where the code has no
+    # underscore but the quotes mark it as a wire code, not prose).
     parts = remainder.split()
     first_word = parts[0] if parts else ""
-    is_structured = bool(first_word) and first_word == first_word.upper() and "_" in first_word
+    quoted = len(first_word) > 2 and first_word.startswith('"') and first_word.endswith('"')
+    code_token = first_word.strip('"')
+    is_structured = bool(code_token) and code_token == code_token.upper() and ("_" in code_token or quoted)
 
     if is_structured:
-        expected_code = first_word
+        expected_code = code_token
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError with code '{expected_code}', got {type(error).__name__}: {error}"
         )
@@ -1785,7 +1794,9 @@ def then_response_revision_is_integer_on_wire(ctx: dict) -> None:
     arrives as a whole-number float (e.g. ``1.0``). Both are the same integer
     value. We therefore require a true ``int`` wherever the wire can represent
     one, and accept a whole-number float on A2A, while still rejecting a string,
-    null, bool, or fractional revision. See #1544 round-3.
+    null, bool, or fractional revision. See #1544 round-3; the wire-type
+    divergence itself is tracked in #1583 — tighten this step to require
+    ``int`` everywhere if A2A gains a JSON-native serialization.
     """
     from tests.harness.transport import Transport
 
@@ -1823,7 +1834,14 @@ def then_response_valid_actions_array(ctx: dict) -> None:
 
 @then("every value in valid_actions should be a member of the media-buy-valid-action enum")
 def then_valid_actions_are_enum_members(ctx: dict) -> None:
-    """Each valid_actions entry belongs to the AdCP media-buy-valid-action enum."""
+    """Each valid_actions entry belongs to the AdCP media-buy-valid-action enum.
+
+    Authority chain: the allowed set is the pinned spec's
+    enums/media-buy-valid-action.json; the SDK enum imported here is the
+    CI-pinned derivation of it (adcp==5.7.0 ↔ 3.1.0-beta.3, guarded by
+    tests/unit/test_adcp_spec_version.py) — re-verify against the JSON on an
+    SDK bump.
+    """
     from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
 
     resp = _require_success_response(ctx)
@@ -1857,7 +1875,24 @@ def given_dry_run_mode(ctx: dict) -> None:
 
 @then("the ad server adapter should never be invoked")
 def then_adapter_never_invoked(ctx: dict) -> None:
-    """The dry-run arm returns a simulated success before any ad-server booking."""
+    """The dry-run arm returns a simulated success before any ad-server booking.
+
+    In-process only: the assertion observes the pytest-process adapter mock.
+    Over an e2e_* transport the create runs in the live server, whose adapter
+    this mock can never see — the assertion would pass vacuously whether or
+    not the server honored x-dry-run. Loud guard instead of silence,
+    mirroring _serialized_success_body's wire_response guard.
+    """
+    import pytest
+
+    from tests.bdd.steps._outcome_helpers import is_e2e
+
+    if is_e2e(ctx):
+        pytest.xfail(
+            "adapter-never-invoked is an in-process-internals assertion: the live server's "
+            "adapter is not observable from the pytest process (in-process-only setup leak, "
+            "docs/test-redesign/e2e-rest-ledger-retirement.md)"
+        )
     env = ctx["env"]
     adapter = env.mock["adapter"].return_value
     assert not adapter.create_media_buy.called, (

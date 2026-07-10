@@ -2434,7 +2434,7 @@ def _labeled_buy_from_response(ctx: dict, response: Any, label: str) -> Any:
     from tests.bdd.steps._outcome_helpers import require_success_response
 
     response = require_success_response(ctx, "query", response=response)
-    real_id = ctx.get("media_buy_labels", {}).get(label, label)
+    real_id = resolve_media_buy_id(ctx, label)
     matches = [b for b in response.media_buys if b.media_buy_id == real_id]
     assert matches, f"media buy {label!r} ({real_id}) not in response: {[b.media_buy_id for b in response.media_buys]}"
     return matches[0]
@@ -2618,7 +2618,7 @@ def when_seller_approves(ctx: dict, label: str) -> None:
     from datetime import UTC, datetime
 
     env = ctx["env"]
-    real_id = ctx.get("media_buy_labels", {}).get(label, label)
+    real_id = resolve_media_buy_id(ctx, label)
     approval_instant = datetime.now(UTC)
     media_buy = _media_buy_repo(ctx).update_status(
         real_id, "scheduled", approved_at=approval_instant, approved_by="seller-admin@example.com"

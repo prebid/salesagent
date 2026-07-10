@@ -24,9 +24,22 @@ gets a tz/boundary fix, the others don't), so each lives here once. See #1544.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from src.core.utils import utc_flight_end, utc_flight_start
+
+
+class _HasFlightWindow(Protocol):
+    """The four attributes the resolver reads — satisfied structurally by the
+    MediaBuy ORM row and any buy-shaped test data object. Members are typed
+    ``Any`` so both the legacy ``Column(Date)`` ORM declarations and plain
+    dataclasses satisfy the protocol; the win is attribute-presence checking
+    at the call sites, not value typing."""
+
+    start_time: Any
+    end_time: Any
+    start_date: Any
+    end_date: Any
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -34,7 +47,7 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def resolve_flight_window_utc(media_buy: Any) -> tuple[datetime | None, datetime | None]:
+def resolve_flight_window_utc(media_buy: _HasFlightWindow) -> tuple[datetime | None, datetime | None]:
     """Resolve ``(start, end)`` flight bounds as UTC-aware datetimes.
 
     Prefers ``start_time``/``end_time``; falls back to the date-only

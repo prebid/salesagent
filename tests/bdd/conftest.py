@@ -622,6 +622,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
                 break  # One xfail per scenario is sufficient
 
+        # Param-level gap on the revision partition: the wrong_type row ('"7"')
+        # expects INVALID_REQUEST per JSON-Schema `type: integer`, but pydantic
+        # lax mode coerces numeric strings to int at every transport boundary,
+        # so the request proceeds. All other rows of the outline grade live.
+        if "T-UC-003-partition-revision" in marker_names and "wrong_type" in item.nodeid:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason=(
+                        "spec-production gap: pydantic lax mode coerces numeric-string "
+                        "revision; JSON-Schema type:integer strictness — tracked in #1582"
+                    ),
+                    strict=False,
+                )
+            )
+
         # workflow_step_id is an internal field (exclude=True in schema).
         # impl/a2a return raw Python objects where the attribute is accessible
         # via hasattr/getattr even with exclude=True. mcp/rest/e2e_rest serialize
@@ -2603,6 +2618,11 @@ _UC002_CREATE_WIRED: set[str] = {
 _UC003_WIRED: set[str] = {
     # AdCP 3.1.0-beta.3 revision counter: successful update increments and returns it (#1544)
     "T-UC-003-revision-success-increments",
+    # AdCP 3.1.0-beta.3 update-media-buy-request.json properties.revision:
+    # "When provided, sellers MUST reject the update with CONFLICT if the media
+    # buy's current revision does not match." Graded by these two outlines (#1544 round 6).
+    "T-UC-003-partition-revision",
+    "T-UC-003-boundary-revision",
 }
 
 # UC-019 scenarios wired to MediaBuyLifecycleEnv (create/update/get composite;

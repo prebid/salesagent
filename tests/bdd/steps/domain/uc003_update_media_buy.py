@@ -684,8 +684,13 @@ def when_send_update_request(ctx: dict) -> None:
         req = UpdateMediaBuyRequest(**update_kwargs)
     except ValidationError as e:
         # Schema validation rejects the request before production code runs.
-        # Store as ctx["error"] so Then steps can assert on it.
-        ctx["error"] = e
+        # Translate through the PRODUCTION boundary translator (the same one
+        # _build_update_request and the REST handler use), so Then steps grade
+        # the INVALID_REQUEST + suggestion shape a buyer receives on the wire —
+        # not a raw pydantic exception the wire never carries.
+        from src.core.tools.media_buy_update import invalid_update_request_error
+
+        ctx["error"] = invalid_update_request_error(e)
         return
 
     if ctx.get("has_auth") is False:
@@ -2140,11 +2145,22 @@ def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
     advance_revision_to(ctx, media_buy, revision)
 
 
-@given(parsers.parse("the request revision is set to {revision:d}"))
-def given_request_revision(ctx: dict, revision: int) -> None:
-    """Set the optimistic-concurrency token on the update request."""
+@given(parsers.parse("the request revision is set to {value}"))
+def given_request_revision(ctx: dict, value: str) -> None:
+    """Set the optimistic-concurrency token on the update request.
+
+    Scenario Outline cells: ``<not provided>`` omits the field (LWW arm);
+    a quoted cell (wrong-type partition) stays a raw string so the boundary
+    sees the type violation; a bare number becomes the integer token.
+    """
+    stripped = value.strip()
+    if stripped == "<not provided>":
+        return
     kwargs = _ensure_update_defaults(ctx)
-    kwargs["revision"] = revision
+    if stripped.startswith('"') and stripped.endswith('"') and len(stripped) > 1:
+        kwargs["revision"] = stripped[1:-1]
+    else:
+        kwargs["revision"] = int(stripped)
 
 
 @then(parsers.parse("the response should contain a revision with value {revision:d}"))

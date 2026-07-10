@@ -89,6 +89,8 @@ class UpdateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    # AdCP 3.1.0-beta.3 optimistic-concurrency token; mismatch -> CONFLICT
+    revision: int | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -302,6 +304,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         currency=body.currency,
         start_time=body.start_time,
         end_time=body.end_time,
+        revision=body.revision,
         identity=identity,
     )
     return response.model_dump(mode="json")

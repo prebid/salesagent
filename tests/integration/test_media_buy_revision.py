@@ -173,3 +173,60 @@ class TestPersistedRevisionOnTheWire:
             # Pause advanced the revision by exactly one, and the read tool agrees.
             assert result.revision == pre_pause + 1
             assert _get_buy(env, created.media_buy_id).revision == result.revision
+
+
+@pytest.mark.requires_db
+class TestRevisionOptimisticConcurrency:
+    """req.revision gate: mismatch MUST reject with CONFLICT; match/absent proceed.
+
+    AdCP 3.1.0-beta.3 update-media-buy-request.json ``properties.revision``:
+    "When provided, sellers MUST reject the update with CONFLICT if the media
+    buy's current revision does not match." (Schema MUST; no conformance
+    storyboard step grades it — ungraded. #1544 round-6 review item 1.)
+    """
+
+    def test_stale_revision_rejected_with_conflict_and_nothing_written(self, integration_db):
+        from src.core.exceptions import AdCPConflictError
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            created = _create_buy(env, product)  # persisted revision 1
+
+            with pytest.raises(AdCPConflictError) as exc_info:
+                env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=created.media_buy_id, budget=9000.0, revision=5))
+
+            # The typed CONFLICT carries both sides of the mismatch so the buyer
+            # can re-read and retry (spec: "Obtain from get_media_buys or the
+            # most recent update response").
+            assert exc_info.value.error_code == "CONFLICT"
+            assert exc_info.value.details is not None
+            assert exc_info.value.details["expected_revision"] == 5
+            assert exc_info.value.details["current_revision"] == 1
+
+            # Rejected update wrote nothing: revision unchanged on a fresh read.
+            assert _get_buy(env, created.media_buy_id).revision == 1
+
+    def test_matching_revision_proceeds_and_increments(self, integration_db):
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            created = _create_buy(env, product)  # persisted revision 1
+
+            result = env.call_impl(
+                req=UpdateMediaBuyRequest(media_buy_id=created.media_buy_id, budget=9000.0, revision=1)
+            )
+            assert isinstance(result, UpdateMediaBuySuccess), f"matching revision must succeed, got {result!r}"
+            assert result.revision == 2
+
+    def test_absent_revision_keeps_last_write_wins(self, integration_db):
+        """Omitting the token preserves LWW semantics — the gate only fires when provided."""
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            created = _create_buy(env, product)
+
+            result = _update_budget(env, created.media_buy_id, 9000.0)
+            assert result.revision == 2

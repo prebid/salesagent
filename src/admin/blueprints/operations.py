@@ -457,7 +457,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         webhook_config = db_session.scalars(stmt_webhook).first()
 
                     if webhook_config and media_buy_data:
-                        media_buy_repo = MediaBuyRepository(db_session, tenant_id)
+                        # media_buy_repo from the top of the route — same session/tenant scope.
                         all_packages = media_buy_repo.get_packages(media_buy_id)
 
                         create_media_buy_approved_result = CreateMediaBuySuccessResponse(

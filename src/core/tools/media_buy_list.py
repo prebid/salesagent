@@ -44,11 +44,11 @@ class _MediaBuyData:
     is_paused: bool
     # Seller confirmation instant (media_buys.approved_at): the manual-approval
     # moment, else None. Drives confirmed_at — see _seller_confirmed_at / #1544.
-    approved_at: datetime | None = None
+    approved_at: datetime | None
     # Persisted monotonic optimistic-concurrency counter (media_buys.revision).
-    # Defaults to the create-time value for callers that build this dataclass
-    # outside the ORM fetch path (production always passes the row's value).
-    revision: int = 1
+    # No default: a constructor that forgot it would silently report revision=1
+    # for every buy — every caller passes the row's value explicitly.
+    revision: int
 
 
 @dataclass
@@ -289,12 +289,13 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                # AdCP 3.1.0-beta.3 GA item fields. confirmed_at is the persisted
-                # created_at but ONLY once the seller has committed to the buy
-                # (unconfirmed/pending_approval buys report None — the field
-                # means "seller committed", and get must agree with create);
-                # revision is the persisted monotonic counter bumped by
-                # MediaBuyRepository on every successful mutation.
+                # AdCP 3.1.0-beta.3 GA item fields. confirmed_at is the
+                # seller's confirmation instant — None until the seller has
+                # committed to the buy; see _seller_confirmed_at for the
+                # derivation (approval instant on the manual path, created_at
+                # on the synchronous path). revision is the persisted
+                # monotonic counter bumped by MediaBuyRepository on every
+                # successful mutation.
                 confirmed_at=_seller_confirmed_at(buy),
                 revision=buy.revision,
             )

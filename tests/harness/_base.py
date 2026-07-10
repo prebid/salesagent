@@ -940,25 +940,46 @@ class BaseTestEnv:
         error_cls = STATUS_TO_ERROR.get(status_code, Exception)
         return error_cls(message)
 
+    def set_review_requirement(self, tenant: Any, required: bool) -> None:
+        """Flip ``human_review_required`` on the real tenant row AND the env identity.
+
+        The single writer of the review mode: the manual/auto-approval Given
+        steps (via ``set_tenant_review_requirement``) and the e2e create
+        plumbing both realize the mode through the real surface — the tenant
+        row — plus the identity-side override, so in-process and live-server
+        behavior stay in lockstep. Commits the row and clears cached
+        identities so identities built later reflect the new mode.
+        """
+        tenant.human_review_required = required
+        self._commit_factory_data()
+        self._identity_cache.clear()
+        self._tenant_overrides["human_review_required"] = required
+
     def live_server_request(self, method: str, endpoint: str, *, body: dict[str, Any], identity: Any) -> dict[str, Any]:
-        """One wire round-trip to the live e2e server; raise the parsed error on >= 400.
+        """One wire round-trip to the live e2e server; raise the materialized error on >= 400.
 
         The transport-aware Given-plumbing seam for e2e mode
         (docs/test-redesign/e2e-rest-ledger-retirement.md): env setup methods
         that realize intent on the live server use this instead of the
         static-endpoint RestE2EDispatcher, because plumbing endpoints (create,
-        per-buy update) differ from the env's graded dispatch endpoint.
+        per-buy update) differ from the env's graded dispatch endpoint. Owns
+        the visibility precondition — pending factory rows are committed here,
+        so no caller can forget and hand the server a DB it can't see — and
+        shares the client construction and non-JSON-tolerant error
+        materialization with RestE2EDispatcher.
         """
-        import httpx
-
-        from tests.harness.dispatchers import e2e_wire_headers
+        from tests.harness.dispatchers import e2e_client, e2e_wire_headers, materialize_e2e_error
 
         if self.e2e_config is None:
             raise RuntimeError("live_server_request requires e2e mode (env.e2e_config is not set)")
-        with httpx.Client(base_url=self.e2e_config.base_url, timeout=30) as client:
+        commit = getattr(self, "_commit_factory_data", None)
+        if commit is not None:
+            commit()
+        with e2e_client(self) as client:
             response = getattr(client, method)(endpoint, json=body, headers=e2e_wire_headers(identity))
         if response.status_code >= 400:
-            raise self.parse_rest_error(response.status_code, response.json())
+            error, _error_body = materialize_e2e_error(self, response)
+            raise error
         return response.json()
 
     def get_rest_client(self) -> Any:

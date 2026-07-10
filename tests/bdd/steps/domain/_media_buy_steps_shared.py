@@ -59,7 +59,7 @@ def advance_revision_to(ctx: dict, media_buy: Any, revision: int) -> Any:
     current = media_buy.revision or 1
     assert current <= revision, f"cannot lower persisted revision from {current} to {revision}"
     while (media_buy.revision or 1) < revision:
-        media_buy = repo.bump_revision(media_buy.media_buy_id)
+        media_buy = repo.bump_revision_or_raise(media_buy.media_buy_id)
     ctx["env"]._commit_factory_data()
     assert media_buy.revision == revision, f"expected persisted revision {revision}, got {media_buy.revision}"
     return media_buy

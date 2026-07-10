@@ -4099,6 +4099,8 @@ class TestGetMediaBuysStatusComputation:
             updated_at=None,
             status="active",
             is_paused=False,
+            approved_at=None,
+            revision=1,
         )
         assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
@@ -4126,6 +4128,8 @@ class TestGetMediaBuysStatusComputation:
             updated_at=None,
             status="active",
             is_paused=False,
+            approved_at=None,
+            revision=1,
         )
         assert _compute_status(buy, date.today()) == MediaBuyStatus.active
 
@@ -4153,6 +4157,8 @@ class TestGetMediaBuysStatusComputation:
             updated_at=None,
             status="active",
             is_paused=False,
+            approved_at=None,
+            revision=1,
         )
         assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
 
@@ -4180,6 +4186,8 @@ class TestGetMediaBuysStatusComputation:
             updated_at=None,
             status="active",
             is_paused=False,
+            approved_at=None,
+            revision=1,
         )
         assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 

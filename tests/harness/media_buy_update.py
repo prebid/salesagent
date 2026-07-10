@@ -53,7 +53,6 @@ _WRAPPER_UNSUPPORTED_FIELDS = (
     "cancellation_reason",
     "invoice_recipient",
     "new_packages",
-    "revision",
     "today",
 )
 

@@ -97,29 +97,18 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return super().call_mcp(**kwargs)
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        # The flag must survive until the dispatcher calls parse_rest_response
-        # (which runs AFTER this method returns), so it is set per dispatch and
-        # only flipped by the next one — never reset in a finally.
-        self._active_update = _is_update_request(kwargs)
-        if self._active_update:
+        if _is_update_request(kwargs):
             return self._run_update_rest_request(**kwargs)
         return super()._run_rest_request(endpoint, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        # Also refresh the parse discriminator here: dispatcher-driven paths
-        # (RestE2EDispatcher) call build_rest_body/parse_rest_response without
-        # going through _run_rest_request, so the flag must not go stale.
-        self._active_update = _is_update_request(kwargs)
-        if self._active_update:
+        # Selecting the parser here (not in a per-layer boolean) keeps every
+        # build→parse path consistent — including dispatcher-driven ones that
+        # never route through _run_rest_request. See MediaBuyCreateEnv._rest_parser.
+        if _is_update_request(kwargs):
+            self._rest_parser = self._parse_update_rest_response
             return self._build_update_rest_body(**kwargs)
         return super().build_rest_body(**kwargs)
-
-    def parse_rest_response(self, data: dict[str, Any]) -> Any:
-        if self._active_update:
-            return self._parse_update_rest_response(data)
-        return super().parse_rest_response(data)
-
-    _active_update: bool = False
 
     # -- Concrete update transport implementations -----------------------------
 
@@ -148,14 +137,10 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         ``live_server_request`` with the update body/parse surface this env
         already owns.
         """
-        self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
-        req = kwargs.get("req")
-        media_buy_id = self._seeded_media_buy_id
-        if req is not None and getattr(req, "media_buy_id", None):
-            media_buy_id = req.media_buy_id
+        endpoint = self._update_endpoint(kwargs)
         body = self._build_update_rest_body(**kwargs)
-        data = self.live_server_request("put", f"/api/v1/media-buys/{media_buy_id}", body=body, identity=identity)
+        data = self.live_server_request("put", endpoint, body=body, identity=identity)
         return self._parse_update_rest_response(data)
 
     def _call_update_a2a(self, **kwargs: Any) -> Any:
@@ -217,6 +202,22 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         kwargs.pop("media_buy_id", None)
         return kwargs
 
+    def _update_endpoint(self, kwargs: dict[str, Any]) -> str:
+        """Per-buy REST update endpoint; falls back to the seeded buy when the request omits the id."""
+        req = kwargs.get("req")
+        media_buy_id = getattr(req, "media_buy_id", None) or self._seeded_media_buy_id
+        return f"/api/v1/media-buys/{media_buy_id}"
+
+    def rest_dispatch_target(self, kwargs: dict[str, Any]) -> tuple[str, str]:
+        """(method, endpoint) for the e2e REST dispatcher, resolved per request.
+
+        Updates PUT the per-buy route; everything else takes the env's static
+        endpoint (create here; the lifecycle subclass's query route for lists).
+        """
+        if _is_update_request(kwargs):
+            return "put", self._update_endpoint(kwargs)
+        return getattr(self, "REST_METHOD", "post"), self.REST_ENDPOINT
+
     def _run_update_rest_request(self, **kwargs: Any) -> Any:
         from tests.harness.transport import Transport
 
@@ -234,12 +235,11 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         if identity is not None and identity.auth_token:
             headers = self._wire_auth_headers(identity.auth_token, identity.tenant_id)
 
-        body = self._build_update_rest_body(**kwargs)
-        req = kwargs.get("req")
-        media_buy_id = self._seeded_media_buy_id
-        if req is not None and hasattr(req, "media_buy_id") and req.media_buy_id:
-            media_buy_id = req.media_buy_id
-        endpoint = f"/api/v1/media-buys/{media_buy_id}"
+        endpoint = self._update_endpoint(kwargs)
+        # Route through build_rest_body (not _build_update_rest_body directly):
+        # the dispatcher parses AFTER this method returns, so the parse
+        # selector must be stashed alongside the body build.
+        body = self.build_rest_body(**kwargs)
         return client.put(endpoint, json=body, headers=headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:

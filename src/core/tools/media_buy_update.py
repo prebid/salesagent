@@ -39,9 +39,11 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
+    AdCPConflictError,
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPGoneError,
+    AdCPInvalidRequestError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -252,6 +254,34 @@ def _update_media_buy_impl(
                         f"Create a new media buy to run a new campaign."
                     ),
                 )
+
+            # Optimistic-concurrency gate — AdCP 3.1.0-beta.3
+            # update-media-buy-request.json properties.revision: "When
+            # provided, sellers MUST reject the update with CONFLICT if the
+            # media buy's current revision does not match." (Schema-optional
+            # field; graded by T-UC-003-partition-revision /
+            # boundary-revision; no conformance storyboard step — ungraded.)
+            if req.revision is not None and _current_mb is not None:
+                _persisted_revision = _current_mb.revision or 1
+                if req.revision != _persisted_revision:
+                    raise AdCPConflictError(
+                        f"Revision mismatch for media buy '{req.media_buy_id}': request expected "
+                        f"revision {req.revision}, current revision is {_persisted_revision}",
+                        field="revision",
+                        suggestion=(
+                            "Re-read the media buy via get_media_buys and retry the update "
+                            f"with revision {_persisted_revision}."
+                        ),
+                        details={
+                            "expected_revision": req.revision,
+                            "current_revision": _persisted_revision,
+                            "suggestion": (
+                                "Re-read the media buy via get_media_buys and retry the update "
+                                f"with revision {_persisted_revision}."
+                            ),
+                        },
+                        context=req.context,
+                    )
 
             _requested = _requested_actions(req)
             _allowed = set(valid_actions_for_status(_current_status))
@@ -542,17 +572,14 @@ def _update_media_buy_impl(
 
                     # A successful pause/resume is a mutation — bump the
                     # persisted revision so the token advances (parity with the
-                    # package-level pause path, which already bumps). bump_revision
-                    # loads FOR UPDATE, bumps, and returns the buy; derive the
-                    # post-action status from that same row so valid_actions
-                    # reflects what the buyer can do next. Fall back to the
-                    # state-machine target only if the row is missing.
-                    _post_action_mb = uow.media_buys.bump_revision(req.media_buy_id)
-                    _post_action_status = (
-                        _post_action_mb.status
-                        if _post_action_mb and _post_action_mb.status
-                        else ("paused" if req.paused else "active")
-                    )
+                    # package-level pause path, which already bumps).
+                    # bump_revision_or_raise loads FOR UPDATE, bumps, and raises
+                    # on a vanished row (a missing buy here is an internal
+                    # invariant violation — _verify_principal already proved it
+                    # exists); derive the post-action status from that same row
+                    # so valid_actions reflects what the buyer can do next.
+                    _post_action_mb = uow.media_buys.bump_revision_or_raise(req.media_buy_id)
+                    _post_action_status = _post_action_mb.status
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
                         # Current persisted revision for this buy.
@@ -1314,6 +1341,25 @@ def _update_media_buy_impl(
         return final_response
 
 
+def invalid_update_request_error(e: ValidationError) -> AdCPInvalidRequestError:
+    """Translate a schema-level update-request rejection to the wire error.
+
+    Single definition of the boundary behavior for a request that violates the
+    AdCP 3.1.0-beta.3 update-media-buy-request schema (e.g. ``revision``
+    below its ``minimum: 1``): INVALID_REQUEST, matching the REST boundary's
+    RequestValidationError handler (src/app.py) so every transport emits one
+    code for the same violation. The suggestion is duplicated into ``details``
+    because in-process callers see the typed error directly, while wire
+    callers see it via the envelope.
+    """
+    suggestion = "Correct the request to satisfy the update-media-buy-request schema and retry."
+    return AdCPInvalidRequestError(
+        format_validation_error(e, context="update_media_buy request"),
+        suggestion=suggestion,
+        details={"suggestion": suggestion},
+    )
+
+
 def _build_update_request(
     media_buy_id: str | None = None,
     paused: bool | None = None,
@@ -1331,6 +1377,7 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: int | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1386,11 +1433,13 @@ def _build_update_request(
         request_params["ext"] = ext
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
+    if revision is not None:
+        request_params["revision"] = revision
 
     try:
         req = UpdateMediaBuyRequest(**request_params)
     except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="update_media_buy request")) from e
+        raise invalid_update_request_error(e) from e
 
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier)
     if not req.has_updatable_fields():
@@ -1422,6 +1471,10 @@ async def update_media_buy(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: Annotated[
+        int | None,
+        Field(description="Expected current revision for optimistic concurrency (CONFLICT on mismatch)"),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1472,6 +1525,7 @@ async def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1499,6 +1553,7 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
+    revision: int | None = None,  # AdCP optimistic-concurrency token (CONFLICT on mismatch)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1548,6 +1603,7 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

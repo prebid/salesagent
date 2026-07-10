@@ -2928,7 +2928,7 @@ class TestUC003StateMachine:
             # A successful pause now reads the post-action buy via bump_revision
             # (bump + return in one FOR UPDATE round trip); the derived status
             # comes from that returned row.
-            env.mock["uow"].return_value.media_buys.bump_revision.return_value = post_action_mb
+            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.return_value = post_action_mb
 
             env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
                 media_buy_id="mb_post_action",
@@ -2970,7 +2970,7 @@ class TestUC003StateMachine:
             bumped_mb = _make_mock_media_buy("mb_pause_rev", status="paused")
             bumped_mb.revision = active_mb.revision + 1
             env.mock["uow"].return_value.media_buys.get_by_id.side_effect = [active_mb]
-            env.mock["uow"].return_value.media_buys.bump_revision.return_value = bumped_mb
+            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.return_value = bumped_mb
 
             env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
                 media_buy_id="mb_pause_rev",
@@ -2981,5 +2981,5 @@ class TestUC003StateMachine:
             result = _update_media_buy_impl(req=req, identity=env.identity)
 
             assert isinstance(result, UpdateMediaBuySuccess)
-            env.mock["uow"].return_value.media_buys.bump_revision.assert_called_once_with("mb_pause_rev")
+            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.assert_called_once_with("mb_pause_rev")
             assert result.revision == bumped_mb.revision

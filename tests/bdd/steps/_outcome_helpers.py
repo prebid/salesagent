@@ -10,6 +10,8 @@ the repository owns the query, the helper owns the assertion.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
@@ -71,7 +73,7 @@ def require_success_response(ctx: dict, noun: str = "success", *, response: obje
     return resp
 
 
-def parse_iso_8601(timestamp: object) -> object:
+def parse_iso_8601(timestamp: str | datetime) -> datetime:
     """Parse an ISO 8601 string (Z suffix tolerated), preserving its offset.
 
     Returns the value unchanged if it is already a ``datetime``. Single
@@ -80,8 +82,6 @@ def parse_iso_8601(timestamp: object) -> object:
     need UTC normalization or a timezone-presence assertion layer that on
     top of the parsed value.
     """
-    from datetime import datetime
-
     return (
         timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
     )
@@ -254,15 +254,10 @@ def _assert_audit_adapter_mock(ctx: dict) -> None:
 
 
 def set_tenant_review_requirement(ctx: dict, required: bool) -> None:
-    """Flip ``human_review_required`` on the real tenant row AND the env identity.
+    """Flip the tenant review mode via the env's single writer.
 
     Shared by the auto-approval (UC-002) and manual-approval (UC-019) Given
-    steps: commits the row, clears the cached identities, and pins the tenant
-    override so identities built later reflect the new review mode.
+    steps; the mutation itself lives on the env (``set_review_requirement``)
+    so the e2e create plumbing realizes the same mode through the same seam.
     """
-    env = ctx["env"]
-    tenant = ctx["tenant"]
-    tenant.human_review_required = required
-    env._commit_factory_data()
-    env._identity_cache.clear()
-    env._tenant_overrides["human_review_required"] = required
+    ctx["env"].set_review_requirement(ctx["tenant"], required)

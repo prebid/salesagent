@@ -168,43 +168,51 @@ def _detect(tree: ast.AST) -> set[tuple[str, str]]:
                 ref = _nearest_ref_name(target.value)
                 if ref in write_bindings:
                     hits.add((ref, target.attr))
-        # setattr(<binding>, "<attr>", ...)
+        # setattr(<binding>, "<attr>", ...) — the target is resolved through
+        # _nearest_ref_name so attribute receivers (setattr(self.media_buy,
+        # "status", ...)) are caught like their direct-assignment twins.
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "setattr"
             and len(node.args) >= 2
-            and isinstance(node.args[0], ast.Name)
-            and node.args[0].id in setattr_bindings
             and isinstance(node.args[1], ast.Constant)
             and node.args[1].value in GUARDED_ATTRS
         ):
-            hits.add((node.args[0].id, node.args[1].value))
+            ref = _nearest_ref_name(node.args[0])
+            if ref in setattr_bindings:
+                hits.add((ref, node.args[1].value))
     return hits
+
+
+def _iter_guarded_src_trees():
+    """Yield ``(rel_path, tree)`` for the src files subject to the seam guards.
+
+    One definition of the guarded surface — skips the repository module (the
+    allowed seam) and test code under any ``tests/`` directory (fixtures
+    legitimately construct rows directly). Consumed by both ``_find_*``
+    walkers below.
+    """
+    repo = repo_root()
+    for py_file in (repo / "src").rglob("*.py"):
+        rel_path = str(py_file.relative_to(repo))
+        if rel_path == REPOSITORY_FILE or "/tests/" in rel_path:
+            continue
+        tree = safe_parse(py_file)
+        if tree is None:
+            continue
+        yield rel_path, tree
 
 
 def _find_direct_media_buy_status_writes() -> set[tuple[str, str, str]]:
     """Find MediaBuy ``.status`` / ``.approved_at`` / ``.approved_by`` writes in src/.
 
-    Skips the repository module (the allowed seam) and test code under any
-    ``tests/`` directory (fixtures legitimately construct rows directly).
     Returns a set of (file_path, binding_name, attribute).
     """
-    repo = repo_root()
     violations: set[tuple[str, str, str]] = set()
-
-    for py_file in (repo / "src").rglob("*.py"):
-        rel_path = str(py_file.relative_to(repo))
-        if rel_path == REPOSITORY_FILE or "/tests/" in rel_path:
-            continue
-
-        tree = safe_parse(py_file)
-        if tree is None:
-            continue
-
+    for rel_path, tree in _iter_guarded_src_trees():
         for binding, attr in _detect(tree):
             violations.add((rel_path, binding, attr))
-
     return violations
 
 
@@ -282,15 +290,8 @@ def _detect_discarded_mutations(tree: ast.AST) -> set[tuple[str, str]]:
 
 def _find_discarded_media_buy_mutations() -> set[tuple[str, str, str]]:
     """Discarded None-tolerant MediaBuy mutator calls in src/ (outside the repository)."""
-    repo = repo_root()
     violations: set[tuple[str, str, str]] = set()
-    for py_file in (repo / "src").rglob("*.py"):
-        rel_path = str(py_file.relative_to(repo))
-        if rel_path == REPOSITORY_FILE or "/tests/" in rel_path:
-            continue
-        tree = safe_parse(py_file)
-        if tree is None:
-            continue
+    for rel_path, tree in _iter_guarded_src_trees():
         for receiver, method in _detect_discarded_mutations(tree):
             violations.add((rel_path, receiver, method))
     return violations
