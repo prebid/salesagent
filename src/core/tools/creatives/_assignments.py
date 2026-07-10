@@ -5,20 +5,11 @@ from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPCreativeRejectedError, AdCPPackageNotFoundError, AdCPValidationError
+from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
-
-
-def _log_safe(value: object) -> str:
-    """Neutralize CR/LF in request-provided values before logging.
-
-    Buyer-supplied ids (creative_id, package_id) flow into log lines; a
-    newline embedded in one would forge log entries (CodeQL py/log-injection).
-    Response payloads are NOT sanitized — buyers correlate on exact ids.
-    """
-    return str(value).replace("\r", "").replace("\n", "")
 
 
 def _process_assignments(
@@ -88,7 +79,7 @@ def _process_assignments(
                             f"Creative {creative_id} was not synced; skipping assignment to package {package_id}"
                         )
                         assignment_errors_by_creative[creative_id][package_id] = error_msg
-                        logger.warning(_log_safe(error_msg))
+                        logger.warning(log_safe(error_msg))
                     continue
 
                 # A creative_id absent from the creative library never existed —
@@ -112,7 +103,7 @@ def _process_assignments(
                                 "request's creatives array) before assigning it to a package."
                             ),
                         )
-                    logger.warning(_log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
+                    logger.warning(log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
                     continue
 
                 for package_id in package_ids:
@@ -138,7 +129,7 @@ def _process_assignments(
                             # via the wire-safe translation and lose buyer-facing specificity.
                             raise AdCPPackageNotFoundError(error_msg)
                         else:
-                            logger.warning(_log_safe(f"Package not found during assignment: {package_id}, skipping"))
+                            logger.warning(log_safe(f"Package not found during assignment: {package_id}, skipping"))
                             continue
 
                     # Validate creative format against package product formats.
@@ -220,7 +211,7 @@ def _process_assignments(
                                     )
                                 else:
                                     logger.warning(
-                                        _log_safe(f"Creative format mismatch during assignment, skipping: {error_msg}")
+                                        log_safe(f"Creative format mismatch during assignment, skipping: {error_msg}")
                                     )
                                     continue
 
@@ -239,7 +230,7 @@ def _process_assignments(
                         if existing_assignment.weight != 100:
                             existing_assignment.weight = 100
                             logger.info(
-                                _log_safe(
+                                log_safe(
                                     f"Updated existing assignment: creative={creative_id}, "
                                     f"package={actual_package_id}, media_buy={media_buy_id}"
                                 )
@@ -254,7 +245,7 @@ def _process_assignments(
                             principal_id=principal_id,
                         )
                         logger.info(
-                            _log_safe(
+                            log_safe(
                                 f"Created new assignment: creative={creative_id}, "
                                 f"package={actual_package_id}, media_buy={media_buy_id}"
                             )
