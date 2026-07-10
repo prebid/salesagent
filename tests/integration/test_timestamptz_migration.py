@@ -115,7 +115,7 @@ class TestTimestamptzMigration:
 
         # The database is already at MIGRATION_REV, with test data, from the previous test
         # in this module (they share the module-scoped migration_db). The integration tox
-        # env runs xdist with --dist loadscope so this module stays on one worker in order.
+        # env runs xdist with --dist loadfile so this whole file stays on one worker in order.
         col_type = _get_column_type(engine, "tenants", "created_at")
         assert col_type == "timestamp with time zone", f"Expected TIMESTAMPTZ before downgrade, got: {col_type}"
 
