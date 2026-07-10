@@ -72,7 +72,7 @@ async def _check_provider_health(endpoint: str) -> str:
             resp = await client.get(health_url)
         return "healthy" if resp.status_code == 200 else "unhealthy"
     except Exception:
-        logger.exception("Health probe failed for %s", endpoint)
+        logger.exception("[TMP health] Health probe failed for %s", endpoint)
         return "error"
 
 
@@ -129,7 +129,7 @@ class TMPHealthScheduler(IntervalScheduler):
                     uow.tmp_providers.update_health_status(provider_id, status)
 
         logger.debug(
-            "TMP health check complete: %d provider(s) checked across %d tenant(s)",
+            "[TMP health] Check complete: %d provider(s) checked across %d tenant(s)",
             len(provider_info),
             len(by_tenant),
         )

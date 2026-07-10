@@ -50,6 +50,24 @@ tmp_providers_bp = Blueprint("tmp_providers", __name__)
 
 
 # ---------------------------------------------------------------------------
+# Guard helpers (DRY: used by multiple route handlers)
+# ---------------------------------------------------------------------------
+
+
+def _tenant_not_found_redirect():
+    """Flash an error and redirect to the index when a tenant cannot be found.
+
+    Returns the redirect response so callers can ``return`` it directly::
+
+        tenant = uow.tenant_config.get_tenant()
+        if not tenant:
+            return _tenant_not_found_redirect()
+    """
+    flash("Tenant not found", "error")
+    return redirect(url_for("core.index"))
+
+
+# ---------------------------------------------------------------------------
 # Shared form validation helper (DRY: used by both add and edit routes)
 # ---------------------------------------------------------------------------
 
@@ -153,8 +171,7 @@ def list_tmp_providers(tenant_id):
             assert uow.tmp_providers is not None
             tenant = uow.tenant_config.get_tenant()
             if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+                return _tenant_not_found_redirect()
 
             providers = uow.tmp_providers.list_all()
 
@@ -191,8 +208,7 @@ def add_tmp_provider(tenant_id):
             assert uow.tenant_config is not None
             tenant = uow.tenant_config.get_tenant()
             if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+                return _tenant_not_found_redirect()
 
             return render_template(
                 "tmp_provider_form.html",
@@ -210,8 +226,7 @@ def add_tmp_provider(tenant_id):
             assert uow.tmp_providers is not None
             tenant = uow.tenant_config.get_tenant()
             if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+                return _tenant_not_found_redirect()
 
             data, error = _validate_provider_form(request.form)
             if error:
@@ -242,8 +257,7 @@ def edit_tmp_provider(tenant_id, provider_id):
             assert uow.tmp_providers is not None
             tenant = uow.tenant_config.get_tenant()
             if not tenant:
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
+                return _tenant_not_found_redirect()
 
             provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:

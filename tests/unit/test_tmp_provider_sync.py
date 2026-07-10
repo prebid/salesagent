@@ -344,10 +344,16 @@ class TestSyncPackagesFanOut:
 
         sync_packages_for_media_buy("tenant-1", "mb-1")
 
+        # Assert call count and that each provider endpoint + auth were used.
+        # We deliberately do NOT assert the payload contents here — that would
+        # re-invoke _build_package_payload on the same inputs and thread any
+        # wiring bug through both sides of the assertion, making it invisible.
+        # Payload correctness is covered by TestBuildPackagePayload unit tests.
         assert mock_post.call_count == 2
-        expected_payload = [_build_package_payload("mb-1", pkg, "http://agent/mcp")]
-        mock_post.assert_any_call("http://provider-a:3000", expected_payload, "")
-        mock_post.assert_any_call("http://provider-b:3000", expected_payload, "")
+        called_endpoints = {call.args[0] for call in mock_post.call_args_list}
+        called_auths = {call.args[2] for call in mock_post.call_args_list}
+        assert called_endpoints == {"http://provider-a:3000", "http://provider-b:3000"}
+        assert called_auths == {""}  # both providers have no auth_credentials
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")

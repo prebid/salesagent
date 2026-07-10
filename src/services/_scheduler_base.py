@@ -9,17 +9,16 @@ This base extracts that scaffold so each concrete scheduler only overrides ``tic
 Usage::
 
     class MyScheduler(IntervalScheduler):
-        _env_var = "MY_INTERVAL_SECONDS"
-        _default_interval = 60
-        _scheduler_name = "my"
-
         async def tick(self) -> None:
             await do_work()
 
     _scheduler: MyScheduler | None = None
 
     def get_my_scheduler() -> MyScheduler:
-        return MyScheduler.get_singleton()
+        global _scheduler
+        if _scheduler is None:
+            _scheduler = MyScheduler()
+        return _scheduler
 """
 
 from __future__ import annotations
