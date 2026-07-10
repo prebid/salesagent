@@ -815,8 +815,10 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (model attribute assignment).
+    # adcp.types.CreativeAsset hides creative_id from mypy's static analysis
+    # (RootModel proxy via __getattr__/__setattr__ — invisible to the type checker).
     if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id
+        creative.creative_id = db_creative.creative_id  # type: ignore[attr-defined]
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":
