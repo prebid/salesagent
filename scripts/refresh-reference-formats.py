@@ -42,7 +42,22 @@ sys.path.insert(0, str(REPO_ROOT))
 # upgrade_legacy_format_id) keep resolving. The raw source is recorded in metadata.
 CANONICAL_AGENT_URL = "https://creative.adcontextprotocol.org"
 PUBLIC_CREATIVE_AGENT_HOST = "creative.adcontextprotocol.org"
-ADCP_PIN = "ca70dd1e2a6c"  # single-sourced in scripts/creative-agent-stack.sh
+
+
+def _read_adcp_pin() -> str:
+    """Read ADCP_PIN from scripts/creative-agent-stack.sh — the single source of the pin.
+
+    Parsing (rather than duplicating the value) means a pin bump in the stack
+    script can never leave a stale pin stamped into the fixture metadata.
+    """
+    script = REPO_ROOT / "scripts" / "creative-agent-stack.sh"
+    for line in script.read_text(encoding="utf-8").splitlines():
+        if line.startswith("ADCP_PIN="):
+            return line.split("=", 1)[1].strip().strip('"')
+    sys.exit(f"ADCP_PIN not found in {script}")
+
+
+ADCP_PIN = _read_adcp_pin()
 
 
 def _check_url_guard(url: str) -> None:

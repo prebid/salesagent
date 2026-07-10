@@ -17,11 +17,21 @@
 #   scripts/creative-agent-stack.sh publish # build+push pin-keyed image to ghcr.io (CI publish workflow)
 set -euo pipefail
 
-# Pin to a known-good commit — upstream HEAD has broken migrations
-# (community_points FK violation). Bump deliberately, never to HEAD.
-ADCP_PIN="ca70dd1e2a6c"
+# Pin to a known-good commit — bump deliberately, never to HEAD.
+# 467fd93d7711 = the v3.1.1 release tag (2026-06-30): the reference agent
+# matches the spec version this repo targets (SDK 6.6 / spec 3.1.1). The
+# previous pin ca70dd1e2a6c (2026-03-31) predated 3.1.1 and was chosen because
+# upstream HEAD then had broken migrations (community_points FK violation);
+# that fix (072b46e83) is an ancestor of v3.1.1, and the sealed-stack e2e +
+# bdd-in-network suites were re-vetted green against this pin before landing.
+ADCP_PIN="467fd93d7711"
 
-IMAGE="adcp-creative-agent"
+# The canonical local tag is pin-keyed so a cached image from a previous pin
+# can never satisfy _ensure_image (a bare `adcp-creative-agent` cache would
+# silently validate the old agent after a bump). The un-keyed alias is what
+# docker-compose.e2e.yml and the standalone `up` path run.
+IMAGE_ALIAS="adcp-creative-agent"
+IMAGE="${IMAGE_ALIAS}:${ADCP_PIN}"
 NET="creative-net"
 PG="adcp-postgres"
 AGENT="creative-agent"
@@ -97,19 +107,20 @@ _push_to_ghcr() {
 }
 
 _ensure_image() {
-    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ] && _ghcr_image_exists; then
-        if _retry 3 _pull_from_ghcr; then
-            return 0
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ] && _ghcr_image_exists && _retry 3 _pull_from_ghcr; then
+            :
+        else
+            if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ]; then
+                echo "[creative-agent] WARN: ghcr image unavailable; building locally" >&2
+            fi
+            _ensure_tarball
+            _retry 3 _build_image_local
         fi
-        echo "[creative-agent] WARN: ghcr pull failed; building locally" >&2
     fi
-
-    _ensure_tarball
-    _retry 3 _build_image_local
+    # Repoint the un-keyed alias (consumed by docker-compose.e2e.yml and
+    # `up`) at the current pin, clobbering any stale-pin leftover.
+    docker tag "$IMAGE" "$IMAGE_ALIAS"
 }
 
 cmd_publish() {
@@ -159,8 +170,11 @@ cmd_up() {
 
     if ! docker ps --format '{{.Names}}' | grep -qx "$AGENT"; then
         docker rm -f "$AGENT" >/dev/null 2>&1 || true
+        # NODE_ENV must NOT be production: since adcp v3.1.1 the agent refuses
+        # to start with the DEV_USER_* auth bypass (which the harness needs) in
+        # a production-shaped env. Mirrored in docker-compose.e2e.yml.
         docker run -d --network "$NET" --name "$AGENT" -p 9999:8080 \
-            -e NODE_ENV=production -e PORT=8080 \
+            -e NODE_ENV=development -e PORT=8080 \
             -e DATABASE_URL=postgresql://adcp:localdev@${PG}:5432/adcp_registry \
             -e RUN_MIGRATIONS=true -e ALLOW_INSECURE_COOKIES=true \
             -e DEV_USER_EMAIL=ci@test.com -e DEV_USER_ID=ci-user \
