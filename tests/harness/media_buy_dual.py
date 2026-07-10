@@ -106,7 +106,11 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return super()._run_rest_request(endpoint, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        if _is_update_request(kwargs):
+        # Also refresh the parse discriminator here: dispatcher-driven paths
+        # (RestE2EDispatcher) call build_rest_body/parse_rest_response without
+        # going through _run_rest_request, so the flag must not go stale.
+        self._active_update = _is_update_request(kwargs)
+        if self._active_update:
             return self._build_update_rest_body(**kwargs)
         return super().build_rest_body(**kwargs)
 
@@ -120,6 +124,9 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     # -- Concrete update transport implementations -----------------------------
 
     def _call_update_impl(self, **kwargs: Any) -> Any:
+        if self.e2e_config is not None:
+            return self._call_update_via_live_server(kwargs)
+
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         self._commit_factory_data()
@@ -130,6 +137,26 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
             req = UMR(**kwargs)
         return _update_media_buy_impl(req=req, identity=identity)
+
+    def _call_update_via_live_server(self, kwargs: dict[str, Any]) -> Any:
+        """Realize an update on the LIVE SERVER (transport-aware Given plumbing).
+
+        The in-process impl reads/writes the suite DB, which the live server
+        never sees (docs/test-redesign/e2e-rest-ledger-retirement.md). The
+        update endpoint is per-buy (PUT /api/v1/media-buys/{id}), which the
+        static-endpoint RestE2EDispatcher cannot express — drive the shared
+        ``live_server_request`` with the update body/parse surface this env
+        already owns.
+        """
+        self._commit_factory_data()
+        identity = kwargs.pop("identity", self.identity)
+        req = kwargs.get("req")
+        media_buy_id = self._seeded_media_buy_id
+        if req is not None and getattr(req, "media_buy_id", None):
+            media_buy_id = req.media_buy_id
+        body = self._build_update_rest_body(**kwargs)
+        data = self.live_server_request("put", f"/api/v1/media-buys/{media_buy_id}", body=body, identity=identity)
+        return self._parse_update_rest_response(data)
 
     def _call_update_a2a(self, **kwargs: Any) -> Any:
         from src.core.tools.media_buy_update import update_media_buy_raw

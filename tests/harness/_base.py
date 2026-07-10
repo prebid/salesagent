@@ -940,6 +940,27 @@ class BaseTestEnv:
         error_cls = STATUS_TO_ERROR.get(status_code, Exception)
         return error_cls(message)
 
+    def live_server_request(self, method: str, endpoint: str, *, body: dict[str, Any], identity: Any) -> dict[str, Any]:
+        """One wire round-trip to the live e2e server; raise the parsed error on >= 400.
+
+        The transport-aware Given-plumbing seam for e2e mode
+        (docs/test-redesign/e2e-rest-ledger-retirement.md): env setup methods
+        that realize intent on the live server use this instead of the
+        static-endpoint RestE2EDispatcher, because plumbing endpoints (create,
+        per-buy update) differ from the env's graded dispatch endpoint.
+        """
+        import httpx
+
+        from tests.harness.dispatchers import e2e_wire_headers
+
+        if self.e2e_config is None:
+            raise RuntimeError("live_server_request requires e2e mode (env.e2e_config is not set)")
+        with httpx.Client(base_url=self.e2e_config.base_url, timeout=30) as client:
+            response = getattr(client, method)(endpoint, json=body, headers=e2e_wire_headers(identity))
+        if response.status_code >= 400:
+            raise self.parse_rest_error(response.status_code, response.json())
+        return response.json()
+
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with auth dependency overridden.
 

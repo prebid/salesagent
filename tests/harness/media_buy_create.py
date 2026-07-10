@@ -302,7 +302,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
-        """Call _create_media_buy_impl with real DB."""
+        """Call _create_media_buy_impl with real DB.
+
+        In e2e mode the create is realized on the LIVE SERVER instead: the
+        in-process impl reads/writes the suite DB, which the server never
+        sees, so Given plumbing built on call_impl would seed buys the
+        graded HTTP reads cannot find. This is the transport-aware setup
+        branch the ledger-retirement design prescribes
+        (docs/test-redesign/e2e-rest-ledger-retirement.md).
+        """
+        if self.e2e_config is not None:
+            return self._call_impl_via_live_server(kwargs)
+
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         self._commit_factory_data()
@@ -314,6 +325,36 @@ class MediaBuyCreateEnv(IntegrationEnv):
             req = CreateMediaBuyRequest(**_ensure_idempotency_key(kwargs))
 
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
+
+    def _call_impl_via_live_server(self, kwargs: dict[str, Any]) -> CreateMediaBuyResult:
+        """Realize a create on the live e2e server; return the impl-shaped result.
+
+        Drives the same REST body/parse surface the rest transport uses
+        (``build_rest_body`` / ``parse_rest_response``), so the returned
+        ``CreateMediaBuyResult`` is interchangeable with the in-process one.
+        Raises the reconstructed error like the in-process impl would. The
+        create endpoint is named explicitly — composite envs (dual/lifecycle)
+        point their graded REST_ENDPOINT elsewhere.
+        """
+        # The in-process arm neutralizes the manual-approval gate through the
+        # MOCKED adapter (manual_approval_operations=[]); the live server runs
+        # the real adapter, so realize the same auto-approve default on the
+        # real surface — the tenant row — unless the scenario explicitly
+        # pinned a review mode (set_tenant_review_requirement writes both the
+        # row and this override).
+        if "human_review_required" not in self._tenant_overrides:
+            from src.core.database.models import Tenant
+
+            tenant_row = self._session.get(Tenant, self._tenant_id)
+            if tenant_row is not None and tenant_row.human_review_required:
+                tenant_row.human_review_required = False
+
+        self._commit_factory_data()
+        identity = kwargs.pop("identity", self.identity)
+        data = self.live_server_request(
+            "post", MediaBuyCreateEnv.REST_ENDPOINT, body=self.build_rest_body(**kwargs), identity=identity
+        )
+        return self.parse_rest_response(data)
 
     def default_create_kwargs(self, product: Any, *, brand_domain: str = "harness-default.example") -> dict[str, Any]:
         """The canonical default create request: 30-day flight starting tomorrow, one CPM package at 5000.0.

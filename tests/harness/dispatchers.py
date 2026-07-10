@@ -209,6 +209,30 @@ class McpDispatcher:
         )
 
 
+def e2e_wire_headers(identity: Any) -> dict[str, str]:
+    """HTTP headers for a request to the live e2e server on behalf of *identity*.
+
+    identity=None means "send without auth headers" (no-auth test) — let the
+    server's auth middleware return 401/structured error. When identity exists
+    but auth_token is None (principal_id=None boundary tests), omit the header
+    so the server rejects gracefully instead of httpx raising on a None header.
+    Shared by RestE2EDispatcher and the harness envs' e2e Given-plumbing calls.
+    """
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if identity is not None:
+        if identity.auth_token is not None:
+            headers["x-adcp-auth"] = identity.auth_token
+        tenant = getattr(identity, "tenant", None)
+        if tenant is not None:
+            subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
+            if subdomain is not None:
+                headers["x-adcp-tenant"] = subdomain
+        tc = getattr(identity, "testing_context", None)
+        if tc is not None and getattr(tc, "dry_run", False):
+            headers["x-dry-run"] = "true"
+    return headers
+
+
 class RestE2EDispatcher:
     """Dispatch via real HTTP through nginx to the Docker stack.
 
@@ -230,23 +254,14 @@ class RestE2EDispatcher:
 
         identity = kwargs.pop("identity", None)
         base_url = env.e2e_config.base_url
+        headers = e2e_wire_headers(identity)
 
-        # identity=None means "send without auth headers" (no-auth test) — let the
-        # server's auth middleware return 401/structured error. When identity exists
-        # but auth_token is None (principal_id=None boundary tests), omit the header
-        # so the server rejects gracefully instead of httpx raising on a None header.
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if identity is not None:
-            if identity.auth_token is not None:
-                headers["x-adcp-auth"] = identity.auth_token
-            tenant = getattr(identity, "tenant", None)
-            if tenant is not None:
-                subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
-                if subdomain is not None:
-                    headers["x-adcp-tenant"] = subdomain
-            tc = getattr(identity, "testing_context", None)
-            if tc is not None and getattr(tc, "dry_run", False):
-                headers["x-dry-run"] = "true"
+        # Factory rows seeded by Given steps must be visible to the live server
+        # before the request lands — the in-process dispatch paths commit inside
+        # their call_* methods; this is the wire counterpart.
+        commit = getattr(env, "_commit_factory_data", None)
+        if commit is not None:
+            commit()
 
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]

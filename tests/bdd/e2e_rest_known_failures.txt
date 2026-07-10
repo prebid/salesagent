@@ -343,29 +343,3 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_parti
 tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-dooh-valid]
 # +++ test_uc011_manage_accounts (1) +++
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
-
-# +++ media-buy revision/confirmed_at wiring — GitHub PR #1544 round-6 full-run audit (16) +++
-# Mechanism: in-process Given plumbing (create_and_load_real_buy / call_impl /
-# MediaBuyRepository seeds on the harness session) writes to the DB the local
-# process sees, while the live server reads its own DB (E2E_POSTGRES_URL /adcp
-# vs suite DATABASE_URL /adcp_test in-network) — the seeded principal/buy is
-# invisible to the server ("Principal ... not found"). Same in-process-only
-# setup leak as the blocks above; retires when the transport-aware Given
-# surfaces land (docs/test-redesign/e2e-rest-ledger-retirement.md).
-# These scenarios remain fully graded on a2a/mcp/rest.
-tests/bdd/test_uc002_create_media_buy.py::test_inv5_holds__dryrun_mode_never_invokes_the_adapter_and_persists_nothing[e2e_rest]
-tests/bdd/test_uc003_update_media_buy.py::test_successful_update_increments_and_returns_the_new_revision_inv4[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_revision_boundary__boundary_point[e2e_rest-revision = 1 (minimum inclusive)-persisted revision 1-the media buy "mb-001" revision should be 1]
-tests/bdd/test_uc019_query_media_buys.py::test_inv4_holds__two_reads_with_no_intervening_write_return_the_same_revision[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_inv5_holds__intervening_successful_write_monotonically_increases_revision[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_status_filter_boundary__boundary_point[e2e_rest-status_filter omitted, media_buy_ids omitted-no status_filter-only media buys with status "active" are returned]
-tests/bdd/test_uc019_query_media_buys.py::test_status_filter_boundary__boundary_point[e2e_rest-status_filter omitted, media_buy_ids non-empty-no status_filter and media_buy_ids ["mb-active","mb-completed"]-every matching buy returned regardless of status]
-tests/bdd/test_uc019_query_media_buys.py::test_status_filter_boundary__boundary_point[e2e_rest-single valid enum value-status_filter "active"-only media buys with status "active" are returned]
-tests/bdd/test_uc019_query_media_buys.py::test_default_status_filter_behavior__partition[e2e_rest-null_default_no_ids-no status_filter and no media_buy_ids-only media buys with status "active" are returned]
-tests/bdd/test_uc019_query_media_buys.py::test_default_status_filter_behavior__partition[e2e_rest-multiple_statuses-status_filter ["active", "pending_start"]-media buys with either status are returned]
-tests/bdd/test_uc019_query_media_buys.py::test_inv1_holds__preflight_media_buy_has_pending_start_status[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_inv11_holds__unknown_persisted_status_defaults_to_active_then_flightrefines[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_manual_approval_lifecycle__approval_advances_revision_and_stamps_confirmed_at_at_the_approval_instant[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_confirmed_at_present__every_returned_media_buy_carries_an_iso_8601_timestamp_set_at_creation[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_confirmed_at_stable_across_subsequent_reads__timestamp_does_not_drift_with_later_writes[e2e_rest]
-tests/bdd/test_uc019_query_media_buys.py::test_confirmed_at__partition[e2e_rest-confirmed_at_includes_timezone-confirmed_at "2026-05-01T12:00:00+00:00"-the media buy "mb-001" confirmed_at should be an ISO 8601 string with a timezone designator]
