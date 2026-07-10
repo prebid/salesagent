@@ -133,7 +133,7 @@ class GeoBreakdown(LibraryByGeoItem):
     §Geo Breakdown.
     """
 
-    pass  # All fields inherited from library ByGeoItem
+    pass  # All fields inherited from library GeoDeliveryMetrics
 
 
 class DeviceTypeBreakdown(LibraryByDeviceTypeItem):
