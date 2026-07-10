@@ -815,9 +815,7 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (model attribute assignment).
-    # adcp.types.CreativeAsset hides creative_id from mypy's static analysis
-    # (the alias resolves at runtime but not statically) — the ignore is load-bearing.
-    if not creative.creative_id:  # type: ignore[attr-defined]
+    if not creative.creative_id:
         creative.creative_id = db_creative.creative_id
 
     # Now apply approval mode logic
