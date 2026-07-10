@@ -16,9 +16,9 @@ from pytest_bdd import given, then, when
 from tests.bdd.steps.domain.uc005_format_id_shape import _serialized_formats
 from tests.helpers.format_assertions import assert_wire_format_id_is_object
 
-# Shared by ProductFactory defaults and mock creative registry (_get_mock_formats).
+# Shared by ProductFactory defaults and the reference-format registry (_get_reference_formats).
 _AGENT_URL = "https://creative.adcontextprotocol.org"
-# Must match a format_id.id in _get_mock_formats() so the filter returns a result.
+# Must match a format_id.id in _get_reference_formats() so the filter returns a result.
 # Production filters list_creative_formats on the (agent_url, id) pair via
 # format_id_identity (creative_formats.py:279-280), so the returned formats[]
 # contains only the single matching entry regardless of catalog order --

@@ -2150,10 +2150,10 @@ class DeliverySimulationConfig(Base):
     # Relationship (lets factories pass a tenant object; no backref needed).
     tenant = relationship("Tenant")
 
-    __table_args__ = (
-        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        Index("idx_delivery_sim_tenant", "tenant_id"),
-    )
+    # No standalone tenant_id index: the composite PK (tenant_id, media_buy_id)
+    # already serves tenant_id-prefix scans (823974a5553e dropped the redundant
+    # idx_delivery_sim_tenant).
+    __table_args__ = (ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),)
 
     def __repr__(self):
         return (

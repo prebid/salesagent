@@ -811,9 +811,10 @@ class TestFormatSpecTransientErrors:
 
     _get_format_spec_sync wraps the async registry; a typed transient
     AdCPError from it (rate limit, timeout, connect failure) must PROPAGATE
-    so the buyer sees SERVICE_UNAVAILABLE — not be swallowed into None,
-    which downstream validation treats as unknown format and converts to a
-    terminal CREATIVE_REJECTED (PR #1430 review).
+    so the buyer sees SERVICE_UNAVAILABLE (transient, retryable) — not be
+    swallowed into None, which downstream validation treats as unknown format
+    and converts to a correctable CREATIVE_REJECTED that misdirects the buyer
+    into "fixing" a fine creative (PR #1430 review).
     """
 
     class _RaisingRegistry:
@@ -837,7 +838,7 @@ class TestFormatSpecTransientErrors:
 
     def test_nonexistent_format_still_returns_none(self, monkeypatch):
         """A genuinely unknown format (registry returns None) stays None —
-        the terminal CREATIVE_REJECTED path is correct for that case.
+        the correctable CREATIVE_REJECTED path is correct for that case.
         """
         import src.core.creative_agent_registry as registry_module
         from src.core.tools.media_buy_create import _get_format_spec_sync
