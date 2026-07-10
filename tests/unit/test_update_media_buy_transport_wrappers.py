@@ -99,4 +99,6 @@ def test_mcp_wrapper_preserves_existing_currency_for_float_budget():
         )
 
     assert result.structured_content["media_buy_id"] == "mb_transport"
-    mock_uow.media_buys.update_fields_or_raise.assert_called_once_with("mb_transport", budget=5000.0, currency="EUR")
+    mock_uow.media_buys.update_fields_or_raise.assert_called_once_with(
+        "mb_transport", expected_revision=None, budget=5000.0, currency="EUR"
+    )

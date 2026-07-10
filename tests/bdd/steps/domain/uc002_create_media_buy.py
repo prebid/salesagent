@@ -945,6 +945,18 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
                 )
 
 
+def _assert_error_has_suggestion(error: object) -> None:
+    """The error carries a buyer-actionable suggestion.
+
+    Typed in-process errors carry it as the ``suggestion`` attribute (the
+    envelope serializes it as errors[0].suggestion); some raise sites (and
+    reconstructed wire errors) carry it inside ``details`` instead — accept
+    either, since both surface it to the buyer.
+    """
+    suggestion = getattr(error, "suggestion", None) or (getattr(error, "details", None) or {}).get("suggestion")
+    assert suggestion, f"Expected a suggestion on the error (attribute or details), got: {error!r}"
+
+
 def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     """Assert error outcome with exact code, recovery, and message matching.
 
@@ -971,8 +983,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
-        assert error.details is not None, "Expected error details with suggestion, got None"
-        assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+        _assert_error_has_suggestion(error)
         return
 
     # Check if first word is a structured error code — UPPER_CASE with an
@@ -994,8 +1005,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
             assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
         if "with suggestion" in outcome.lower():
-            assert error.details is not None, "Expected error details with suggestion, got None"
-            assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+            _assert_error_has_suggestion(error)
     else:
         # Descriptive: "error unknown sort field"
         description = remainder

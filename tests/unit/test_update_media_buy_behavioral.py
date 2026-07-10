@@ -2981,5 +2981,7 @@ class TestUC003StateMachine:
             result = _update_media_buy_impl(req=req, identity=env.identity)
 
             assert isinstance(result, UpdateMediaBuySuccess)
-            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.assert_called_once_with("mb_pause_rev")
+            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.assert_called_once_with(
+                "mb_pause_rev", expected_revision=None
+            )
             assert result.revision == bumped_mb.revision

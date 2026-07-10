@@ -231,12 +231,14 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
     message = fallback_message
     recovery: str | None = None
     details: dict | None = None
+    suggestion: str | None = None
     adcp_err = envelope.get("adcp_error")
     if isinstance(adcp_err, dict):
         error_code = adcp_err.get("code")
         message = adcp_err.get("message", message) or message
         recovery = adcp_err.get("recovery")
         details = adcp_err.get("details")
+        suggestion = adcp_err.get("suggestion")
     errors = envelope.get("errors")
     if isinstance(errors, list) and errors and isinstance(errors[0], dict):
         first = errors[0]
@@ -244,10 +246,17 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
         message = first.get("message", message) or message
         recovery = recovery or first.get("recovery")
         details = details or first.get("details")
+        suggestion = suggestion or first.get("suggestion")
     if not error_code:
         return None
     reconstructed = _adcp_error_from_code(error_code, message, recovery, details)
     if reconstructed is not None:
+        # Restore the buyer-actionable suggestion the envelope carries at
+        # errors[0].suggestion — dropping it made reconstruction lossier
+        # than necessary (steps asserting "with suggestion" over the wire
+        # transports would fail against errors whose suggestion lives only
+        # on the typed attribute, not duplicated inside details).
+        reconstructed.suggestion = suggestion
         # Stash the REAL wire envelope on the reconstructed exception so the
         # A2A/REST dispatchers can capture the actual wire bytes (artifact
         # DataPart for A2A, HTTP body for REST) rather than re-synthesizing

@@ -462,7 +462,13 @@ class MediaBuyRepository:
         """
         media_buy.revision = func.coalesce(MediaBuy.revision, 0) + 1
 
-    def _locked_mutate_and_bump(self, media_buy_id: str, mutate: Callable[[MediaBuy], None]) -> MediaBuy | None:
+    def _locked_mutate_and_bump(
+        self,
+        media_buy_id: str,
+        mutate: Callable[[MediaBuy], None],
+        *,
+        expected_revision: int | None = None,
+    ) -> MediaBuy | None:
         """Shared single-row mutation skeleton: load-under-lock → mutate → bump → flush.
 
         Loads the buy with a row write-lock, applies ``mutate`` in place, bumps
@@ -471,25 +477,44 @@ class MediaBuyRepository:
         single-row mutator (``bump_revision``, ``update_status``,
         ``update_fields``) routes through here so the load-guard, the bump, and
         the flush live in exactly one place.
+
+        ``expected_revision`` is the buyer's optimistic-concurrency token
+        (AdCP 3.1.0-beta.3 update-media-buy-request ``revision``): when
+        provided, the check happens HERE, under the held row lock — the fast
+        pre-adapter gate in the update tool reads an unlocked snapshot, so a
+        concurrent writer could bump between that gate and this mutation.
+        Raises the shared CONFLICT on mismatch, before any mutation.
         """
         media_buy = self.get_by_id(media_buy_id, for_update=True)
         if media_buy is None:
             return None
+        if expected_revision is not None:
+            from src.core.exceptions import media_buy_revision_conflict
+
+            # The locked SELECT returns the in-memory instance when the row is
+            # already in the session identity map (no populate_existing), so
+            # explicitly refresh the counter under the held lock before
+            # comparing — the committed value can no longer move.
+            self._session.refresh(media_buy, attribute_names=["revision"])
+            current = media_buy.revision or 1
+            if current != expected_revision:
+                raise media_buy_revision_conflict(media_buy_id, expected=expected_revision, current=current)
         mutate(media_buy)
         self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
-    def bump_revision(self, media_buy_id: str) -> MediaBuy | None:
+    def bump_revision(self, media_buy_id: str, *, expected_revision: int | None = None) -> MediaBuy | None:
         """Bump the revision of a media buy that was mutated outside this repository.
 
         For tool paths that persist changes to a buy's packages/assignments
         directly on the session (e.g. package targeting_overlay writes) and
         therefore never pass through ``update_status``/``update_fields``.
         Returns the updated MediaBuy, or None if not found in this tenant.
+        ``expected_revision`` is checked under the row lock (CONFLICT on mismatch).
         """
         # No column change of its own — the shared skeleton does the bump/flush.
-        return self._locked_mutate_and_bump(media_buy_id, lambda _media_buy: None)
+        return self._locked_mutate_and_bump(media_buy_id, lambda _media_buy: None, expected_revision=expected_revision)
 
     def update_status(
         self,
@@ -545,19 +570,25 @@ class MediaBuyRepository:
             f"status transition to {status!r}",
         )
 
-    def bump_revision_or_raise(self, media_buy_id: str) -> MediaBuy:
+    def bump_revision_or_raise(self, media_buy_id: str, *, expected_revision: int | None = None) -> MediaBuy:
         """``bump_revision``, raising if the buy vanished mid-request (No Quiet Failures)."""
-        return self._require_mutated(self.bump_revision(media_buy_id), media_buy_id, "revision bump")
+        return self._require_mutated(
+            self.bump_revision(media_buy_id, expected_revision=expected_revision), media_buy_id, "revision bump"
+        )
 
-    def update_fields(self, media_buy_id: str, **kwargs: Any) -> MediaBuy | None:
+    def update_fields(
+        self, media_buy_id: str, *, expected_revision: int | None = None, **kwargs: Any
+    ) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.
 
         Only updates fields that are valid MediaBuy column attributes.
         Bumps the persisted revision counter (successful mutation).
         Returns the updated MediaBuy, or None if not found in this tenant.
-        Raises ValueError if any kwarg is not a valid MediaBuy attribute or
-        if the caller attempts to update an immutable/repository-managed
-        field (tenant_id, media_buy_id, created_at, revision).
+        ``expected_revision`` is checked under the row lock (CONFLICT on
+        mismatch, before any mutation). Raises ValueError if any kwarg is not
+        a valid MediaBuy attribute or if the caller attempts to update an
+        immutable/repository-managed field (tenant_id, media_buy_id,
+        created_at, revision).
         """
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
@@ -569,11 +600,17 @@ class MediaBuyRepository:
                     raise ValueError(f"MediaBuy has no attribute {key!r}")
                 setattr(media_buy, key, value)
 
-        return self._locked_mutate_and_bump(media_buy_id, _apply)
+        return self._locked_mutate_and_bump(media_buy_id, _apply, expected_revision=expected_revision)
 
-    def update_fields_or_raise(self, media_buy_id: str, **kwargs: Any) -> MediaBuy:
+    def update_fields_or_raise(
+        self, media_buy_id: str, *, expected_revision: int | None = None, **kwargs: Any
+    ) -> MediaBuy:
         """``update_fields``, raising if the buy vanished mid-request (No Quiet Failures)."""
-        return self._require_mutated(self.update_fields(media_buy_id, **kwargs), media_buy_id, "field update")
+        return self._require_mutated(
+            self.update_fields(media_buy_id, expected_revision=expected_revision, **kwargs),
+            media_buy_id,
+            "field update",
+        )
 
     # ------------------------------------------------------------------
     # MediaPackage writes

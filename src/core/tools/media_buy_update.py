@@ -39,12 +39,12 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
-    AdCPConflictError,
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPInvalidRequestError,
     AdCPValidationError,
+    media_buy_revision_conflict,
 )
 from src.core.tool_context import ToolContext
 
@@ -261,26 +261,16 @@ def _update_media_buy_impl(
             # media buy's current revision does not match." (Schema-optional
             # field; graded by T-UC-003-partition-revision /
             # boundary-revision; no conformance storyboard step — ungraded.)
+            # This is the FAST gate on an unlocked snapshot — it rejects a
+            # stale token before any adapter side effects. The authoritative
+            # check re-runs under the row lock inside the repository mutation
+            # (_locked_mutate_and_bump), closing the read-then-write window a
+            # concurrent updater could slip through.
             if req.revision is not None and _current_mb is not None:
                 _persisted_revision = _current_mb.revision or 1
                 if req.revision != _persisted_revision:
-                    raise AdCPConflictError(
-                        f"Revision mismatch for media buy '{req.media_buy_id}': request expected "
-                        f"revision {req.revision}, current revision is {_persisted_revision}",
-                        field="revision",
-                        suggestion=(
-                            "Re-read the media buy via get_media_buys and retry the update "
-                            f"with revision {_persisted_revision}."
-                        ),
-                        details={
-                            "expected_revision": req.revision,
-                            "current_revision": _persisted_revision,
-                            "suggestion": (
-                                "Re-read the media buy via get_media_buys and retry the update "
-                                f"with revision {_persisted_revision}."
-                            ),
-                        },
-                        context=req.context,
+                    raise media_buy_revision_conflict(
+                        req.media_buy_id, expected=req.revision, current=_persisted_revision, context=req.context
                     )
 
             _requested = _requested_actions(req)
@@ -578,7 +568,9 @@ def _update_media_buy_impl(
                     # invariant violation — _verify_principal already proved it
                     # exists); derive the post-action status from that same row
                     # so valid_actions reflects what the buyer can do next.
-                    _post_action_mb = uow.media_buys.bump_revision_or_raise(req.media_buy_id)
+                    _post_action_mb = uow.media_buys.bump_revision_or_raise(
+                        req.media_buy_id, expected_revision=req.revision
+                    )
                     _post_action_status = _post_action_mb.status
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
@@ -1282,9 +1274,11 @@ def _update_media_buy_impl(
             # bump once directly. Exactly one increment per accepted update — see
             # #1544.
             if pending_field_updates:
-                uow.media_buys.update_fields_or_raise(req.media_buy_id, **pending_field_updates)
+                uow.media_buys.update_fields_or_raise(
+                    req.media_buy_id, expected_revision=req.revision, **pending_field_updates
+                )
             elif package_level_changed:
-                uow.media_buys.bump_revision_or_raise(req.media_buy_id)
+                uow.media_buys.bump_revision_or_raise(req.media_buy_id, expected_revision=req.revision)
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes
@@ -1352,11 +1346,9 @@ def invalid_update_request_error(e: ValidationError) -> AdCPInvalidRequestError:
     because in-process callers see the typed error directly, while wire
     callers see it via the envelope.
     """
-    suggestion = "Correct the request to satisfy the update-media-buy-request schema and retry."
     return AdCPInvalidRequestError(
         format_validation_error(e, context="update_media_buy request"),
-        suggestion=suggestion,
-        details={"suggestion": suggestion},
+        suggestion="Correct the request to satisfy the update-media-buy-request schema and retry.",
     )
 
 
@@ -1501,6 +1493,7 @@ async def update_media_buy(
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
         idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        revision: Expected current revision for optimistic concurrency — CONFLICT on mismatch (optional, per AdCP spec)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1580,6 +1573,7 @@ def update_media_buy_raw(
         reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
         idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        revision: Expected current revision for optimistic concurrency — CONFLICT on mismatch (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 

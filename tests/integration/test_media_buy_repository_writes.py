@@ -822,3 +822,51 @@ class TestPersistedRevisionBump:
 
         assert (first, second) == (2, 3)
         assert second > first
+
+
+class TestExpectedRevisionUnderLock:
+    """The optimistic-concurrency token is enforced UNDER the row lock at the
+    mutation seam — not only by the update tool's unlocked pre-adapter gate.
+
+    AdCP 3.1.0-beta.3 update-media-buy-request.json properties.revision MUST.
+    The discriminating case: the mutating session already holds a STALE
+    in-memory instance (identity map), another session bumps the row, and the
+    seam must still CONFLICT — the locked check refreshes the counter under
+    the held lock instead of trusting the stale attribute (#1544 round-7).
+    """
+
+    def test_stale_identity_map_instance_still_conflicts(self, tenant_a, principal_a):
+        from src.core.exceptions import AdCPConflictError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_conflict"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            # Load the row unlocked into THIS session's identity map at revision 1.
+            stale = uow.media_buys.get_by_id("mb_lock_conflict")
+            assert stale is not None and (stale.revision or 1) == 1
+
+            # A concurrent writer bumps the committed row to 2.
+            with MediaBuyUoW(tenant_a) as other:
+                other.media_buys.bump_revision_or_raise("mb_lock_conflict")
+
+            # The seam must see the committed 2 under its lock and CONFLICT,
+            # even though this session's instance still reads 1.
+            with pytest.raises(AdCPConflictError) as exc_info:
+                uow.media_buys.update_fields_or_raise("mb_lock_conflict", expected_revision=1, budget=Decimal("500.00"))
+            assert exc_info.value.details["current_revision"] == 2
+            assert exc_info.value.details["expected_revision"] == 1
+
+    def test_matching_token_mutates_and_bumps(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_match"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            row = uow.media_buys.update_fields_or_raise("mb_lock_match", expected_revision=1, budget=Decimal("750.00"))
+            assert row is not None
+
+        with get_db_session() as session:
+            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_lock_match")
+            assert persisted is not None
+            assert persisted.revision == 2
+            assert persisted.budget == Decimal("750.00")
