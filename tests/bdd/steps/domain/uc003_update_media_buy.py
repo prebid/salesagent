@@ -2139,10 +2139,47 @@ def given_buyer_owns_media_buy_labeled(ctx: dict, label: str) -> None:
 
 
 @given(parsers.parse('the media buy "{label}" is at revision {revision:d}'))
+@given(parsers.parse('the media buy "{label}" is at version {revision:d}'))
 def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
-    """Advance the persisted revision to the target via real repository bumps."""
+    """Advance the persisted revision to the target via real repository bumps.
+
+    Registered under both spellings: the generated revision outlines say
+    "at revision"; the v3.1 CONFLICT-details scenario says "at version"
+    (the spec's error-details/conflict.json speaks in versions).
+    """
     media_buy = load_real_buy(ctx, resolve_media_buy_id(ctx, label))
     advance_revision_to(ctx, media_buy, revision)
+
+
+@given(parsers.parse('the Buyer Agent\'s last-read version of "{label}" is {version:d}'))
+def given_last_read_version(ctx: dict, label: str, version: int) -> None:
+    """Stage the stale token the buyer believes is current (CONFLICT setup)."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["media_buy_id"] = label
+    kwargs["revision"] = version
+
+
+@then(parsers.parse('the error "details" object should include "{key}" with value {value}'))
+def then_error_details_include(ctx: dict, key: str, value: str) -> None:
+    """The error's details carry the spec's recommended CONFLICT shape.
+
+    Authority: static/schemas/source/error-details/conflict.json —
+    resource_id / expected_version / current_version. A quoted cell is a
+    string (media-buy labels resolve to the real factory id); a bare number
+    compares as an integer.
+    """
+    from tests.bdd.steps._outcome_helpers import _require_error
+
+    error = _require_error(ctx)
+    details = getattr(error, "details", None) or {}
+    assert key in details, f"error details missing {key!r}: {details!r}"
+    stripped = value.strip()
+    expected: object
+    if stripped.startswith('"') and stripped.endswith('"'):
+        expected = resolve_media_buy_id(ctx, stripped[1:-1])
+    else:
+        expected = int(stripped)
+    assert details[key] == expected, f"details[{key!r}]: expected {expected!r}, got {details[key]!r}"
 
 
 @given(parsers.parse("the request revision is set to {value}"))

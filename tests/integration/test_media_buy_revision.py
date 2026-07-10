@@ -201,8 +201,9 @@ class TestRevisionOptimisticConcurrency:
             # most recent update response").
             assert exc_info.value.error_code == "CONFLICT"
             assert exc_info.value.details is not None
-            assert exc_info.value.details["expected_revision"] == 5
-            assert exc_info.value.details["current_revision"] == 1
+            assert exc_info.value.details["expected_version"] == 5
+            assert exc_info.value.details["current_version"] == 1
+            assert exc_info.value.details["resource_id"] == created.media_buy_id
 
             # Rejected update wrote nothing: revision unchanged on a fresh read.
             assert _get_buy(env, created.media_buy_id).revision == 1

@@ -854,8 +854,8 @@ class TestExpectedRevisionUnderLock:
             # even though this session's instance still reads 1.
             with pytest.raises(AdCPConflictError) as exc_info:
                 uow.media_buys.update_fields_or_raise("mb_lock_conflict", expected_revision=1, budget=Decimal("500.00"))
-            assert exc_info.value.details["current_revision"] == 2
-            assert exc_info.value.details["expected_revision"] == 1
+            assert exc_info.value.details["current_version"] == 2
+            assert exc_info.value.details["expected_version"] == 1
 
     def test_matching_token_mutates_and_bumps(self, tenant_a, principal_a):
         with MediaBuyUoW(tenant_a) as uow:
@@ -870,3 +870,68 @@ class TestExpectedRevisionUnderLock:
             assert persisted is not None
             assert persisted.revision == 2
             assert persisted.budget == Decimal("750.00")
+
+    def test_two_concurrent_updates_same_token_one_wins_one_conflicts(self, tenant_a, principal_a):
+        """Both writers pass the fast unlocked gate with the SAME token; the
+        under-lock check must reject exactly one.
+
+        Mirrors ``TestConcurrentRevisionBump``'s barrier setup: two independent
+        transactions preload the row at revision 1 and both present
+        ``expected_revision=1``. The locked check serializes on the row
+        write-lock — the winner mutates and bumps to 2; the loser's
+        refresh-under-lock then reads the committed 2 and raises CONFLICT. A
+        gate that only checks the unlocked snapshot admits both writes
+        (#1544 round-7): this test is red under gate-only enforcement.
+        """
+        import threading
+
+        from src.core.exceptions import AdCPConflictError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_token_race"))
+
+        both_preloaded = threading.Barrier(2, timeout=30)
+        outcomes: list[str] = []
+        errors: list[BaseException] = []
+        results_lock = threading.Lock()
+
+        def update_with_token(budget: str) -> None:
+            try:
+                with MediaBuyUoW(tenant_a) as uow:
+                    # Preload at revision 1 in THIS transaction — the unlocked
+                    # snapshot both writers' fast gates would see.
+                    preloaded = uow.media_buys.get_by_id("mb_token_race")
+                    assert preloaded is not None and (preloaded.revision or 1) == 1
+                    both_preloaded.wait()
+                    try:
+                        uow.media_buys.update_fields_or_raise(
+                            "mb_token_race", expected_revision=1, budget=Decimal(budget)
+                        )
+                    except AdCPConflictError:
+                        with results_lock:
+                            outcomes.append("conflict")
+                        return
+                with results_lock:
+                    outcomes.append("applied")
+            except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
+                with results_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=update_with_token, args=(b,)) for b in ("100.00", "200.00")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+
+        assert not errors, f"unexpected thread errors: {errors}"
+        assert sorted(outcomes) == ["applied", "conflict"], (
+            f"exactly one writer must win and one must CONFLICT, got outcomes: {outcomes}"
+        )
+
+        # Exactly one mutation landed: revision advanced by exactly one, and the
+        # budget is whichever writer won (never a blend, never both).
+        with get_db_session() as session:
+            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_token_race")
+            assert persisted is not None
+            assert persisted.revision == 2
+            assert persisted.budget in (Decimal("100.00"), Decimal("200.00"))

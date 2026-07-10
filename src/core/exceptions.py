@@ -620,12 +620,16 @@ def media_buy_revision_conflict(
     shared by the fast pre-adapter gate in ``_update_media_buy_impl`` and the
     authoritative under-row-lock check in ``MediaBuyRepository``.
     """
+    # Details use the spec's recommended CONFLICT shape
+    # (static/schemas/source/error-details/conflict.json:
+    # resource_id / expected_version / current_version) so optimistic-
+    # concurrency clients can re-read and retry generically.
     return AdCPConflictError(
         f"Revision mismatch for media buy '{media_buy_id}': request expected "
         f"revision {expected}, current revision is {current}",
         field="revision",
         suggestion=(f"Re-read the media buy via get_media_buys and retry the update with revision {current}."),
-        details={"expected_revision": expected, "current_revision": current},
+        details={"resource_id": media_buy_id, "expected_version": expected, "current_version": current},
         context=context,
     )
 

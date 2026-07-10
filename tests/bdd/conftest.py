@@ -2600,6 +2600,9 @@ _UC003_WIRED: set[str] = {
     # buy's current revision does not match." Graded by these two outlines (#1544 round 6).
     "T-UC-003-partition-revision",
     "T-UC-003-boundary-revision",
+    # v3.1 CONFLICT details shape (error-details/conflict.json: resource_id /
+    # expected_version / current_version) — #1544 round 7.
+    "T-UC-003-v31-error-conflict-version",
 }
 
 # UC-019 scenarios wired to MediaBuyLifecycleEnv (create/update/get composite;
