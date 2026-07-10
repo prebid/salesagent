@@ -398,9 +398,7 @@ def _schema_fingerprint() -> str:
     import src.core.database.models  # noqa: F401  (register models on Base.metadata)
     from src.core.database.models import Base
 
-    sig = "\n".join(
-        sorted(f"{t.name}.{c.name}:{c.type}" for t in Base.metadata.tables.values() for c in t.columns)
-    )
+    sig = "\n".join(sorted(f"{t.name}.{c.name}:{c.type}" for t in Base.metadata.tables.values() for c in t.columns))
     return hashlib.sha1(sig.encode()).hexdigest()[:8]
 
 
