@@ -572,6 +572,7 @@ jobs:
         e2e-tests,
         admin-ui-tests,
         bdd-tests,
+        bdd-in-network,
         migration-roundtrip,
         coverage,
       ]
@@ -593,6 +594,7 @@ jobs:
              [ "${{ needs.e2e-tests.result }}" != "success" ] || \
              [ "${{ needs.admin-ui-tests.result }}" != "success" ] || \
              [ "${{ needs.bdd-tests.result }}" != "success" ] || \
+             [ "${{ needs.bdd-in-network.result }}" != "success" ] || \
              [ "${{ needs.migration-roundtrip.result }}" != "success" ] || \
              [ "${{ needs.coverage.result }}" != "success" ]; then
             echo "One or more required checks failed."
