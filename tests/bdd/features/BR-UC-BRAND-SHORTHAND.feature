@@ -27,6 +27,7 @@ Feature: Brand string shorthand coercion on _BRAND_TOOLS
       | {"domain": "acme.com"}         |
       | {"domain": "ACME.COM"}         |
       | {"domain": "https://acme.com"} |
+      | {"domain": "acme.com", "industries": ["automotive"]} |
 
   @brand_shorthand @get_products @requires_db
   Scenario Outline: get_products rejects malformed brand
@@ -58,6 +59,7 @@ Feature: Brand string shorthand coercion on _BRAND_TOOLS
       | {"domain": "acme.com"}         |
       | {"domain": "ACME.COM"}         |
       | {"domain": "https://acme.com"} |
+      | {"domain": "acme.com", "industries": ["automotive"]} |
 
   @brand_shorthand @create_media_buy @requires_db
   Scenario Outline: create_media_buy rejects malformed brand

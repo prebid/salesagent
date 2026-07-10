@@ -111,7 +111,7 @@ def test_to_brand_reference_dict_preserves_governance_fields() -> None:
             "domain": "ACME.COM",
             "industries": ["automotive"],
             "data_subject_contestation": {"email": "dpo@acme.com"},
-            "brand_kit_override": {"primary_color": "#003366"},
+            "brand_kit_override": {"colors": {"primary": "#003366"}},
         }
     )
     assert ref is not None
@@ -120,7 +120,14 @@ def test_to_brand_reference_dict_preserves_governance_fields() -> None:
     assert ref.data_subject_contestation is not None
     assert ref.data_subject_contestation.email == "dpo@acme.com"
     assert ref.brand_kit_override is not None
-    assert ref.brand_kit_override.primary_color == "#003366"
+    assert ref.brand_kit_override.colors is not None
+    assert ref.brand_kit_override.colors.primary == "#003366"
+
+
+def test_to_brand_reference_unexpected_type_raises_typed_error() -> None:
+    with pytest.raises(AdCPValidationError) as exc_info:
+        to_brand_reference(123)  # type: ignore[arg-type]
+    assert exc_info.value.field == "brand"
 
 
 def _minimal_create_media_buy_kwargs() -> dict:

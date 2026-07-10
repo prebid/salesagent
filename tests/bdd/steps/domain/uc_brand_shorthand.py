@@ -3,34 +3,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.uc002_create_media_buy import _get_response_field
+from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.bdd.steps.generic.brand_param import parse_brand_gherkin_param
-from tests.bdd.steps.generic.given_media_buy import _pricing_option_id
-
-
-def _build_create_media_buy_brand_kwargs(ctx: dict, brand: Any) -> dict[str, Any]:
-    product = ctx["default_product"]
-    pricing_option = ctx["default_pricing_option"]
-    now = datetime.now(UTC)
-    return {
-        "brand": brand,
-        "po_number": f"PO-BRAND-{uuid.uuid4().hex[:8]}",
-        "start_time": (now + timedelta(days=1)).isoformat(),
-        "end_time": (now + timedelta(days=30)).isoformat(),
-        "packages": [
-            {
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": _pricing_option_id(pricing_option),
-            }
-        ],
-    }
+from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 
 @given("a tenant is configured for media buy creation")
@@ -43,7 +22,10 @@ def given_media_buy_creation_tenant(ctx: dict) -> None:
 @when(parsers.parse("the buyer sends create_media_buy with brand {brand}"))
 def when_send_create_media_buy_with_brand(ctx: dict, brand: str) -> None:
     """Dispatch create_media_buy with a brand value (JSON dict or bare/quoted string)."""
-    dispatch_request(ctx, **_build_create_media_buy_brand_kwargs(ctx, parse_brand_gherkin_param(brand)))
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["brand"] = parse_brand_gherkin_param(brand)
+    kwargs["po_number"] = f"PO-BRAND-{uuid.uuid4().hex[:8]}"
+    dispatch_request(ctx, **kwargs)
 
 
 @then("the create_media_buy request succeeds")

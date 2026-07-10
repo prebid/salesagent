@@ -67,7 +67,7 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -1557,8 +1557,6 @@ class AdCPRequestHandler(RequestHandler):
         # Keep params JSON-serializable: raw_wire_payload falls back to params for
         # direct handler callers, and idempotency hashes RFC 8785 over that dict.
         if params.get("brand") is not None:
-            from src.core.schema_helpers import to_brand_reference
-
             coerced_brand = to_brand_reference(params["brand"])
             if coerced_brand is None:
                 raise AdCPValidationError(

@@ -70,7 +70,7 @@ class GetProductsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (P
 
 class CreateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
     # dict BrandReference or string domain/URL shorthand (#1324)
-    brand: dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
+    brand: dict[str, Any] | str | None = None
     packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
     end_time: str | None = None
@@ -264,7 +264,7 @@ async def create_media_buy(
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
     account_ref = to_account_reference(body.account)
-    brand_ref = to_brand_reference(body.brand) if body.brand is not None else None
+    brand_ref = to_brand_reference(body.brand)
     response = await media_buy_create_module.create_media_buy_raw(
         brand=brand_ref,
         packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest

@@ -121,7 +121,7 @@ def _coerce_domain_or_raise(raw: str) -> str:
         BrandReference(domain=domain)
     except ValidationError as e:
         raise AdCPValidationError(
-            f"Invalid brand domain {domain!r}",
+            f"Invalid brand: domain {domain!r} is not a valid hostname",
             field="brand",
         ) from e
     return domain
@@ -166,7 +166,10 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
                 format_validation_error(e, context="brand"),
                 field="brand",
             ) from e
-    return None  # Fallback for unexpected types
+    raise AdCPValidationError(
+        f"Invalid brand: expected dict, string, or BrandReference, got {type(brand).__name__}",
+        field="brand",
+    )
 
 
 def to_account_reference(account: dict[str, Any] | AccountReference | None) -> AccountReference | None:

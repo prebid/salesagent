@@ -19,7 +19,8 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
-from tests.bdd.steps.generic.brand_param import parse_brand_gherkin_param
+from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
@@ -32,26 +33,9 @@ from tests.helpers import assert_envelope_shape
 
 
 def _call_get_products(ctx: dict, **kwargs: Any) -> None:
-    """Dispatch get_products through ctx['transport'] via call_via."""
-    transport = ctx.get("transport")
-    env = ctx["env"]
+    """Dispatch get_products through ctx['transport'] via dispatch_request."""
     kwargs.setdefault("brief", "inventory profile test")
-    if transport is not None:
-        try:
-            result = env.call_via(transport, **kwargs)
-            if result.is_error:
-                ctx["error"] = result.error
-                ctx["wire_error_envelope"] = result.wire_error_envelope
-                ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
-            else:
-                ctx["response"] = result.payload
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        try:
-            ctx["response"] = env.call_impl(**kwargs)
-        except Exception as exc:
-            ctx["error"] = exc
+    dispatch_request(ctx, **kwargs)
 
 
 def _get_first_prop(ctx: dict) -> Any:
@@ -188,7 +172,7 @@ def then_has_products(ctx: dict) -> None:
 @then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
 def then_rejected_validation_field(ctx: dict, field: str) -> None:
     """Assert the wire envelope is VALIDATION_ERROR and names the field structurally."""
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    envelope = ctx.get("wire_error_envelope")
     assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
     assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
     assert envelope["errors"][0].get("field") == field, (

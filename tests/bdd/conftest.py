@@ -2808,7 +2808,7 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     ):
         return "UC-GET-PRODUCTS"
     if "brand_shorthand" in marker_names and "create_media_buy" in marker_names:
-        return "UC-002-BRAND-SHORTHAND"
+        return "UC-002"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
     return None
@@ -2875,7 +2875,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
-        elif marker_names & _UC002_IDEMPOTENCY_WIRED:
+        elif marker_names & _UC002_IDEMPOTENCY_WIRED or (
+            "brand_shorthand" in marker_names and "create_media_buy" in marker_names
+        ):
             # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
             # real create_media_buy through every transport (the replay scenario
             # creates once, then sends the same key again to exercise the
@@ -2896,18 +2898,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
-
-    elif uc == "UC-002-BRAND-SHORTHAND":
-        request.getfixturevalue("integration_db")
-        from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-        with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
-            tenant, _principal, product, pricing_option = env.setup_media_buy_data()
-            ctx["env"] = env
-            ctx["tenant"] = tenant
-            ctx["default_product"] = product
-            ctx["default_pricing_option"] = pricing_option
-            yield
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
