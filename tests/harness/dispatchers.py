@@ -293,11 +293,18 @@ class RestE2EDispatcher:
             )
 
         try:
-            payload = env.parse_rest_response(response.json())
+            wire_body = response.json()
+            payload = env.parse_rest_response(wire_body)
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
 
-        return TransportResult(payload=payload, envelope=envelope, error=None, raw_response=response)
+        # Real HTTP body — the success-path analogue of wire_error_envelope,
+        # mirroring the in-process RestDispatcher. Wire-shape Then steps
+        # (uc002 v31 revision/confirmed_at, uc005 format_id, uc018 creatives)
+        # raise a loud guard on any non-IMPL transport that fails to stash it.
+        return TransportResult(
+            payload=payload, envelope=envelope, error=None, raw_response=response, wire_response=wire_body
+        )
 
 
 class McpE2EDispatcher:
