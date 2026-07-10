@@ -10,9 +10,7 @@ from typing import Any
 from adcp.types import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -24,38 +22,42 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
 from src.core.tools.media_buy_update import _verify_principal
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
-def _update_performance_index_impl(
+def _build_update_performance_index_request(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
+) -> UpdatePerformanceIndexRequest:
+    """Build an UpdatePerformanceIndexRequest from individual wire params.
+
+    Coerces dict performance_data into ProductPerformance objects and translates
+    Pydantic ValidationError into AdCPValidationError. Shared by both transport
+    wrappers (MCP + A2A) so the construction + error translation lives in one place.
+    """
+    from src.core.schemas import ProductPerformance
+
+    with adcp_validation_boundary(context="update_performance_index request"):
+        performance_objects = [ProductPerformance(**perf) for perf in performance_data]
+        return UpdatePerformanceIndexRequest(
+            media_buy_id=media_buy_id, performance_data=performance_objects, context=context
+        )
+
+
+def _update_performance_index_impl(
+    req: UpdatePerformanceIndexRequest,
     identity: ResolvedIdentity | None = None,
 ) -> UpdatePerformanceIndexResponse:
     """Shared implementation for update_performance_index (used by both MCP and A2A).
 
     Args:
-        media_buy_id: ID of the media buy to update
-        performance_data: List of performance data objects
-        context: Application level context per adcp spec
+        req: Typed update-performance-index request
         identity: Resolved identity for authentication
 
     Returns:
         UpdatePerformanceIndexResponse with update status
     """
-    # Create request object from individual parameters (MCP-compliant)
-    # Convert dict performance_data to ProductPerformance objects
-    from src.core.schemas import ProductPerformance
-
-    try:
-        performance_objects = [ProductPerformance(**perf) for perf in performance_data]
-        req = UpdatePerformanceIndexRequest(
-            media_buy_id=media_buy_id, performance_data=performance_objects, context=context
-        )
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
-
     identity = require_identity(identity, context=req.context)
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
@@ -141,7 +143,8 @@ async def update_performance_index(
         ToolResult with UpdatePerformanceIndexResponse data
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = _update_performance_index_impl(media_buy_id, performance_data, context, identity)
+    req = _build_update_performance_index_request(media_buy_id, performance_data, context)
+    response = _update_performance_index_impl(req=req, identity=identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -169,7 +172,8 @@ def update_performance_index_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    return _update_performance_index_impl(media_buy_id, performance_data, context, identity)
+    req = _build_update_performance_index_request(media_buy_id, performance_data, context)
+    return _update_performance_index_impl(req=req, identity=identity)
 
 
 # --- Human-in-the-Loop Task Queue Tools ---

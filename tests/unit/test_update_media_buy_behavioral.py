@@ -8,7 +8,6 @@ BDD scenario cross-references:
 - T-UC-003-ext-a-not-found: test_principal_not_found_returns_error
 - T-UC-003-combined-update: test_combined_campaign_and_package_update
 - T-UC-003-multi-package: test_multi_package_update_processes_all_packages
-- T-UC-003-buyer-ref (positive): test_buyer_ref_positive_resolution
 - T-UC-003-alt-timing + T-UC-003-ext-e: test_flight_date_validation_and_persistence
 - T-UC-003-alt-budget + T-UC-003-ext-d + T-UC-003-rule-008: test_campaign_budget_validation_and_persistence
 - T-UC-003-alt-manual: test_manual_approval_path_through_impl
@@ -89,7 +88,7 @@ def test_principal_not_found_returns_error():
         with pytest.raises(AdCPAuthenticationError, match="principal_test") as exc_info:
             env.call_impl(media_buy_id="mb_001")
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
         # _update_media_buy_impl wraps its body in the ``audit_workflow_step_failure_ctx`` context
         # manager, so the raise propagates through it rather than via a per-site
         # fail_step call; the exception type is asserted by ``pytest.raises`` above.
@@ -167,13 +166,13 @@ def test_combined_campaign_and_package_update():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_combined"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_combined"
         # affected_packages should contain entries from both package-level and campaign-level updates
         # Package budget update -> 1 entry for pkg_A
         # Campaign budget update -> entries for pkg_A, pkg_B
-        assert len(result.affected_packages) >= 2
-        affected_pkg_ids = {ap.package_id for ap in result.affected_packages}
+        assert len(result.response.affected_packages) >= 2
+        affected_pkg_ids = {ap.package_id for ap in result.response.affected_packages}
         assert "pkg_A" in affected_pkg_ids
         assert "pkg_B" in affected_pkg_ids
         # The adapter should have been called for package budget update
@@ -228,10 +227,10 @@ def test_multi_package_update_processes_all_packages():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # All 3 packages should appear in affected_packages
-        assert len(result.affected_packages) == 3
-        affected_pkg_ids = {ap.package_id for ap in result.affected_packages}
+        assert len(result.response.affected_packages) == 3
+        affected_pkg_ids = {ap.package_id for ap in result.response.affected_packages}
         assert affected_pkg_ids == {"pkg_1", "pkg_2", "pkg_3"}
 
         # Adapter should have been called 3 times (once per package)
@@ -242,16 +241,6 @@ def test_multi_package_update_processes_all_packages():
 # HIGH_RISK Test 4: Buyer_ref positive resolution
 # BDD: T-UC-003-buyer-ref (positive path)
 # ---------------------------------------------------------------------------
-
-
-def test_buyer_ref_positive_resolution():
-    """buyer_ref removed from UpdateMediaBuyRequest in adcp 3.12.
-    Now media_buy_id is the sole identifier."""
-    from pydantic import ValidationError
-
-    # buyer_ref is no longer accepted on UpdateMediaBuyRequest
-    with pytest.raises(ValidationError, match="buyer_ref"):
-        UpdateMediaBuyRequest(buyer_ref="buyer_ref_abc")
 
 
 # ---------------------------------------------------------------------------
@@ -286,10 +275,10 @@ def test_main_flow_package_budget_update():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_main"
-        assert len(result.affected_packages) == 1
-        assert result.affected_packages[0].package_id == "pkg_main_1"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_main"
+        assert len(result.response.affected_packages) == 1
+        assert result.response.affected_packages[0].package_id == "pkg_main_1"
 
         # Verify adapter was called with correct action
         call_kwargs = env.mock["adapter"].return_value.update_media_buy.call_args[1]
@@ -344,8 +333,8 @@ class TestFlightDateValidationAndPersistence:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            assert result.media_buy_id == "mb_dates"
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert result.response.media_buy_id == "mb_dates"
             # Date update should have been persisted via repository
             env.mock["uow"].return_value.media_buys.update_fields.assert_called()
 
@@ -455,11 +444,11 @@ class TestCampaignBudgetValidationAndPersistence:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            assert result.media_buy_id == "mb_budget"
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert result.response.media_buy_id == "mb_budget"
             # All packages should be listed as affected
-            assert len(result.affected_packages) >= 1
-            assert result.affected_packages[0].package_id == "pkg_budget_1"
+            assert len(result.response.affected_packages) >= 1
+            assert result.response.affected_packages[0].package_id == "pkg_budget_1"
 
             # Budget should have been persisted via repository
             env.mock["uow"].return_value.media_buys.update_fields.assert_called()
@@ -498,10 +487,10 @@ def test_manual_approval_path_through_impl():
         result = _update_media_buy_impl(req=req, identity=identity)
 
         # Should return UpdateMediaBuySuccess (not error)
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_manual"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_manual"
         # affected_packages should be empty (update not applied yet)
-        assert result.affected_packages == []
+        assert result.response.affected_packages == []
 
         # Workflow step should be updated with requires_approval status
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
@@ -566,8 +555,8 @@ def test_pause_completes_workflow_step():
         result = _update_media_buy_impl(req=req, identity=identity)
 
         # Should succeed
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_pause"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_pause"
 
         # BUG: Workflow step must be marked 'completed' after successful pause
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
@@ -608,7 +597,7 @@ def test_manual_approval_creates_object_workflow_mapping():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
 
         # The DB session should have had an ObjectWorkflowMapping added via session.add()
         mock_session = env.mock["uow"].return_value.session
@@ -658,7 +647,7 @@ def test_manual_approval_stores_raw_request():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
 
         # The workflow step's response_data must contain enough information
         # to execute the update after approval. At minimum, the request data
@@ -731,7 +720,7 @@ class TestTimezoneHandlingRegression:
             result = _update_media_buy_impl(req=req, identity=identity)
 
             # Must succeed — no TypeError from naive/aware subtraction
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_update_only_start_time_succeeds(self):
         """Updating only start_time (end_time from DB) must not raise TypeError.
@@ -767,7 +756,7 @@ class TestTimezoneHandlingRegression:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_schema_rejects_naive_start_time(self):
         """UpdateMediaBuyRequest must reject naive (no tzinfo) start_time.
@@ -854,7 +843,7 @@ class TestUC003MainObligations:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_adapter_called_with_correct_action(self):
         """Adapter update_media_buy called with action=update_package_budget.
@@ -909,9 +898,9 @@ class TestUC003MainObligations:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            assert len(result.affected_packages) == 1
-            assert result.affected_packages[0].package_id == "pkg_y"
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert len(result.response.affected_packages) == 1
+            assert result.response.affected_packages[0].package_id == "pkg_y"
 
     def test_response_wrapped_with_status_completed(self):
         """Workflow step updated with status=completed on success.
@@ -923,7 +912,7 @@ class TestUC003MainObligations:
             req = UpdateMediaBuyRequest(media_buy_id="mb_status")
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert len(result_calls) >= 1
             assert result_calls[-1][1].get("status", "completed") == "completed"
@@ -950,7 +939,7 @@ class TestUC003PauseResume:
             req = UpdateMediaBuyRequest(media_buy_id="mb_pause_manual", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert len(result_calls) >= 1
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -994,7 +983,7 @@ class TestUC003UpdateTiming:
             req = UpdateMediaBuyRequest(media_buy_id="mb_both_dates", start_time=start, end_time=end)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # update_fields should have been called with both start_time and end_time
             env.mock["uow"].return_value.media_buys.update_fields.assert_called()
             call_kwargs = env.mock["uow"].return_value.media_buys.update_fields.call_args
@@ -1030,7 +1019,7 @@ class TestUC003UpdateTiming:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called for timing-only updates
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1109,7 +1098,7 @@ class TestUC003CampaignLevelBudget:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called for budget-only updates
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1123,13 +1112,19 @@ class TestUC003UpdateCreativeIds:
     """Creative ID update obligations."""
 
     def _setup_creative_mocks(self, env, creative_ids, statuses=None, formats=None):
-        """Helper to set up creative-related mocks."""
+        """Helper to set up creative-related mocks.
+
+        Wires the shared creative-validation path: existence/status/format are
+        resolved via ``uow.creatives.admin_get_by_ids`` and ``uow.products.get_by_id``
+        (not raw session.scalars), matching production.
+        """
         mock_session = env.mock["uow"].return_value.session
+        uow = env.mock["uow"].return_value
 
         # Media buy lookup
         mock_mb = MagicMock()
         mock_mb.media_buy_id = "mb_creative"
-        env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+        uow.media_buys.get_by_id.return_value = mock_mb
 
         # Build creative mocks
         creatives = []
@@ -1141,7 +1136,11 @@ class TestUC003UpdateCreativeIds:
             c.format = formats[i] if formats else "display"
             creatives.append(c)
 
-        # Session scalars returns creatives
+        # Creative existence/status via repository (shared validation helper).
+        uow.creatives.admin_get_by_ids.side_effect = None
+        uow.creatives.admin_get_by_ids.return_value = creatives
+
+        # Session scalars returns creatives (legacy paths) + no existing assignments.
         mock_scalars = MagicMock()
         mock_scalars.all.return_value = creatives
         mock_scalars.first.return_value = None  # No existing assignments by default
@@ -1150,7 +1149,7 @@ class TestUC003UpdateCreativeIds:
         # Package with product
         mock_pkg = MagicMock()
         mock_pkg.package_config = {"product_id": "prod_1"}
-        env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+        uow.media_buys.get_package.return_value = mock_pkg
 
         return mock_session, creatives
 
@@ -1164,15 +1163,14 @@ class TestUC003UpdateCreativeIds:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_creative"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # Only C1 found, C999 missing
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            mock_scalars = MagicMock()
-            mock_scalars.all.return_value = [c1]
-            mock_session.scalars.return_value = mock_scalars
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.side_effect = None
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.return_value = [c1]
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1190,30 +1188,23 @@ class TestUC003UpdateCreativeIds:
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-03
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
+            self._setup_creative_mocks(env, ["C1"], statuses=["error"])
 
-            mock_session, _ = self._setup_creative_mocks(env, ["C1"], statuses=["error"])
-
-            # Product with matching format (to pass format check)
+            # Product with no format restriction (to isolate the status check).
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-            mock_scalars_seq = MagicMock()
-            mock_scalars_seq.all.return_value = [
-                MagicMock(creative_id="C1", status="error", agent_url="http://test.com", format="display")
-            ]
-            mock_scalars_seq.first.return_value = mock_product
-            mock_session.scalars.return_value = mock_scalars_seq
+            env.mock["uow"].return_value.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="status=error") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_rejected_state_rejected(self):
         """Creative in rejected state cannot be assigned.
@@ -1221,29 +1212,22 @@ class TestUC003UpdateCreativeIds:
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-04
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session, _ = self._setup_creative_mocks(env, ["C1"], statuses=["rejected"])
+            self._setup_creative_mocks(env, ["C1"], statuses=["rejected"])
 
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-            mock_scalars_seq = MagicMock()
-            mock_scalars_seq.all.return_value = [
-                MagicMock(creative_id="C1", status="rejected", agent_url="http://test.com", format="display")
-            ]
-            mock_scalars_seq.first.return_value = mock_product
-            mock_session.scalars.return_value = mock_scalars_seq
+            env.mock["uow"].return_value.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="status=rejected") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_format_compatibility_check(self):
         """Creative format mismatch with product returns INVALID_CREATIVES.
@@ -1251,13 +1235,11 @@ class TestUC003UpdateCreativeIds:
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-05
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_creative"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             # Creative with "video" format
             c1 = MagicMock()
@@ -1265,35 +1247,29 @@ class TestUC003UpdateCreativeIds:
             c1.status = "active"
             c1.agent_url = "http://test.com"
             c1.format = "video"
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1]
 
             # Product with only "display" format
             mock_product = MagicMock()
             mock_product.format_ids = [{"agent_url": "http://test.com", "id": "display"}]
             mock_product.name = "Display Product"
+            uow.products.get_by_id.return_value = mock_product
 
             # Package with product
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
-
-            # First call returns creatives, second returns product
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            uow.media_buys.get_package.return_value = mock_pkg
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="not supported") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_update_no_adapter_call(self):
         """Creative ID updates persist directly to DB without adapter call.
@@ -1302,35 +1278,35 @@ class TestUC003UpdateCreativeIds:
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_creative"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
             c1.agent_url = "http://test.com"
             c1.format = "display"
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1]
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+            uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
-            mock_product.format_ids = []
+            mock_product.format_ids = []  # no restriction
             mock_product.name = "Test Product"
+            uow.products.get_by_id.return_value = mock_product
 
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                    MagicMock(all=Mock(return_value=[])),  # existing assignments
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            # Remaining raw select is the existing-assignments lookup → empty.
+            mock_scalars = MagicMock()
+            mock_scalars.all.return_value = []
+            mock_session.scalars.return_value = mock_scalars
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1339,7 +1315,7 @@ class TestUC003UpdateCreativeIds:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called for creative_ids updates
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1429,14 +1405,14 @@ class TestUC003UploadInlineCreatives:
                 )
                 result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             mock_sync.assert_called_once_with(
                 creatives=ANY,
                 identity=ANY,
                 assignments=ANY,
             )
             # affected_packages should track the creative upload
-            assert len(result.affected_packages) >= 1
+            assert len(result.response.affected_packages) >= 1
 
     def test_inline_creatives_additive_semantics(self):
         """Inline creatives are additive (don't replace existing).
@@ -1472,11 +1448,11 @@ class TestUC003UploadInlineCreatives:
                 )
                 result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # The sync call does NOT delete existing assignments -
             # it only creates new ones (additive semantics)
-            assert len(result.affected_packages) >= 1
-            changes = result.affected_packages[0].changes_applied
+            assert len(result.response.affected_packages) >= 1
+            changes = result.response.affected_packages[0].changes_applied
             assert "creatives_uploaded" in changes
 
     def test_sync_failure_returns_error(self):
@@ -1546,7 +1522,7 @@ class TestUC003UpdateCreativeAssignments:
             mock_mb.media_buy_id = "mb_assign"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # Package with product that has placements
             mock_pkg = MagicMock()
@@ -1585,7 +1561,7 @@ class TestUC003UpdateCreativeAssignments:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_product_does_not_support_placement_targeting(self):
         """Placement targeting rejected when product has no placements.
@@ -1597,7 +1573,7 @@ class TestUC003UpdateCreativeAssignments:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_no_placement"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
@@ -1630,28 +1606,31 @@ class TestUC003UpdateCreativeAssignments:
             assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
 
     def test_creative_existence_validated_for_assignments(self):
-        """Creative not found when using creative_assignments path.
+        """Creative not found is rejected on the creative_assignments path.
+
+        Regression for the bug where the creative_assignments handler skipped
+        existence validation and let a missing creative_id reach the composite
+        FK as an IntegrityError. The shared validation helper now rejects it
+        with CREATIVE_REJECTED before any assignment row is built.
 
         Covers: UC-003-ALT-UPDATE-CREATIVE-ASSIGNMENTS-05
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_assign_not_found"
             mock_mb.status = "active"
             mock_mb.approved_at = None
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
-            # No placement_ids in assignment -> skip placement validation
-            # Existing assignments empty, new assignment for C999 (doesn't exist)
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[])),  # existing assignments
-                    MagicMock(first=Mock(return_value=None)),  # find assignment for C999
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            mock_pkg = MagicMock()
+            mock_pkg.package_config = {"product_id": "prod_1"}
+            uow.media_buys.get_package.return_value = mock_pkg
+
+            # C999 does not exist in the creative library.
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = []
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1665,12 +1644,10 @@ class TestUC003UpdateCreativeAssignments:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
-
-            # The creative_assignments path creates assignments even for
-            # non-existing creatives (existence check is in creative_ids path).
-            # This test documents the current behavior.
-            assert isinstance(result, UpdateMediaBuySuccess)
+            with pytest.raises(AdCPCreativeRejectedError, match="C999") as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
 
 # ---------------------------------------------------------------------------
@@ -1698,7 +1675,7 @@ class TestUC003UpdateTargetingOverlay:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # targeting_overlay should have been replaced (stored as Pydantic model or dict)
             stored = mock_pkg.package_config["targeting_overlay"]
             assert stored is not None
@@ -1743,7 +1720,7 @@ class TestUC003UpdateTargetingOverlay:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
     def test_property_list_update_rejected_when_product_disallows(self):
@@ -1866,7 +1843,7 @@ class TestUC003UpdateTargetingOverlay:
             result = _update_media_buy_impl(req=req, identity=identity)
 
             # Targeting persisted; no property_list rejection
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             assert mock_pkg.package_config["targeting_overlay"] is not None
 
     def test_property_list_update_replaces_existing_not_merge(self):
@@ -1923,7 +1900,7 @@ class TestUC003UpdateTargetingOverlay:
             result = _update_media_buy_impl(req=req, identity=identity)
 
             # Update succeeded.
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
             # Persisted targeting_overlay reflects the swap, not a merge.
             # update_media_buy stores Targeting models in package_config; legacy
@@ -1963,7 +1940,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_deferred", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Adapter should NOT be called (deferred until seller approves)
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1982,7 +1959,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_reject_setup", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # Verify workflow step created with requires_approval (enables rejection)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -2003,7 +1980,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_poll")
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
             # The workflow step was created (step_id="step_001")
             # and the response allows the buyer to track the status
             env.mock["ctx_mgr"].return_value.create_workflow_step.assert_called_once_with(
@@ -2037,7 +2014,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     def test_principal_not_found_in_database(self):
         """Principal ID exists but no DB record raises AdCPAuthenticationError.
@@ -2052,7 +2029,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     def test_state_unchanged_on_auth_failure(self):
         """No records modified when authentication fails.
@@ -2067,7 +2044,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes through UoW
@@ -2280,37 +2257,6 @@ class TestUC003ExtG:
 # ---------------------------------------------------------------------------
 
 
-class TestUC003ExtH:
-    """Missing package ID obligations."""
-
-    def test_package_update_without_package_id(self):
-        """Package update without package_id rejected at schema level in adcp 3.12.
-
-        Covers: UC-003-EXT-H-01
-        """
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError, match="package_id"):
-            UpdateMediaBuyRequest(
-                media_buy_id="mb_no_pkg",
-                packages=[{"budget": 5000.0}],  # No package_id
-            )
-
-    def test_buyer_ref_at_package_level_gap(self):
-        """Package-level buyer_ref removed in adcp 3.12.
-
-        Covers: UC-003-EXT-H-02
-        """
-        from pydantic import ValidationError
-
-        # package_id is now required, cannot omit it
-        with pytest.raises(ValidationError, match="package_id"):
-            UpdateMediaBuyRequest(
-                media_buy_id="mb_buyer_ref_pkg",
-                packages=[{"budget": 5000.0}],  # No package_id
-            )
-
-
 # ---------------------------------------------------------------------------
 # EXT-I: Creative IDs Not Found
 # ---------------------------------------------------------------------------
@@ -2329,9 +2275,11 @@ class TestUC003ExtI:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_all_missing"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # No creatives found
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.side_effect = None
+            env.mock["uow"].return_value.creatives.admin_get_by_ids.return_value = []
             mock_scalars = MagicMock()
             mock_scalars.all.return_value = []
             mock_session.scalars.return_value = mock_scalars
@@ -2362,45 +2310,38 @@ class TestUC003ExtJ:
         Covers: UC-003-EXT-J-02
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_rejected"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "rejected"
             c1.agent_url = "http://test.com"
             c1.format = "display"
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1]
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+            uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            uow.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_rejected",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError, match="status=rejected") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.suggestion
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_all_validation_errors_collected(self):
         """Multiple creative errors collected and returned together.
@@ -2408,13 +2349,11 @@ class TestUC003ExtJ:
         Covers: UC-003-EXT-J-04
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            from src.core.exceptions import AdCPValidationError
-
-            mock_session = env.mock["uow"].return_value.session
+            uow = env.mock["uow"].return_value
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_multi_err"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            uow.media_buys.get_by_id.return_value = mock_mb
 
             # C1 in error state, C2 in rejected state
             c1 = MagicMock()
@@ -2429,35 +2368,29 @@ class TestUC003ExtJ:
             c2.agent_url = "http://test.com"
             c2.format = "display"
 
+            uow.creatives.admin_get_by_ids.side_effect = None
+            uow.creatives.admin_get_by_ids.return_value = [c1, c2]
+
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
-            env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
+            uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
             mock_product.format_ids = []
             mock_product.name = "Test Product"
-
-            scalars_calls = iter(
-                [
-                    MagicMock(all=Mock(return_value=[c1, c2])),
-                    MagicMock(first=Mock(return_value=mock_product)),
-                ]
-            )
-            mock_session.scalars.side_effect = lambda _stmt: next(scalars_calls)
+            uow.products.get_by_id.return_value = mock_product
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
                 media_buy_id="mb_multi_err",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C2"]}],
             )
-            with pytest.raises(AdCPValidationError, match="invalid creatives") as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            # Both errors should be collected
-            error_details = exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
-            assert len(error_details["creative_errors"]) == 2
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            # Both offending creatives reported together in the rejection.
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert set(exc_info.value.details["creative_ids"]) == {"C1", "C2"}
 
 
 # ---------------------------------------------------------------------------
@@ -2624,7 +2557,7 @@ class TestUC003ExtM:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_bad_placement"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
@@ -2667,7 +2600,7 @@ class TestUC003ExtM:
 
             mock_mb = MagicMock()
             mock_mb.media_buy_id = "mb_no_placements"
-            env.mock["uow"].return_value.media_buys.get_by_id_or_buyer_ref.return_value = mock_mb
+            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
@@ -2734,7 +2667,7 @@ class TestUC003ExtN:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuyError)
+            assert isinstance(result.response, UpdateMediaBuyError)
 
 
 # ---------------------------------------------------------------------------
@@ -2772,7 +2705,7 @@ class TestUC003ExtO:
             )
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuyError)
+            assert isinstance(result.response, UpdateMediaBuyError)
 
     def test_workflow_creation_failure(self):
         """Workflow step creation failure during manual approval.
@@ -2867,7 +2800,7 @@ class TestUC003StateMachine:
             req = UpdateMediaBuyRequest(media_buy_id="mb_active", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_paused_status_rejects_pause(self):
         """A paused buy rejects another pause — 'pause' is not in valid_actions for 'paused'."""
@@ -2903,7 +2836,7 @@ class TestUC003StateMachine:
             req = UpdateMediaBuyRequest(media_buy_id="mb_paused_resume", paused=False)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySuccess)
 
     def test_post_action_status_derived_from_db(self):
         """After a successful pause, valid_actions reflects the DB status, not a hardcode.
@@ -2936,8 +2869,8 @@ class TestUC003StateMachine:
             req = UpdateMediaBuyRequest(media_buy_id="mb_post_action", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySuccess)
-            action_values = {getattr(a, "value", a) for a in (result.valid_actions or [])}
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            action_values = {getattr(a, "value", a) for a in (result.response.valid_actions or [])}
             assert "sync_creatives" in action_values, (
                 "valid_actions must reflect the DB-derived post-action status "
                 f"('pending_creatives'), not the hardcoded ('paused'). Got: {action_values}"

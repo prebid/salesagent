@@ -252,7 +252,7 @@ class TestListPrincipalIsolation:
 # ---------------------------------------------------------------------------
 # Advanced Filtering Tests — Covers: salesagent-39ic
 # adcp spec: list_creatives filters (tags, created_after, created_before,
-#            name_contains, media_buy_ids, buyer_refs)
+#            name_contains, media_buy_ids)
 # ---------------------------------------------------------------------------
 
 

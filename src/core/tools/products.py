@@ -16,7 +16,7 @@ from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, ValidationError
+from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -39,7 +39,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error, safe_parse_json_field
+from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -805,19 +805,20 @@ async def get_products(
 
     # Build request object for shared implementation
     try:
-        req = create_get_products_request(
-            brief=brief,
-            brand=brand,
-            filters=filters,
-            property_list=property_list,
-            context=context,
-        )
-
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
+        with adcp_validation_boundary(context="get_products request"):
+            req = create_get_products_request(
+                brief=brief,
+                brand=brand,
+                filters=filters,
+                property_list=property_list,
+                context=context,
+            )
     except ValueError as e:
-        # Convert ValueError from helper to ToolError with clear message
-        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
+        # Helper raises ValueError for semantic (non-Pydantic) input problems.
+        raise AdCPValidationError(
+            f"Invalid get_products request: {e}",
+            suggestion="Correct the get_products request per the AdCP specification and resend.",
+        ) from e
 
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None

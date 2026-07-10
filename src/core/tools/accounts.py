@@ -116,7 +116,7 @@ def _list_accounts_impl(
 ) -> ListAccountsResponse:
     """List accounts accessible to the authenticated agent.
 
-    Per BR-RULE-055: requires authentication, raises AUTH_TOKEN_INVALID if missing.
+    Per BR-RULE-055: requires authentication, raises AUTH_REQUIRED if missing.
     Per BR-RULE-054: returns only accounts accessible to the agent.
 
     Args:

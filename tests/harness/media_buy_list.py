@@ -43,12 +43,15 @@ class MediaBuyListEnv(IntegrationEnv):
         return _get_media_buys_impl(req=req, identity=identity, include_snapshot=include_snapshot)
 
     def call_a2a(self, **kwargs: Any) -> Any:
-        """Call get_media_buys_raw (A2A wrapper)."""
-        from src.core.tools.media_buy_list import get_media_buys_raw
+        """Dispatch get_media_buys through the REAL A2A pipeline (on_message_send).
 
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return get_media_buys_raw(**kwargs)
+        The production A2A path is ``_handle_get_media_buys_skill`` —
+        ``get_media_buys_raw`` has ZERO production callers, so dispatching to it
+        here gave false confidence (#1417): a boundary fix on the raw
+        wrapper made 'A2A' tests green while the real skill handler still
+        leaked bare ValidationErrors.
+        """
+        return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> Any:
         """Call get_media_buys MCP wrapper."""

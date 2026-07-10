@@ -143,7 +143,7 @@ class TestA2AErrorPropagation:
         )
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
-        """Principal-not-found surfaces AUTH_TOKEN_INVALID as a two-layer envelope on the A2A wire."""
+        """Principal-not-found surfaces AUTH_REQUIRED as a two-layer envelope on the A2A wire."""
         # Mock identity with non-existent principal — simulates resolved but invalid principal
         identity = PrincipalFactory.make_identity(
             principal_id="nonexistent_principal",
@@ -188,12 +188,12 @@ class TestA2AErrorPropagation:
 
         # Principal-not-found raises AdCPAuthenticationError from _impl; the A2A
         # dispatcher catches the typed error and builds the two-layer envelope on
-        # a failed Task. AUTH_TOKEN_INVALID is a STANDARD_ERROR_CODES entry
-        # (passthrough — not rewritten by ERROR_CODE_MAPPING); recovery=terminal.
+        # a failed Task. AUTH_REQUIRED is a STANDARD_ERROR_CODES entry
+        # (passthrough — not rewritten by ERROR_CODE_MAPPING); recovery=correctable.
         assert_envelope_shape(
             artifact_data,
-            "AUTH_TOKEN_INVALID",
-            recovery="terminal",
+            "AUTH_REQUIRED",
+            recovery="correctable",
             message_substr="not found",
         )
 
@@ -957,7 +957,7 @@ class TestA2AErrorResponseStructure:
         """PermissionError in a skill handler propagates as AdCPAuthorizationError.
 
         Symmetric with ValueError handling. Outer dispatcher produces a failed
-        Task with envelope (AUTH_REQUIRED, recovery=terminal).
+        Task with envelope (AUTH_REQUIRED, recovery=correctable).
         """
         from unittest.mock import patch
 
@@ -972,10 +972,9 @@ class TestA2AErrorResponseStructure:
 
             assert "tenant scope mismatch" in str(exc_info.value)
             assert exc_info.value.error_code == "AUTH_REQUIRED"
-            # AdCPAuthorizationError class default (hardcoded _default_recovery, not read from
-            # STANDARD_ERROR_CODES), preserved through the wrap. Terminal is intentional: the AdCP
-            # 3.1 storyboards grade the error code, not the recovery class — see the docstring.
-            assert exc_info.value.recovery == "terminal"
+            # AdCPAuthorizationError default recovery is correctable per the pinned AUTH_REQUIRED
+            # enum (#1417), preserved through the PermissionError wrap.
+            assert exc_info.value.recovery == "correctable"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 
     async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):
