@@ -31,6 +31,7 @@ a decision without understanding its rationale.
 | [ADR-003](adr-003-pull-request-target-trust.md) | pull_request_target trust boundary for CLA and PR-title workflows | Accepted |
 | [ADR-007](adr-007-build-provenance.md) | Build provenance attestation (SLSA L2) | Accepted |
 | [ADR-008](adr-008-target-version-bump.md) | Defer black/ruff target-version bump out of #1234 | Accepted |
+| [ADR-009](adr-009-quality-amnesty-honesty.md) | Honest policy for #1228 F1/F2/G2 (no fake incremental amnesty) | Proposed |
 
 ## How to add a new ADR
 
