@@ -71,6 +71,22 @@ def require_success_response(ctx: dict, noun: str = "success", *, response: obje
     return resp
 
 
+def parse_iso_8601(timestamp: object) -> object:
+    """Parse an ISO 8601 string (Z suffix tolerated), preserving its offset.
+
+    Returns the value unchanged if it is already a ``datetime``. Single
+    source for the ISO-parse expression shared by the confirmed_at wire
+    assertion (uc002) and the UC-019 timestamp normalizer — callers that
+    need UTC normalization or a timezone-presence assertion layer that on
+    top of the parsed value.
+    """
+    from datetime import datetime
+
+    return (
+        timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    )
+
+
 def assert_valid_actions_array(ctx: dict) -> None:
     """The success response carries a valid_actions array (INT-002)."""
     actions = _get_response_field(require_success_response(ctx), "valid_actions")

@@ -514,6 +514,31 @@ class MediaBuyRepository:
 
         return self._locked_mutate_and_bump(media_buy_id, _apply)
 
+    def update_status_or_raise(
+        self,
+        media_buy_id: str,
+        status: str,
+        *,
+        approved_at: datetime.datetime | None = None,
+        approved_by: str | None = None,
+    ) -> MediaBuy:
+        """``update_status``, raising if the buy vanished mid-request.
+
+        For callers that verified the buy exists before transitioning (the
+        admin approve/reject and workflow-approval routes): ``None`` there
+        means the row disappeared between the check and the write, and
+        proceeding would report success for a transition that never happened
+        (No Quiet Failures). Coexists with ``update_status`` — callers that
+        deliberately tolerate a missing buy keep using that.
+        """
+        media_buy = self.update_status(media_buy_id, status, approved_at=approved_at, approved_by=approved_by)
+        if media_buy is None:
+            raise RuntimeError(
+                f"media buy {media_buy_id!r} disappeared during status transition to {status!r} — "
+                "it existed when the request began"
+            )
+        return media_buy
+
     def update_fields(self, media_buy_id: str, **kwargs: Any) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.
 

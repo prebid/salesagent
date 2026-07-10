@@ -16,6 +16,7 @@ from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import (
     _get_response_field,
     assert_valid_actions_array,
+    parse_iso_8601,
 )
 from tests.bdd.steps._outcome_helpers import (
     require_success_response as _require_success_response,
@@ -1763,15 +1764,13 @@ def then_response_confirmed_at_is_iso(ctx: dict) -> None:
     schema-optional in beta.3). The prose/schema divergence is tracked for
     upstream reconciliation in #1564.
     """
-    from datetime import datetime
-
     body = _serialized_success_body(ctx)
     confirmed_at = body.get("confirmed_at")
     assert confirmed_at is not None, f"serialized response is missing confirmed_at: {body!r}"
     assert isinstance(confirmed_at, str), (
         f"confirmed_at must be an ISO 8601 STRING on the wire, got {type(confirmed_at).__name__}: {confirmed_at!r}"
     )
-    parsed = datetime.fromisoformat(confirmed_at.replace("Z", "+00:00"))
+    parsed = parse_iso_8601(confirmed_at)
     assert parsed.tzinfo is not None, f"confirmed_at must carry a timezone designator, got {confirmed_at!r}"
 
 

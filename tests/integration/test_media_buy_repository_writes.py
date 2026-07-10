@@ -246,6 +246,24 @@ class TestRevisionBumpsOnStatusTransition:
             assert result is not None
             assert result.revision == 2
 
+    def test_update_status_or_raise_returns_row_and_raises_when_missing(self, tenant_a, principal_a):
+        """The or-raise variant surfaces a vanished buy instead of reporting silent success.
+
+        The admin approve/reject routes verify the buy exists, then transition it;
+        a ``None`` from ``update_status`` at that point means the row disappeared
+        mid-request — No-Quiet-Failures requires a raise, not a skipped write.
+        """
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_or_raise", status="pending_approval"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            result = uow.media_buys.update_status_or_raise("mb_rev_or_raise", "active")
+            assert result.status == "active"
+
+        with MediaBuyUoW(tenant_a) as uow:
+            with pytest.raises(RuntimeError, match="mb_never_existed"):
+                uow.media_buys.update_status_or_raise("mb_never_existed", "active")
+
     def test_apply_status_transition_bumps_revision(self, tenant_a, principal_a):
         """The cross-tenant seam (scheduler / creative-sync) bumps revision too."""
         with MediaBuyUoW(tenant_a) as uow:

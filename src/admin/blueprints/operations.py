@@ -410,7 +410,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # stamped in one place (AdCP 3.1.0-beta.3 revision counter + confirmed_at
                     # confirmation instant). Direct ``.status``/``.approved_at``
                     # writes here would skip the bump — see #1544 review.
-                    media_buy_repo.update_status(
+                    media_buy_repo.update_status_or_raise(
                         media_buy_id,
                         new_status,
                         approved_at=datetime.now(UTC),
@@ -532,7 +532,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 if media_buy and media_buy.status == "pending_approval":
                     # Route through the repository seam so the persisted revision
                     # bumps on this state change (AdCP 3.1.0-beta.3 revision) — see #1544.
-                    media_buy_repo.update_status(media_buy_id, "rejected")
+                    media_buy_repo.update_status_or_raise(media_buy_id, "rejected")
 
                 db_session.commit()
 

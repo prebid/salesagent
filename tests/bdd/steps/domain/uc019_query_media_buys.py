@@ -2421,11 +2421,11 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
 
 def _parse_iso_utc(timestamp: str | Any) -> Any:
     """Normalize an ISO 8601 string (or datetime) to an aware UTC datetime."""
-    from datetime import UTC, datetime
+    from datetime import UTC
 
-    parsed = (
-        timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-    )
+    from tests.bdd.steps._outcome_helpers import parse_iso_8601
+
+    parsed = parse_iso_8601(timestamp)
     return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 

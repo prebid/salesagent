@@ -66,6 +66,7 @@ MEDIA_BUY_SPECIFIC_METHODS = {
     "create_from_request",
     "apply_status_transition",
     "bump_revision",
+    "update_status_or_raise",
     "find_by_idempotency_key",
     "get_by_id_or_idempotency_key",
     "get_by_id_or_raise",
