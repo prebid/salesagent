@@ -256,6 +256,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
     timeout-minutes: 25
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
@@ -265,6 +266,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Ensure docker-compose alias exists
         run: |
           docker compose version
@@ -293,6 +300,9 @@ jobs:
           POSTGRES_PORT: 5435
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
+          # conftest builds the pinned creative agent host-side; prefer the
+          # pin-keyed ghcr pull (~5m faster) over building from source.
+          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -307,6 +317,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
     # Measured on the first run: image build ~5m + serial in-network bdd 44m
     # (2649s pytest) + teardown — 50m fired during teardown with the suite
     # fully green. 75m leaves headroom without masking a hang.
@@ -323,6 +334,12 @@ jobs:
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
           docker container prune -f 2>/dev/null || true
           docker network prune -f 2>/dev/null || true
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # No _setup-env / host Postgres: the runner container executes tox inside
       # the compose network (postgres:5432, proxy:8000) and publishes no host
       # ports. No coverage upload: the suite asserts behavior on the live
@@ -332,6 +349,9 @@ jobs:
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
+          # run_all_tests.sh builds the pinned creative agent host-side; prefer
+          # the pin-keyed ghcr pull (~5m faster) over building from source.
+          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1
