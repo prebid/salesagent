@@ -372,13 +372,34 @@ def auth_headers(test_principal):
 # a cheap clone per test, then skip the per-test drop entirely. Throwaway clones
 # accumulate in the (tmpfs) Postgres and are wiped when the container restarts, so
 # no teardown is needed. Correct because every test gets a unique DB name.
-_TEST_DB_TEMPLATE_NAME = "test_schema_template"
+_TEST_DB_TEMPLATE_PREFIX = "test_tmpl_"
 _TEST_DB_TEMPLATE_LOCK = 0x5A1E5DB  # arbitrary fixed advisory-lock key
-_template_ready = False
+_template_name: str | None = None
 
 
 def _use_db_template() -> bool:
     return os.environ.get("TEST_DB_TEMPLATE") == "1"
+
+
+def _skip_clone_drop() -> bool:
+    # Skip the per-test clone DROP only when explicitly told the Postgres is
+    # throwaway (tmpfs) via TEST_DB_SKIP_DROP=1. Otherwise clones are always
+    # dropped, so template mode never leaks databases on a persistent Postgres
+    # (agent-db / local dev). Skip-drop has no measured wall-time benefit; it
+    # only shaves teardown CPU on the tmpfs CI box.
+    return _use_db_template() and os.environ.get("TEST_DB_SKIP_DROP") == "1"
+
+
+def _schema_fingerprint() -> str:
+    """Stable 8-char hash of the ORM schema so a model change forces a FRESH
+    template instead of silently cloning a stale one (existence != freshness)."""
+    import hashlib
+
+    import src.core.database.models  # noqa: F401  (register models on Base.metadata)
+    from src.core.database.models import Base
+
+    sig = "\n".join(sorted(f"{t.name}.{c.name}:{c.type}" for t in Base.metadata.tables.values() for c in t.columns))
+    return hashlib.sha1(sig.encode()).hexdigest()[:8]
 
 
 def _build_schema(url: str) -> None:
@@ -397,28 +418,43 @@ def _build_schema(url: str) -> None:
 
 
 def _ensure_db_template(conn_params: dict, engine_url_base: str) -> str:
-    """Ensure the schema template DB exists; build it once (xdist-safe via a
-    Postgres advisory lock so exactly one worker builds it). Returns its name."""
-    global _template_ready
-    if _template_ready:
-        return _TEST_DB_TEMPLATE_NAME
+    """Ensure a schema-fresh template DB exists and return its name.
+
+    Build is xdist-safe (one builder via a Postgres advisory lock) and
+    crash-safe: the schema is created into a transient ``…__build`` database and
+    only RENAMEd to the final name after create_all succeeds — so a half-built
+    template can never be mistaken for a complete one (the old code committed
+    CREATE DATABASE before build, permanently poisoning the template if the build
+    threw). The final name embeds the schema fingerprint, so a model change lands
+    in a new template rather than reusing a stale clone source."""
+    global _template_name
+    if _template_name:
+        return _template_name
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+    name = f"{_TEST_DB_TEMPLATE_PREFIX}{_schema_fingerprint()}"
+    building = f"{name}__build"
     conn = _connect_with_retry(conn_params)
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
     try:
         cur.execute("SELECT pg_advisory_lock(%s)", (_TEST_DB_TEMPLATE_LOCK,))
-        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (_TEST_DB_TEMPLATE_NAME,))
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
         if not cur.fetchone():
-            cur.execute(f'CREATE DATABASE "{_TEST_DB_TEMPLATE_NAME}"')
-            _build_schema(f"{engine_url_base}/{_TEST_DB_TEMPLATE_NAME}")
+            cur.execute(f'DROP DATABASE IF EXISTS "{building}"')
+            cur.execute(f'CREATE DATABASE "{building}"')
+            try:
+                _build_schema(f"{engine_url_base}/{building}")
+                cur.execute(f'ALTER DATABASE "{building}" RENAME TO "{name}"')
+            except Exception:
+                cur.execute(f'DROP DATABASE IF EXISTS "{building}"')
+                raise
         cur.execute("SELECT pg_advisory_unlock(%s)", (_TEST_DB_TEMPLATE_LOCK,))
     finally:
         cur.close()
         conn.close()
-    _template_ready = True
-    return _TEST_DB_TEMPLATE_NAME
+    _template_name = name
+    return name
 
 
 @pytest.fixture(scope="function")
@@ -481,8 +517,21 @@ def integration_db():
     _engine_url_base = f"postgresql://{user}:{password}@{host}:{postgres_port}"
     try:
         if _use_db_template():
-            _ensure_db_template(conn_params, _engine_url_base)
-            cur.execute(f'CREATE DATABASE "{unique_db_name}" TEMPLATE "{_TEST_DB_TEMPLATE_NAME}"')
+            tmpl = _ensure_db_template(conn_params, _engine_url_base)
+            # Concurrent `CREATE DATABASE … TEMPLATE` from the same template can
+            # transiently fail with "source database is being accessed by other
+            # users" under heavy xdist — Postgres briefly locks the template.
+            # Retry a few times before surfacing the error.
+            import time as _time
+
+            for _attempt in range(8):
+                try:
+                    cur.execute(f'CREATE DATABASE "{unique_db_name}" TEMPLATE "{tmpl}"')
+                    break
+                except Exception:
+                    _time.sleep(0.25)
+            else:
+                cur.execute(f'CREATE DATABASE "{unique_db_name}" TEMPLATE "{tmpl}"')
         else:
             cur.execute(f'CREATE DATABASE "{unique_db_name}"')
     finally:
@@ -614,9 +663,11 @@ def integration_db():
     elif "DB_TYPE" in os.environ:
         del os.environ["DB_TYPE"]
 
-    # Drop PostgreSQL test database — skipped in template mode, where throwaway
-    # clones accumulate in the (tmpfs) Postgres and are wiped on container restart.
-    if not _use_db_template():
+    # Drop the per-test clone. Skipped ONLY when TEST_DB_SKIP_DROP=1 signals a
+    # throwaway (tmpfs) Postgres where clones are wiped on container restart;
+    # otherwise we always drop, so template mode never leaks databases on a
+    # persistent Postgres (agent-db / local dev).
+    if not _skip_clone_drop():
         try:
             conn = _connect_with_retry(conn_params)
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
