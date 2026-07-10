@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 
 import httpx
 
@@ -117,8 +118,6 @@ class TMPHealthScheduler(IntervalScheduler):
         # --- Step 3: write results — group by tenant so each UoW owns its commit ---
         # Build a per-tenant list of (provider_id, status) pairs first so we can
         # open exactly one UoW per tenant rather than one raw session for all tenants.
-        from collections import defaultdict
-
         by_tenant: dict[str, list[tuple[str, str]]] = defaultdict(list)
         for (provider_id, tenant_id, _endpoint), status in zip(provider_info, statuses, strict=True):
             by_tenant[tenant_id].append((provider_id, status))

@@ -240,12 +240,11 @@ class TestDiscoveryApiKeyAuth:
     def test_returns_500_when_tmp_discovery_api_keys_not_set(self, client):
         """When TMP_DISCOVERY_API_KEYS is unset the endpoint returns 500 (fail-closed, operator must act).
 
-        AdCPConfigurationError (500, correctable) is the right error here: the operator
-        has to configure the env var; the buyer cannot recover this themselves.
-
-        NOTE: recovery is currently "terminal" (AdCPConfigurationError class default) because
-        the global default flip (terminal → correctable) is split into its own PR #1550.
-        Once #1550 merges and this branch rebases, update to recovery="correctable".
+        AdCPConfigurationError is the right error here: the operator has to configure
+        the env var; the buyer cannot recover this themselves.  The wire code is
+        SERVICE_UNAVAILABLE (CONFIGURATION_ERROR maps through exceptions.py) with
+        recovery="terminal" — the spec-correct value under the current pin (3.1.0-beta.3
+        classifies CONFIGURATION_ERROR as terminal).
         """
         import os
 
@@ -254,25 +253,21 @@ class TestDiscoveryApiKeyAuth:
             response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 500
-        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire.
-        # TODO(#1550): update to recovery="correctable" once PR #1550 merges.
+        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire; recovery=terminal
+        # is spec-correct under the current pin (3.1.0-beta.3).
         assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
 
     def test_returns_500_when_tmp_discovery_api_keys_is_empty_string(self, client):
         """When TMP_DISCOVERY_API_KEYS is set to empty string the endpoint returns 500 (fail-closed).
 
-        Same as unset: AdCPConfigurationError (500) — operator must act.
-
-        NOTE: recovery is currently "terminal" (AdCPConfigurationError class default) because
-        the global default flip (terminal → correctable) is split into its own PR #1550.
-        Once #1550 merges and this branch rebases, update to recovery="correctable".
+        Same as unset: AdCPConfigurationError (500, terminal) — operator must act.
         """
         with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": ""}):
             response = client.get("/tenant/si-host/tmp-providers/discovery")
 
         assert response.status_code == 500
-        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire.
-        # TODO(#1550): update to recovery="correctable" once PR #1550 merges.
+        # CONFIGURATION_ERROR maps to SERVICE_UNAVAILABLE on wire; recovery=terminal
+        # is spec-correct under the current pin (3.1.0-beta.3).
         assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
 
     def test_open_when_tmp_discovery_api_keys_is_open(self, client):

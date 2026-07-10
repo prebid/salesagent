@@ -4311,6 +4311,10 @@ async def create_media_buy(
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
     )
+
+    from src.services.tmp_provider_sync import fire_tmp_sync
+
+    fire_tmp_sync(result, identity.tenant_id if identity else None)
     return ToolResult(content=str(result), structured_content=result)
 
 
@@ -4394,13 +4398,18 @@ async def create_media_buy_raw(
         else push_notification_config
     )
 
-    return await _create_media_buy_impl(
+    result = await _create_media_buy_impl(
         req=req,
         push_notification_config=pnc_dict,
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
     )
+
+    from src.services.tmp_provider_sync import fire_tmp_sync
+
+    fire_tmp_sync(result, identity.tenant_id if identity else None)
+    return result
 
 
 # Unified update tools

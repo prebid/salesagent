@@ -15,6 +15,11 @@ from sqlalchemy.orm import Session
 
 from src.core.database.models import TMPProvider
 
+# Statuses that receive package sync updates and health probes.
+# Draining providers still serve in-flight requests and need current data.
+# Used by both list_syncable() (per-tenant) and get_all_syncable() (cross-tenant).
+_SYNCABLE_STATUSES: list[str] = ["active", "draining"]
+
 
 class TMPProviderRepository:
     """Tenant-scoped data access for TMPProvider registrations.
@@ -47,10 +52,10 @@ class TMPProviderRepository:
     def list_syncable(self) -> list[TMPProvider]:
         """List providers that should receive package sync updates.
 
-        Includes both 'active' and 'draining' providers. Draining providers
-        still serve in-flight requests and need current package data — the
-        router stops sending NEW requests to them, but packages must stay
-        up-to-date for requests already in the pipeline.
+        Includes both 'active' and 'draining' providers (``_SYNCABLE_STATUSES``).
+        Draining providers still serve in-flight requests and need current
+        package data — the router stops sending NEW requests to them, but
+        packages must stay up-to-date for requests already in the pipeline.
 
         This matches the discovery endpoint (tmp_providers.py) which also
         returns both active and draining providers to the TMP Router.
@@ -60,7 +65,7 @@ class TMPProviderRepository:
                 select(TMPProvider)
                 .where(
                     TMPProvider.tenant_id == self._tenant_id,
-                    TMPProvider.status.in_(["active", "draining"]),
+                    TMPProvider.status.in_(_SYNCABLE_STATUSES),
                 )
                 .order_by(TMPProvider.priority.asc(), TMPProvider.name.asc())
             ).all()
@@ -185,15 +190,15 @@ class TMPProviderRepository:
     def get_all_syncable(session: Session) -> list[TMPProvider]:
         """List all active/draining providers across all tenants.
 
-        Includes both 'active' and 'draining' providers — matches the
-        per-tenant ``list_syncable()`` semantics but scoped to all tenants.
-        Used by the health-check scheduler which runs cross-tenant.
+        Includes both 'active' and 'draining' providers (``_SYNCABLE_STATUSES``) —
+        matches the per-tenant ``list_syncable()`` semantics but scoped to all
+        tenants.  Used by the health-check scheduler which runs cross-tenant.
         Not tenant-scoped — callers must handle tenant context themselves.
         """
         return list(
             session.scalars(
                 select(TMPProvider)
-                .where(TMPProvider.status.in_(["active", "draining"]))
+                .where(TMPProvider.status.in_(_SYNCABLE_STATUSES))
                 .order_by(TMPProvider.tenant_id, TMPProvider.name)
             ).all()
         )

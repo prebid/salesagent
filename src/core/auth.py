@@ -37,6 +37,7 @@ _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODU
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
+from src.core.http_utils import parse_bearer_token as _parse_bearer_token
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:
@@ -218,17 +219,15 @@ def get_principal_from_context(
     auth_token = _get_header_case_insensitive(headers, "x-adcp-auth")
     auth_source = "x-adcp-auth" if auth_token else None
 
-    # If x-adcp-auth not present, try Authorization: Bearer (for Anthropic, standard MCP clients)
+    # If x-adcp-auth not present, try Authorization: Bearer (for Anthropic, standard MCP clients).
+    # parse_bearer_token() is the single canonical Bearer parser shared across
+    # auth.py, auth_middleware.py, resolved_identity.py, and routes/tmp_providers.py.
     if not auth_token:
-        authorization_header = _get_header_case_insensitive(headers, "Authorization")
-        if authorization_header:
-            # RFC 6750 specifies "Bearer" but accept case-insensitive for compatibility
-            auth_header_lower = authorization_header.lower()
-            if auth_header_lower.startswith("bearer "):
-                potential_token = authorization_header[7:].strip()  # Remove "Bearer " prefix and whitespace
-                if potential_token:  # Only use if there's actually a token after the prefix
-                    auth_token = potential_token
-                    auth_source = "Authorization: Bearer"
+        authorization_header = _get_header_case_insensitive(headers, "Authorization") or ""
+        bearer_token = _parse_bearer_token(authorization_header)
+        if bearer_token:
+            auth_token = bearer_token
+            auth_source = "Authorization: Bearer"
 
     if _VERBOSE_AUTH_LOG and auth_source:
         logger.info("Auth token found via: %s", auth_source)

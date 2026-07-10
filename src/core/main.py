@@ -103,30 +103,27 @@ _SCHEDULER_REGISTRY = [
 ]
 
 
-async def _start_scheduler(name: str, module_path: str, fn_name: str) -> None:
-    """Import and call a scheduler start function, logging success/failure."""
+async def _run_scheduler_fn(verb: str, name: str, module_path: str, fn_name: str) -> None:
+    """Import and call a scheduler lifecycle function, logging success/failure.
+
+    Extracted from the identical ``_start_scheduler`` / ``_stop_scheduler``
+    pair — they differed only in the verb string used in log messages.
+
+    Args:
+        verb:        Human-readable verb for log messages (e.g. ``"start"``).
+        name:        Scheduler name (e.g. ``"TMP health"``).
+        module_path: Dotted import path of the scheduler module.
+        fn_name:     Name of the function to call on the module.
+    """
     import importlib
 
-    logger.info("Starting %s scheduler...", name)
+    logger.info("%sing %s scheduler...", verb.capitalize(), name)
     try:
         mod = importlib.import_module(module_path)
         await getattr(mod, fn_name)()
-        logger.info("✅ %s scheduler started", name)
+        logger.info("✅ %s scheduler %sed", name, verb)
     except Exception as e:
-        logger.error("Failed to start %s scheduler: %s", name, e, exc_info=True)
-
-
-async def _stop_scheduler(name: str, module_path: str, fn_name: str) -> None:
-    """Import and call a scheduler stop function, logging success/failure."""
-    import importlib
-
-    logger.info("Stopping %s scheduler...", name)
-    try:
-        mod = importlib.import_module(module_path)
-        await getattr(mod, fn_name)()
-        logger.info("✅ %s scheduler stopped", name)
-    except Exception as e:
-        logger.error("Failed to stop %s scheduler: %s", name, e, exc_info=True)
+        logger.error("Failed to %s %s scheduler: %s", verb, name, e, exc_info=True)
 
 
 # Lifespan context manager for FastMCP startup/shutdown
@@ -138,12 +135,12 @@ async def lifespan_context(app):
     so dependencies are torn down cleanly.
     """
     for name, module_path, start_fn, _stop_fn in _SCHEDULER_REGISTRY:
-        await _start_scheduler(name, module_path, start_fn)
+        await _run_scheduler_fn("start", name, module_path, start_fn)
 
     yield
 
     for name, module_path, _start_fn, stop_fn in reversed(_SCHEDULER_REGISTRY):
-        await _stop_scheduler(name, module_path, stop_fn)
+        await _run_scheduler_fn("stop", name, module_path, stop_fn)
 
 
 mcp = FastMCP(

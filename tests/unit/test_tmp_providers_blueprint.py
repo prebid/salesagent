@@ -140,7 +140,12 @@ class TestTMPProviderEditSSRF:
     """SSRF validation is wired into the edit endpoint."""
 
     def test_edit_rejects_unsafe_url_on_update(self):
-        """POST /tmp-providers/<id>/edit updating URL to host.docker.internal must be rejected."""
+        """POST /tmp-providers/<id>/edit updating URL to host.docker.internal must be rejected.
+
+        Uses identity_match=on with countries+uid_types so the SSRF check is the
+        sole rejection reason — mirrors the add-path test (test_add_rejects_docker_internal_url)
+        which uses context_match-only to isolate SSRF as the sole cause.
+        """
         client = _make_tmp_provider_client()
 
         existing_provider = _make_mock_provider()
@@ -159,6 +164,10 @@ class TestTMPProviderEditSSRF:
                         "endpoint": "http://host.docker.internal:9999",
                         "context_match": "on",
                         "identity_match": "on",
+                        # Provide valid countries+uid_types so identity_match validation
+                        # passes and SSRF is the sole rejection reason.
+                        "countries": "US,GB",
+                        "uid_types": "uid2,id5",
                         "timeout_ms": "50",
                         "status": "active",
                     },
@@ -168,6 +177,56 @@ class TestTMPProviderEditSSRF:
         assert response.status_code == 302
         assert "edit" in response.headers.get("Location", "")
         mock_uow.tmp_providers.update_fields.assert_not_called()
+
+    def test_edit_accepts_safe_public_url(self):
+        """POST /tmp-providers/<id>/edit with a safe public URL must succeed.
+
+        Positive counterpart to test_edit_rejects_unsafe_url_on_update — verifies
+        that the SSRF guard does not block legitimate public endpoints on the edit path.
+        """
+        client = _make_tmp_provider_client()
+
+        existing_provider = _make_mock_provider()
+
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
+            mock_uow = MagicMock()
+            mock_uow.tmp_providers = MagicMock()
+            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+            with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+                with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                    response = client.post(
+                        "/tenant/default/tmp-providers/test-uuid-1234/edit",
+                        data={
+                            "name": "Existing Provider",
+                            "endpoint": "https://provider.example.com/tmp",
+                            "context_match": "on",
+                            "identity_match": "on",
+                            "countries": "US,GB",
+                            "uid_types": "uid2,id5",
+                            "timeout_ms": "50",
+                            "status": "active",
+                        },
+                        follow_redirects=False,
+                    )
+
+        assert response.status_code == 302
+        assert "tmp-providers" in response.headers.get("Location", "")
+        mock_uow.tmp_providers.update_fields.assert_called_once_with(
+            "test-uuid-1234",
+            name="Existing Provider",
+            endpoint="https://provider.example.com/tmp",
+            context_match=True,
+            identity_match=True,
+            countries=["US", "GB"],
+            uid_types=["uid2", "id5"],
+            properties=None,
+            timeout_ms=50,
+            priority=0,
+            status="active",
+            auth_type=None,
+        )
 
 
 class TestTMPProviderInputValidation:
@@ -344,7 +403,8 @@ class TestTMPProviderIdentityMatchValidation:
 
         assert response.status_code == 302
         assert "add" in response.headers.get("Location", "")
-        mock_uow.tmp_providers.create.assert_not_called()
+        # Production uses create_from_fields, not create — assert the right method.
+        mock_uow.tmp_providers.create_from_fields.assert_not_called()
 
     def test_add_rejects_identity_match_without_uid_types(self):
         """POST /tmp-providers/add with identity_match=on but no uid_types must redirect with error."""
@@ -372,7 +432,8 @@ class TestTMPProviderIdentityMatchValidation:
 
         assert response.status_code == 302
         assert "add" in response.headers.get("Location", "")
-        mock_uow.tmp_providers.create.assert_not_called()
+        # Production uses create_from_fields, not create — assert the right method.
+        mock_uow.tmp_providers.create_from_fields.assert_not_called()
 
     def test_add_rejects_invalid_uid_type_value(self):
         """POST /tmp-providers/add with invalid uid_type value must redirect with error."""
@@ -400,7 +461,8 @@ class TestTMPProviderIdentityMatchValidation:
 
         assert response.status_code == 302
         assert "add" in response.headers.get("Location", "")
-        mock_uow.tmp_providers.create.assert_not_called()
+        # Production uses create_from_fields, not create — assert the right method.
+        mock_uow.tmp_providers.create_from_fields.assert_not_called()
 
 
 class TestTMPProviderDeactivate:

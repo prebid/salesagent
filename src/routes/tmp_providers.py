@@ -58,28 +58,12 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPServiceUnavailableError,
 )
+from src.core.http_utils import parse_bearer_token as _parse_bearer_token
 from src.core.security.url_validator import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["tmp-providers"])
-
-
-def _parse_bearer_scheme(header_value: str) -> str:
-    """Parse an ``Authorization`` header value with an explicit scheme check.
-
-    ``removeprefix("Bearer ")`` is a substring strip, not a scheme parse: it
-    silently accepts a scheme-less ``Authorization: <key>`` value (the prefix
-    just isn't there to remove) and rejects the RFC-legal lowercase
-    ``bearer <key>`` scheme (case-sensitive prefix match). Parsing the scheme
-    explicitly and case-insensitively closes both gaps. Fails closed either
-    way (empty string on no match) — this hardens, it does not loosen, the
-    existing behavior.
-    """
-    parts = header_value.strip().split(None, 1)
-    if len(parts) == 2 and parts[0].lower() == "bearer":
-        return parts[1].strip()
-    return ""
 
 
 async def require_api_key(request: Request) -> None:
@@ -91,7 +75,7 @@ async def require_api_key(request: Request) -> None:
     - ``TMP_DISCOVERY_API_KEYS=key1,key2`` — accept those keys only.
     - ``TMP_DISCOVERY_API_KEYS=OPEN`` — disable auth (internal-network-only
       deployments where the operator has made a deliberate choice).
-    - Unset or empty — raise ``AdCPConfigurationError`` (500, correctable) so
+    - Unset or empty — raise ``AdCPConfigurationError`` (500, terminal) so
       misconfigured deployments fail loudly instead of silently exposing tenant
       topology.  The operator must act; the buyer cannot recover this.
 
@@ -99,6 +83,10 @@ async def require_api_key(request: Request) -> None:
       - ``x-adcp-auth``
       - ``X-API-Key``
       - ``Authorization: Bearer <key>``
+
+    Bearer parsing uses the shared ``parse_bearer_token()`` helper
+    (``src.core.http_utils``) — the single canonical implementation across
+    all four Bearer-parsing sites in the codebase.
     """
     raw = os.environ.get("TMP_DISCOVERY_API_KEYS", "").strip()
 
@@ -117,7 +105,8 @@ async def require_api_key(request: Request) -> None:
     api_key = (
         request.headers.get("x-adcp-auth", "")
         or request.headers.get("X-API-Key", "")
-        or _parse_bearer_scheme(request.headers.get("authorization", ""))
+        or _parse_bearer_token(request.headers.get("authorization", ""))
+        or ""
     )
     if not any(secrets.compare_digest(api_key, k) for k in allowed):
         raise AdCPAuthRequiredError(

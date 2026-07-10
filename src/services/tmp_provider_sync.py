@@ -11,16 +11,18 @@ Each synced AvailablePackage includes a seller_agent reference so the TMP
 Provider can attribute offers back to the originating seller agent.
 
 Design principles (AdCP Pattern compliance):
-- Called only from the **route layer** via FastAPI BackgroundTasks — never from
-  _impl functions (which must remain transport-agnostic).
+- Triggered from **every transport** (REST, MCP, A2A) via ``fire_tmp_sync()``,
+  which spawns a daemon thread so the caller is never blocked.  REST callers
+  may also use FastAPI BackgroundTasks — both paths converge on
+  ``sync_packages_for_media_buy``.
+- Never called from _impl functions (which must remain transport-agnostic).
 - Reads packages and provider endpoints via **repositories** (UoW pattern) —
   no raw get_db_session() / select() calls.
 - HTTP calls are made **after** the DB session is closed — no open transaction
   during network I/O.
 - Failures are **logged with full context** and re-raised as warnings so the
   background task runner records them.  The media buy operation itself is
-  unaffected (fire-and-forget at the route boundary).
-- No asyncio.create_task() — FastAPI BackgroundTasks handles scheduling.
+  unaffected (fire-and-forget at the transport boundary).
 
 beads: salesagent-tmp-sync
 """
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Any
 
 import httpx
@@ -42,6 +45,39 @@ logger = logging.getLogger(__name__)
 # Timeout for each POST /packages/sync call (seconds).
 # Kept short — TMP Provider is an internal service on the same network.
 _SYNC_TIMEOUT_S = 5.0
+
+
+def fire_tmp_sync(response: Any, tenant_id: str | None) -> None:
+    """Spawn a daemon thread to sync TMP packages after a successful media buy operation.
+
+    Transport-agnostic entry point shared by MCP, A2A, and REST transports.
+    REST callers may also use FastAPI BackgroundTasks — both paths converge on
+    ``sync_packages_for_media_buy``.
+
+    ``response`` may be a ``CreateMediaBuyResult`` wrapper (create path) or a
+    direct ``UpdateMediaBuySuccess | UpdateMediaBuyError`` (update path).
+    ``CreateMediaBuyResult`` serializes flat but stores the domain response in
+    its ``.response`` field — ``media_buy_id`` lives there, not on the wrapper.
+    Uses ``getattr`` with an inner-response fallback to handle both shapes.
+
+    No-ops silently when ``media_buy_id`` or ``tenant_id`` is absent (e.g. on
+    error responses that carry no ID).
+    """
+    media_buy_id = getattr(response, "media_buy_id", None)
+    if media_buy_id is None:
+        inner = getattr(response, "response", None)
+        media_buy_id = getattr(inner, "media_buy_id", None)
+
+    if not media_buy_id or not tenant_id:
+        return
+
+    t = threading.Thread(
+        target=sync_packages_for_media_buy,
+        args=(tenant_id, media_buy_id),
+        daemon=True,
+        name=f"tmp-sync-{media_buy_id}",
+    )
+    t.start()
 
 
 def _resolve_seller_agent_url(tenant_id: str) -> str:
@@ -93,13 +129,14 @@ def _resolve_seller_agent_url(tenant_id: str) -> str:
 def _is_local_host(host: str) -> bool:
     """True if *host* (a hostname, optionally with ``:port``) is a local dev host.
 
-    Mirrors ``app.py:get_protocol``'s heuristic: a proper prefix check against
-    ``localhost`` / ``127.0.0.1`` rather than a substring test. A substring
-    test (``"localhost" not in host``) misclassifies a host like
-    ``my-localhost-mirror.example.com`` as local.
+    Uses exact equality / suffix checks rather than substring tests.
+    A substring test (``"localhost" not in host``) misclassifies a host like
+    ``my-localhost-mirror.example.com`` as local.  Likewise,
+    ``hostname.startswith("127.0.0.1")`` misclassifies ``127.0.0.1.evil.com``
+    as loopback — use ``== "127.0.0.1"`` instead.
     """
     hostname = host.split(":", 1)[0]
-    return hostname == "localhost" or hostname.endswith(".localhost") or hostname.startswith("127.0.0.1")
+    return hostname == "localhost" or hostname.endswith(".localhost") or hostname == "127.0.0.1"
 
 
 def _build_package_payload(
@@ -132,7 +169,8 @@ def _build_package_payload(
         "content_policies": cfg.get("content_policies") or cfg.get("required_policies") or [],
         "summary": cfg.get("summary") or cfg.get("name") or "",
         "creative_manifest": cfg.get("creative_manifest"),
-        "price": cfg.get("price") or cfg.get("bid_price"),
+        # Explicit None check: `or` would treat a valid price of 0 as absent.
+        "price": cfg.get("price") if cfg.get("price") is not None else cfg.get("bid_price"),
         "macros": cfg.get("macros") or {},
         # seller_agent.agent_url → stored as si_agent_endpoint in TMP Provider
         "si_agent_endpoint": seller_agent_url,
