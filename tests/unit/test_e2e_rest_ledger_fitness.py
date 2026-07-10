@@ -24,7 +24,17 @@ _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 
 # Ratchet ceiling — this may only ever DECREASE. When you graduate ledger
 # entries, lower it to the new count. It must never be raised.
-_LEDGER_CEILING = 308
+#
+# One-time owner-approved recalibration 2026-07-09, 308 -> 317: perf/parallelize-
+# test-suite enabled parallel e2e_rest (E2E_PER_WORKER), which for the first time
+# exercises 14 pre-existing MAIN scenarios (UC-004 #1545, UC-005 #1479, UC-018
+# BR-RULE-034 #1551) over the real HTTP transport. They fail for transport-inherent
+# reasons (mock-injection invisible, e2e_rest auth/tenant-context, wire not stashed)
+# unrelated to the adcp 6.6 bump — the run surface expanded, so this is a genuinely
+# new baseline, not a re-add of a graduated scenario. Deferred to the e2e_rest
+# retirement epic salesagent-rlgl (tracked: salesagent-5p68); the ceiling drops as
+# those scenarios are retired.
+_LEDGER_CEILING = 317
 
 
 def _ledger_entries() -> list[str]:
