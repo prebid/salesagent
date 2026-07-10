@@ -210,12 +210,23 @@ ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 # host runner runs this too; keep parity so the canonical local gate still scans
 # for known vulnerabilities. Single-sourced in scripts/security-audit.sh (also
 # called by .github/workflows/ci.yml, so CI and local can't drift).
-echo "Running security audit (uv-secure)..."
-if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
-    echo "Security audit passed"
-else
-    echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+# RUN_ALL_SKIP_AUDIT=1 skips it: the CI in-network job has no host uvx (it
+# deliberately skips _setup-env) and the dedicated "Security Audit" CI check
+# already owns this scan — a silent command-not-found here must not fail an
+# otherwise-green suite run.
+if [ "${RUN_ALL_SKIP_AUDIT:-0}" = "1" ]; then
+    echo "Security audit skipped (RUN_ALL_SKIP_AUDIT=1 — owned by the dedicated CI check)"
+elif ! command -v uvx >/dev/null 2>&1; then
+    echo "Security audit FAILED — uvx not on PATH (install uv or set RUN_ALL_SKIP_AUDIT=1)"
     [ "$RC" -eq 0 ] && RC=1
+else
+    echo "Running security audit (uv-secure)..."
+    if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+        echo "Security audit passed"
+    else
+        echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+        [ "$RC" -eq 0 ] && RC=1
+    fi
 fi
 
 exit $RC

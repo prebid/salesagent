@@ -1,10 +1,5 @@
 """Creative Agent Registry for dynamic format discovery per AdCP v2.4.
 
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [valid-type] on lines ~179, ~192: ImageFormatAsset | VideoFormatAsset union
-  annotation. SDK asset classes are dynamically resolved type factories; mypy
-  cannot validate the union. Permanent until upstream ships StrEnum.
-
 This module provides:
 1. Creative agent registry (system defaults + tenant-specific)
 2. Dynamic format discovery via MCP
@@ -36,7 +31,6 @@ from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
-from adcp.types import ImageFormatAsset
 from pydantic import ValidationError
 
 from src.core.exceptions import (
@@ -44,7 +38,8 @@ from src.core.exceptions import (
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
-from src.core.schemas import Format, FormatId, canonical_agent_url, url
+from src.core.format_cache import load_reference_formats
+from src.core.schemas import Format, FormatId, canonical_agent_url
 
 
 def _known_asset_types() -> frozenset[str]:
@@ -173,62 +168,50 @@ class FormatFetchResult:
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
 
 
-def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Format:
-    """Create a single mock format with proper typing for testing."""
-    from adcp.types import VideoFormatAsset
+def _get_reference_formats() -> list[Format]:
+    """Return the reference formats served in testing mode (ADCP_TESTING=true).
 
-    # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
-    # ImageFormatAsset = image, VideoFormatAsset = video. Pass asset_type as plain string (not enum).
-    if asset_type == "video":
-        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(  # type: ignore[valid-type]
-            item_type="individual",
-            asset_id="primary",
-            asset_type="video",
-            required=True,
-        )
-    else:
-        asset_item = ImageFormatAsset(
-            item_type="individual",
-            asset_id="primary",
-            asset_type="image",
-            required=True,
-        )
-    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]  # type: ignore[valid-type]
-    # Use Format (our extended class) instead of AdcpFormat to include is_standard field
-    # Explicitly pass None for optional internal fields to satisfy mypy
-    return Format(
-        format_id=FormatId(id=format_id_str, agent_url=url("https://creative.adcontextprotocol.org")),
-        name=name,
-        assets=assets,
-        is_standard=True,  # Mock formats are standard formats
-        platform_config=None,
-        category=None,
-        requirements=None,
-        iab_specification=None,
-        accepts_3p_tags=None,
-    )
+    These are loaded from the checked-in fixture
+    (tests/fixtures/creative_formats/reference_formats.json) captured from the
+    pinned reference creative agent (adcp@ca70dd1e2a6c). Reading from the fixture
+    — rather than a hand-maintained list — is what keeps the in-process harness
+    and the e2e server serving identical formats by construction, with no risk of
+    silent drift from the real agent.
 
-
-def _get_mock_formats() -> list[Format]:
-    """Return mock formats for testing mode (ADCP_TESTING=true).
-
-    These formats match what the real creative agent returns, but without
-    making external HTTP calls. Used in CI to avoid timeouts.
+    Refresh the fixture with `make creative-formats-refresh` when the pin or the
+    agent's catalog changes. See salesagent issue #1418.
     """
-    # Create mock formats using our Format class (which includes is_standard field)
-    return [
-        _create_mock_format("display_300x250_image", "Medium Rectangle", "image"),
-        _create_mock_format("display_728x90_image", "Leaderboard", "image"),
-        _create_mock_format("display_300x600_image", "Half Page", "image"),
-        _create_mock_format("display_160x600_image", "Wide Skyscraper", "image"),
-        _create_mock_format("display_320x50_image", "Mobile Leaderboard", "image"),
-        _create_mock_format("video_standard", "Standard Video", "video"),
-        _create_mock_format("video_standard_30s", "Standard Video 30s", "video"),
-        _create_mock_format("video_vast", "VAST Video", "video"),
-        _create_mock_format("display_image", "Display Image", "image"),
-        _create_mock_format("display_html", "Display HTML", "image"),
-        _create_mock_format("display_js", "Display JavaScript", "image"),
-    ]
+    return list(load_reference_formats())
+
+
+# Canonical URL of the AdCP standard creative agent. This is the FEDERATION
+# IDENTITY half of a format reference — (agent_url, id) — and must stay stable
+# across deployments; it is NOT necessarily where connections go (see
+# _connection_agent_url).
+PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+
+def _connection_agent_url(agent_url: str) -> str:
+    """Resolve the TRANSPORT url for an agent reference (salesagent-9qe2).
+
+    When CREATIVE_AGENT_URL is set (test/CI stacks run a pinned container
+    serving the standard catalog), references to the PUBLIC default agent
+    connect there instead of the live public host — which rate-limits under
+    CI load and must never be a test dependency (the catalog also drifts).
+    Only the connection reroutes: cache keys and format_id federation
+    identity stay on the canonical url. Non-default agents are untouched.
+
+    Read at call time (not import) so test stacks that set the env after
+    import still take effect.
+    """
+    configured = os.environ.get("CREATIVE_AGENT_URL")
+    if not configured:
+        return agent_url
+    if canonical_agent_url(agent_url) != canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL):
+        return agent_url
+    if canonical_agent_url(configured) == canonical_agent_url(agent_url):
+        return agent_url
+    return configured
 
 
 @dataclass
@@ -303,10 +286,27 @@ class CreativeAgentRegistry:
         return canonical_agent_url(agent_url)
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from creative agent configs."""
+        """Build AdCP client from creative agent configs.
+
+        Connections to the public default agent are rerouted through
+        ``_connection_agent_url`` (pinned-container alias in test/CI stacks);
+        the agents' identity urls (cache keys, format_id federation) are
+        untouched — only the transport config sees the alias.
+        """
+        from dataclasses import replace as _dc_replace
+
         from src.core.helpers.adapter_helpers import build_agent_config
 
-        return ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
+        return ADCPMultiAgentClient(
+            agents=[
+                build_agent_config(
+                    _dc_replace(agent, agent_url=_connection_agent_url(agent.agent_url))
+                    if _connection_agent_url(agent.agent_url) != agent.agent_url
+                    else agent
+                )
+                for agent in agents
+            ]
+        )
 
     def _get_tenant_agents(self, tenant_id: str | None) -> list[CreativeAgent]:
         """Get list of creative agents for a tenant.
@@ -644,9 +644,10 @@ class CreativeAgentRegistry:
         Returns:
             List of Format objects
         """
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
+        # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
+        # to avoid external HTTP calls (and to match the e2e server by construction).
         if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            return _get_mock_formats()
+            return _get_reference_formats()
 
         # Check cache - only use cache if no filtering parameters provided
         has_filters = any(
@@ -752,10 +753,11 @@ class CreativeAgentRegistry:
 
         logger = logging.getLogger(__name__)
 
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
+        # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
+        # to avoid external HTTP calls (and to match the e2e server by construction).
         if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            logger.info("list_all_formats: Using mock formats (ADCP_TESTING=true)")
-            return FormatFetchResult(formats=_get_mock_formats(), errors=[])
+            logger.info("list_all_formats: Using reference formats (ADCP_TESTING=true)")
+            return FormatFetchResult(formats=_get_reference_formats(), errors=[])
 
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []
@@ -908,7 +910,7 @@ class CreativeAgentRegistry:
             }
         """
         # Use custom MCP client for non-standard tools (preview_creative not in AdCP spec)
-        async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
+        async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
             result = await client.call_tool(
                 "preview_creative", {"format_id": format_id, "creative_manifest": creative_manifest}
             )
@@ -960,7 +962,7 @@ class CreativeAgentRegistry:
             - creative_output: Generated creative manifest with output_format
         """
         # Use custom MCP client for non-standard tools (build_creative not in AdCP spec)
-        async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
+        async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
             params = {
                 "message": message,
                 "format_id": format_id,

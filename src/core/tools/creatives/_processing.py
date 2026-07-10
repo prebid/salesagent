@@ -31,14 +31,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _failed_sync_result(creative_id: str, error_msg: str, *, recovery: str | None = None) -> SyncCreativeResult:
+def _failed_sync_result(
+    creative_id: str, error_msg: str, *, recovery: str | None = None, code: str = "SERVICE_UNAVAILABLE"
+) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
     ``recovery`` distinguishes a transient failure (creative agent down — a retry
     may help) from a terminal one (server misconfiguration — retrying cannot fix
-    it). The wire code stays the standard ``SERVICE_UNAVAILABLE`` either way
+    it). The wire code defaults to the standard ``SERVICE_UNAVAILABLE``
     (``CONFIGURATION_ERROR`` is internal-only and would leak verbatim in an
-    advisory); ``recovery`` is the structured retry signal.
+    advisory); ``recovery`` is the structured retry signal. Buyer-correctable
+    per-item failures (e.g. an assignment referencing an unknown creative_id)
+    pass ``code="VALIDATION_ERROR"``, matching the strict-mode raise.
     """
     return SyncCreativeResult(
         creative_id=creative_id,
@@ -47,7 +51,7 @@ def _failed_sync_result(creative_id: str, error_msg: str, *, recovery: str | Non
         platform_id=None,
         errors=[
             AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-                code="SERVICE_UNAVAILABLE", message=error_msg, recovery=recovery
+                code=code, message=error_msg, recovery=recovery
             )
         ],
         review_feedback=None,

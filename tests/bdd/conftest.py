@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Generator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -92,12 +93,21 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
     if report.when == "call" and report.failed and call.excinfo is not None:
         from pytest_bdd.exceptions import StepDefinitionNotFoundError
 
+        from tests.harness._realize import E2EUnsupportedSetup
+
         if call.excinfo.errisinstance(StepDefinitionNotFoundError):
             report.outcome = "skipped"
             report.wasxfail = f"Step definition not found: {call.excinfo.value}"
         elif call.excinfo.errisinstance(NotImplementedError):
             report.outcome = "skipped"
             report.wasxfail = f"Not implemented: {call.excinfo.value}"
+        elif call.excinfo.errisinstance(E2EUnsupportedSetup):
+            # A mock-setup intent the live e2e stack has no surface for. The
+            # reason is declared at the env method (not a nodeid ledger), so it
+            # is visible in the report. Non-strict xfail — in-process transports
+            # of the same scenario still run normally.
+            report.outcome = "skipped"
+            report.wasxfail = f"impl-only setup declared in env: {call.excinfo.value}"
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +589,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-webhook-circuit-open",
             "T-UC-004-webhook-circuit-recovery",
             "T-UC-004-webhook-retry-success",
+            # jdy1-M4: retry/sequence observability — assert on env.mock['post']
+            # call counts / args, not visible over the Docker HTTP path.
+            "T-UC-004-webhook-retry-5xx",
+            "T-UC-004-webhook-retry-network",
+            "T-UC-004-webhook-no-retry-4xx",
+            "T-UC-004-webhook-sequence",
         }
         if is_e2e_rest and (marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS):
             item.add_marker(
@@ -1140,6 +1156,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "the adcp MediaBuyDelivery.status enum includes it (production gap)",
                 True,
             ),
+            # Graduated: T-UC-004-aggregated-roas-and-cpa (production now computes
+            # conversions/conversion_value/roas/cost_per_acquisition in
+            # aggregated_totals — DeliveryTotals.conversion_value + aggregation
+            # quotients with omit-on-zero semantics).
             # T-UC-004-attr-supported: resolved — steps now assert attribution_window model and echo
             # T-UC-004-attr-unsupported: resolved — xfail now in step function for specific production gap
             # T-UC-004-attr-echo: resolved — vvx9 + ral2 fixed enum→str handling
@@ -1273,11 +1293,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # a2a now normalizes these to AdCPError(INVALID_REQUEST) (wire-drop
                     # confirmed XPASS, #1417) — removed. mcp/rest still gap.
                     "mcp-geo without geo_level",
-                    "rest-geo without geo_level",
+                    "[rest-geo without geo_level",
                     "mcp-limit=0 (below minimum)",
-                    "rest-limit=0 (below minimum)",
+                    "[rest-limit=0 (below minimum)",
                     "mcp-limit negative",
-                    "rest-limit negative",
+                    "[rest-limit negative",
                 },
                 "Pydantic rejects (missing geo_level / limit>=1) but error not normalized to "
                 "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
@@ -1290,11 +1310,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # a2a now normalizes these to AdCPError(INVALID_REQUEST) (wire-drop
                     # confirmed XPASS, #1417) — removed. mcp/rest still gap.
                     "mcp-interval=0 (below minimum)",
-                    "rest-interval=0 (below minimum)",
+                    "[rest-interval=0 (below minimum)",
                     "mcp-unit=weeks (not in enum)",
-                    "rest-unit=weeks (not in enum)",
+                    "[rest-unit=weeks (not in enum)",
                     "mcp-model=last_click (not in enum)",
-                    "rest-model=last_click (not in enum)",
+                    "[rest-model=last_click (not in enum)",
                 },
                 "Pydantic rejects (interval>=1 / unit enum / model enum) but error not normalized to "
                 "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
@@ -1308,14 +1328,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # buyer-supplied start_date/end_date in response.reporting_period,
             # so T-UC-004-daterange now genuinely passes (no strict xfail).
             #
-            # date-range partition (salesagent-x18x, #1545): GRADUATED. The Examples
-            # now name the wire code — error "VALIDATION_ERROR" with suggestion — and
-            # production emits exactly that on the a2a wire ("Start date must be before
-            # end date", media_buy_delivery.py:209-218 via AdCPValidationError). Only the
-            # [a2a-…] rows are parametrized for this partition (mcp/rest/impl not
-            # collected), and they pass the named code, so no partition marker remains.
-            # (The boundary counterpart below still masks mcp/rest — those transports
-            # ARE parametrized there and still gap.)
+            # date-range partition (salesagent-x18x, #1545): the a2a rows GRADUATED —
+            # the Examples now name the wire code (error "VALIDATION_ERROR" with
+            # suggestion) and production emits exactly that on the a2a wire ("Start date
+            # must be before end date", media_buy_delivery.py:209-218 via
+            # AdCPValidationError). Under the transport-aware harness (e2e-harness-wiring)
+            # mcp/rest ARE parametrized for this partition and still gap, so they retain a
+            # marker below.
+            # date-range partition/boundary (salesagent-04zf, 18h.10 Phase-2):
+            # when_partition/boundary_date_range now translate the descriptor
+            # into real start_date/end_date (previously the axis name was sent
+            # as a literal request field and rejected by extra=forbid, so the
+            # blanket _UC004_{PARTITION,BOUNDARY}_TAGS strict=False masked a
+            # broken step). With real wiring: the "valid" rows
+            # (start_before_end / dates_omitted) genuinely PASS on all 4
+            # transports (no marker). Only the "invalid" rows genuinely fail —
+            # production does not reject start>=end (same real gap as
+            # T-UC-004-daterange-invalid / -equal). strict=True forces marker
+            # removal the moment start>=end validation lands. See
+            # docs/test-debt-bdd-strict-markers.md item C4.
+            (
+                "T-UC-004-partition-date-range",
+                # a2a rows GRADUATED at the main merge (strict XPASS observed
+                # 2026-07-09): the merged wire path validates start>=end on a2a
+                # (same evidence class as the boundary-date-range rows below).
+                {"mcp-start_after_end", "mcp-start_equals_end", "[rest-start_after_end", "[rest-start_equals_end"},
+                "production does not validate start_date>=end_date (same gap as "
+                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
             # Transport-scoped: impl genuinely PASSES start>=end on the _impl
             # path now. mcp/rest boundary rows still don't enforce the gap.
             (
@@ -1324,9 +1364,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
                     # #1417) — removed. mcp/rest still gap.
                     "mcp-start_date after end_date",
-                    "rest-start_date after end_date",
+                    "[rest-start_date after end_date",
                     "mcp-start_date equals end_date",
-                    "rest-start_date equals end_date",
+                    "[rest-start_date equals end_date",
                 },
                 "production does not validate start_date>=end_date on a2a/mcp/rest "
                 "(impl passes). Same gap as T-UC-004-daterange-invalid/-equal. "
@@ -1385,17 +1425,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-account_not_found",
                     "impl-empty_object",
                     # valid rows (explicit_account_id / natural_key) now resolve the
-                    # account on a2a/mcp/rest (seeded, salesagent-jr5b) — removed.
+                    # account on a2a/mcp/rest — the delivery When seeds the named valid
+                    # accounts via _seed_valid_account_if_named / seed_account_with_access
+                    # (salesagent-jr5b, #1545), which is exactly the "seed the account in the
+                    # delivery Given" follow-up the e2e-harness-wiring branch flagged as the
+                    # condition for graduation. That seeding is present in the merged tree,
+                    # so the earlier REVERT no longer applies — the valid rows are removed.
                     # account_not_found now correctly raises ACCOUNT_NOT_FOUND on
-                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the
-                    # unseeded id 404s) — removed. Only invalid_oneOf_both / empty_object
-                    # still raise ValidationError-not-AdCPError on the wire, kept.
+                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the unseeded
+                    # id 404s) — removed. Only invalid_oneOf_both / empty_object still raise
+                    # ValidationError-not-AdCPError on the wire, kept (impl path also fails).
                     "a2a-invalid_oneOf_both",
                     "a2a-empty_object",
                     "mcp-invalid_oneOf_both",
                     "mcp-empty_object",
-                    "rest-invalid_oneOf_both",
-                    "rest-empty_object",
+                    "[rest-invalid_oneOf_both",
+                    "[rest-empty_object",
                 },
                 "a2a/mcp/rest do not parse/resolve the invalid oneOf/empty account "
                 "reference into an AdCPError(INVALID_REQUEST) at the transport boundary; "
@@ -1407,9 +1452,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "impl-account_id present + not found",
                     # Valid rows (account exists / single match = "brand + operator
-                    # present", incl. the sandbox:true variant) now resolve on
-                    # a2a/mcp/rest once their accounts are seeded (salesagent-jr5b)
-                    # — removed. a2a invalid rows (both / not found / empty) already
+                    # present", incl. the sandbox:true variant) now resolve on a2a/mcp/rest
+                    # once their accounts are seeded (salesagent-jr5b, present in the merged
+                    # tree) — removed. a2a invalid rows (both / not found / empty) already
                     # raise AdCPError (wire-drop XPASS, #1417) — removed.
                     "mcp-both account_id and brand/operator",
                     # mcp-account_id present + not found genuinely passes
@@ -1444,7 +1489,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-recent",
                     "mcp-failures_only",
                     "mcp-unknown_value-systematic",
-                    "rest-unknown_value-systematic",
+                    "[rest-unknown_value-systematic",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
                 "field); ValidationError not AdCPError (rest silently drops it). "
@@ -1462,7 +1507,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-random (first enum value)",
                     "mcp-failures_only (last enum value)",
                     "mcp-Unknown string not in enum",
-                    "rest-Unknown string not in enum",
+                    "[rest-Unknown string not in enum",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
                 "field); ValidationError not AdCPError (rest silently drops it). "
@@ -1475,7 +1520,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (empirically verified: a2a/mcp/rest all PASS the named code). The earlier
             # INVALID_REQUEST framing (and the "A2A wraps in RuntimeError" note) were both
             # stale — production emits VALIDATION_ERROR here, not INVALID_REQUEST — so no
-            # partition marker remains.
+            # partition marker remains. (e2e-harness-wiring corroborates: strict XPASS
+            # observed on the merged tree 2026-07-09, the merged A2A boundary raises
+            # AdCPError on the empty-array reject — adcp_validation_boundary from the
+            # #1417 embed — matching the boundary-resolution graduation below. Entry removed.)
             # T-UC-004-boundary-resolution: a2a now raises AdCPError on the empty-array
             # reject (wire-drop confirmed XPASS, #1417); the only remaining
             # transport-aware failure (a2a empty array) is handled below — entry removed
@@ -1499,7 +1547,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # access (wire-drop confirmed XPASS, #1417) — removed.
                     # mcp/rest still return 200+empty (C3 gap remains).
                     "mcp-principal differs from owner",
-                    "rest-principal differs from owner",
+                    "[rest-principal differs from owner",
                 },
                 "cross-principal access returns 200+empty instead of "
                 "AdCPError(MEDIA_BUY_NOT_FOUND). impl genuinely passes. "
@@ -1521,10 +1569,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # still raise ValidationError-not-AdCPError on a2a/mcp/rest, kept.
                     "a2a-empty_array",
                     "mcp-empty_array",
-                    "rest-empty_array",
+                    "[rest-empty_array",
                     "a2a-unknown_value",
                     "mcp-unknown_value",
-                    "rest-unknown_value",
+                    "[rest-unknown_value",
                 },
                 "single_pending: Gherkin 'pending_activation' is not a valid AdCP "
                 "MediaBuyStatus (item B1) — impl normalizes the legacy label, "
@@ -1545,7 +1593,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # #1417) — removed. mcp still fails (mcp-failed kept).
                     "mcp-pending_activation (first enum value)",
                     "mcp-failed (not in AdCP enum",
-                    "rest-pending_activation (first enum value)",
+                    "[rest-pending_activation (first enum value)",
                 },
                 "pending_activation: Gherkin value not a valid AdCP MediaBuyStatus "
                 "(item B1). failed/[]: ValidationError not AdCPError on a2a/mcp (item C4). "
@@ -1558,8 +1606,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (same shape as the reconciled date-range valid rows).
         ]
         # e2e_rest items must NOT be marked by this loop. Its row substrings use
-        # bare transport prefixes ("rest-…", not the "[rest-" bracket guard at :402),
-        # so a "rest-…" row substring-matches an "[e2e_rest-…]" nodeid and would stamp
+        # bare transport prefixes ("[rest-…", not the "[rest-" bracket guard at :402),
+        # so a "[rest-…" row substring-matches an "[e2e_rest-…]" nodeid and would stamp
         # a strict=True in-process "impl passes" reason onto e2e_rest items —
         # contradicting the ledger's non-strict policy and, once e2e_rest reaches the
         # real boundary and passes (e.g. INVALID_REQUEST now emitted), turning the pass
@@ -1685,15 +1733,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # FIXME(#1270): e2e_rest: Docker doesn't validate date range params —
-            # invalid cases (equals, after) succeed instead of failing.
-            if is_e2e_rest and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date")):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: Docker does not validate date range — invalid cases succeed",
-                        strict=True,
-                    )
-                )
+            # #1270 tripwire FIRED (strict XPASS on the first in-network CI run,
+            # 2026-07-09): the live server now validates start>=end (the merged
+            # #1417 validation embed) — tripwire removed, ledger entries graduated.
 
         # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
         # in-process — when only end_date is given, production defaults start to
@@ -1729,6 +1771,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # never reaches the live server (#1417). Marker kept for e2e_rest until the step-
         # binding bug is fixed.
         _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
+        # #1545/x18x: the campaign partition row GRADUATED on a2a (the only transport
+        # parametrized for it) — INV-5 fires VALIDATION_ERROR with suggestion — so the
+        # former strict=True _aw_partition_campaign leg is dropped (no _aw_partition_campaign
+        # var remains). Only the error "INVALID_REQUEST" rows still fail on e2e_rest, where
+        # the generic "with {request_params}" step still shadows the specific partition step.
         _partition_window_dropped = _aw_partition_error and is_e2e_rest
         if _partition_window_dropped:
             item.add_marker(
@@ -2356,22 +2403,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Immutable: only REST success-path update tests fail (error tests pass)
             (
                 "T-UC-026-partition-immutable",
-                {"rest-update_mutable_only", "rest-no_immutable_fields_present"},
+                {"[rest-update_mutable_only", "[rest-no_immutable_fields_present"},
                 "REST update dispatch not wired for partition immutable success tests",
             ),
             (
                 "T-UC-026-boundary-immutable",
-                {"rest-update with only mutable"},
+                {"[rest-update with only mutable"},
                 "REST update dispatch not wired for boundary immutable success tests",
             ),
             # Keyword add partition: only REST success-path tests fail
             (
                 "T-UC-026-partition-keyword-add",
                 {
-                    "rest-new_keyword",
-                    "rest-existing_keyword_update_bid",
-                    "rest-mixed_new_and_update",
-                    "rest-same_keyword_different_match",
+                    "[rest-new_keyword",
+                    "[rest-existing_keyword_update_bid",
+                    "[rest-mixed_new_and_update",
+                    "[rest-same_keyword_different_match",
                 },
                 "REST update dispatch not wired for partition keyword-add success tests",
             ),
@@ -2379,10 +2426,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-partition-keyword-remove",
                 {
-                    "rest-remove_existing_pair",
-                    "rest-remove_nonexistent_pair",
-                    "rest-remove_all_keywords",
-                    "rest-mixed_existing_and_nonexistent",
+                    "[rest-remove_existing_pair",
+                    "[rest-remove_nonexistent_pair",
+                    "[rest-remove_all_keywords",
+                    "[rest-mixed_existing_and_nonexistent",
                 },
                 "REST update dispatch not wired for partition keyword-remove success tests",
             ),
@@ -2394,10 +2441,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-empty keyword string",
                     "a2a-empty keyword string",
                     "mcp-empty keyword string",
-                    "rest-single new keyword target",
-                    "rest-existing (keyword, match_type) pair",
-                    "rest-same keyword with broad and exact",
-                    "rest-bid_price = 0",
+                    "[rest-single new keyword target",
+                    "[rest-existing (keyword, match_type) pair",
+                    "[rest-same keyword with broad and exact",
+                    "[rest-bid_price = 0",
                 },
                 "empty keyword validation not implemented / REST update not wired",
             ),
@@ -2409,10 +2456,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-empty keyword string",
                     "a2a-empty keyword string",
                     "mcp-empty keyword string",
-                    "rest-remove single existing",
-                    "rest-remove non-existent pair",
-                    "rest-remove all keyword targets",
-                    "rest-mix of existing and non-existent",
+                    "[rest-remove single existing",
+                    "[rest-remove non-existent pair",
+                    "[rest-remove all keyword targets",
+                    "[rest-mix of existing and non-existent",
                 },
                 "empty keyword validation not implemented / REST update not wired",
             ),
@@ -2424,15 +2471,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_add",
-                    "rest-add_with_bid_price",
-                    "rest-add_without_bid_price",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
-                    "rest-upsert_existing",
-                    "rest-zero_bid_price",
+                    "[rest-typical_add",
+                    "[rest-add_with_bid_price",
+                    "[rest-add_without_bid_price",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
+                    "[rest-upsert_existing",
+                    "[rest-zero_bid_price",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2442,12 +2489,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_remove",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
-                    "rest-remove_nonexistent",
+                    "[rest-typical_remove",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
+                    "[rest-remove_nonexistent",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2459,13 +2506,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
                     "a2a-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
                     "mcp-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-keyword_targets_add WITH targeting_overlay.negative_keywords",
-                    "rest-keyword_targets_add WITHOUT",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-keyword_targets_add WITH targeting_overlay.negative_keywords",
+                    "[rest-keyword_targets_add WITHOUT",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
@@ -2475,14 +2522,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
                     "a2a-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
                     "mcp-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-keyword_targets_remove WITHOUT",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
-                    "rest-remove pair that does NOT exist",
-                    "rest-remove pair that exists",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-keyword_targets_remove WITHOUT",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
+                    "[rest-remove pair that does NOT exist",
+                    "[rest-remove pair that exists",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
@@ -2494,12 +2541,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_add",
-                    "rest-add_duplicate",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
+                    "[rest-typical_add",
+                    "[rest-add_duplicate",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2509,12 +2556,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-conflict_with_overlay",
                     "a2a-conflict_with_overlay",
                     "mcp-conflict_with_overlay",
-                    "rest-typical_remove",
-                    "rest-all_match_types",
-                    "rest-boundary_min_array",
-                    "rest-boundary_min_keyword",
-                    "rest-cross_dimension_valid",
-                    "rest-remove_nonexistent",
+                    "[rest-typical_remove",
+                    "[rest-all_match_types",
+                    "[rest-boundary_min_array",
+                    "[rest-boundary_min_keyword",
+                    "[rest-cross_dimension_valid",
+                    "[rest-remove_nonexistent",
                 },
                 "conflict_with_overlay not implemented / REST update not wired",
             ),
@@ -2526,14 +2573,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
                     "a2a-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
                     "mcp-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
-                    "rest-negative_keywords_add WITHOUT",
-                    "rest-negative_keywords_add WITH targeting_overlay.keyword_targets",
-                    "rest-add pair that already exists",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
+                    "[rest-negative_keywords_add WITHOUT",
+                    "[rest-negative_keywords_add WITH targeting_overlay.keyword_targets",
+                    "[rest-add pair that already exists",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
@@ -2543,21 +2590,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
                     "a2a-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
                     "mcp-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
-                    "rest-negative_keywords_remove WITHOUT",
-                    "rest-array length 1",
-                    "rest-keyword length 1",
-                    "rest-match_type = 'broad'",
-                    "rest-match_type = 'exact'",
-                    "rest-match_type = 'phrase'",
-                    "rest-remove pair that does NOT exist",
-                    "rest-remove pair that exists",
+                    "[rest-negative_keywords_remove WITHOUT",
+                    "[rest-array length 1",
+                    "[rest-keyword length 1",
+                    "[rest-match_type = 'broad'",
+                    "[rest-match_type = 'exact'",
+                    "[rest-match_type = 'phrase'",
+                    "[rest-remove pair that does NOT exist",
+                    "[rest-remove pair that exists",
                 },
                 "overlay conflict validation not implemented / REST update not wired",
             ),
             # Paused: only REST update-path tests fail (create-path passes)
             (
                 "T-UC-026-partition-paused",
-                {"rest-pause_on_update", "rest-resume_on_update"},
+                {"[rest-pause_on_update", "[rest-resume_on_update"},
                 "REST update dispatch not wired for partition paused update tests",
             ),
             # d09y: boundary scenarios exposing real production gaps after step-parser fix.
@@ -2571,9 +2618,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-boundary-paused",
                 {
-                    "rest-paused=false on update",
-                    "rest-paused=true on update",
-                    "rest-paused=true on already-paused",
+                    "[rest-paused=false on update",
+                    "[rest-paused=true on update",
+                    "[rest-paused=true on already-paused",
                 },
                 "REST update dispatch not wired for boundary paused update tests",
             ),
@@ -2584,9 +2631,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "creative_assignments",
                     "optimization_goals",
-                    "rest-omit_array_fields",
-                    "rest-replace_catalogs",
-                    "rest-replace_targeting_overlay",
+                    "[rest-omit_array_fields",
+                    "[rest-replace_catalogs",
+                    "[rest-replace_targeting_overlay",
                 },
                 "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
             ),
@@ -2595,10 +2642,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "creative_assignments",
                     "optimization_goals",
-                    "rest-all array fields omitted",
-                    "rest-catalogs provided",
-                    "rest-only scalar fields updated",
-                    "rest-targeting_overlay replacement",
+                    "[rest-all array fields omitted",
+                    "[rest-catalogs provided",
+                    "[rest-only scalar fields updated",
+                    "[rest-targeting_overlay replacement",
                 },
                 "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
             ),
@@ -2789,11 +2836,17 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
     # the A2A + MCP wire transports only — including a REST variant would 404.
-    if any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names):
+    # This applies to e2e_rest too: it dispatches real HTTP REST to the live
+    # server, so a tool with no REST route 404s there identically (confirmed by
+    # the first in-network CI run: every UC-019 e2e_rest param died on a live
+    # 404). Skip the e2e append for these UCs instead of parking ~40 ledger
+    # entries for a definitionally-unsupported transport.
+    no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
+    if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]
         ids = ["a2a", "mcp"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true":
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 
@@ -3037,6 +3090,53 @@ def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     return "poll"
 
 
+@contextmanager
+def _production_db_pointed_at(url: str) -> Generator[None, None, None]:
+    """Point production's cached DB engine at ``url`` for the scenario duration.
+
+    The e2e counterpart of ``integration_db``'s engine repoint: over e2e_rest
+    the env's factories write to the live server DB (``e2e_config.postgres_url``),
+    but the runner's ``DATABASE_URL`` targets the in-process test base (in-network:
+    ``.../adcp_test``), so any in-process production call inside an e2e scenario
+    (e.g. a TRANSPORT-BYPASS Given calling an ``_impl``) would read a different
+    database than the one being seeded. Repoint DATABASE_URL + reset the cached
+    engine on entry, restore both on exit (mirrors tests/conftest_db.py).
+    """
+    import src.core.context_manager as _context_manager_module
+    from src.core.database.database_session import reset_engine
+
+    original_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = url
+    reset_engine()
+    _context_manager_module._context_manager_instance = None
+    try:
+        yield
+    finally:
+        if original_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original_url
+        reset_engine()
+        _context_manager_module._context_manager_instance = None
+
+
+def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> AbstractContextManager[None]:
+    """Select the production-DB scope for an e2e-capable harness branch.
+
+    In-process transports need the per-test database (``integration_db``).
+    Over e2e_rest, ``integration_db`` would repoint production's cached engine
+    at an empty per-test DB while the env's factories write to the live server
+    DB — so any in-process production call inside an e2e scenario (raw
+    ``get_db_session()`` read-backs in Then steps, TRANSPORT-BYPASS Givens
+    calling an ``_impl``) would read the wrong database. Point production at
+    the server DB instead for the scenario duration.
+    """
+    if e2e_config is None:
+        request.getfixturevalue("integration_db")
+        return nullcontext()
+    return _production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
+
+
 @pytest.fixture(autouse=True)
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
@@ -3048,12 +3148,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - Unknown UC → no harness (yields immediately)
     """
     uc = _detect_uc(request)
+    e2e_config = ctx.get("e2e_config")
 
     # E2E shares one live DB across all scenarios; flush it to a clean baseline so
     # this scenario's harness setup starts fresh (no cross-scenario tenant_id
     # collisions). No-op for the in-process transports (they use per-test DBs).
-    if ctx.get("e2e_config") is not None:
-        _reset_e2e_db(ctx["e2e_config"])
+    if e2e_config is not None:
+        _reset_e2e_db(e2e_config)
 
     if uc == "UC-002":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -3067,10 +3168,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # — or succeeds — on the wire. MediaBuyCreateEnv gives the create
             # transport wrappers + the full product/pricing dependency chain; the
             # account Given steps seed the account rows on top.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3092,10 +3192,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # which needs the same full create_media_buy flow to reach the
             # pending-approval audit feed.
             # Use MediaBuyCreateEnv which calls _create_media_buy_impl with real DB.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3112,10 +3211,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # remaining @idempotency-key scenarios (in-flight, expired, conflict,
             # pattern, canonical) stay blanket-xfailed below until their
             # production gaps + steps are wired.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3149,10 +3247,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # transport wrappers (_update_media_buy_impl / update_media_buy_raw /
             # MCP / REST), so update scenarios actually exercise the update flow
             # against the real DB instead of falling through to _create_media_buy_impl.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_dual import MediaBuyDualEnv
 
-            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyDualEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3169,25 +3266,26 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if "account" in marker_names or "creative-invariant" in marker_names:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
-            # response invariants (e.g. all-failed still returns the success variant).
-            request.getfixturevalue("integration_db")
+            # response invariants (e.g. all-failed still returns the success variant);
+            # @BR-RULE-034 scenarios drive cross-principal isolation (triple-key
+            # creative lookup) — dormant until the cross-principal existence-gate
+            # fix (PR #1430 review) made the surface safe to grade.
             from tests.harness.creative_sync import CreativeSyncEnv
 
-            with CreativeSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:
             pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-005":
-        request.getfixturevalue("integration_db")
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        with CreativeFormatsEnv(e2e_config=ctx.get("e2e_config")) as env:
+        with _db_scope_for(request, e2e_config), CreativeFormatsEnv(e2e_config=e2e_config) as env:
             # Seed a tenant ONLY in e2e mode: the live server authenticates the token
             # against the DB tenant, and UC-005 baseline scenarios carry no account/tenant
             # Given step to seed it (unlike UC-006/UC-011). In-process the registry is mocked
@@ -3214,10 +3312,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # CreativeListEnv mocks only the audit logger; DB, repository, and
             # query building are real. The Background auth step switches the env
             # principal; the seed step owns the creatives under it.
-            request.getfixturevalue("integration_db")
             from tests.harness.creative_list import CreativeListEnv
 
-            with CreativeListEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), CreativeListEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -3231,17 +3328,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         harness_type = _detect_uc011_harness(marker_names)
 
         if harness_type == "list":
-            request.getfixturevalue("integration_db")
             from tests.harness.account_list import AccountListEnv
 
-            with AccountListEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), AccountListEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         elif harness_type == "sync":
-            request.getfixturevalue("integration_db")
             from tests.harness.account_sync import AccountSyncEnv
 
-            with AccountSyncEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), AccountSyncEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -3258,10 +3353,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             yield
 
     elif uc == "COMPAT":
-        request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
+        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
             ctx["env"] = env
             yield
 
@@ -3269,32 +3363,32 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         harness_type = _detect_delivery_harness(request)
 
         if harness_type == "poll":
-            request.getfixturevalue("integration_db")
             from tests.harness.delivery_poll import DeliveryPollEnv
 
             # Use "buyer-001" as principal — matches most UC-004 scenarios.
             # _ensure_media_buy_in_db creates media buys owned by the
             # scenario's "owner" (usually "buyer-001"), and _impl filters
             # by the identity's principal. They must match.
-            with DeliveryPollEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+            with (
+                _db_scope_for(request, e2e_config),
+                DeliveryPollEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
+            ):
                 tenant, principal = env.setup_default_data()
                 ctx["env"] = env
                 ctx["db_tenant"] = tenant
                 ctx[f"db_principal_{env._principal_id}"] = principal
                 yield
         elif harness_type == "webhook":
-            request.getfixturevalue("integration_db")
             from tests.harness.delivery_webhook import WebhookEnv
 
-            with WebhookEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), WebhookEnv(e2e_config=e2e_config) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
         elif harness_type == "circuit-breaker":
-            request.getfixturevalue("integration_db")
             from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
-            with CircuitBreakerEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), CircuitBreakerEnv(e2e_config=e2e_config) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
@@ -3302,10 +3396,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # Webhook-credential-length scenarios dispatch a real create_media_buy
             # carrying a reporting_webhook so production's Pydantic boundary
             # (Authentication.credentials MinLen=32) accepts/rejects on the wire.
-            request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-            with MediaBuyCreateEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 ctx["env"] = env
                 ctx["tenant"] = tenant
@@ -3316,10 +3409,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     elif uc == "UC-GET-PRODUCTS":
-        request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv(e2e_config=ctx.get("e2e_config")) as env:
+        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
             ctx["env"] = env
             yield
     elif uc == "UC-019":
@@ -3328,10 +3420,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # read). Scenarios seed buys via factories under ctx["tenant"]/["principal"]
         # (principal "buyer-001" matches the feature files). Genuine spec-production
         # gaps stay xfailed via _UC019_XFAIL_TAGS / the selective blocks above.
-        request.getfixturevalue("integration_db")
         from tests.harness.media_buy_list import MediaBuyListEnv
 
-        with MediaBuyListEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+        with (
+            _db_scope_for(request, e2e_config),
+            MediaBuyListEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
+        ):
             tenant, principal = env.setup_default_data()
             ctx["env"] = env
             ctx["tenant"] = tenant

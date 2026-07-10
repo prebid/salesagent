@@ -9,11 +9,43 @@ creative agent-based format discovery per AdCP v2.4.
 """
 
 import json
+import logging
 
 from src.core.database.database_session import get_db_session
-from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
+from src.core.exceptions import AdCPError, AdCPFormatNotFoundError, AdCPNotFoundError
 from src.core.schemas import Format
 from src.core.validation_helpers import run_async_in_sync_context
+
+logger = logging.getLogger(__name__)
+
+
+def fetch_format_spec(agent_url: str, format_id: str) -> Format | None:
+    """Fetch one format spec from the creative-agent registry (sync bridge).
+
+    THE single fetch path for format specs (salesagent-mpo1) — create_media_buy,
+    sync_creatives validation, and get_format all route through here so typed
+    transient errors behave identically on every tool:
+
+    - Typed ``AdCPError`` from the registry (429 -> AdCPRateLimitError,
+      5xx/timeout/connect -> AdCPServiceUnavailableError) PROPAGATES: it carries
+      its own recovery semantics, and swallowing it into ``None`` degrades a
+      transient agent failure to a terminal "unknown format" rejection.
+    - ``None`` means the agent genuinely doesn't expose the format (unknown-
+      format semantics — the caller decides how to reject or fall back).
+    - Untyped exceptions are logged and become ``None``: the registry types all
+      its network errors, so an untyped one here is a programming surprise, not
+      a transport signal.
+    """
+    from src.core.creative_agent_registry import get_creative_agent_registry
+
+    registry = get_creative_agent_registry()
+    try:
+        return run_async_in_sync_context(registry.get_format(agent_url, format_id))
+    except AdCPError:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
+        return None
 
 
 def get_format(
@@ -47,7 +79,7 @@ def get_format(
     # If agent_url provided, get format directly from that agent
     # Coerce to str: FormatId.agent_url is Pydantic AnyUrl (not a str subclass)
     if agent_url:
-        fmt = run_async_in_sync_context(registry.get_format(str(agent_url), format_id))
+        fmt = fetch_format_spec(str(agent_url), format_id)
         if fmt:
             return fmt
     else:

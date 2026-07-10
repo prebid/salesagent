@@ -121,6 +121,8 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     entry.update(extra)
     req = SyncAccountsRequest(accounts=[entry])
     dispatch_request(ctx, req=req)
+    error = ctx.get("error")
+    assert error is None, f"Given: pre-create sync for {brand_domain!r} failed: {error!r}"
     # Capture original field values for "unchanged from the original" assertions
     resp = ctx.get("response")
     if resp is not None and resp.accounts:
@@ -1633,47 +1635,54 @@ def _create_agent(ctx: dict, agent_name: str) -> Any:
 
 
 def _make_identity_for_agent(ctx: dict, agent_name: str) -> Any:
-    """Build a ResolvedIdentity for a named agent."""
+    """Build a ResolvedIdentity for a named agent.
+
+    Carries the agent principal's access_token: the REST e2e dispatcher only
+    sends x-adcp-auth when the identity has an auth_token, and the live server
+    401s tokenless agent syncs (PR #1430 items 1-2).
+    """
     from tests.factories.principal import PrincipalFactory
 
     agent = _create_agent(ctx, agent_name)
     return PrincipalFactory.make_identity(
         principal_id=agent.principal_id,
         tenant_id=agent.tenant_id,
+        auth_token=agent.access_token,
     )
 
 
-@given(parsers.parse('agent A previously synced accounts for brand domain "{d}"'))
-def given_agent_a_synced(ctx: dict, d: str) -> None:
-    """Pre-create an account under agent A's identity."""
-    _setup_tenant_and_principal(ctx)
-    _create_agent(ctx, "A")
-    identity_a = _make_identity_for_agent(ctx, "A")
+def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
+    """Pre-create an account under a named agent's identity via sync.
+
+    Shared body for the agent-scoped sync Givens. Fails loudly if the sync
+    itself failed — swallowing the Given error previously masked live-server
+    401s, so agent accounts silently never existed (PR #1430 items 1-2).
+    """
     from src.core.schemas.account import SyncAccountsRequest
 
+    _setup_tenant_and_principal(ctx)
+    identity = _make_identity_for_agent(ctx, agent_name)
     req = SyncAccountsRequest(
-        accounts=[{"brand": {"domain": d}, "operator": d, "billing": "operator"}],
+        accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator"}],
     )
-    dispatch_request(ctx, req=req, identity=identity_a)
+    dispatch_request(ctx, req=req, identity=identity)
+    error = ctx.get("error")
+    assert error is None, f"Given: agent {agent_name} sync for {domain!r} failed: {error!r}"
     # Clear response so the next When step's response is fresh
     ctx.pop("response", None)
     ctx.pop("error", None)
 
 
+@given(parsers.parse('agent A previously synced accounts for brand domain "{d}"'))
+def given_agent_a_synced(ctx: dict, d: str) -> None:
+    """Pre-create an account under agent A's identity."""
+    _given_agent_synced(ctx, "A", d)
+
+
 @given(parsers.parse('agent B previously synced accounts for brand domain "{d}"'))
 def given_agent_b_synced(ctx: dict, d: str) -> None:
     """Pre-create an account under agent B's identity."""
-    _setup_tenant_and_principal(ctx)
-    _create_agent(ctx, "B")
-    identity_b = _make_identity_for_agent(ctx, "B")
-    from src.core.schemas.account import SyncAccountsRequest
-
-    req = SyncAccountsRequest(
-        accounts=[{"brand": {"domain": d}, "operator": d, "billing": "operator"}],
-    )
-    dispatch_request(ctx, req=req, identity=identity_b)
-    ctx.pop("response", None)
-    ctx.pop("error", None)
+    _given_agent_synced(ctx, "B", d)
 
 
 # ── When: sync with dry_run / delete_missing flags ────────────────────
@@ -2621,17 +2630,7 @@ def when_named_agent_sync_delete_missing(ctx: dict, name: str, datatable: Any) -
 @given(parsers.parse('agent "{name}" created account for brand domain "{domain}"'))
 def given_agent_created_account(ctx: dict, name: str, domain: str) -> None:
     """Create an account under a specific agent's identity via sync."""
-    _setup_tenant_and_principal(ctx)
-    agent = _create_agent(ctx, name)
-    identity = _make_identity_for_agent(ctx, name)
-    from src.core.schemas.account import SyncAccountsRequest
-
-    req = SyncAccountsRequest(
-        accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator"}],
-    )
-    dispatch_request(ctx, req=req, identity=identity)
-    ctx.pop("response", None)
-    ctx.pop("error", None)
+    _given_agent_synced(ctx, name, domain)
 
 
 @given(parsers.parse('agent "{a}" was granted access to the account for brand domain "{domain}"'))

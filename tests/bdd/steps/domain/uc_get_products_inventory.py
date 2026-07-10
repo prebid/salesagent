@@ -56,13 +56,23 @@ def _get_first_prop(ctx: dict) -> Any:
 
 @given("a tenant is configured for product discovery")
 def given_tenant(ctx: dict) -> None:
-    """Create a tenant with required config for get_products."""
-    tenant = TenantFactory(
-        tenant_id="test_tenant",
-        subdomain="test_tenant",
-        ad_server="mock",
+    """Get-or-create the discovery tenant (idempotent).
+
+    Shared-DB idempotency rationale lives on ``get_or_create`` (jdy1-M3, #1418).
+    """
+    from src.core.database.models import Tenant
+    from tests.factories.core import get_or_create
+
+    ctx["tenant"] = get_or_create(
+        ctx["env"],
+        Tenant,
+        {"tenant_id": "test_tenant"},
+        lambda: TenantFactory(
+            tenant_id="test_tenant",
+            subdomain="test_tenant",
+            ad_server="mock",
+        ),
     )
-    ctx["tenant"] = tenant
 
 
 @given(parsers.parse('an inventory profile with property_ids "{ids}" for domain "{domain}"'))

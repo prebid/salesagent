@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
-from src.core.tools._media_buy_status import resolve_canonical_status
+from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL, resolve_canonical_status
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,9 @@ def _get_media_buys_impl(
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
         # FIXME(salesagent-9f2): _fetch_creative_approvals should use a repository method
         assert uow.session is not None
-        creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant_id, uow.session)
+        creative_approvals_by_package = _fetch_creative_approvals(
+            all_media_buy_ids, tenant_id, principal_id, uow.session
+        )
 
         # Resolve package configs for all media buys in one batch query
         packages_by_media_buy = _fetch_packages(all_media_buy_ids, uow)
@@ -462,49 +464,38 @@ def _resolve_status_filter(
         ) from e
 
 
-# Persisted MediaBuy.status -> AdCP MediaBuyStatus wire enum. The canonical
-# persisted-status resolution + flight-window refinement now lives in the shared
-# ``_media_buy_status.resolve_canonical_status`` (used by both required read
-# tools); this map is the LIFECYCLE-surface projection consumed by the #1417
-# dual-emit of ``media_buy_status`` on the update responses. It exists purely so
-# ``normalize_persisted_media_buy_status`` can coerce a persisted DB string to the
-# typed ``MediaBuyStatus`` field without date refinement (the update-response
-# status pair reads the column, not the flight window). "failed" has no AdCP
-# lifecycle equivalent and reports the closest terminal state, "rejected";
-# pre-serving aliases (draft/pending/pending_approval/scheduled) map to
-# "pending_start".
-_PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
-    "active": MediaBuyStatus.active,
-    "approved": MediaBuyStatus.active,
-    "paused": MediaBuyStatus.paused,
-    "completed": MediaBuyStatus.completed,
-    "rejected": MediaBuyStatus.rejected,
-    "canceled": MediaBuyStatus.canceled,
-    "failed": MediaBuyStatus.rejected,
-    "draft": MediaBuyStatus.pending_start,
-    "pending": MediaBuyStatus.pending_start,
-    "pending_approval": MediaBuyStatus.pending_start,
-    # "scheduled" is set by admin approval pre-flight (operations.py / workflows.py);
-    # like the other pre-serving states it maps to pending_start.
-    "scheduled": MediaBuyStatus.pending_start,
-    "pending_creatives": MediaBuyStatus.pending_creatives,
-    "pending_start": MediaBuyStatus.pending_start,
-}
+def _canonical_to_media_buy_status(canonical: str) -> MediaBuyStatus:
+    """Adapt a canonical status string to the AdCP lifecycle ``MediaBuyStatus``.
+
+    The canonical vocabulary's delivery-only ``failed`` has no AdCP lifecycle
+    equivalent, so it collapses to the closest terminal state, ``rejected``
+    (enums/media-buy-status.json). Shared by the list read path and the
+    create/update dual-emit coercion so the collapse cannot drift.
+    """
+    if canonical == "failed":
+        return MediaBuyStatus.rejected
+    return MediaBuyStatus(canonical)
 
 
 def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
-    """Map a persisted ``MediaBuy.status`` string to its canonical AdCP ``MediaBuyStatus``.
+    """Map a persisted ``MediaBuy.status`` string to its AdCP ``MediaBuyStatus``.
 
-    Single source of truth for DB-status → AdCP-status coercion (``_PERSISTED_STATUS_TO_ADCP``),
-    so the create/update dual-emit of ``media_buy_status`` cannot inject a non-enum DB
-    value (e.g. legacy ``pending_approval``) into the typed response field (#1417). This is a
-    pure column coercion with NO flight-window refinement — the update-response status pair
-    reflects the persisted lifecycle decision, not a date-derived state. Returns ``None`` for
-    an empty/unknown status so callers omit the field rather than emit a non-spec value.
+    Date-free coercion for the create/update dual-emit of ``media_buy_status``,
+    so a non-enum DB value (e.g. legacy ``pending_approval``) cannot be injected
+    into the typed response field (#1417). Built on the shared
+    ``PERSISTED_STATUS_TO_CANONICAL`` map (single source of truth, #1545) with
+    the same lifecycle-surface adaptation as ``_compute_status`` (delivery-only
+    ``failed`` collapses to ``rejected``). Returns ``None`` for an empty/unknown
+    status so callers omit the field rather than emit a non-spec value. Unlike
+    ``_compute_status`` there is no flight-window refinement — the write paths
+    emit the state the action just persisted.
     """
     if not status:
         return None
-    return _PERSISTED_STATUS_TO_ADCP.get(status.lower())
+    canonical = PERSISTED_STATUS_TO_CANONICAL.get(status.lower())
+    if canonical is None:
+        return None
+    return _canonical_to_media_buy_status(canonical)
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
@@ -523,10 +514,7 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     coercion with no date refinement, so the two surfaces read the same column
     but only the read path refines against the flight window (#1417 / #1545).
     """
-    canonical = resolve_canonical_status(buy, today)
-    if canonical == "failed":
-        return MediaBuyStatus.rejected
-    return MediaBuyStatus(canonical)
+    return _canonical_to_media_buy_status(resolve_canonical_status(buy, today))
 
 
 def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:
@@ -555,6 +543,7 @@ def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, lis
 def _fetch_creative_approvals(
     media_buy_ids: list[str],
     tenant_id: str,
+    principal_id: str,
     session: Session,
 ) -> dict[tuple[str, str], list[CreativeApproval]]:
     """Fetch creative approvals for all packages, grouped by (media_buy_id, package_id)."""
@@ -571,10 +560,14 @@ def _fetch_creative_approvals(
     if not assignments:
         return {}
 
-    # Fetch all referenced creatives in one query (scoped to tenant)
+    # Fetch all referenced creatives in one principal-scoped query. The map is
+    # keyed by bare creative_id, but the creatives PK is composite (creative_id,
+    # tenant_id, principal_id) — a tenant-only load could resolve a colliding id
+    # to ANOTHER principal's row and show their approval status to this buyer.
     creative_ids = [a.creative_id for a in assignments]
     creative_stmt = select(Creative).where(
         Creative.tenant_id == tenant_id,
+        Creative.principal_id == principal_id,
         Creative.creative_id.in_(creative_ids),
     )
     creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}

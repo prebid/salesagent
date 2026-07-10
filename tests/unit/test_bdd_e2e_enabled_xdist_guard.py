@@ -31,13 +31,27 @@ def _config(numprocesses):
 @pytest.mark.parametrize("numprocesses", [1, 4])
 def test_e2e_enabled_under_xdist_raises(monkeypatch, numprocesses):
     monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    # Isolation: the guard is legitimately relaxed under per-worker e2e stacks
+    # (E2E_PER_WORKER=1) — a fast-path runner exports that into the whole tests
+    # container, so clear it or this test wrongly fails inside those runs.
+    monkeypatch.delenv("E2E_PER_WORKER", raising=False)
     with pytest.raises(pytest.UsageError, match="BDD_XDIST_N=0"):
         pytest_configure(_config(numprocesses))
+
+
+@pytest.mark.parametrize("numprocesses", [1, 4])
+def test_e2e_enabled_under_xdist_allowed_with_per_worker_stacks(monkeypatch, numprocesses):
+    """E2E_PER_WORKER=1 provisions one server+DB per xdist worker, so the
+    silent-drop hazard the guard exists for doesn't apply — must not raise."""
+    monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    monkeypatch.setenv("E2E_PER_WORKER", "1")
+    pytest_configure(_config(numprocesses))  # must not raise
 
 
 @pytest.mark.parametrize("numprocesses", [0, None])
 def test_e2e_enabled_serial_is_allowed(monkeypatch, numprocesses):
     monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    monkeypatch.delenv("E2E_PER_WORKER", raising=False)
     pytest_configure(_config(numprocesses))  # must not raise
 
 
