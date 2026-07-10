@@ -159,7 +159,9 @@ class TestCheckProviderHealth:
             result = await _check_provider_health("https://bad-hostname.invalid")
 
         assert result == "error"
-        mock_logger.exception.assert_called_once_with("[TMP health] Health probe failed for %s", "https://bad-hostname.invalid")
+        mock_logger.exception.assert_called_once_with(
+            "[TMP health] Health probe failed for %s", "https://bad-hostname.invalid"
+        )
 
 
 class TestCheckAllProviders:
