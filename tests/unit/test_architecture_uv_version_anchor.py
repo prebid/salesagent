@@ -194,7 +194,7 @@ def test_python_version_anchors_consistent() -> None:
     for path, version, anchor_kind in anchors:
         if path.name in {".python-version", "Dockerfile"}:
             continue
-        # ADR-008: ruff/black target-version stays py311 until a dedicated post-#1234 PR.
+        # ADR-008: ruff target-version is py312 (aligned with runtime .python-version).
         if anchor_kind == "target-version":
             continue
         if version != major_minor:
@@ -222,8 +222,8 @@ def test_python_anchor_scan_includes_github_yaml_surfaces() -> None:
 
 
 @pytest.mark.arch_guard
-def test_target_version_anchor_must_stay_py311() -> None:
-    """Mutation self-test: ADR-008 deferred target-version downgrade must fail the guard."""
+def test_target_version_anchor_must_stay_py312() -> None:
+    """Mutation self-test: ADR-008 target-version downgrade must fail the guard."""
     repo = repo_root()
     anchors = list(iter_python_version_anchors(repo))
     assert_adr008_target_version_pinned(anchors, repo)
@@ -234,7 +234,7 @@ def test_target_version_anchor_must_stay_py311() -> None:
         for version, anchor_kind in extract_python_version_anchors(bad_path, bad_text)
     ]
     assert bad_anchors, "known-bad fixture must yield a target-version anchor"
-    with pytest.raises(AssertionError, match="ADR-008 target-version must stay py311"):
+    with pytest.raises(AssertionError, match="ADR-008 target-version must stay py312"):
         assert_adr008_target_version_pinned(bad_anchors, repo)
 
 

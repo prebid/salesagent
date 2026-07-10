@@ -18,6 +18,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
+from src.core.utils import utc_flight_end, utc_flight_start
 from src.services._scheduler_base import IntervalScheduler, _parse_interval_env
 
 logger = logging.getLogger(__name__)
@@ -81,9 +82,7 @@ class MediaBuyStatusScheduler(IntervalScheduler):
             else:
                 start_time = raw_start
         elif media_buy.start_date:
-            start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
+            start_time = utc_flight_start(media_buy.start_date)  # type: ignore[arg-type]
 
         if start_time is None:
             return None  # No start time defined
@@ -96,9 +95,7 @@ class MediaBuyStatusScheduler(IntervalScheduler):
             else:
                 end_time = raw_end
         elif media_buy.end_date:
-            end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(  # type: ignore[arg-type]
-                tzinfo=UTC
-            )
+            end_time = utc_flight_end(media_buy.end_date)  # type: ignore[arg-type]
 
         if end_time is None:
             return None  # No end time defined

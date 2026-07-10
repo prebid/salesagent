@@ -126,6 +126,25 @@ async def _run_scheduler_fn(verb: str, name: str, module_path: str, fn_name: str
         logger.error("Failed to %s %s scheduler: %s", verb, name, e, exc_info=True)
 
 
+def _background_schedulers_enabled() -> bool:
+    """Whether to start the background schedulers on app startup.
+
+    ``ADCP_RUN_BACKGROUND_SCHEDULERS`` is a **test-only** knob that defaults to
+    ENABLED (schedulers run in production unless the value is exactly ``"false"``,
+    read at runtime). The test harness sets it to ``false`` because the schedulers
+    run a batch immediately on startup, on the *real* wall clock, and mutate
+    media-buy status rows — which silently rewrites the rows a test just seeded
+    (e.g. promoting a seeded ``pending_start`` buy to ``active`` before the
+    assertion runs). It is NOT an operator control: disabling it in production
+    stops automatic pending->active->completed status transitions and delivery
+    webhooks, so an accidental disable is logged at WARNING (below) to make it
+    visible in production logs.
+    """
+    import os
+
+    return os.getenv("ADCP_RUN_BACKGROUND_SCHEDULERS", "true").lower() != "false"
+
+
 # Lifespan context manager for FastMCP startup/shutdown
 @asynccontextmanager
 async def lifespan_context(app):
@@ -134,6 +153,19 @@ async def lifespan_context(app):
     Schedulers are started in registry order and stopped in reverse (LIFO)
     so dependencies are torn down cleanly.
     """
+    schedulers_enabled = _background_schedulers_enabled()
+    if not schedulers_enabled:
+        # WARNING, not INFO: this is a test-only knob (see
+        # _background_schedulers_enabled). If it is ever set in production the
+        # status/webhook schedulers do not run — surface that loudly.
+        logger.warning(
+            "Background schedulers DISABLED via ADCP_RUN_BACKGROUND_SCHEDULERS=false — "
+            "media-buy status transitions and delivery webhooks will NOT run. "
+            "This is a test-only knob; unset it in production."
+        )
+        yield
+        return
+
     for name, module_path, start_fn, _stop_fn in _SCHEDULER_REGISTRY:
         await _run_scheduler_fn("start", name, module_path, start_fn)
 

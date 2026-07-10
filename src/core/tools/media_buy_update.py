@@ -87,6 +87,7 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.transport_helpers import resolve_identity_from_context
+from src.core.utils import utc_flight_start
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
@@ -499,7 +500,7 @@ def _update_media_buy_impl(
                     action=action,
                     package_id=None,
                     budget=None,
-                    today=datetime.combine(today, datetime.min.time(), tzinfo=UTC),
+                    today=utc_flight_start(today),
                 )
                 # Manual approval case - convert adapter result to appropriate Success/Error
                 # adcp v1.2.1 oneOf pattern: Check if result is Error variant (has errors field)
@@ -563,7 +564,7 @@ def _update_media_buy_impl(
                             action=action,
                             package_id=pkg_update.package_id,
                             budget=None,
-                            today=datetime.combine(today, datetime.min.time(), tzinfo=UTC),
+                            today=utc_flight_start(today),
                         )
                         # adcp v1.2.1 oneOf pattern: Check if result is Error variant
                         if isinstance(result, UpdateMediaBuyError) and result.errors:
@@ -623,7 +624,7 @@ def _update_media_buy_impl(
                             action="update_package_budget",
                             package_id=pkg_update.package_id,
                             budget=int(budget_amount),
-                            today=datetime.combine(today, datetime.min.time(), tzinfo=UTC),
+                            today=utc_flight_start(today),
                         )
                         # adcp v1.2.1 oneOf pattern: Check if result is Error variant
                         if isinstance(result, UpdateMediaBuyError) and result.errors:

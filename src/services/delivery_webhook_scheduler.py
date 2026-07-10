@@ -22,6 +22,7 @@ from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from src.core.utils import utc_flight_start
 from src.services._scheduler_base import IntervalScheduler, _parse_interval_env
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -217,7 +218,7 @@ class DeliveryWebhookScheduler(IntervalScheduler):
 
             # Calculate next_expected_at for daily frequency: start of next day (UTC)
             next_day = datetime.now(UTC).date() + timedelta(days=1)
-            next_expected_at = datetime.combine(next_day, datetime.min.time(), tzinfo=UTC)
+            next_expected_at = utc_flight_start(next_day)
 
             # Set webhook-specific metadata directly on the response model
             # These fields are defined on the library's GetMediaBuyDeliveryResponse
