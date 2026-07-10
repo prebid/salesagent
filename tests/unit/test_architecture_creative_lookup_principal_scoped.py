@@ -245,9 +245,9 @@ class TestCreativeLookupPrincipalScoped:
 
 
 class TestDetectorMetaTests:
-    """Exercise the LIVE detectors on synthetic modules (salesagent-e3jv: meta-tests
-    must pin the detectors the guard actually runs, incl. alias, .in_(), filter_by,
-    per-query granularity, and the admin-call detector)."""
+    """Exercise the LIVE detectors on synthetic modules (#1430 guard meta-drift
+    discipline: meta-tests must pin the detectors the guard actually runs, incl.
+    alias, .in_(), filter_by, per-query granularity, and the admin-call detector)."""
 
     @pytest.mark.arch_guard
     def test_detector_catches_tenant_only_lookup(self):
