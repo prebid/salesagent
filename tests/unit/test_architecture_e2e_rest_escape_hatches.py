@@ -85,10 +85,6 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and 'Unknown string not in enum' in nodeid",
     "is_e2e_rest and any((s in nodeid for s in ('account exists', 'single match')))",
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
-    # UC-003 manual-approval scenarios xfail on e2e_rest only: RestE2EDispatcher
-    # has no update-endpoint support yet (added with the adcp 6.6 merge; the three
-    # scenarios grade green on a2a/mcp/rest).
-    "is_e2e_rest and marker_names & _UC003_E2E_MANUAL_APPROVAL_TAGS",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",
     "is_e2e_rest and tag in uc005_filter_e2e_untestable",
