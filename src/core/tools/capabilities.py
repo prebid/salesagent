@@ -206,7 +206,7 @@ def _get_adcp_capabilities_impl(
             uk_itl2=targeting_caps.uk_itl2 or None,
         )
 
-    # Build GeoPostalAreas if any postal targeting is supported
+    # Build PostalAreaSupport if any postal targeting is supported
     geo_postal_areas = None
     if targeting_caps and any(
         [

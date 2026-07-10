@@ -168,7 +168,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
         # Apply filters if provided
         if req.filters:
             # Filter by catalog_types (equivalent to old 'type' field)
-            # catalog_types contains SignalCatalogType enums; compare via .value
+            # catalog_types contains SignalAvailabilityType enums; compare via .value
             if req.filters.catalog_types and signal.signal_type not in [ct.value for ct in req.filters.catalog_types]:
                 continue
 

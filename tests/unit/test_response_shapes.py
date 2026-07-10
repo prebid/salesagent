@@ -291,6 +291,7 @@ class TestSyncCreativesResponseShape:
 
         c = data["creatives"][0]
         assert "status" not in c, "Internal 'status' field should be excluded"
+        assert "internal_status" not in c, "Internal 'internal_status' field should be excluded"
         assert "review_feedback" not in c, "Internal 'review_feedback' field should be excluded"
 
     def test_sync_response_failed_creative_has_errors(self):

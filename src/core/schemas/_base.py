@@ -285,14 +285,15 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
 
     @classmethod
     def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
-        """Construct a synchronous create_media_buy success, defaulting the spec-3.1.1 envelope
-        invariants (status/confirmed_at/revision) in one place instead of repeating them at every
-        call site. mypy's pydantic plugin does not treat the subclass defaults above as satisfying
-        the required parent fields (spurious ``call-arg``), so callers route through this factory.
+        """Construct a synchronous create_media_buy success.
+
+        The spec-3.1.1 envelope invariants (status/confirmed_at/revision) come from the
+        subclass field defaults above — that is the single source of truth. This factory
+        exists ONLY because mypy's pydantic plugin does not treat those subclass defaults
+        as satisfying the required parent fields (spurious ``call-arg``); callers route the
+        untyped ``**kwargs`` through here to dodge that. Do NOT re-default the fields here —
+        that would let the factory drift from the class defaults.
         """
-        kwargs.setdefault("status", "completed")
-        kwargs.setdefault("confirmed_at", datetime.now(UTC))
-        kwargs.setdefault("revision", 1)
         return cls(**kwargs)
 
     # SDK 5.7 removed these from parent — declare locally

@@ -124,7 +124,7 @@ class PlacementBreakdown(SalesAgentBaseModel):
 
 
 class GeoBreakdown(LibraryByGeoItem):
-    """Geographic delivery breakdown entry (extends library ByGeoItem).
+    """Geographic delivery breakdown entry (extends library GeoDeliveryMetrics).
 
     Library provides geo_level, system, geo_code, geo_name plus the full
     DeliveryMetrics surface. For metro/postal_area levels the ``system``

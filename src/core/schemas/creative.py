@@ -370,8 +370,11 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # schema-inheritance allowlist). Our former local `status` held internal review-routing state,
     # not the spec's advisory CreativeStatus, so it is renamed to `internal_status` (excluded from
     # the wire) rather than shadowing the inherited spec field. Per owner decision we inherit but
-    # do NOT populate the spec `status`: it stays None and exclude_none omits it, so the sync wire
-    # is byte-identical this bump. changes/warnings inherit the parent's None default (writers use
+    # do NOT populate the spec `status`: it stays None. On A2A/REST (model_dump with exclude_none)
+    # it is omitted, so the sync wire is byte-identical this bump; on MCP the response goes through
+    # structured_content -> to_jsonable_python, which BYPASSES the model_dump override, so there the
+    # inherited `status` (and empty changes/warnings) serialize as null rather than being omitted.
+    # changes/warnings inherit the parent's None default (writers use
     # the _append_warning guard in _sync.py); platform_id/assigned_to/assignment_errors are
     # type-compatible and inherited as-is.
     internal_status: str | None = Field(

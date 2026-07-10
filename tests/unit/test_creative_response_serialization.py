@@ -102,6 +102,7 @@ def test_sync_creative_result_excludes_internal_fields():
     dumped = result.model_dump()
     assert dumped["creative_id"] == "c_1"
     assert "status" not in dumped
+    assert "internal_status" not in dumped
     assert "review_feedback" not in dumped
 
 
