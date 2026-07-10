@@ -199,7 +199,7 @@ def _process_assignments(
                                 if validation_mode == "strict":
                                     # Converge with the update path (media_buy_update.py:233):
                                     # creative-format-incompatible-with-product is CREATIVE_REJECTED,
-                                    # the canonical code for a rejected creative (salesagent-8j5r).
+                                    # the canonical code for a rejected creative (#1417).
                                     raise AdCPCreativeRejectedError(
                                         error_msg,
                                         suggestion=(
@@ -297,7 +297,7 @@ def _process_assignments(
     # omitted), and BR-RULE-033 INV-4 pins that assignment errors are always
     # recorded in the response. Without this, creatives=[] + assignments
     # returned bare success and the buyer never learned the assignment was
-    # skipped (salesagent-9qpj).
+    # skipped (#1430: orphan-assignment visibility fix).
     present_ids = {r.creative_id for r in results}
     for creative_id in sorted(assignments_by_creative.keys() | assignment_errors_by_creative.keys()):
         if creative_id in present_ids:

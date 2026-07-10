@@ -9,6 +9,7 @@ Covers: salesagent-xwkj, salesagent-11th, salesagent-0m59, salesagent-mi8l
 
 from __future__ import annotations
 
+import json
 from datetime import UTC
 
 import pytest
@@ -50,6 +51,16 @@ _make_identity = make_identity  # Canonical version from tests.harness
 # ---------------------------------------------------------------------------
 # Auth Tests — UC-006-EXT-A, UC-006-EXT-B
 # ---------------------------------------------------------------------------
+
+
+def _wire_entries(result) -> dict:
+    """Index the wire response's creatives[] by creative_id.
+
+    Shared read-back for TestAssignmentProcessing: every per-item wire
+    assertion goes through the same extraction instead of hand-rolling the
+    dict comprehension per test.
+    """
+    return {e.get("creative_id"): e for e in (result.wire_response or {}).get("creatives", [])}
 
 
 class TestSyncAuthRequired:
@@ -687,31 +698,49 @@ class TestAssignmentProcessing:
 
     def test_cross_principal_creative_reference_does_not_500_or_leak(self, integration_db):
         """A principal referencing ANOTHER principal's creative_id in assignments
-        must get a clean response — not a raw FK IntegrityError 500 — and no
-        assignment row may be inserted.
+        must get a clean response — not a raw FK IntegrityError 500 — no
+        assignment row may be inserted, and none of the owner's row fields may
+        leak into the requester's response.
 
         creatives has a composite PK (creative_id, tenant_id, principal_id); the
         existence gate must be principal-scoped like the parallel lookup in
         _sync.py (SECURITY comment), so a cross-principal reference resolves to
         "not found" instead of passing the gate on the other principal's row and
-        crashing on the FK insert (PR #1430 review).
+        crashing on the FK insert (PR #1430 review). The owner's creative is
+        seeded with marker fields that only surface if the gate reads their row;
+        a same-request positive control (the requester's own creative) proves
+        the assignment machinery ran, so a zero-rows outcome from an unrelated
+        upstream gate cannot pass this scenario.
         """
-        from sqlalchemy import select
-
-        from src.core.database.database_session import get_db_session
         from src.core.database.models import CreativeAssignment as DBAssignment
         from tests.factories import CreativeFactory
         from tests.harness.transport import Transport
+
+        # Fields that exist ONLY on the owner's creative row. Any of them in the
+        # requester's wire response means the gate read the other principal's row
+        # (mirrors the create-path _LEAK_MARKERS discipline).
+        leak_markers = ("video_640x480", "rejected", "has status")
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             requester = PrincipalFactory(tenant=tenant, principal_id="test_principal")
             owner = PrincipalFactory(tenant=tenant, principal_id="other_principal")
-            # The creative exists ONLY under the other principal.
+            # The cross-principal creative exists ONLY under the other principal,
+            # armed with marker field values.
             CreativeFactory(
                 tenant=tenant,
                 principal=owner,
                 creative_id="c_owned_by_other",
+                format="video_640x480",
+                status="rejected",
+                agent_url="https://creative.adcontextprotocol.org",
+            )
+            # Positive control: the requester's OWN creative in the same request
+            # must produce a real assignment row.
+            CreativeFactory(
+                tenant=tenant,
+                principal=requester,
+                creative_id="c_mine",
                 format="display_300x250",
                 agent_url="https://creative.adcontextprotocol.org",
             )
@@ -722,7 +751,7 @@ class TestAssignmentProcessing:
             result = env.call_via(
                 Transport.REST,
                 creatives=[],
-                assignments={"c_owned_by_other": [pkg_id]},
+                assignments={"c_owned_by_other": [pkg_id], "c_mine": [pkg_id]},
                 validation_mode="lenient",
             )
 
@@ -730,19 +759,32 @@ class TestAssignmentProcessing:
                 f"Cross-principal creative reference must not fail the request "
                 f"(was a raw FK 500): {result.wire_error_envelope}"
             )
-            # Mutation-proofing (salesagent-9qpj): the skipped assignment must be
-            # VISIBLE on the wire as a synthesized failed entry — no-error+no-row
-            # alone survives deletion of the error recording.
-            entries = {e.get("creative_id"): e for e in (result.wire_response or {}).get("creatives", [])}
+            # Mutation-proofing (PR #1430 orphan-assignment fix): the skipped
+            # assignment must be VISIBLE on the wire as a synthesized failed
+            # entry — no-error+no-row alone survives deletion of the error
+            # recording.
+            entries = _wire_entries(result)
             assert entries.get("c_owned_by_other", {}).get("action") == "failed", (
                 f"Skipped cross-principal assignment must surface as action='failed': {result.wire_response}"
             )
-
-        with get_db_session() as session:
-            rows = session.scalars(
-                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_owned_by_other")
-            ).all()
-            assert rows == [], f"No assignment may be created from a cross-principal reference, got {len(rows)}"
+            # Leak absence: the owner's field values must not appear anywhere in
+            # the response the requester sees.
+            wire_text = json.dumps(result.wire_response).lower()
+            for marker in leak_markers:
+                assert marker not in wire_text, (
+                    f"Response leaks the other principal's creative fields ({marker!r}): {result.wire_response}"
+                )
+            # Positive control ran in the SAME request: real row for c_mine...
+            assert entries.get("c_mine", {}).get("assigned_to") == [pkg_id], (
+                f"Positive-control assignment must surface assigned_to: {entries.get('c_mine')}"
+            )
+            mine_rows = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_mine")
+            assert len(mine_rows) == 1, f"Positive-control assignment row must exist, got {len(mine_rows)}"
+            # ...and none for the cross-principal reference.
+            cross_rows = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_owned_by_other")
+            assert cross_rows == [], (
+                f"No assignment may be created from a cross-principal reference, got {len(cross_rows)}"
+            )
 
     @pytest.mark.parametrize(
         "orphan_creative_id, seed_other_principal",
@@ -802,7 +844,7 @@ class TestAssignmentProcessing:
             )
             wire = result.wire_response
             assert wire is not None, "REST success must expose the wire body"
-            entries = {e.get("creative_id"): e for e in wire.get("creatives", [])}
+            entries = _wire_entries(result)
             assert orphan_creative_id in entries, (
                 f"Orphan assignment reference must produce a per-item action='failed' "
                 f"result entry — bare success hides the skipped assignment from the "
@@ -848,7 +890,7 @@ class TestAssignmentProcessing:
             )
 
             assert not result.is_error
-            entries = {e.get("creative_id"): e for e in (result.wire_response or {}).get("creatives", [])}
+            entries = _wire_entries(result)
             entry = entries.get("c_preexisting")
             assert entry is not None, (
                 f"Assign-only reference to an existing creative must produce a result "

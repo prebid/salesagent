@@ -1163,7 +1163,7 @@ class MockAdServer(AdServerAdapter):
 
         Gated behind ADCP_TESTING: the table has no production writer, so the
         per-poll DB read is pure test plumbing — a production deployment must
-        not query it at all (PR #1430 review).
+        not query it at all (#1430: simulation-read gating).
         """
         import os
 

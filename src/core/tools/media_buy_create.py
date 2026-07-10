@@ -310,7 +310,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
 
     Thin delegate kept for its patch surface (tests/harness envs patch this
     name). The behavior — typed AdCPError propagates (transient agent failures
-    keep their recovery semantics, PR #1430 review), untyped errors log and
+    keep their recovery semantics, #1430: transient-error taxonomy fix), untyped errors log and
     become None (unknown-format) — lives in the SINGLE shared fetch path,
     format_resolver.fetch_format_spec (salesagent-mpo1).
     """
