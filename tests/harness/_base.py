@@ -423,8 +423,11 @@ class BaseTestEnv:
         """Re-point the env at *principal_id*, clearing cached identity.
 
         Public accessor for the principal-switch mutation (mirrors
-        ``get_session()``): step functions must not reach into the private
-        ``_identity_cache`` / ``_principal_id``. Clearing the cache forces the
+        ``get_session()``): step functions must not hand-roll *this switch* —
+        clearing ``_identity_cache`` and reassigning ``_principal_id`` inline —
+        but call this instead. (Reading ``_principal_id`` / ``_tenant_id`` to
+        seed factory rows, or clearing the cache for a tenant override, is a
+        different operation and stays fine.) Clearing the cache forces the
         next ``identity`` / ``identity_for`` access to re-resolve from scratch —
         picking up a principal row committed after the env was created (in
         integration mode this re-runs the auth-token lookup).

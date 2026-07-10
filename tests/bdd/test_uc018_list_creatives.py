@@ -96,7 +96,10 @@ def _seed_creative(
     The single place this module assembles a creative: the ``approved`` trait
     supplies ``status="approved"`` and CreativeFactory's realistic default ``assets``
     (which already satisfy the repository's ``data["assets"] IS NOT NULL`` guard — an
-    empty ``{"assets": {}}`` is unnecessary). When a concept is given, its
+    empty ``{"assets": {}}`` is unnecessary — *and* conform to the pinned
+    ``list-creatives-response.json`` asset union, so the ``#1405``
+    ``schema-valid against`` Then step still holds with the realistic shape).
+    When a concept is given, its
     ``concept_id`` / ``concept_name`` are layered onto those realistic assets in this
     one merge site. Replaces the per-seeder ``status=`` + ``data={"assets": {}}``
     hand-rolls with a single factory idiom.
