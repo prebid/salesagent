@@ -21,6 +21,7 @@ from tests.factories import (
     MediaBuyFactory,
     MediaPackageFactory,
     PrincipalFactory,
+    ProductFactory,
     TenantFactory,
 )
 from tests.factories.creative_asset import build_assets, image_spec
@@ -363,6 +364,78 @@ class TestAssignmentRepoGetExisting:
             session = env.get_session()
             repo = CreativeAssignmentRepository(session, "test_tenant")
             result = repo.get_existing("mb_none", "pkg_none", "c_none", "p_none")
+
+        assert result is None
+
+
+class TestAssignmentRepoGetCreativeById:
+    """get_creative_by_id — full composite-PK creative lookup (tenant + principal + creative_id).
+
+    Refactor guard for salesagent-qkk4: these pin the behavior that must survive
+    delegation to CreativeRepository.get_by_id (they PASS pre-refactor).
+    """
+
+    def test_own_principal_creative_found(self, integration_db):
+        """Internal: ASSIGN-XLOOKUP-01 — returns the creative when the caller's principal owns it."""
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c1")
+
+            session = env.get_session()
+            repo = CreativeAssignmentRepository(session, "test_tenant")
+            result = repo.get_creative_by_id("c1", "p1")
+
+        assert result is not None
+        assert result.creative_id == "c1"
+        assert result.principal_id == "p1"
+
+    def test_cross_principal_returns_none(self, integration_db):
+        """Covers: UC-006-CROSS-PRINCIPAL-CREATIVE-01 — another principal's creative resolves to None."""
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            owner = PrincipalFactory(tenant=tenant, principal_id="p_owner")
+            PrincipalFactory(tenant=tenant, principal_id="p_other")
+            CreativeFactory(tenant=tenant, principal=owner, creative_id="c_owned")
+
+            session = env.get_session()
+            repo = CreativeAssignmentRepository(session, "test_tenant")
+            result = repo.get_creative_by_id("c_owned", "p_other")
+
+        assert result is None
+
+
+class TestAssignmentRepoGetProductById:
+    """get_product_by_id — tenant-scoped product lookup.
+
+    Refactor guard for salesagent-qkk4: these pin the behavior that must survive
+    delegation to ProductRepository.get_by_id (they PASS pre-refactor).
+    """
+
+    def test_own_tenant_product_found(self, integration_db):
+        """Internal: ASSIGN-XLOOKUP-02 — returns the product when it belongs to the repo's tenant."""
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            ProductFactory(tenant=tenant, product_id="prod_own")
+
+            session = env.get_session()
+            repo = CreativeAssignmentRepository(session, "test_tenant")
+            result = repo.get_product_by_id("prod_own")
+
+        assert result is not None
+        assert result.product_id == "prod_own"
+        assert result.tenant_id == "test_tenant"
+
+    def test_other_tenant_returns_none(self, integration_db):
+        """Internal: ASSIGN-XLOOKUP-03 — another tenant's product is invisible to this repo."""
+        with _RepoEnv() as env:
+            t1 = TenantFactory(tenant_id="t1")
+            TenantFactory(tenant_id="t2")
+            ProductFactory(tenant=t1, product_id="prod_t1")
+
+            session = env.get_session()
+            repo_t2 = CreativeAssignmentRepository(session, "t2")
+            result = repo_t2.get_product_by_id("prod_t1")
 
         assert result is None
 

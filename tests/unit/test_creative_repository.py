@@ -290,6 +290,7 @@ class TestCreativeAssignmentRepositoryCreate:
             media_buy_id="mb1",
             package_id="pkg1",
             creative_id="c1",
+            principal_id="p1",
         )
 
         db_obj = session.add.call_args[0][0]
