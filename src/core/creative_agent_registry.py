@@ -184,6 +184,36 @@ def _get_reference_formats() -> list[Format]:
     return list(load_reference_formats())
 
 
+# Canonical URL of the AdCP standard creative agent. This is the FEDERATION
+# IDENTITY half of a format reference — (agent_url, id) — and must stay stable
+# across deployments; it is NOT necessarily where connections go (see
+# _connection_agent_url).
+PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+
+def _connection_agent_url(agent_url: str) -> str:
+    """Resolve the TRANSPORT url for an agent reference (salesagent-9qe2).
+
+    When CREATIVE_AGENT_URL is set (test/CI stacks run a pinned container
+    serving the standard catalog), references to the PUBLIC default agent
+    connect there instead of the live public host — which rate-limits under
+    CI load and must never be a test dependency (the catalog also drifts).
+    Only the connection reroutes: cache keys and format_id federation
+    identity stay on the canonical url. Non-default agents are untouched.
+
+    Read at call time (not import) so test stacks that set the env after
+    import still take effect.
+    """
+    configured = os.environ.get("CREATIVE_AGENT_URL")
+    if not configured:
+        return agent_url
+    if canonical_agent_url(agent_url) != canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL):
+        return agent_url
+    if canonical_agent_url(configured) == canonical_agent_url(agent_url):
+        return agent_url
+    return configured
+
+
 @dataclass
 class CreativeAgent:
     """Represents a creative agent that provides format definitions and creative services."""
@@ -256,10 +286,27 @@ class CreativeAgentRegistry:
         return canonical_agent_url(agent_url)
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from creative agent configs."""
+        """Build AdCP client from creative agent configs.
+
+        Connections to the public default agent are rerouted through
+        ``_connection_agent_url`` (pinned-container alias in test/CI stacks);
+        the agents' identity urls (cache keys, format_id federation) are
+        untouched — only the transport config sees the alias.
+        """
+        from dataclasses import replace as _dc_replace
+
         from src.core.helpers.adapter_helpers import build_agent_config
 
-        return ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
+        return ADCPMultiAgentClient(
+            agents=[
+                build_agent_config(
+                    _dc_replace(agent, agent_url=_connection_agent_url(agent.agent_url))
+                    if _connection_agent_url(agent.agent_url) != agent.agent_url
+                    else agent
+                )
+                for agent in agents
+            ]
+        )
 
     def _get_tenant_agents(self, tenant_id: str | None) -> list[CreativeAgent]:
         """Get list of creative agents for a tenant.
@@ -863,7 +910,7 @@ class CreativeAgentRegistry:
             }
         """
         # Use custom MCP client for non-standard tools (preview_creative not in AdCP spec)
-        async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
+        async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
             result = await client.call_tool(
                 "preview_creative", {"format_id": format_id, "creative_manifest": creative_manifest}
             )
@@ -915,7 +962,7 @@ class CreativeAgentRegistry:
             - creative_output: Generated creative manifest with output_format
         """
         # Use custom MCP client for non-standard tools (build_creative not in AdCP spec)
-        async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
+        async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
             params = {
                 "message": message,
                 "format_id": format_id,
