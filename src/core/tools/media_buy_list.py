@@ -42,9 +42,8 @@ class _MediaBuyData:
     updated_at: datetime | None
     status: str | None
     is_paused: bool
-    # Seller confirmation instant (media_buys.approved_at): the manual-approval
-    # moment, else None. Drives confirmed_at — see _seller_confirmed_at / #1544.
-    approved_at: datetime | None
+    # Persisted seller confirmation instant; stable across later status changes.
+    confirmed_at: datetime | None
     # Persisted monotonic optimistic-concurrency counter (media_buys.revision).
     # No default: a constructor that forgot it would silently report revision=1
     # for every buy — every caller passes the row's value explicitly.
@@ -291,12 +290,10 @@ def _get_media_buys_impl(
                 updated_at=buy.updated_at,
                 # AdCP 3.1.0-beta.3 GA item fields. confirmed_at is the
                 # seller's confirmation instant — None until the seller has
-                # committed to the buy; see _seller_confirmed_at for the
-                # derivation (approval instant on the manual path, created_at
-                # on the synchronous path). revision is the persisted
+                # committed to the buy. revision is the persisted
                 # monotonic counter bumped by MediaBuyRepository on every
                 # successful mutation.
-                confirmed_at=_seller_confirmed_at(buy),
+                confirmed_at=buy.confirmed_at,
                 revision=buy.revision,
             )
         )
@@ -424,7 +421,7 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
             status=buy.status,
             is_paused=buy.is_paused,
-            approved_at=buy.approved_at,
+            confirmed_at=buy.confirmed_at,
             revision=buy.revision,
         )
         for buy in buys
@@ -475,20 +472,16 @@ def _resolve_status_filter(
 
 
 def _seller_confirmed_at(buy: _MediaBuyData) -> datetime | None:
-    """confirmed_at for a listed buy: the seller's confirmation instant once the
-    seller has committed, else None (still pending approval / never confirmed).
+    """Compatibility helper for callers of the pre-persistence list seam.
 
-    Whether the seller has committed is decided by the shared
-    :func:`is_media_buy_seller_confirmed` classifier — the SAME definition
-    create_media_buy consults to gate confirmed_at on its response arms — so get
-    and create cannot drift (see #1544).
-
-    The confirmation instant is ``approved_at`` when the buy went through seller
-    approval (manual-approval path — the moment the seller committed), falling
-    back to ``created_at`` for the synchronous path, where "a successful
-    create_media_buy response constitutes order confirmation" (AdCP media-buy
-    spec). Returning ``created_at`` for an approved buy would report the buyer's
-    request time, not the confirmation moment — see #1544."""
+    Production rows always carry ``confirmed_at``; the fallback only supports
+    legacy unit-test snapshots that predate the column.
+    """
+    persisted = getattr(buy, "confirmed_at", None)
+    if persisted is not None:
+        return persisted
+    if not hasattr(buy, "approved_at"):
+        return None
     if not is_media_buy_seller_confirmed(buy.status):
         return None
     return buy.approved_at or buy.created_at

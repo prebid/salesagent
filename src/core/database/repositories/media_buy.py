@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from src.core.database.models import MediaBuy, MediaPackage
+from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
@@ -57,18 +57,16 @@ class MediaBuyRepository:
     # Single MediaBuy lookups
     # ------------------------------------------------------------------
 
-    def get_by_id(self, media_buy_id: str, *, for_update: bool = False) -> MediaBuy | None:
+    def get_by_id(
+        self, media_buy_id: str, *, for_update: bool = False, populate_existing: bool = False
+    ) -> MediaBuy | None:
         """Get a media buy by its ID within the tenant.
 
         ``for_update=True`` acquires a row lock (``SELECT ... FOR UPDATE``) so
         concurrent writers to the same buy's mutable columns serialize under
-        READ COMMITTED. Note: if the row is already in this session's identity
-        map, SQLAlchemy takes the lock but returns the existing in-memory
-        instance without re-reading the committed values (no
-        ``populate_existing()``). Do NOT rely on the lock to freshen a stale
-        read — the revision counter is bumped with a server-side SQL expression
-        (see ``_bump_revision``) precisely so it is collision-free regardless of
-        what the identity map holds.
+        READ COMMITTED. Pass ``populate_existing=True`` when the caller needs
+        the locked row to refresh an instance already present in the identity
+        map; this is required for authoritative revision/status checks.
         """
         stmt = select(MediaBuy).where(
             MediaBuy.tenant_id == self._tenant_id,
@@ -76,6 +74,8 @@ class MediaBuyRepository:
         )
         if for_update:
             stmt = stmt.with_for_update()
+        if populate_existing:
+            stmt = stmt.execution_options(populate_existing=True)
         return self._session.scalars(stmt).first()
 
     def get_by_id_or_raise(
@@ -420,6 +420,9 @@ class MediaBuyRepository:
         media_buy = MediaBuy(**kwargs)
         self._session.add(media_buy)
         self._session.flush()
+        if is_media_buy_seller_confirmed(status):
+            media_buy.confirmed_at = media_buy.created_at
+            self._session.flush()
         return media_buy
 
     def create(self, media_buy: MediaBuy) -> MediaBuy:
@@ -485,7 +488,7 @@ class MediaBuyRepository:
         concurrent writer could bump between that gate and this mutation.
         Raises the shared CONFLICT on mismatch, before any mutation.
         """
-        media_buy = self.get_by_id(media_buy_id, for_update=True)
+        media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
         if media_buy is None:
             return None
         if expected_revision is not None:
@@ -536,6 +539,8 @@ class MediaBuyRepository:
                 media_buy.approved_at = approved_at
             if approved_by is not None:
                 media_buy.approved_by = approved_by
+            if media_buy.confirmed_at is None and is_media_buy_seller_confirmed(status):
+                media_buy.confirmed_at = approved_at or media_buy.approved_at or media_buy.created_at
 
         return self._locked_mutate_and_bump(media_buy_id, _apply)
 

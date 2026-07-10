@@ -3606,10 +3606,8 @@ async def _create_media_buy_impl(
                     payload_hash=request_hash,
                 )
                 # Capture persisted values while the session is open (the
-                # instance is expired after UoW commit). confirmed_at on the
-                # create response and get_media_buys both report this same
-                # persisted created_at; revision is the persisted counter (1).
-                persisted_confirmed_at = created_mb.created_at
+                # instance is expired after UoW commit).
+                persisted_confirmed_at = created_mb.confirmed_at
                 persisted_revision = created_mb.revision
                 # UoW auto-commits on clean exit
         except IntegrityError as exc:
@@ -4017,14 +4015,8 @@ async def _create_media_buy_impl(
             creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
             errors=property_list_unsupported_advisories(req.packages, adapter),
-            # AdCP 3.1.0-beta.3 success-arm fields. confirmed_at is gated by the
-            # SAME shared classifier get_media_buys consults
-            # (is_media_buy_seller_confirmed), keyed on the status we actually
-            # persisted — so create and get can never disagree about whether the
-            # seller has committed. For a committed status it is the persisted
-            # created_at (the value get reports); revision is the persisted
-            # monotonic counter at its initial value (1). See #1544.
-            confirmed_at=persisted_confirmed_at if is_media_buy_seller_confirmed(media_buy_status) else None,
+            # The response echoes the write-once persisted confirmation instant.
+            confirmed_at=persisted_confirmed_at,
             revision=persisted_revision,
         )
 

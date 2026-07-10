@@ -682,15 +682,13 @@ def when_send_update_request(ctx: dict) -> None:
                 pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
     try:
         req = UpdateMediaBuyRequest(**update_kwargs)
-    except ValidationError as e:
-        # Schema validation rejects the request before production code runs.
-        # Translate through the PRODUCTION boundary translator (the same one
-        # _build_update_request and the REST handler use), so Then steps grade
-        # the INVALID_REQUEST + suggestion shape a buyer receives on the wire —
-        # not a raw pydantic exception the wire never carries.
-        from src.core.tools.media_buy_update import invalid_update_request_error
-
-        ctx["error"] = invalid_update_request_error(e)
+    except ValidationError:
+        # Send the raw invalid payload through the selected transport so the
+        # boundary, not this step, produces the buyer-visible envelope.
+        if ctx.get("has_auth") is False:
+            dispatch_request(ctx, identity=None, **update_kwargs)
+        else:
+            dispatch_request(ctx, **update_kwargs)
         return
 
     if ctx.get("has_auth") is False:
@@ -2168,11 +2166,12 @@ def then_error_details_include(ctx: dict, key: str, value: str) -> None:
     string (media-buy labels resolve to the real factory id); a bare number
     compares as an integer.
     """
-    from tests.bdd.steps._outcome_helpers import _require_error
+    from tests.helpers.envelope_assertions import assert_envelope_shape
 
-    error = _require_error(ctx)
-    details = getattr(error, "details", None) or {}
-    assert key in details, f"error details missing {key!r}: {details!r}"
+    envelope = ctx.get("wire_error_envelope")
+    assert_envelope_shape(envelope, "CONFLICT", recovery="correctable")
+    details = envelope["errors"][0].get("details") or envelope["adcp_error"].get("details") or {}
+    assert key in details, f"wire error details missing {key!r}: {details!r}"
     stripped = value.strip()
     expected: object
     if stripped.startswith('"') and stripped.endswith('"'):

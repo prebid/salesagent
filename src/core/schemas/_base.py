@@ -1761,6 +1761,14 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         if not isinstance(values, dict):
             return values
 
+        # JSON Schema ``type: integer`` must be enforced before Pydantic's
+        # default coercion. This keeps numeric strings and booleans from
+        # becoming valid optimistic-concurrency tokens at any boundary.
+        if "revision" in values and values["revision"] is not None:
+            revision = values["revision"]
+            if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+                raise ValueError("revision must be an integer greater than or equal to 1")
+
         # Unwrap RootModel packages (FastMCP produces library PackageUpdate RootModel,
         # but JSON/dict input arrives as plain dicts — guard needed in pre-validator)
         if "packages" in values and values["packages"]:
@@ -2455,8 +2463,7 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     # returned buy; the beta.3 JSON schema lists them optional
     # (get-media-buys-response media_buys[].required omits both — prose/schema
     # divergence tracked in #1564). revision is the persisted monotonic counter;
-    # confirmed_at is the seller confirmation instant (approved_at, else
-    # created_at — see media_buy_list._seller_confirmed_at).
+    # confirmed_at is the persisted, write-once seller confirmation instant.
     confirmed_at: datetime | None = Field(
         default=None, description="When this media buy was committed by the seller (stable after set)"
     )

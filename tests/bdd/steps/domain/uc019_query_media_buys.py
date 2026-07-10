@@ -2567,9 +2567,7 @@ def given_tenant_manual_approval(ctx: dict) -> None:
     'create_media_buy' in adapter.manual_approval_operations`` — so the
     adapter mock must also list the operation.
     """
-    from tests.bdd.steps._outcome_helpers import set_tenant_review_requirement
-
-    set_tenant_review_requirement(ctx, required=True)
+    ctx["env"].set_review_requirement(ctx["tenant"], required=True)
     adapter_mock = ctx["env"].mock["adapter"].return_value
     adapter_mock.manual_approval_operations = ["create_media_buy"]
 

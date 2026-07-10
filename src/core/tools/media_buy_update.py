@@ -243,7 +243,16 @@ def _update_media_buy_impl(
             # ``AdCPGoneError`` carries the spec-mandated ``INVALID_STATE`` code
             # for both terminal states and disallowed actions — see
             # ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` for the source of truth.
-            _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use)
+            # Optimistic-concurrency gate — AdCP 3.1.0-beta.3
+            # update-media-buy-request.json properties.revision: "When
+            # provided, sellers MUST reject the update with CONFLICT if the
+            # media buy's current revision does not match." (Schema-optional
+            # field; graded by T-UC-003-partition-revision /
+            # boundary-revision; no conformance storyboard step — ungraded.)
+            # Acquire the authoritative row lock before any workflow or adapter
+            # side effect. The lock is held by this UoW until commit, so two
+            # same-token requests cannot both reach the adapter.
+            _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use, for_update=True, populate_existing=True)
             _current_status = _current_mb.status if _current_mb else ""
             if is_terminal_status(_current_status):
                 raise AdCPGoneError(
@@ -254,18 +263,6 @@ def _update_media_buy_impl(
                         f"Create a new media buy to run a new campaign."
                     ),
                 )
-
-            # Optimistic-concurrency gate — AdCP 3.1.0-beta.3
-            # update-media-buy-request.json properties.revision: "When
-            # provided, sellers MUST reject the update with CONFLICT if the
-            # media buy's current revision does not match." (Schema-optional
-            # field; graded by T-UC-003-partition-revision /
-            # boundary-revision; no conformance storyboard step — ungraded.)
-            # This is the FAST gate on an unlocked snapshot — it rejects a
-            # stale token before any adapter side effects. The authoritative
-            # check re-runs under the row lock inside the repository mutation
-            # (_locked_mutate_and_bump), closing the read-then-write window a
-            # concurrent updater could slip through.
             if req.revision is not None and _current_mb is not None:
                 _persisted_revision = _current_mb.revision or 1
                 if req.revision != _persisted_revision:

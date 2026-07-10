@@ -251,13 +251,3 @@ def _assert_audit_adapter_mock(ctx: dict) -> None:
         f"(operation='create_media_buy', success=True, with details), "
         f"got: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
     )
-
-
-def set_tenant_review_requirement(ctx: dict, required: bool) -> None:
-    """Flip the tenant review mode via the env's single writer.
-
-    Shared by the auto-approval (UC-002) and manual-approval (UC-019) Given
-    steps; the mutation itself lives on the env (``set_review_requirement``)
-    so the e2e create plumbing realizes the same mode through the same seam.
-    """
-    ctx["env"].set_review_requirement(ctx["tenant"], required)

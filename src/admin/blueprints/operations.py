@@ -15,6 +15,7 @@ from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
+from src.core.schemas import CreateMediaBuySuccess
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -459,11 +460,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     if webhook_config and media_buy_data:
                         # media_buy_repo from the top of the route — same session/tenant scope.
                         all_packages = media_buy_repo.get_packages(media_buy_id)
+                        approved_buy = media_buy_repo.get_by_id(media_buy_id)
+                        if approved_buy is None:
+                            raise RuntimeError(f"Media buy {media_buy_id!r} disappeared before completion webhook")
 
-                        create_media_buy_approved_result = CreateMediaBuySuccessResponse(
+                        create_media_buy_approved_result = CreateMediaBuySuccess(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
                             context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                            confirmed_at=approved_buy.confirmed_at,
+                            revision=approved_buy.revision,
                         )
                         metadata = {
                             "task_type": step_data["tool_name"],

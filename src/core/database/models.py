@@ -947,6 +947,9 @@ class MediaBuy(Base):
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Write-once seller confirmation instant. Unlike approved_at, this remains
+    # stable across later creative/status transitions.
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw_request: Mapped[dict] = mapped_column(JSONType, nullable=False)
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

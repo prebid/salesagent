@@ -1895,6 +1895,7 @@ class AdCPRequestHandler(RequestHandler):
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),
                 context=params.get("context"),
+                revision=params.get("revision"),
             )
 
         # Call core function with validated fields + raw nested structures and identity
@@ -1904,9 +1905,13 @@ class AdCPRequestHandler(RequestHandler):
             start_time=params.get("start_time"),
             end_time=params.get("end_time"),
             budget=params.get("budget"),
+            currency=params.get("currency"),
+            pacing=params.get("pacing"),
+            daily_budget=params.get("daily_budget"),
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
+            revision=req.revision,
             identity=identity,
         )
 
