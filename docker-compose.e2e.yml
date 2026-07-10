@@ -234,11 +234,12 @@ services:
   # NO published host port. The host path runs that script standalone (creative-net,
   # :9999); in-network we reuse the SAME pre-built image (`adcp-creative-agent`,
   # adcp@ca70dd1e2a6c) so CI/host/in-network cannot diverge on the pin. The
-  # image is built by `scripts/creative-agent-stack.sh build` (called from
-  # run_all_tests.sh) before `up`. Gated behind the runner profile so a
-  # normal e2e `up` never pulls it.
+  # image is built by `scripts/creative-agent-stack.sh build` before `up`
+  # (run_all_tests.sh for the in-network path; tests/e2e/conftest.py for the
+  # host-side standalone path). NOT profile-gated: the SERVER resolves format
+  # specs against this agent (CREATIVE_AGENT_URL) and the live public host is
+  # blackholed, so every e2e `up` needs it (salesagent-9qe2).
   creative-pg:
-    profiles: ["runner"]
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: adcp_registry
@@ -253,7 +254,6 @@ services:
       retries: 10
 
   creative-agent:
-    profiles: ["runner"]
     image: adcp-creative-agent  # built by scripts/creative-agent-stack.sh build
     environment:
       NODE_ENV: production
