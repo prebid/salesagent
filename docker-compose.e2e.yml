@@ -77,6 +77,12 @@ services:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # BLACKHOLE the live public creative agent: tests must NEVER depend on it
+      # (its catalog drifts and it rate-limits under CI load — salesagent-9qe2,
+      # salesagent-kczg). The registry aliases this host to the pinned in-network
+      # agent; if any code path regresses and connects to it verbatim, this makes
+      # it fail INSTANTLY (connection refused) instead of flaking on a 429.
+      - "creative.adcontextprotocol.org:127.0.0.1"
     # Same Docker embedded-DNS concurrent-lookup race fix as the runner — the
     # server resolves postgres/creative-agent and the webhook callback host.
     dns_opt:
@@ -201,6 +207,10 @@ services:
         condition: service_healthy
       creative-agent:
         condition: service_healthy
+    extra_hosts:
+      # BLACKHOLE the live public creative agent (see the adcp-server entry):
+      # a runner-side leak fails instantly instead of flaking on a 429.
+      - "creative.adcontextprotocol.org:127.0.0.1"
     # Fix the Docker embedded-DNS concurrent-lookup race (moby/moby#22142): under
     # the e2e suite's connection churn, glibc fires the A and AAAA queries in
     # parallel over one UDP socket to 127.0.0.11 and one response gets dropped,
