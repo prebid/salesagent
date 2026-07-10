@@ -83,5 +83,13 @@ class TestRegistryConnectionRouting:
             try:
                 await registry.preview_creative(PUBLIC_DEFAULT_AGENT_URL, "display_300x250", {"assets": {}})
             except Exception:
-                pass  # response parsing is not under test — only the connection URL
+                pass  # response parsing is not under test — only connection + payload
         assert cmc.call_args.kwargs["agent_url"] == _PINNED
+
+        # The payload's format_id is the federation-identity OBJECT carrying the
+        # CANONICAL agent_url (not the connection alias) — the pinned reference
+        # agent rejects a bare string, which the live public host tolerated
+        # (the mismatch the in-network pinning unmasked).
+        call_tool = client_cm.__aenter__.return_value.call_tool
+        payload = call_tool.call_args.args[1]
+        assert payload["format_id"] == {"agent_url": PUBLIC_DEFAULT_AGENT_URL, "id": "display_300x250"}

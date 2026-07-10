@@ -912,7 +912,17 @@ class CreativeAgentRegistry:
         # Use custom MCP client for non-standard tools (preview_creative not in AdCP spec)
         async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
             result = await client.call_tool(
-                "preview_creative", {"format_id": format_id, "creative_manifest": creative_manifest}
+                "preview_creative",
+                {
+                    # The pinned reference agent's schema takes format_id as the
+                    # federation-identity OBJECT {agent_url, id} — the live public
+                    # host tolerated a bare string, which masked this mismatch
+                    # until connections were pinned in-network (salesagent-9qe2).
+                    # The identity keeps the CANONICAL agent_url, not the
+                    # connection alias.
+                    "format_id": {"agent_url": agent_url, "id": format_id},
+                    "creative_manifest": creative_manifest,
+                },
             )
 
             # Use structured_content field for JSON response (MCP protocol update)
