@@ -141,8 +141,10 @@ async def test_trigger_report_for_media_buy_public_method(integration_db):
 
     scheduler = DeliveryWebhookScheduler()
 
-    # Mock _send_report_for_media_buy to verify it receives force=True
-    with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send_internal:
+    # Mock _send_report_for_media_buy to verify it receives force=True.
+    # The public method now returns the send result, so the mock must
+    # report a successful delivery.
+    with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock, return_value=True) as mock_send_internal:
         with get_db_session() as session:
             from src.core.database.models import MediaBuy
 
