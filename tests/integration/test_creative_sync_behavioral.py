@@ -998,10 +998,7 @@ class TestAssignmentProcessing:
         per-creative failure, an assignment_errors entry for the skipped package,
         and ZERO assignment rows for the failed creative.
         """
-        from sqlalchemy import select
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import CreativeAssignment as DBAssignment
+        from src.core.database.repositories.creative import CreativeAssignmentRepository
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -1017,6 +1014,8 @@ class TestAssignmentProcessing:
                 validation_mode="lenient",
             )
 
+            assignments = CreativeAssignmentRepository(env.get_session(), "test_tenant").get_by_creative("c_bad")
+
         # No 500 — a real SyncCreativesResponse is returned.
         assert len(response.creatives) == 1
         result = response.creatives[0]
@@ -1024,11 +1023,7 @@ class TestAssignmentProcessing:
         assert result.assignment_errors is not None
         assert pkg_id in result.assignment_errors
 
-        with get_db_session() as session:
-            assignments = session.scalars(
-                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_bad")
-            ).all()
-            assert assignments == [], "No assignment row may be written for a creative that was not persisted"
+        assert assignments == [], "No assignment row may be written for a creative that was not persisted"
 
     def test_batch_valid_and_invalid_creative_assignments(self, integration_db):
         """Regression #1418 — batch: valid+assigned creative A, invalid+assigned creative B.
@@ -1036,10 +1031,7 @@ class TestAssignmentProcessing:
         A's assignment persists; B's does not. B's per-creative failure and its
         skipped assignment are reported. No FK violation, no 500.
         """
-        from sqlalchemy import select
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import CreativeAssignment as DBAssignment
+        from src.core.database.repositories.creative import CreativeAssignmentRepository
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -1057,6 +1049,10 @@ class TestAssignmentProcessing:
                 validation_mode="lenient",
             )
 
+            repo = CreativeAssignmentRepository(env.get_session(), "test_tenant")
+            ok_assignments = [a for a in repo.get_by_creative("c_ok") if a.package_id == pkg_id]
+            bad_assignments = repo.get_by_creative("c_bad")
+
         result_by_id = {r.creative_id: r for r in response.creatives}
         assert result_by_id["c_ok"].action != "failed"
         assert result_by_id["c_ok"].assigned_to == [pkg_id]
@@ -1064,15 +1060,8 @@ class TestAssignmentProcessing:
         assert result_by_id["c_bad"].assignment_errors is not None
         assert pkg_id in result_by_id["c_bad"].assignment_errors
 
-        with get_db_session() as session:
-            ok_assignments = session.scalars(
-                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_ok", package_id=pkg_id)
-            ).all()
-            bad_assignments = session.scalars(
-                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_bad")
-            ).all()
-            assert len(ok_assignments) == 1, "Valid creative's assignment must persist"
-            assert bad_assignments == [], "Invalid creative's assignment must not persist"
+        assert len(ok_assignments) == 1, "Valid creative's assignment must persist"
+        assert bad_assignments == [], "Invalid creative's assignment must not persist"
 
 
 class TestSchemaCompleteness:
@@ -1088,9 +1077,11 @@ class TestSchemaCompleteness:
 
         assert len(response.creatives) == 1
         result = response.creatives[0]
-        # Warnings field should exist (may be empty or populated)
+        # warnings is inherited from the adcp 6.6 parent as an OPTIONAL list[str] | None
+        # (salesagent-qj0p): None when there are no warnings (omitted on the wire), a list
+        # when populated — never any other type.
         assert hasattr(result, "warnings")
-        assert isinstance(result.warnings, list)
+        assert result.warnings is None or isinstance(result.warnings, list)
 
     def test_per_creative_result_has_required_fields(self, integration_db):
         """Covers: UC-006-MAIN-MCP-01 — result has creative_id, action, changes, errors."""
@@ -1103,7 +1094,9 @@ class TestSchemaCompleteness:
         result = response.creatives[0]
         assert result.creative_id == "c_fields"
         assert result.action in [a.value for a in CreativeAction]
-        assert isinstance(result.changes, list)
+        # changes/errors are inherited optional list[str] | None (salesagent-qj0p): None when
+        # empty (omitted on the wire), a list when populated.
+        assert result.changes is None or isinstance(result.changes, list)
         assert result.errors is None or isinstance(result.errors, list)
 
 

@@ -545,6 +545,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # E2E_REST: RestE2EDispatcher has no update-endpoint support — it POSTs the
+        # update body to the fixed create endpoint and never sets _active_update, so
+        # update_media_buy submitted responses don't parse (resp is None). The 3 UC-003
+        # manual-approval scenarios grade green on a2a/mcp/rest (incl. the async A2A
+        # submitted path); e2e_rest is xfailed pending RestE2EDispatcher update support.
+        _UC003_E2E_MANUAL_APPROVAL_TAGS = {
+            "T-UC-003-alt-manual",
+            "T-UC-003-approval-tenant",
+            "T-UC-003-approval-adapter",
+        }
+        if is_e2e_rest and (marker_names & _UC003_E2E_MANUAL_APPROVAL_TAGS):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="RestE2EDispatcher lacks update-endpoint support (salesagent-3aec)",
+                    strict=True,
+                )
+            )
+
         # FIXME(salesagent-nmg9, salesagent-rwly, salesagent-hamk): E2E_REST —
         # set_registry_formats has no sidecar mock path. Docker's real creative
         # agent serves its own catalog, so scenarios that inject specific format
@@ -1733,9 +1751,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # #1270 tripwire FIRED (strict XPASS on the first in-network CI run,
-            # 2026-07-09): the live server now validates start>=end (the merged
-            # #1417 validation embed) — tripwire removed, ledger entries graduated.
+            # GRADUATED (#1270): the live server now validates start>=end (the
+            # merged #1417 validation embed), so the invalid cases (equals, after)
+            # are rejected over e2e_rest — the former strict-xfail tripwire here
+            # XPASSed deterministically on in-network CI runs (first fired
+            # 2026-07-09) and was removed. The non-strict e2e_rest ledger entries
+            # for these 2 nodeids remain as a graceful guard against e2e
+            # environment flakiness.
 
         # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
         # in-process — when only end_date is given, production defaults start to
@@ -3239,6 +3261,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-partition-targeting-overlay",
             "T-UC-003-boundary-targeting-overlay",
         }
+        # The 3 manual-approval submitted-envelope scenarios are graded too (they
+        # exercise UpdateMediaBuySubmitted cross-transport, adcp 6.6 / spec 3.1.1).
+        # Every other UC-003 scenario stays dormant; graduating the full UC-003
+        # file is tracked separately.
+        _UC003_MANUAL_APPROVAL = {
+            "T-UC-003-alt-manual",
+            "T-UC-003-approval-tenant",
+            "T-UC-003-approval-adapter",
+        }
         if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
@@ -3260,6 +3291,32 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 # tell the env which media_buy_id the REST update endpoint targets.
                 _setup_existing_media_buy(ctx, env, tenant, principal, product)
                 env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
+                yield
+        elif marker_names & _UC003_MANUAL_APPROVAL:
+            # UpdateMediaBuy manual-approval scenarios. MediaBuyDualEnv (an IntegrationEnv)
+            # routes an UpdateMediaBuyRequest through IMPL/A2A/MCP/REST. Seed the full create
+            # dependency chain plus a standalone MediaBuy with the literal id the
+            # Background references ("mb_existing") so the update path has a target.
+            request.getfixturevalue("integration_db")
+            from tests.factories import MediaBuyFactory
+            from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                existing_media_buy = MediaBuyFactory(
+                    tenant=tenant,
+                    principal=principal,
+                    media_buy_id="mb_existing",
+                    status="active",
+                )
+                env._commit_factory_data()
+                env._seeded_media_buy_id = "mb_existing"
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                ctx["existing_media_buy"] = existing_media_buy
                 yield
         else:
             pytest.xfail("UC-003 harness not yet wired for non-extension scenarios")

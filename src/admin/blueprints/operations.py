@@ -3,17 +3,18 @@
 import asyncio
 import logging
 
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp import Error, create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 # FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import CreateMediaBuySuccessResponse, Package
-from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -470,7 +471,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
-                        create_media_buy_approved_result = CreateMediaBuySuccessResponse(
+                        # Route through our defaulted subclass — adcp 6.6 (spec 3.1.1)
+                        # made status/confirmed_at/revision required on the raw envelope;
+                        # constructing the raw library type here would ValidationError.
+                        create_media_buy_approved_result = CreateMediaBuySuccess(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
                             context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
@@ -561,13 +565,13 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     webhook_config = db_session.scalars(stmt_webhook).first()
 
                 if webhook_config and media_buy_data:
-                    reject_repo = MediaBuyRepository(db_session, tenant_id)
-                    all_packages = reject_repo.get_packages(media_buy_id)
-
-                    create_media_buy_rejected_result = CreateMediaBuySuccessResponse(
-                        media_buy_id=media_buy_id,
-                        packages=[Package(package_id=x.package_id) for x in all_packages],
-                        context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                    # A rejection is NOT a completed media buy. adcp 6.6 defaults
+                    # CreateMediaBuySuccess.status="completed"/confirmed_at, so embedding a
+                    # Success here would assert the buy COMPLETED inside a status="rejected"
+                    # webhook. Spec 3.1.1 create-media-buy-response.json models a non-success
+                    # outcome as the CreateMediaBuyError variant — embed that with the reason.
+                    create_media_buy_rejected_result = CreateMediaBuyError(
+                        errors=[Error(code="MEDIA_BUY_REJECTED", message=f"Rejected: {reason or 'No reason provided'}")]
                     )
                     metadata = {
                         "task_type": step_data["tool_name"],

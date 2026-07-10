@@ -303,22 +303,32 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
 
 
 class _TestClock:
-    """Simple clock for BDD date token resolution ({now}, {N days from now}, etc.)."""
+    """Minimal clock for BDD relative date-token resolution.
+
+    The media-buy Given steps resolve Gherkin tokens (``{now}``,
+    ``{30 days from now}``, ``{1 day ago}``) against ``ctx["env"].clock`` using
+    the ``now_iso`` / ``future_iso`` / ``past_iso`` interface. Emits the
+    ``YYYY-MM-DDTHH:MM:SSZ`` shape AdCP request validators accept.
+    """
+
+    @staticmethod
+    def _iso(dt: Any) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def now_iso(self) -> str:
         from datetime import UTC, datetime
 
-        return datetime.now(UTC).isoformat()
+        return self._iso(datetime.now(UTC))
 
     def future_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) + timedelta(days=days)).isoformat()
+        return self._iso(datetime.now(UTC) + timedelta(days=days))
 
     def past_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        return self._iso(datetime.now(UTC) - timedelta(days=days))
 
 
 class BaseTestEnv:
@@ -395,6 +405,8 @@ class BaseTestEnv:
         # A2A/MCP dispatchers. None unless such a path ran — REST builds its
         # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
         self._last_wire_response: dict[str, Any] | None = None
+        # Relative date-token resolver for media-buy Given steps (env.clock).
+        self.clock = _TestClock()
 
     # -- Transport mode -----------------------------------------------------
 
@@ -696,6 +708,16 @@ class BaseTestEnv:
                 if reconstructed is not None:
                     raise reconstructed
             raise AdCPError(f"A2A task failed: {task_result.status}")
+
+        if task_result.status.state == TaskState.TASK_STATE_SUBMITTED:
+            # Async manual-approval path: the server returns a submitted Task with NO
+            # artifacts (adcp_a2a_server.py:683) — the submitted envelope is conveyed by
+            # the Task state + id, not an artifact union. Reconstruct the submitted wire
+            # (protocol status="submitted" + the task_id the buyer polls) so success-path
+            # grading sees the real A2A wire.
+            submitted_wire = {"status": "submitted", "task_id": task_result.id}
+            self._last_wire_response = dict(submitted_wire)
+            return response_cls(**submitted_wire)
 
         if not task_result.artifacts:
             raise ValueError(f"Task has no artifacts. Status: {task_result.status}")

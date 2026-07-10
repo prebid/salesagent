@@ -168,7 +168,7 @@ class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     adapter_type = "mock"
 
 
-def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> None:
+def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> AdapterConfig:
     """Persist adapter test-behavior to the tenant's AdapterConfig row.
 
     BDD Given steps configure the in-process mock adapter directly (attribute /
@@ -208,6 +208,7 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> None
         row.mock_manual_approval_required = bool(behavior["manual_approval_required"])
 
     session.commit()
+    return row
 
 
 class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):

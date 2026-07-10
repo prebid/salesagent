@@ -409,6 +409,24 @@ class TestBuildCreateSuccess:
         assert len(result.packages) == 1
         assert result.packages[0].package_id == "custom-p1"
 
+    def test_buyer_ref_no_longer_on_success_response(self):
+        """buyer_ref must not be part of CreateMediaBuySuccess.
+
+        SDK 5.7 codegen incorrectly declared buyer_ref on the response schema; adcp 6.6
+        (spec 3.1.1) removed it — buyer_ref belongs on the request, not the response. The
+        field is now entirely absent from the model rather than present-but-None.
+        """
+        adapter = _make_adapter_instance()
+        result = adapter._build_create_success(
+            request=_make_create_request(),
+            media_buy_id="mb-1",
+            packages=[_make_media_package()],
+        )
+
+        # buyer_ref is not a field on the success response at all
+        assert "buyer_ref" not in type(result).model_fields
+        assert "buyer_ref" not in result.model_dump()
+
     def test_result_is_create_media_buy_success_type(self):
         """Return type is CreateMediaBuySuccess."""
         from src.core.schemas import CreateMediaBuySuccess

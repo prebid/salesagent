@@ -3063,7 +3063,7 @@ async def _create_media_buy_impl(
             # Return success response with packages awaiting approval
             # The workflow_step_id in packages indicates approval is required
             _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
+                response=CreateMediaBuySuccess.sync_success(
                     media_buy_id=media_buy_id,
                     media_buy_status=MediaBuyStatus.pending_creatives.value,  # AdCP 3.1: mirrors deprecated `status`
                     creative_deadline=None,
@@ -3219,7 +3219,7 @@ async def _create_media_buy_impl(
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
             _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
+                response=CreateMediaBuySuccess.sync_success(
                     media_buy_id=media_buy_id,
                     media_buy_status=MediaBuyStatus.pending_start.value,  # AdCP 3.1: mirrors deprecated `status`
                     packages=response_packages,
@@ -3545,7 +3545,16 @@ async def _create_media_buy_impl(
                 )
                 for pkg in packages
             ]
-            simulated_response = CreateMediaBuySuccess(
+            # The adcp-6.6 CreateMediaBuySuccess default status="completed" is KEPT for
+            # dry_run and is spec-correct (salesagent-6tc3): spec 3.1.1
+            # create-media-buy-response.json has exactly three variants
+            # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
+            # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the spec
+            # is SILENT on a dry_run response status -> production authoritative. A dry_run
+            # buyer asked to SIMULATE the would-be outcome, which IS completion, so
+            # "completed" is a truthful preview (unlike salesagent-5dxc/-88e2, where the op
+            # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
+            simulated_response = CreateMediaBuySuccess.sync_success(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 media_buy_status=MediaBuyStatus.pending_start.value,  # AdCP 3.1: mirrors deprecated `status`
                 packages=simulated_packages,
@@ -4076,7 +4085,7 @@ async def _create_media_buy_impl(
             )
 
         # Create AdCP response with typed Package objects
-        adcp_response = CreateMediaBuySuccess(
+        adcp_response = CreateMediaBuySuccess.sync_success(
             media_buy_id=response.media_buy_id,
             media_buy_status=media_buy_status,  # AdCP 3.1 preferred status; mirrors deprecated `status`
             packages=response_packages,
@@ -4318,6 +4327,7 @@ def _build_create_media_buy_request(
     ext: dict[str, Any] | None,
     account: AccountReference | None,
     idempotency_key: str | None,
+    paused: bool | None,
 ) -> CreateMediaBuyRequest:
     """Shared boundary request construction for the MCP and A2A/REST wrappers.
 
@@ -4342,6 +4352,7 @@ def _build_create_media_buy_request(
             context=context,
             ext=ext,
             account=account,
+            paused=paused,
             # Omit-when-absent so a missing key rejects as "Field required",
             # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
             # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
@@ -4383,6 +4394,10 @@ async def create_media_buy(
                 "without creating a duplicate booking; omitting it rejects with VALIDATION_ERROR."
             ),
         ),
+    ] = None,
+    paused: Annotated[
+        bool | None,
+        Field(description="Create the media buy in a paused state (AdCP 3.1.1); delivery starts only once unpaused"),
     ] = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -4428,6 +4443,7 @@ async def create_media_buy(
         ext=ext,
         account=account,
         idempotency_key=idempotency_key,
+        paused=paused,
     )
 
     # Read identity, context_id, and the raw wire arguments pre-stashed by
@@ -4471,6 +4487,7 @@ async def create_media_buy_raw(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None,
+    paused: bool | None = None,  # AdCP 3.1.1: create in paused state
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -4513,6 +4530,7 @@ async def create_media_buy_raw(
         ext=ext,
         account=account,
         idempotency_key=idempotency_key,
+        paused=paused,
     )
 
     if identity is None:

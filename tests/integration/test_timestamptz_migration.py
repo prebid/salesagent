@@ -118,7 +118,9 @@ class TestTimestamptzMigration:
         # fresh worker's DB has no schema at all until we migrate it (the old
         # "already at MIGRATION_REV from the previous test" assumption returned
         # column type None). Upgrading is a no-op when the sibling already ran
-        # on this worker (salesagent-6afh).
+        # on this worker. The integration tox env additionally runs xdist with
+        # --dist loadfile so this whole file normally stays on one worker, but
+        # the test stays self-contained rather than depending on scheduling.
         run_alembic_upgrade(db_url, MIGRATION_REV)
         col_type = _get_column_type(engine, "tenants", "created_at")
         assert col_type == "timestamp with time zone", f"Expected TIMESTAMPTZ before downgrade, got: {col_type}"

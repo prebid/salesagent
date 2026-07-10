@@ -82,6 +82,7 @@ from src.core.schemas import (
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
+    UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -343,7 +344,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-) -> UpdateMediaBuyResult:
+) -> UpdateMediaBuyResult | UpdateMediaBuySubmitted:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
     Callers construct the validated UpdateMediaBuyRequest at their boundary
@@ -541,7 +542,17 @@ def _update_media_buy_impl(
                 # parity with get_media_buys — see _adcp_status_and_actions).
                 _dry_run_mb = uow.media_buys.get_by_id(req.media_buy_id)
 
-                # Build simulated response
+                # Build simulated response.
+                # The protocol status "completed" is KEPT for dry_run and is
+                # spec-correct (salesagent-6tc3): spec 3.1.1
+                # update-media-buy-response.json has exactly three variants
+                # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
+                # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the
+                # spec is SILENT on a dry_run response status -> production authoritative.
+                # Unlike pending-approval (salesagent-5dxc -> Submitted) and reject
+                # (salesagent-88e2 -> Error), a dry_run buyer asked to SIMULATE the would-be
+                # outcome, which IS completion -> "completed" is a truthful preview, not a
+                # lie. Guarded by tests/integration/test_media_buy_dry_run_status.py.
                 _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_mb)
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
@@ -566,13 +577,13 @@ def _update_media_buy_impl(
                 # Store the original request alongside the response so the approval
                 # execution path can re-execute the update after human approval.
                 # This mirrors create_media_buy's raw_request pattern.
-                _approval_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                _approval_mbs, _approval_actions = _adcp_status_and_actions(_approval_mb)
-                approval_response = UpdateMediaBuySuccess(
-                    media_buy_id=req.media_buy_id or "",
-                    media_buy_status=_approval_mbs,  # AdCP 3.1: mirrors `status`
-                    affected_packages=[],  # Not yet applied — pending approval
-                    valid_actions=_approval_actions,
+                # Spec 3.1.1 models a not-yet-applied (pending human approval) update as the
+                # UpdateMediaBuySubmitted response variant: protocol-envelope status="submitted"
+                # + a task_id the buyer polls for the outcome. Returning UpdateMediaBuySuccess
+                # here would emit a "completed" success envelope, falsely asserting the
+                # update was applied. task_id is the workflow step the admin approval flow acts on.
+                approval_response = UpdateMediaBuySubmitted(
+                    task_id=step.step_id,
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
@@ -597,7 +608,10 @@ def _update_media_buy_impl(
                 )
                 session.add(mapping)
 
-                return UpdateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.submitted.value)
+                # UpdateMediaBuySubmitted carries the protocol-envelope
+                # status="submitted" (const) natively — returned unwrapped so every
+                # transport serializes the spec-correct submitted envelope.
+                return approval_response
 
             # Validate currency limits if flight dates or budget changes
             # This prevents workarounds where buyers extend flight to bypass daily max

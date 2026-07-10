@@ -74,7 +74,7 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "5.7.0"
+version = "6.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
@@ -92,9 +92,9 @@ dependencies = [
     { name = "tldextract" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/d8/2b282cfedaa6f3fc849c3c0c43bfc563f1912c81efe631ca156991c266cf/adcp-5.7.0.tar.gz", hash = "sha256:dbb1e471502bea68f154696d00f18b6dbae503e2b53f79aa07190edee01be314", size = 4429489, upload-time = "2026-05-22T17:26:34.502Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/af/7e48aa75e04be01cc3d0abc81500716d5196301c78e42127e44f1e558c19/adcp-6.6.0.tar.gz", hash = "sha256:564af3f869224f625fed1c46e30e5808e3a0f1e485a51b5744a85eb9e6ec5249", size = 14228157, upload-time = "2026-07-01T08:35:36.222Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/b8/3bc0299e37ae1765f2e3241a8416c7fd5061db24f7b9ee6ca64f59855962/adcp-5.7.0-py3-none-any.whl", hash = "sha256:d4dedee3f2e5907c2e3286b831e1d4a1ef9f119bdadf8d83048dc4dd11cfebcd", size = 4352070, upload-time = "2026-05-22T17:26:30.731Z" },
+    { url = "https://files.pythonhosted.org/packages/db/6a/7fb907feae1ec3ebb06081e4179cb6daec5b8d084124d2c278b42560494a/adcp-6.6.0-py3-none-any.whl", hash = "sha256:e940f3f71dc3f8b4be8f7adcd54f7471d11e49f8b65e6069825e0ea0fe6c5fd7", size = 15057489, upload-time = "2026-07-01T08:35:33.307Z" },
 ]
 
 [[package]]
@@ -191,7 +191,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", specifier = "==5.7.0" },
+    { name = "adcp", specifier = "==6.6.0" },
     { name = "aiohttp", specifier = ">=3.14.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },

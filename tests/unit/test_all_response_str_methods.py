@@ -147,9 +147,9 @@ class TestResponseStrMethods:
 
         resp = SyncCreativesResponse(
             creatives=[
-                SyncCreativeResult(creative_id="cr-001", status="approved", action="created"),
-                SyncCreativeResult(creative_id="cr-002", status="approved", action="created"),
-                SyncCreativeResult(creative_id="cr-003", status="approved", action="updated"),
+                SyncCreativeResult(creative_id="cr-001", internal_status="approved", action="created"),
+                SyncCreativeResult(creative_id="cr-002", internal_status="approved", action="created"),
+                SyncCreativeResult(creative_id="cr-003", internal_status="approved", action="updated"),
             ],
             dry_run=False,
         )

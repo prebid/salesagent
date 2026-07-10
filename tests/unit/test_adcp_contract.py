@@ -122,11 +122,11 @@ class TestSchemaMatchesLibrary:
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
         # product_selectors — internal-only field (not in AdCP spec)
-        # push_notification_config — in JSON schema but not yet in adcp library's
-        #   GetProductsWholesaleRequest (library gap); declared locally per Pattern #1
+        # push_notification_config — now a real library field on GetProductsWholesaleRequest
+        #   (adcp 6.6 / spec 3.1.1); inherited, present in both sets, no longer a local extension
         # buying_mode and account are now in the library (adcp 3.9) but overridden locally
         # (buying_mode widened to str|None, account made optional)
-        local_extensions = {"product_selectors", "push_notification_config"}
+        local_extensions = {"product_selectors"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )
@@ -1467,12 +1467,12 @@ class TestAdCPContract:
                 SyncCreativeResult(
                     creative_id="creative_123",
                     action="created",
-                    status="approved",
+                    internal_status="approved",
                 ),
                 SyncCreativeResult(
                     creative_id="creative_456",
                     action="updated",
-                    status="pending_review",
+                    internal_status="pending_review",
                     changes=["url", "name"],
                 ),
                 SyncCreativeResult(
@@ -2943,11 +2943,20 @@ class TestProductV36FieldContract:
 
     def test_placements_present_when_set(self):
         """placements appears in model_dump with correct Placement structure."""
+        # adcp 6.6 (spec 3.1.1) made Placement.kind and Placement.mode required.
         placements = [
-            {"placement_id": "top_banner", "name": "Top Banner", "description": "Above the fold"},
+            {
+                "placement_id": "top_banner",
+                "name": "Top Banner",
+                "description": "Above the fold",
+                "kind": "publisher_ref",
+                "mode": "targetable",
+            },
             {
                 "placement_id": "sidebar",
                 "name": "Sidebar",
+                "kind": "publisher_ref",
+                "mode": "targetable",
                 "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             },
         ]

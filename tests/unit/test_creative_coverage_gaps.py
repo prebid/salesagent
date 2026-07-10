@@ -170,7 +170,7 @@ class TestSyncUnchangedCount:
             unchanged_result = SyncCreativeResult(
                 creative_id="c1",
                 action=CreativeAction.unchanged,
-                status="approved",
+                internal_status="approved",
                 platform_id=None,
                 review_feedback=None,
                 assigned_to=None,
@@ -216,7 +216,7 @@ class TestSyncAiReviewReasonOnUpdate:
             update_result = SyncCreativeResult(
                 creative_id="c1",
                 action=CreativeAction.updated,
-                status="pending_review",
+                internal_status="pending_review",
                 platform_id=None,
                 review_feedback=None,
                 assigned_to=None,
@@ -272,7 +272,7 @@ class TestSyncProvenanceWarningOnUpdate:
             update_result = SyncCreativeResult(
                 creative_id="c1",
                 action=CreativeAction.updated,
-                status="approved",
+                internal_status="approved",
                 platform_id=None,
                 review_feedback=None,
                 assigned_to=None,
@@ -329,7 +329,7 @@ class TestSyncMixedMessageSuffix:
             update_result = SyncCreativeResult(
                 creative_id="c2",
                 action=CreativeAction.updated,
-                status="approved",
+                internal_status="approved",
                 platform_id=None,
                 review_feedback=None,
                 assigned_to=None,

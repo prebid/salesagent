@@ -83,6 +83,7 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
+    paused: bool | None = None  # adcp 6.6: Package.status enum replaced by paused bool
     adcp_version: str = "1.0.0"
 
 

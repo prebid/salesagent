@@ -10,7 +10,6 @@ from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject as LibraryContextObject
 from adcp.types import CreativeStatus
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
@@ -349,62 +348,48 @@ class SyncSummary(SalesAgentBaseModel):
 
 
 class SyncCreativeResult(LibrarySyncCreativeResult):
-    """Extends library SyncCreativeResult with locally-owned fields.
+    """Extends library SyncCreativeResult with internal-only fields.
 
-    Library (SDK 5.7) provides: creative_id, action, errors,
-    adcp_major_version, adcp_version.
+    adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
+    changes and warnings to the library parent, so all six are now INHERITED (they were
+    locally redeclared under SDK 5.7 which had dropped them). See salesagent-qj0p.
 
-    Locally owned (removed from SDK 5.7 but used by this codebase):
-    - assigned_to, assignment_errors: assignment reporting (UC-006)
-    - platform_id, status: internal tracking
-    - changes, warnings: sync operation details
-
-    Internal-only (not in AdCP spec):
-    - review_feedback: excluded from responses
+    Internal-only (not in AdCP spec, excluded from responses):
+    - internal_status: review-routing state (renamed off the inherited spec `status`)
+    - review_feedback: platform review feedback
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # SDK 5.7 (adcontextprotocol/adcp-client-python#913): parent declares action
-    # as CreativeAction|str and stores raw strings. CreativeAction is plain Enum
-    # (not StrEnum), so "created" == CreativeAction.created is False.
-    # Store as string; compare with strings everywhere until upstream ships StrEnum.
-    action: str = Field(description="Action taken for this creative")
+    # action is inherited from the adcp 6.6 parent as the StrEnum CreativeAction. Every value
+    # production emits (created/updated/unchanged/failed/deleted — as strings or enum members) is
+    # a valid CreativeAction, and StrEnum coerces the strings, so no override or normalizer is needed.
 
-    @field_validator("action", mode="before")
-    @classmethod
-    def _normalize_action_to_str(cls, v: Any) -> str | None:
-        """Normalize CreativeAction enum to its string value.
-
-        Returns ``None`` only when ``v`` is ``None`` (delegated to ``enum_value``);
-        the required ``action: str`` field type then rejects it. Annotated
-        ``str | None`` to match ``enum_value``'s real return.
-        """
-        return enum_value(v)
-
-    # --- Fields removed from SDK 5.7 that we own locally ---
-    assigned_to: list[str] | None = Field(None, description="Package IDs this creative was assigned to during sync")
-    assignment_errors: dict[str, str] | None = Field(
-        None, description="Per-package assignment errors {package_id: error_message}"
+    # adcp 6.6 (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
+    # warnings to the library parent — we now INHERIT all six (salesagent-qj0p, shrinking the
+    # schema-inheritance allowlist). Our former local `status` held internal review-routing state,
+    # not the spec's advisory CreativeStatus, so it is renamed to `internal_status` (excluded from
+    # the wire) rather than shadowing the inherited spec field. Per owner decision we inherit but
+    # do NOT populate the spec `status`: it stays None. On A2A/REST (model_dump with exclude_none)
+    # it is omitted, so the sync wire is byte-identical this bump; on MCP the response goes through
+    # structured_content -> to_jsonable_python, which BYPASSES the model_dump override, so there the
+    # inherited `status` (and empty changes/warnings) serialize as null rather than being omitted.
+    # changes/warnings inherit the parent's None default (writers use
+    # the _append_warning guard in _sync.py); platform_id/assigned_to/assignment_errors are
+    # type-compatible and inherited as-is.
+    internal_status: str | None = Field(
+        None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
     )
-    platform_id: str | None = Field(None, description="Platform-assigned creative identifier")
-    status: str | None = Field(None, exclude=True, description="Internal creative status")
 
     # Internal-only fields (not in AdCP spec)
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
 
-    # Override library defaults: library uses None, we use [] for backward compatibility
-    changes: list[str] = Field(
-        default_factory=list, description="List of field names that were modified (for 'updated' action)"
-    )
-    warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
-
     def model_dump(self, **kwargs):
         """Override to strip empty lists for AdCP spec compliance.
 
-        Internal fields (status, review_feedback) are excluded via Field(exclude=True).
+        Internal fields (internal_status, review_feedback) are excluded via Field(exclude=True).
         This override handles empty-list stripping: changes, errors, warnings are
         optional in the AdCP spec, so omit them when empty rather than serializing [].
         """
@@ -470,10 +455,10 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Design decision (salesagent-g3c): error variant never constructed.
     """
 
-    # SDK 5.7 removed these from the parent — declare locally
+    # SDK 5.7 removed dry_run from the parent — declare locally. context (ContextObject|None) and
+    # ext (ExtensionObject|None) were re-added by adcp 6.6 and are now inherited: production may
+    # assign raw dicts, which Pydantic coerces to the typed models on validation.
     dry_run: bool | None = None
-    context: LibraryContextObject | dict[str, Any] | None = None
-    ext: dict[str, Any] | None = None
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.

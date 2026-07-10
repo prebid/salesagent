@@ -168,10 +168,35 @@ def _sync_adapter_error_to_db(
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
+    """Set manual-approval config on EVERY adapter mock the env exposes.
+
+    MediaBuyCreateEnv patches the create-module adapter as ``env.mock['adapter']``;
+    MediaBuyDualEnv additionally patches the update-module adapter as
+    ``env.mock['update_adapter']``. The production create/update manual-approval
+    gate reads ``manual_approval_required`` + ``'<op>' in manual_approval_operations``
+    from its OWN module's adapter, so both must be configured (guarded on presence).
+    """
+    operations = {"create_media_buy", "update_media_buy"} if required else []
+    for name in ("adapter", "update_adapter"):
+        if name not in env.mock:
+            continue
+        adapter_mock = env.mock[name].return_value
+        adapter_mock.manual_approval_required = required
+        adapter_mock.manual_approval_operations = operations
+
+
 @given("the tenant is configured for auto-approval")
 @given("tenant human_review_required is false")
 def given_tenant_auto_approval(ctx: dict) -> None:
-    """Configure tenant for auto-approval (human_review_required=False)."""
+    """Configure tenant for auto-approval (human_review_required=False).
+
+    This module is the single owner of the "the tenant is configured for
+    auto-approval" alias: the former uc002_create_media_buy definition was
+    consolidated into this real DB-aware version, so there is no cross-module
+    shadow. UC-003 scenarios reach this via the "human_review_required is
+    false" alias.
+    """
     assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for auto-approval' but no tenant exists to configure"
     )
@@ -195,12 +220,10 @@ def given_tenant_manual_approval(ctx: dict) -> None:
     env._identity_cache.clear()
     env._tenant_overrides["human_review_required"] = True
     # Production code checks: manual_approval_required AND
-    # "create_media_buy" in adapter.manual_approval_operations.
-    # The mock adapter defaults to manual_approval_operations=[],
-    # so we must also configure the adapter mock for manual approval.
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.manual_approval_required = True
-    adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+    # "<op>" in adapter.manual_approval_operations. The mock adapter defaults to
+    # manual_approval_operations=[], so configure every adapter mock (create +
+    # update) for manual approval — the update submitted path reads update_adapter.
+    _configure_adapter_manual_approval(env, required=True)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
 
@@ -213,9 +236,7 @@ def given_adapter_no_manual_approval(ctx: dict) -> None:
     to be clear in the scenario.
     """
     env = ctx["env"]
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.manual_approval_required = False
-    adapter_mock.manual_approval_operations = []
+    _configure_adapter_manual_approval(env, required=False)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
 
@@ -228,9 +249,7 @@ def given_adapter_manual_approval(ctx: dict) -> None:
     manual_approval_operations — both are needed for the approval gate.
     """
     env = ctx["env"]
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.manual_approval_required = True
-    adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+    _configure_adapter_manual_approval(env, required=True)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
 
@@ -2805,11 +2824,9 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the ad server adapter is available")
-def given_adapter_available(ctx: dict) -> None:
-    """Ensure the mock adapter is configured for success (default state)."""
-    # MediaBuyCreateEnv._configure_mocks() already sets up happy-path adapter
-    ctx.setdefault("adapter_available", True)
+# "the ad server adapter is available" is owned by uc002_create_media_buy
+# (canonical) — removed here to avoid a cross-module shadow now that this module
+# is registered. No UC-003 scenario uses that text.
 
 
 @given("the ad server adapter returns an error")

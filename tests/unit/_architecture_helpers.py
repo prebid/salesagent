@@ -223,12 +223,14 @@ _FS_WALK_SKIP_DIRS = frozenset(
     {
         ".git",
         ".venv",
+        "venv",
         ".tox",
         "__pycache__",
         ".pytest_cache",
         ".mypy_cache",
         ".ruff_cache",
         ".claude",
+        ".beads",
         "node_modules",
         "htmlcov",
         "test-results",
@@ -254,7 +256,8 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
     metadata that lives outside the mount, so ``git ls-files`` errors with
     "not a git repository". Without the fallback every git-dependent architecture
     guard hard-errors in that runner (and is silently never exercised there). The
-    walk lets the guards run regardless of git availability.
+    walk prunes the usual VCS/build/cache dirs so, in a clean checkout, it matches
+    the tracked set; on any host with a working git the fallback never triggers.
     """
     try:
         output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True, stderr=subprocess.DEVNULL)
@@ -270,11 +273,11 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
 
 
 def _iter_filesystem_files(repo: Path) -> Iterator[Path]:
-    """git-unavailable fallback: walk ``repo``, skipping known-untracked directories."""
+    """git-unavailable fallback: deterministic walk of ``repo``, skipping known-untracked dirs."""
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = [d for d in dirnames if d not in _FS_WALK_SKIP_DIRS]
+        dirnames[:] = sorted(d for d in dirnames if d not in _FS_WALK_SKIP_DIRS)
         base = Path(dirpath)
-        for name in filenames:
+        for name in sorted(filenames):
             # In a worktree ``.git`` is a pointer FILE (not a dir), so the dir
             # filter above misses it; skip it (and any skip-named file) here.
             if name in _FS_WALK_SKIP_DIRS:

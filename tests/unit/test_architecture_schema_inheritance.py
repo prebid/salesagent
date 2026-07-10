@@ -201,8 +201,10 @@ class TestSchemaInheritance:
             ("QuerySummary", "filters_applied"),
             ("Signal", "signal_type"),
             ("Signal", "deployments"),
-            ("SyncCreativeResult", "action"),  # Coerce str→CreativeAction (adcontextprotocol/adcp-client-python#913)
-            ("SyncCreativeResult", "errors"),  # SDK 5.7 still has errors; warnings/changes removed
+            # adcp 6.6 (spec 3.1.1) re-added status/changes/warnings/platform_id/assignment_errors/
+            # assigned_to to the library sync_creatives_response Creative — now all INHERITED
+            # (salesagent-qj0p). Internal review-routing state was renamed to `internal_status`
+            # (a non-parent field, excluded from the wire), so no override remains here.
             ("SyncCreativesRequest", "creatives"),
             ("SyncCreativesRequest", "push_notification_config"),
             # Creative overrides — listing base requires these fields, but we add

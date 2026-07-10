@@ -79,6 +79,17 @@ class TestSchemaFieldMapping:
             "format_options",  # Format option config from adcp 5.7 spec
             "vendor_metric_optimization",  # Vendor metric optimization from adcp 5.7 spec
             "allowed_actions",  # Allowed buyer actions from adcp 5.7 spec
+            # AdCP 6.6+ (spec 3.1.1) fields - inherited from library Product, not yet stored
+            # in database. Pure forward-compat passthrough: nothing in src/ populates or reads
+            # them (defaulted None). Persist deliberately if/when a product-management feature
+            # configures placement-type/signal arrays (salesagent-rw9q).
+            "video_placement_types",  # Video placement types from adcp 3.1.1 spec
+            "social_placement_surfaces",  # Social placement surfaces from adcp 3.1.1 spec
+            "signal_targeting_options",  # Signal targeting options from adcp 3.1.1 spec
+            "sponsored_placement_types",  # Sponsored placement types from adcp 3.1.1 spec
+            "audio_distribution_types",  # Audio distribution types from adcp 3.1.1 spec
+            "signal_targeting_rules",  # Signal targeting rules from adcp 3.1.1 spec
+            "included_signals",  # Included signals from adcp 3.1.1 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

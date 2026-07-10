@@ -53,6 +53,7 @@ from src.core.schemas import (
     ReportingPeriod,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
+    UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -3007,13 +3008,16 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        # Should return success but workflow step should be marked as requires_approval
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant (status="submitted"
+        # + task_id), not a completed success. It carries no affected_packages (the update is
+        # not yet applied). The workflow step is marked requires_approval, and the result
+        # envelope's protocol status mirrors the submitted state.
+        assert isinstance(result, UpdateMediaBuySubmitted)
+        assert result.status == "submitted"
+        assert result.task_id == "step_1"
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
-        # Affected packages should be empty (not yet applied)
-        assert result.response.affected_packages == []
 
     def test_implementation_date_null_when_pending(self):
         """UC-003-MA02: implementation_date is null until approved.
@@ -3071,8 +3075,11 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
-        dumped = result.response.model_dump()
+        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant. implementation_date
+        # is not part of that envelope (the update is not yet applied), so it is absent/None.
+        assert isinstance(result, UpdateMediaBuySubmitted)
+        assert result.status == "submitted"
+        dumped = result.model_dump()
         # implementation_date should be None when pending approval
         assert dumped.get("implementation_date") is None
 
