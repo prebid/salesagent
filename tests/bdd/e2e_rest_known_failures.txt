@@ -354,8 +354,6 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_l
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-natural_key-{"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]
 tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]
 tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]

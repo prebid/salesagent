@@ -64,16 +64,8 @@ def _insert_test_tenant(engine, test_time):
 
 
 @pytest.mark.requires_db
-@pytest.mark.xdist_group("timestamptz_migration")
 class TestTimestamptzMigration:
-    """Test the TIMESTAMPTZ migration upgrade and downgrade.
-
-    The downgrade test depends on the upgrade test's side effect on the shared
-    module-scoped ``migration_db``. Pin the class to one xdist worker (xdist_group)
-    so the ordered upgrade->downgrade pair isn't split across workers under
-    ``-n auto`` (default ``--dist load``), which would leave downgrade running
-    against a DB the upgrade never touched.
-    """
+    """Test the TIMESTAMPTZ migration upgrade and downgrade."""
 
     def test_upgrade_converts_timestamp_to_timestamptz(self, migration_db):
         """Upgrade should convert all TIMESTAMP columns to TIMESTAMPTZ."""
@@ -121,8 +113,9 @@ class TestTimestamptzMigration:
         """Downgrade should revert TIMESTAMPTZ columns back to TIMESTAMP."""
         engine, db_url = migration_db
 
-        # The database is already at MIGRATION_REV from the previous test.
-        # Verify it's TIMESTAMPTZ first.
+        # The database is already at MIGRATION_REV, with test data, from the previous test
+        # in this module (they share the module-scoped migration_db). The integration tox
+        # env runs xdist with --dist loadscope so this module stays on one worker in order.
         col_type = _get_column_type(engine, "tenants", "created_at")
         assert col_type == "timestamp with time zone", f"Expected TIMESTAMPTZ before downgrade, got: {col_type}"
 

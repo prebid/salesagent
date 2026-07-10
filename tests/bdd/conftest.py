@@ -1559,15 +1559,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # FIXME(#1270): e2e_rest: Docker doesn't validate date range params —
-            # invalid cases (equals, after) succeed instead of failing.
-            if is_e2e_rest and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date")):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: Docker does not validate date range — invalid cases succeed",
-                        strict=True,
-                    )
-                )
+            # GRADUATED (#1270): production now validates date range over e2e_rest, so the
+            # invalid cases (equals, after) are rejected — the former strict-xfail tripwire
+            # here XPASSed deterministically (two consecutive in-network runs) and was
+            # removed. The non-strict e2e_rest ledger entries for these 2 nodeids remain as
+            # a graceful guard against e2e environment flakiness.
 
         # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
         # in-process — when only end_date is given, production defaults start to
