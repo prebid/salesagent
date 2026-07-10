@@ -57,7 +57,10 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
         return None
 
     domain = brand_shorthand_to_domain(url)
-    return {"domain": domain} if domain else None
+    if not domain:
+        logger.debug("Could not parse domain from brand_manifest url=%r; stripping field", url)
+        return None
+    return {"domain": domain}
 
 
 def _normalize_packages(packages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:

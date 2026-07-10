@@ -45,6 +45,7 @@ from pydantic import ValidationError
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetProductsResponse
 from tests.factories import PrincipalFactory
+from tests.helpers.capture_wrapper_req import capture_req_via_wrapper
 
 
 def _mock_response() -> GetProductsResponse:
@@ -54,19 +55,14 @@ def _mock_response() -> GetProductsResponse:
 
 def _capture_req_via_get_products(brand):
     """Run the real MCP get_products wrapper with `brand`; return the req handed to the impl."""
-    captured: dict = {}
+    from src.core.tools.products import get_products
 
-    async def _impl(req, identity):
-        captured["req"] = req
-        return GetProductsResponse(products=[])
-
-    mock_ctx = MagicMock(spec=Context)
-    mock_ctx.get_state = AsyncMock(return_value=None)
-    with patch("src.core.tools.products._get_products_impl", side_effect=_impl):
-        from src.core.tools.products import get_products
-
-        asyncio.run(get_products(brand=brand, brief="ads", ctx=mock_ctx))
-    return captured["req"]
+    return capture_req_via_wrapper(
+        impl_patch_target="src.core.tools.products._get_products_impl",
+        wrapper=get_products,
+        stub_response=GetProductsResponse(products=[]),
+        wrapper_kwargs={"brand": brand, "brief": "ads"},
+    )
 
 
 def test_mcp_get_products_coerces_string_url_brand_before_impl():

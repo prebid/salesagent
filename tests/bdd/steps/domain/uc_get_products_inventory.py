@@ -14,12 +14,12 @@ Steps store results in ctx:
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.generic.brand_param import parse_brand_gherkin_param
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
@@ -163,11 +163,7 @@ def when_request_products(ctx: dict) -> None:
 @when(parsers.parse("the buyer requests products with brand {brand}"))
 def when_request_products_with_brand(ctx: dict, brand: str) -> None:
     """Dispatch get_products with a brand value (JSON dict or bare/quoted string)."""
-    try:
-        value: Any = json.loads(brand)
-    except json.JSONDecodeError:
-        value = brand
-    _call_get_products(ctx, brand=value)
+    _call_get_products(ctx, brand=parse_brand_gherkin_param(brand))
 
 
 # ── Then steps ──────────────────────────────────────────────────────

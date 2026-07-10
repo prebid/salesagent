@@ -1,10 +1,6 @@
 """Brand string shorthand coercion for get_products and create_media_buy (#1324)."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-from fastmcp.server.context import Context
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schema_helpers import (
@@ -14,6 +10,7 @@ from src.core.schema_helpers import (
     to_brand_reference,
 )
 from src.core.tools.media_buy_create import _build_create_media_buy_request
+from tests.helpers.capture_wrapper_req import capture_req_via_wrapper
 
 
 @pytest.mark.parametrize(
@@ -107,6 +104,25 @@ def test_dict_url_domain_normalized_like_string() -> None:
     assert from_dict.domain == from_string.domain == "acme.com"
 
 
+def test_to_brand_reference_dict_preserves_governance_fields() -> None:
+    """Dict path must preserve all BrandReference fields, not pluck domain/brand_id only."""
+    ref = to_brand_reference(
+        {
+            "domain": "ACME.COM",
+            "industries": ["automotive"],
+            "data_subject_contestation": {"email": "dpo@acme.com"},
+            "brand_kit_override": {"primary_color": "#003366"},
+        }
+    )
+    assert ref is not None
+    assert ref.domain == "acme.com"
+    assert ref.industries == ["automotive"]
+    assert ref.data_subject_contestation is not None
+    assert ref.data_subject_contestation.email == "dpo@acme.com"
+    assert ref.brand_kit_override is not None
+    assert ref.brand_kit_override.primary_color == "#003366"
+
+
 def _minimal_create_media_buy_kwargs() -> dict:
     from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 
@@ -154,36 +170,28 @@ def test_build_create_media_buy_request_invalid_brand_raises(invalid_brand: str)
 
 def _capture_req_via_create_media_buy(brand):
     """Run the real MCP create_media_buy wrapper with `brand`; return the req handed to the impl."""
-    captured: dict = {}
+    from src.core.schemas import CreateMediaBuyResult
+    from src.core.schemas._base import CreateMediaBuySuccess
+    from src.core.tools.media_buy_create import create_media_buy
+    from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 
-    async def _impl(req, identity, **kwargs):
-        captured["req"] = req
-        from src.core.schemas import CreateMediaBuyResult
-        from src.core.schemas._base import CreateMediaBuySuccess
-
-        return CreateMediaBuyResult(
-            response=CreateMediaBuySuccess(media_buy_id="mb_test", buyer_ref="buyer-1", packages=[]),
-            status="completed",
-        )
-
-    mock_ctx = MagicMock(spec=Context)
-    mock_ctx.get_state = AsyncMock(return_value=None)
-    with patch("src.core.tools.media_buy_create._create_media_buy_impl", side_effect=_impl):
-        from src.core.tools.media_buy_create import create_media_buy
-        from tests.helpers.adcp_factories import create_test_media_buy_request_dict
-
-        req_dict = create_test_media_buy_request_dict(brand={"domain": "placeholder.com"})
-        asyncio.run(
-            create_media_buy(
-                brand=brand,
-                packages=req_dict["packages"],
-                start_time=req_dict["start_time"],
-                end_time=req_dict["end_time"],
-                idempotency_key=req_dict["idempotency_key"],
-                ctx=mock_ctx,
-            )
-        )
-    return captured["req"]
+    req_dict = create_test_media_buy_request_dict(brand={"domain": "placeholder.com"})
+    stub = CreateMediaBuyResult(
+        response=CreateMediaBuySuccess(media_buy_id="mb_test", buyer_ref="buyer-1", packages=[]),
+        status="completed",
+    )
+    return capture_req_via_wrapper(
+        impl_patch_target="src.core.tools.media_buy_create._create_media_buy_impl",
+        wrapper=create_media_buy,
+        stub_response=stub,
+        wrapper_kwargs={
+            "brand": brand,
+            "packages": req_dict["packages"],
+            "start_time": req_dict["start_time"],
+            "end_time": req_dict["end_time"],
+            "idempotency_key": req_dict["idempotency_key"],
+        },
+    )
 
 
 def test_mcp_create_media_buy_coerces_string_url_brand_before_impl() -> None:

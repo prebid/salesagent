@@ -1561,7 +1561,10 @@ class AdCPRequestHandler(RequestHandler):
 
             coerced_brand = to_brand_reference(params["brand"])
             if coerced_brand is None:
-                raise AdCPValidationError("Invalid brand", field="brand")
+                raise AdCPValidationError(
+                    "Invalid brand: could not coerce brand shorthand to BrandReference",
+                    field="brand",
+                )
             params["brand"] = coerced_brand.model_dump(mode="json")
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).

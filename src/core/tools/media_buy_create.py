@@ -4241,8 +4241,9 @@ def _build_create_media_buy_request(
     idempotency omit-when-absent splat, and the ValidationError translation —
     a future request field lands here once instead of in wrapper lockstep.
     Transport-specific input coercions (A2A's ``to_reporting_webhook`` /
-    ``to_context_object``) happen at the call site; this builder receives
-    already-typed values.
+    ``to_context_object``) happen at the call site. ``brand`` is the exception:
+    string/dict shorthand is normalized here via ``to_brand_reference`` so MCP,
+    A2A, and REST share one funnel.
     """
     try:
         return CreateMediaBuyRequest(

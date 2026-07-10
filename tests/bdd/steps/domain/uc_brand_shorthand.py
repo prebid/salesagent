@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -11,18 +10,8 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.uc002_create_media_buy import _get_response_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
-
-
-def _pricing_option_id(pricing_option) -> str:
-    fixed_str = "fixed" if pricing_option.is_fixed else "auction"
-    return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
-
-
-def _parse_brand_param(brand: str) -> Any:
-    try:
-        return json.loads(brand)
-    except json.JSONDecodeError:
-        return brand
+from tests.bdd.steps.generic.brand_param import parse_brand_gherkin_param
+from tests.bdd.steps.generic.given_media_buy import _pricing_option_id
 
 
 def _build_create_media_buy_brand_kwargs(ctx: dict, brand: Any) -> dict[str, Any]:
@@ -54,7 +43,7 @@ def given_media_buy_creation_tenant(ctx: dict) -> None:
 @when(parsers.parse("the buyer sends create_media_buy with brand {brand}"))
 def when_send_create_media_buy_with_brand(ctx: dict, brand: str) -> None:
     """Dispatch create_media_buy with a brand value (JSON dict or bare/quoted string)."""
-    dispatch_request(ctx, **_build_create_media_buy_brand_kwargs(ctx, _parse_brand_param(brand)))
+    dispatch_request(ctx, **_build_create_media_buy_brand_kwargs(ctx, parse_brand_gherkin_param(brand)))
 
 
 @then("the create_media_buy request succeeds")
