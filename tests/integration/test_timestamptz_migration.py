@@ -125,9 +125,7 @@ class TestTimestamptzMigration:
 
         # Seed the survival-check row if the sibling test didn't (fresh worker).
         with engine.connect() as conn:
-            existing = conn.execute(
-                text("SELECT 1 FROM tenants WHERE tenant_id = 'test_tz_tenant'")
-            ).fetchone()
+            existing = conn.execute(text("SELECT 1 FROM tenants WHERE tenant_id = 'test_tz_tenant'")).fetchone()
         if existing is None:
             _insert_test_tenant(engine, datetime(2025, 6, 15, 12, 30, 0))
 
