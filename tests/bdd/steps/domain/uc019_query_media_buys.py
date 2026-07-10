@@ -206,16 +206,23 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
 def given_today_is(ctx: dict, today_str: str) -> None:
     """Override 'today' for status computation.
 
-    Production code uses ``datetime.now(UTC).date()`` in
-    ``src.core.tools.media_buy_list`` (line 116). We patch ``datetime``
-    in that module so ``now()`` returns a datetime whose ``.date()``
-    yields the desired date.
+    In-process transports: production uses ``datetime.now(UTC).date()`` in
+    ``src.core.tools.media_buy_list``. We patch ``datetime`` in that module
+    so ``now()`` returns a datetime whose ``.date()`` yields the desired date.
+
+    e2e transports: the live server runs in a separate process the patch
+    can't reach, and the pinned spec offers no protocol clock control (see
+    ``_shift_seeded_windows_to_real_clock``). The pin is realized instead by
+    shifting seeded flight windows onto the real clock at dispatch time.
     """
     from datetime import UTC, datetime
     from unittest.mock import patch
 
     parsed = date.fromisoformat(today_str)
     ctx["mock_today"] = today_str
+
+    if ctx["env"].e2e_config is not None:
+        return
 
     # Build a datetime that corresponds to the target date
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
@@ -1157,10 +1164,42 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _shift_seeded_windows_to_real_clock(ctx: dict) -> None:
+    """Realize a pinned mock clock against the live e2e server via the seeded data.
+
+    Over e2e transports the server classifies lifecycle status with its real
+    clock; the ``today is`` patch can't reach that process. Nor may the clock
+    be pinned over the wire: AdCP 3.1.0-beta.3 deprecates the X-Mock-Time
+    testing header — "Sellers MUST NOT alter behavior based on these headers"
+    (media-buy/advanced-topics/sandbox.mdx) — so the seeded flight windows are
+    the only real time surface. Translate every seeded window by
+    (real today − pinned today): status resolution is pure date comparison,
+    so a uniform day shift preserves every phase/boundary relationship the
+    scenario asserts against its pinned clock.
+    """
+    from datetime import UTC, datetime
+
+    env = ctx["env"]
+    mock_today = ctx.get("mock_today")
+    if env.e2e_config is None or mock_today is None or ctx.get("_e2e_windows_shifted"):
+        return
+    ctx["_e2e_windows_shifted"] = True
+    delta = datetime.now(UTC).date() - date.fromisoformat(mock_today)
+    if not delta:
+        return
+    for mb in ctx.get("seeded_media_buys", {}).values():
+        for field in ("start_date", "end_date", "start_time", "end_time"):
+            value = getattr(mb, field)
+            if value is not None:
+                setattr(mb, field, value + delta)
+    env._session.commit()
+
+
 def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
     """Build and dispatch a get_media_buys request."""
     if ctx.get("error") is not None:
         return
+    _shift_seeded_windows_to_real_clock(ctx)
     query_kwargs = ctx.get("query_kwargs", {})
     query_kwargs.update(extra_kwargs)
 
