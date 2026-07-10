@@ -12,19 +12,23 @@ through the A2A wrapper layer, including:
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from a2a.server.routes.common import ServerCallContext
 from a2a.types import Message, SendMessageRequest, Task, TaskState
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from tests.a2a_helpers import make_nl_send_message_request
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+from tests.utils.a2a_helpers import (
+    create_a2a_message_with_skill,
+    extract_data_from_artifact,
+    extract_processing_error_envelope,
+    make_nl_send_message_request,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -106,6 +110,7 @@ class TestA2AErrorPropagation:
         )
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
         handler._resolve_a2a_identity = MagicMock(return_value=identity)
+        handler._send_protocol_webhook = AsyncMock()
 
         from src.core.config_loader import set_current_tenant
 
@@ -141,6 +146,13 @@ class TestA2AErrorPropagation:
             "VALIDATION_ERROR",
             message_substr="Missing required AdCP parameters",
             recovery="correctable",
+        )
+
+        # All-skills-failed branch forwards the joined per-skill reason as the
+        # webhook error= via _fail_task_with_webhook (single skill here, so the
+        # joined reason equals the wire envelope's first error message).
+        handler._send_protocol_webhook.assert_awaited_once_with(
+            result, status="failed", error=artifact_data["errors"][0]["message"]
         )
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
@@ -369,10 +381,10 @@ class TestA2AErrorPropagation:
 
         assert isinstance(result, Task)
         assert result.status.state == TaskState.TASK_STATE_FAILED
-        assert result.artifacts is not None
-        assert len(result.artifacts) > 0
 
-        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        # Strict reader pins the outer-handler artifact contract (processing_error
+        # name + single DataPart) at integration altitude, same as the unit tests.
+        artifact_data = extract_processing_error_envelope(result)
         assert_envelope_shape(
             artifact_data,
             "UNSUPPORTED_FEATURE",

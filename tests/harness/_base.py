@@ -35,6 +35,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 
 if TYPE_CHECKING:
+    from a2a.types import Task
     from pydantic import BaseModel
     from sqlalchemy.orm import Session
 
@@ -256,6 +257,37 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
         # ``A2ADispatcher.dispatch`` via ``getattr(exc, '_wire_error_envelope', None)``.
         reconstructed._wire_error_envelope = envelope  # type: ignore[attr-defined]
     return reconstructed
+
+
+def _read_failed_a2a_task(
+    task: Task,
+    *,
+    fallback_message: str,
+    expect_processing_error: bool = False,
+) -> tuple[dict[str, Any] | None, Exception]:
+    """Reconstruct ``(wire envelope, error)`` from a failed A2A Task.
+
+    Shared failed-Task reader for the harness A2A dispatcher and the BDD NL
+    when-step. Skill-dispatch failures carry the envelope in an ``error_result``
+    artifact (loose read); ``on_message_send``'s outer-handler failures carry it
+    in ``processing_error`` — pass ``expect_processing_error=True`` to pin that
+    strict shape (artifact present, name, single DataPart). When no envelope can
+    be read or reconstructed, the error falls back to a bare ``AdCPError``
+    describing the task status.
+    """
+    from src.core.exceptions import AdCPError
+    from tests.utils.a2a_helpers import extract_data_from_artifact, extract_processing_error_envelope
+
+    if task.artifacts:
+        if expect_processing_error:
+            envelope = extract_processing_error_envelope(task)
+        else:
+            envelope = extract_data_from_artifact(task.artifacts[0])
+        reconstructed = _envelope_to_adcp_error(envelope, fallback_message=fallback_message)
+        if reconstructed is not None:
+            return envelope, reconstructed
+        return envelope, AdCPError(f"A2A task failed: {task.status}")
+    return None, AdCPError(f"A2A task failed: {task.status}")
 
 
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
@@ -636,14 +668,8 @@ class BaseTestEnv:
         from a2a.types import TaskState
 
         if task_result.status.state == TaskState.TASK_STATE_FAILED:
-            from src.core.exceptions import AdCPError
-
-            if task_result.artifacts:
-                envelope = extract_data_from_artifact(task_result.artifacts[0])
-                reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
-                if reconstructed is not None:
-                    raise reconstructed
-            raise AdCPError(f"A2A task failed: {task_result.status}")
+            _envelope, error = _read_failed_a2a_task(task_result, fallback_message="A2A skill failed")
+            raise error
 
         if not task_result.artifacts:
             raise ValueError(f"Task has no artifacts. Status: {task_result.status}")

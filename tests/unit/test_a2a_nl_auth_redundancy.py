@@ -13,9 +13,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from tests.a2a_helpers import (
+from tests.a2a_helpers import make_a2a_context
+from tests.utils.a2a_helpers import (
     extract_processing_error_envelope,
-    make_a2a_context,
     make_mock_a2a_identity,
     make_nl_send_message_request,
 )

@@ -223,6 +223,10 @@ class AdCPError(Exception):
     # Class-level identity defaults. Subclasses override these.
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
+    # AdCP transport-errors.mdx §"Recovery Behavior": the explicit recovery field
+    # is authoritative — terminal for untyped internal failures is deliberate even
+    # though error-code.json's canonical recovery for SERVICE_UNAVAILABLE (the wire
+    # code INTERNAL_ERROR maps to) is transient; a genuine bug won't heal on retry.
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
     # Instance attributes — set in __init__ from _default_* unless overridden.

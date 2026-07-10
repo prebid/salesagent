@@ -204,11 +204,9 @@ def when_buyer_sends_nl_a2a_request(ctx: dict, request_text: str) -> None:
 
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
     from src.core.config_loader import set_current_tenant
-    from src.core.exceptions import AdCPError
-    from tests.a2a_helpers import make_nl_send_message_request
-    from tests.harness._base import _envelope_to_adcp_error
+    from tests.harness._base import _read_failed_a2a_task
     from tests.harness.transport import Transport
-    from tests.utils.a2a_helpers import extract_data_from_artifact
+    from tests.utils.a2a_helpers import make_nl_send_message_request
 
     env = ctx["env"]
     identity = env.identity_for(Transport.A2A)
@@ -229,12 +227,14 @@ def when_buyer_sends_nl_a2a_request(ctx: dict, request_text: str) -> None:
 
     ctx["response"] = result
     if result.status.state == TaskState.TASK_STATE_FAILED:
-        if not result.artifacts:
-            ctx["error"] = AdCPError(f"A2A task failed without artifacts: {result.status}")
-            return
-        envelope = extract_data_from_artifact(result.artifacts[0])
-        ctx["wire_error_envelope"] = envelope
-        ctx["error"] = _envelope_to_adcp_error(envelope, fallback_message="A2A natural-language request failed")
+        envelope, error = _read_failed_a2a_task(
+            result,
+            fallback_message="A2A natural-language request failed",
+            expect_processing_error=True,
+        )
+        if envelope is not None:
+            ctx["wire_error_envelope"] = envelope
+        ctx["error"] = error
 
 
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))

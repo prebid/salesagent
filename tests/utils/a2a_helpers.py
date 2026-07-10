@@ -10,7 +10,7 @@ import uuid
 from typing import Any
 from unittest.mock import ANY
 
-from a2a.types import Artifact, Message, Part, Role
+from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task
 from google.protobuf import json_format, struct_pb2
 
 
@@ -55,6 +55,41 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
         if part.HasField("data"):
             return json.loads(json_format.MessageToJson(part.data))
     return {}
+
+
+def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
+    """Read the two-layer AdCP envelope from a failed Task's processing_error artifact.
+
+    ``on_message_send``'s outer error handler attaches the envelope built by
+    ``AdCPRequestHandler._build_error_envelope`` to the failed Task as a
+    single ``processing_error`` artifact with one DataPart (AdCP 3.1.x
+    transport-errors.mdx "Layer Separation": application failures ride in
+    the task body, not JSON-RPC errors). Asserts that artifact contract,
+    then delegates the decode to ``extract_data_from_artifact``.
+    """
+    assert task.artifacts, "failed Task must carry the error envelope artifact"
+    artifact = task.artifacts[0]
+    assert artifact.name == "processing_error", f"expected processing_error artifact, got {artifact.name!r}"
+    assert len(artifact.parts) == 1, f"envelope artifact must be a single DataPart, got {len(artifact.parts)} parts"
+    assert artifact.parts[0].HasField("data"), "envelope artifact part must be a DataPart"
+    return extract_data_from_artifact(artifact)
+
+
+def make_mock_a2a_identity():
+    """Standard mock ResolvedIdentity for A2A handler unit tests."""
+    from tests.factories import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
+        principal_id="test-principal",
+        tenant_id="test-tenant",
+        tenant={"tenant_id": "test-tenant"},
+        protocol="a2a",
+    )
+
+
+def make_nl_send_message_request(text: str) -> SendMessageRequest:
+    """Build a minimal A2A SendMessageRequest carrying NL text (no skills)."""
+    return SendMessageRequest(message=create_a2a_text_message(text))
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
