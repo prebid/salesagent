@@ -156,8 +156,11 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
                 "Invalid brand: domain is required",
                 field="brand",
             )
+        allowed = BrandReference.model_fields.keys()
+        ref_data = {key: value for key, value in brand.items() if key in allowed}
+        ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
         try:
-            return BrandReference(**{**brand, "domain": _coerce_domain_or_raise(domain_raw)})
+            return BrandReference(**ref_data)
         except ValidationError as e:
             raise AdCPValidationError(
                 format_validation_error(e, context="brand"),
