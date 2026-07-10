@@ -815,9 +815,9 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (model attribute assignment).
-    # CreativeAsset is a RootModel with a __getattr__ proxy that now exposes
-    # creative_id to mypy under the pinned adcp version — no ignore needed.
-    if not creative.creative_id:
+    # adcp.types.CreativeAsset hides creative_id from mypy's static analysis
+    # (the alias resolves at runtime but not statically) — the ignore is load-bearing.
+    if not creative.creative_id:  # type: ignore[attr-defined]
         creative.creative_id = db_creative.creative_id
 
     # Now apply approval mode logic
