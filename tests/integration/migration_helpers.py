@@ -72,12 +72,7 @@ def column_exists(engine, table: str, column: str) -> bool:
     Shared by migration tests that assert a column is added/dropped, replacing
     per-test hand-rolled copies of the same query.
     """
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT 1 FROM information_schema.columns WHERE table_name = :t AND column_name = :c"),
-            {"t": table, "c": column},
-        ).first()
-    return row is not None
+    return get_column_info(engine, table, column) is not None
 
 
 def get_column_info(engine, table: str, column: str) -> tuple[str, str | None] | None:

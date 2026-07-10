@@ -228,6 +228,10 @@ class TestRevisionBumpsOnStatusTransition:
     directly, bypassing the bump — so ``revision`` never advanced on those
     seller-side state changes and ``confirmed_at`` reported the buyer's request
     time (``created_at``) instead of the approval moment.
+
+    Pins IN-SESSION materialization: values are asserted on the row the seam
+    returns within the mutating UoW (cross-session persistence is pinned
+    separately by ``TestPersistedRevisionBump``).
     """
 
     def test_update_status_bumps_revision(self, tenant_a, principal_a):
@@ -747,6 +751,10 @@ class TestPersistedRevisionBump:
     expression (``coalesce(revision, 0) + 1``), so the value only materializes on
     flush — the number a buyer sees must be read back from PostgreSQL, never
     asserted on an in-memory ORM attribute (#1544 round-2 TQ-03).
+
+    Pins CROSS-SESSION persistence: every value is re-read from the database in
+    a fresh session (in-session materialization on the seam's returned row is
+    pinned separately by ``TestRevisionBumpsOnStatusTransition``).
     """
 
     def _read_revision(self, tenant_id: str, media_buy_id: str) -> int:

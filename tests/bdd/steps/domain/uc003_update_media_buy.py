@@ -16,6 +16,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.domain._media_buy_steps_shared import (
+    _media_buy_repo,
     advance_revision_to,
     create_and_load_real_buy,
     load_real_buy,
@@ -68,8 +69,6 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     AND database persistence to prevent phantom media buys that exist only in
     test state.  Uses MediaBuyRepository (not raw select) per repository pattern.
     """
-    from src.core.database.repositories.media_buy import MediaBuyRepository
-
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — conftest setup_update_data() failed"
     # Verify DB persistence — step claims media buy "exists", not just "is in ctx"
@@ -77,8 +76,7 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     env._commit_factory_data()
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx — cannot verify media buy ownership"
-    repo = MediaBuyRepository(env._session, tenant.tenant_id)
-    db_mb = repo.get_by_id(mb.media_buy_id)
+    db_mb = _media_buy_repo(ctx).get_by_id(mb.media_buy_id)
     assert db_mb is not None, (
         f"Media buy '{mb.media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
         "step claims 'Buyer owns an existing media buy' but it is not persisted"
@@ -676,7 +674,7 @@ def when_send_update_request(ctx: dict) -> None:
     # "pkg_001") to real factory-generated ids before sending the request to
     # production code. See _resolve_package_id / _register_package above.
     if update_kwargs.get("media_buy_id"):
-        update_kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, update_kwargs["media_buy_id"])
+        update_kwargs["media_buy_id"] = resolve_media_buy_id(ctx, update_kwargs["media_buy_id"])
     packages = update_kwargs.get("packages")
     if packages:
         for pkg in packages:
@@ -2122,11 +2120,6 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _resolve_media_buy_id(ctx: dict, label: str) -> str:
-    """Resolve a Gherkin media buy label (e.g. "mb_existing") to the real id."""
-    return resolve_media_buy_id(ctx, label)
-
-
 @given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{label}"'))
 def given_buyer_owns_media_buy_labeled(ctx: dict, label: str) -> None:
     """Create a real media buy through the create tool and register the label.
@@ -2143,7 +2136,7 @@ def given_buyer_owns_media_buy_labeled(ctx: dict, label: str) -> None:
 @given(parsers.parse('the media buy "{label}" is at revision {revision:d}'))
 def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
     """Advance the persisted revision to the target via real repository bumps."""
-    media_buy = load_real_buy(ctx, _resolve_media_buy_id(ctx, label))
+    media_buy = load_real_buy(ctx, resolve_media_buy_id(ctx, label))
     advance_revision_to(ctx, media_buy, revision)
 
 
@@ -2157,20 +2150,15 @@ def given_request_revision(ctx: dict, revision: int) -> None:
 @then(parsers.parse("the response should contain a revision with value {revision:d}"))
 def then_response_revision_value(ctx: dict, revision: int) -> None:
     """The success response returns the new persisted revision (BR-RULE-215 INV-4)."""
-    from tests.bdd.steps._outcome_helpers import _get_response_field
+    from tests.bdd.steps._outcome_helpers import _get_response_field, require_success_response
 
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
-    actual = _get_response_field(resp, "revision")
+    actual = _get_response_field(require_success_response(ctx), "revision")
     assert actual == revision, f"Expected revision {revision}, got {actual!r}"
 
 
 @then("the response should contain a valid_actions array")
 def then_response_contains_valid_actions(ctx: dict) -> None:
     """The success response carries valid_actions (INT-002)."""
-    from tests.bdd.steps._outcome_helpers import _get_response_field
+    from tests.bdd.steps._outcome_helpers import assert_valid_actions_array
 
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
-    actions = _get_response_field(resp, "valid_actions")
-    assert isinstance(actions, list), f"Expected a valid_actions array, got {type(actions).__name__}: {actions!r}"
+    assert_valid_actions_array(ctx)

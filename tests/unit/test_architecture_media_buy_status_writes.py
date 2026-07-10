@@ -30,6 +30,12 @@ and it covers ``setattr(mb, "status", ...)`` in addition to direct assignment.
 The property enforced is "no MediaBuy status/approval write bypasses the seam,"
 not "no write through these eight names."
 
+The type inference is deliberately conservative, not exhaustive: a MediaBuy
+loaded through a raw ``select(MediaBuy)`` and bound to a novel name is
+invisible to this guard. That blind spot requires code the no-raw-select
+guard (test_architecture_no_raw_select.py) already rejects outside
+repositories, so the two guards compose to close it.
+
 Precedent: the no-raw-select guards (test_architecture_no_raw_select.py).
 
 GitHub PR #1544 (structural guard — no direct MediaBuy status/approval writes)

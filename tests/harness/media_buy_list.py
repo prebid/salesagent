@@ -55,7 +55,7 @@ class MediaBuyListDispatchMixin:
     def _build_list_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""
         body: dict[str, Any] = {}
-        for key in ("media_buy_ids", "status_filter", "account_id", "context"):
+        for key in ("media_buy_ids", "status_filter", "account", "context"):
             if key in kwargs and kwargs[key] is not None:
                 body[key] = kwargs[key]
         if kwargs.get("include_snapshot"):

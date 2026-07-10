@@ -12,7 +12,7 @@ plumbing steps via direct ``call_impl`` calls, discriminated by request type
 update; everything else → list). REST/E2E dispatch therefore always targets
 the query endpoint.
 
-beads: #1544 review remediation (wire dormant UC-019 scenarios).
+GitHub PR #1544 review remediation (wire dormant UC-019 scenarios).
 """
 
 from __future__ import annotations

@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain._media_buy_steps_shared import (
+    _media_buy_repo,
     advance_revision_to,
     create_and_load_real_buy,
     resolve_media_buy_id,
@@ -53,14 +54,9 @@ def _register_media_buy(ctx: dict, label: str, media_buy: Any) -> None:
     ctx.setdefault("seeded_media_buys", {})[label] = media_buy
 
 
-def _resolve_media_buy_id(ctx: dict, label: str) -> str:
-    """Resolve a Gherkin label to the real database media_buy_id."""
-    return resolve_media_buy_id(ctx, label)
-
-
 def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
     """Resolve a list of Gherkin labels to real database media_buy_ids."""
-    return [_resolve_media_buy_id(ctx, label) for label in labels]
+    return [resolve_media_buy_id(ctx, label) for label in labels]
 
 
 def _create_media_buy_with_null_dates(
@@ -331,7 +327,7 @@ def given_media_buy_has_dates(ctx: dict, mb_id: str, start: str, end: str) -> No
 
     from src.core.database.models import MediaBuy as DBMediaBuy
 
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     env = ctx["env"]
     row = env._session.scalars(select(DBMediaBuy).filter_by(media_buy_id=real_id)).first()
     assert row is not None, f"Media buy '{mb_id}' (real_id={real_id}) not seeded before setting its dates"
@@ -1361,7 +1357,7 @@ def _get_media_buys(ctx: dict) -> list:
 @then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))
 def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) -> None:
     """Assert response includes the media buy with expected status."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
     assert len(matching) == 1, (
@@ -1521,8 +1517,8 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
 def then_response_includes_two(ctx: dict, mb1: str, mb2: str) -> None:
     """Assert response includes both specified media buys."""
-    real_id1 = _resolve_media_buy_id(ctx, mb1)
-    real_id2 = _resolve_media_buy_id(ctx, mb2)
+    real_id1 = resolve_media_buy_id(ctx, mb1)
+    real_id2 = resolve_media_buy_id(ctx, mb2)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
     assert real_id1 in ids, f"Expected '{mb1}' (real_id={real_id1}) in response, got {ids}"
@@ -1532,7 +1528,7 @@ def then_response_includes_two(ctx: dict, mb1: str, mb2: str) -> None:
 @then(parsers.parse('the response should not include media buy "{mb_id}"'))
 def then_response_excludes(ctx: dict, mb_id: str) -> None:
     """Assert response does not include the specified media buy."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
     assert real_id not in ids, f"Expected '{mb_id}' (real_id={real_id}) NOT in response, but it was present"
@@ -1541,7 +1537,7 @@ def then_response_excludes(ctx: dict, mb_id: str) -> None:
 @then(parsers.parse('the response should include media buy "{mb_id}"'))
 def then_response_includes_one(ctx: dict, mb_id: str) -> None:
     """Assert response includes the specified media buy."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
     assert real_id in ids, f"Expected '{mb_id}' (real_id={real_id}) in response, got {ids}"
@@ -1669,7 +1665,7 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
 def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> None:
     """Assert a specific media buy has the expected status in the response."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
     assert len(matching) == 1, (
@@ -2435,7 +2431,9 @@ def _parse_iso_utc(timestamp: str | Any) -> Any:
 
 def _labeled_buy_from_response(ctx: dict, response: Any, label: str) -> Any:
     """Find the media buy registered under a Gherkin label in a query response."""
-    assert response is not None, f"Expected a query response, got error: {ctx.get('error')!r}"
+    from tests.bdd.steps._outcome_helpers import require_success_response
+
+    response = require_success_response(ctx, "query", response=response)
     real_id = ctx.get("media_buy_labels", {}).get(label, label)
     matches = [b for b in response.media_buys if b.media_buy_id == real_id]
     assert matches, f"media buy {label!r} ({real_id}) not in response: {[b.media_buy_id for b in response.media_buys]}"
@@ -2539,35 +2537,22 @@ def given_tenant_manual_approval(ctx: dict) -> None:
 
 @given(parsers.parse('the Buyer Agent has created media buy "{mb_id}" awaiting seller approval'))
 def given_created_awaiting_approval(ctx: dict, mb_id: str) -> None:
-    """Drive a real create that lands on the submitted (manual-approval) arm."""
-    from datetime import UTC, datetime, timedelta
+    """Drive a real create that lands on the submitted (manual-approval) arm.
 
-    from src.core.database.repositories.media_buy import MediaBuyRepository
-    from tests.helpers.adcp_factories import create_test_package_request_dict
-
+    Same canonical request shape as ``create_default_buy`` (single source:
+    ``default_create_kwargs``); only the expected arm differs — manual
+    approval means submitted, not the synchronous success arm the shared
+    wrapper asserts.
+    """
     env = ctx["env"]
     _register_principal(ctx, "buyer-001")
-    start = datetime.now(UTC) + timedelta(days=1)
-    end = start + timedelta(days=30)
     # TRANSPORT-BYPASS: Given plumbing — the create seeds the pending buy; the
     # graded read-back (get_media_buys) runs through the parametrized transport
-    result = env.call_impl(
-        brand={"domain": "manual-approval.example"},
-        packages=[
-            create_test_package_request_dict(
-                product_id=ctx["default_product"].product_id,
-                pricing_option_id="cpm_usd_fixed",
-                budget=5000.0,
-            )
-        ],
-        start_time=start.isoformat(),
-        end_time=end.isoformat(),
-    )
+    result = env.call_impl(**env.default_create_kwargs(ctx["default_product"], brand_domain="manual-approval.example"))
     status = getattr(result, "status", None)
     assert status == "submitted", f"expected the submitted (manual-approval) arm, got status {status!r}"
     media_buy_id = result.response.media_buy_id
-    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
-    media_buy = repo.get_by_id(media_buy_id)
+    media_buy = _media_buy_repo(ctx).get_by_id(media_buy_id)
     assert media_buy is not None, f"created media buy {media_buy_id} not found in DB"
     assert media_buy.status == "pending_approval", f"expected pending_approval, got {media_buy.status!r}"
     ctx["revision_at_creation"] = media_buy.revision or 1
@@ -2632,13 +2617,10 @@ def when_seller_approves(ctx: dict, label: str) -> None:
     """
     from datetime import UTC, datetime
 
-    from src.core.database.repositories.media_buy import MediaBuyRepository
-
     env = ctx["env"]
     real_id = ctx.get("media_buy_labels", {}).get(label, label)
     approval_instant = datetime.now(UTC)
-    repo = MediaBuyRepository(env._session, ctx["tenant"].tenant_id)
-    media_buy = repo.update_status(
+    media_buy = _media_buy_repo(ctx).update_status(
         real_id, "scheduled", approved_at=approval_instant, approved_by="seller-admin@example.com"
     )
     assert media_buy is not None, f"media buy {label!r} ({real_id}) not found for approval"
@@ -2651,8 +2633,9 @@ def when_seller_approves(ctx: dict, label: str) -> None:
 
 @then("every returned media buy should include an integer revision field")
 def then_every_buy_has_integer_revision(ctx: dict) -> None:
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a query response, got error: {ctx.get('error')!r}"
+    from tests.bdd.steps._outcome_helpers import require_success_response
+
+    resp = require_success_response(ctx, "query")
     assert resp.media_buys, "expected at least one returned media buy"
     non_integer = [(b.media_buy_id, b.revision) for b in resp.media_buys if not isinstance(b.revision, int)]
     assert not non_integer, f"media buys with a non-integer revision: {non_integer}"
@@ -2660,8 +2643,9 @@ def then_every_buy_has_integer_revision(ctx: dict) -> None:
 
 @then("every revision should be >= 1")
 def then_every_revision_at_least_1(ctx: dict) -> None:
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a query response, got error: {ctx.get('error')!r}"
+    from tests.bdd.steps._outcome_helpers import require_success_response
+
+    resp = require_success_response(ctx, "query")
     assert resp.media_buys, "expected at least one returned media buy"
     below_minimum = [(b.media_buy_id, b.revision) for b in resp.media_buys if b.revision < 1]
     assert not below_minimum, f"media buys with revision below the schema minimum 1: {below_minimum}"

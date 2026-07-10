@@ -13,7 +13,13 @@ from __future__ import annotations
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field
+from tests.bdd.steps._outcome_helpers import (
+    _get_response_field,
+    assert_valid_actions_array,
+)
+from tests.bdd.steps._outcome_helpers import (
+    require_success_response as _require_success_response,
+)
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1718,13 +1724,6 @@ def then_webhook_notification(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _require_success_response(ctx: dict) -> object:
-    """Return ctx['response'], failing with the recorded error if absent."""
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
-    return resp
-
-
 def _serialized_success_body(ctx: dict) -> dict:
     """The success response as the buyer sees it on the serialized wire.
 
@@ -1820,9 +1819,7 @@ def then_response_revision_is_1(ctx: dict) -> None:
 @then(parsers.parse('the response should include a "valid_actions" array'))
 def then_response_valid_actions_array(ctx: dict) -> None:
     """The sync success arm carries valid_actions so the buyer can plan the next call."""
-    resp = _require_success_response(ctx)
-    actions = _get_response_field(resp, "valid_actions")
-    assert isinstance(actions, list), f"Expected a valid_actions array, got {type(actions).__name__}: {actions!r}"
+    assert_valid_actions_array(ctx)
 
 
 @then("every value in valid_actions should be a member of the media-buy-valid-action enum")
@@ -1882,9 +1879,9 @@ def then_simulated_success(ctx: dict) -> None:
 @then("no database records should be created")
 def then_no_db_records(ctx: dict) -> None:
     """Dry-run persists nothing — no MediaBuy row exists for the tenant."""
-    from src.core.database.repositories.media_buy import MediaBuyRepository
+    from tests.bdd.steps.domain._media_buy_steps_shared import _media_buy_repo
 
     env = ctx["env"]
     env._session.expire_all()
-    persisted = MediaBuyRepository(env._session, ctx["tenant"].tenant_id).list_all()
+    persisted = _media_buy_repo(ctx).list_all()
     assert persisted == [], f"dry-run must not persist any media buy, found {[b.media_buy_id for b in persisted]}"

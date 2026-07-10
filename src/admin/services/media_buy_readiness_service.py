@@ -270,9 +270,15 @@ class MediaBuyReadinessService:
         # start_time/end_time-preferred, date-fallback resolution used by the
         # scheduler, admin approve route, and creative-review path). See #1544.
         # start_date/end_date are NOT NULL, so the window is always fully
-        # resolved for a persisted media buy.
+        # resolved for a persisted media buy; None here is an internal
+        # invariant violation (raise, don't assert — assert is stripped
+        # under python -O).
         start_time, end_time = resolve_flight_window_utc(media_buy)
-        assert start_time is not None and end_time is not None
+        if start_time is None or end_time is None:
+            raise RuntimeError(
+                f"resolve_flight_window_utc returned an unresolved window for persisted "
+                f"media buy {media_buy.media_buy_id} (start_date/end_date are NOT NULL)"
+            )
 
         # Completed if past end date
         if now > end_time:

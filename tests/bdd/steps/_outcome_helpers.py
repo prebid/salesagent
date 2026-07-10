@@ -58,6 +58,25 @@ def _require_error(ctx: dict) -> object:
     return error
 
 
+def require_success_response(ctx: dict, noun: str = "success", *, response: object | None = None) -> object:
+    """Return the response, failing with the recorded error if absent.
+
+    Defaults to ``ctx["response"]``; pass ``response`` to guard an
+    explicitly-stashed response (e.g. a t1/t2 cross-read) instead. ``noun``
+    names the expected response kind in the failure message ("success",
+    "query", ...) so the step's wording survives the shared guard.
+    """
+    resp = ctx.get("response") if response is None else response
+    assert resp is not None, f"Expected a {noun} response, got error: {ctx.get('error')!r}"
+    return resp
+
+
+def assert_valid_actions_array(ctx: dict) -> None:
+    """The success response carries a valid_actions array (INT-002)."""
+    actions = _get_response_field(require_success_response(ctx), "valid_actions")
+    assert isinstance(actions, list), f"Expected a valid_actions array, got {type(actions).__name__}: {actions!r}"
+
+
 def _get_response_field(resp: object, field: str) -> object:
     """Extract a field from a response, handling wrapper types."""
     if hasattr(resp, field):

@@ -315,14 +315,12 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
 
-    def create_default_buy(
-        self, product: Any, *, brand_domain: str = "harness-default.example"
-    ) -> CreateMediaBuySuccess:
-        """Drive a one-package create through ``call_impl``; assert and return success.
+    def default_create_kwargs(self, product: Any, *, brand_domain: str = "harness-default.example") -> dict[str, Any]:
+        """The canonical default create request: 30-day flight starting tomorrow, one CPM package at 5000.0.
 
-        Shared by tests that just need a persisted buy (a 30-day flight starting
-        tomorrow, one CPM package at 5000.0) without caring about the request
-        shape. Tests exercising create parameters call ``call_impl`` directly.
+        Single source of truth for the request shape. ``create_default_buy``
+        drives it through the synchronous arm; manual-approval steps drive the
+        same shape onto the submitted arm and keep their own status assertion.
         """
         from datetime import UTC, datetime, timedelta
 
@@ -330,18 +328,29 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
         start = datetime.now(UTC) + timedelta(days=1)
         end = start + timedelta(days=30)
-        result = self.call_impl(
-            brand={"domain": brand_domain},
-            packages=[
+        return {
+            "brand": {"domain": brand_domain},
+            "packages": [
                 create_test_package_request_dict(
                     product_id=product.product_id,
                     pricing_option_id="cpm_usd_fixed",
                     budget=5000.0,
                 )
             ],
-            start_time=start.isoformat(),
-            end_time=end.isoformat(),
-        )
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        }
+
+    def create_default_buy(
+        self, product: Any, *, brand_domain: str = "harness-default.example"
+    ) -> CreateMediaBuySuccess:
+        """Drive a one-package create through ``call_impl``; assert and return success.
+
+        Shared by tests that just need a persisted buy (the
+        ``default_create_kwargs`` shape) without caring about the request
+        shape. Tests exercising create parameters call ``call_impl`` directly.
+        """
+        result = self.call_impl(**self.default_create_kwargs(product, brand_domain=brand_domain))
         created = result.response
         assert isinstance(created, CreateMediaBuySuccess), f"create must succeed, got {type(created).__name__}"
         return created
