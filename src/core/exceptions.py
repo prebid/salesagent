@@ -29,23 +29,36 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # Error-code compliance: mapping non-standard codes to SDK equivalents
 # ---------------------------------------------------------------------------
 # Every code that reaches the wire (buyer agent) MUST be in
-# STANDARD_ERROR_CODES.  Codes in ERROR_CODE_MAPPING are translated at the
+# WIRE_STANDARD_CODES.  Codes in ERROR_CODE_MAPPING are translated at the
 # transport boundary; codes in INTERNAL_CODES never leave the server.
+
+# Spec codes the SDK helper table has not caught up to. The pinned 3.1 enum
+# (enums/error-code.json @ adcp 04f59d2d5) defines these as real wire codes;
+# adcp 5.7's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
+# cross-check, not the authority. CREATIVE_NOT_FOUND per the enum: correctable,
+# and "Sellers MUST return this code uniformly for any creative_id not owned by
+# the calling account" (#1430 review). The two further demoted spec codes
+# (CONFIGURATION_ERROR, BILLING_NOT_SUPPORTED) are tracked for the same
+# treatment in a follow-up.
+_SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
+    "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
+}
+
+# The authoritative wire-code table: SDK baseline + pinned-spec supplement.
+WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {**STANDARD_ERROR_CODES, **_SPEC_SUPPLEMENT_CODES}
 
 ERROR_CODE_MAPPING: dict[str, str] = {
     # Internal-only codes that occasionally leak to the wire when a raise site
     # uses a base class (AdCPError / AdCPNotFoundError / AdCPConfigurationError)
-    # instead of a specific subclass. Mapped to the closest STANDARD_ERROR_CODES
+    # instead of a specific subclass. Mapped to the closest WIRE_STANDARD_CODES
     # entry so the wire stays spec-compliant. Raise sites can later migrate to
     # specific subclasses; the mappings stay as a safety net.
     "NOT_FOUND": "INVALID_REQUEST",
-    # Entity-specific not-found codes the SDK does not define as standard. The typed
-    # subclasses (AdCPCreativeNotFoundError / AdCPFormatNotFoundError /
-    # AdCPTaskNotFoundError) exist for recovery=correctable + guard-enforceability;
-    # the buyer-visible wire code is INVALID_REQUEST. NOTE: CREATIVE_NOT_FOUND
-    # (singular, a lookup miss) is distinct from the plural CREATIVES_NOT_FOUND →
-    # CREATIVE_REJECTED bulk-sync code below — different keys, no overwrite.
-    "CREATIVE_NOT_FOUND": "INVALID_REQUEST",
+    # Entity-specific not-found codes the pinned spec enum does NOT define
+    # (unlike CREATIVE_NOT_FOUND, which the enum defines and therefore passes
+    # through untranslated). The typed subclasses exist for
+    # recovery=correctable + guard-enforceability; the buyer-visible wire code
+    # is INVALID_REQUEST.
     "FORMAT_NOT_FOUND": "INVALID_REQUEST",
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
@@ -105,7 +118,6 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     {
         "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
-        "CREATIVE_NOT_FOUND",  # AdCPCreativeNotFoundError; wire → INVALID_REQUEST
         "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
         "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
         "CONFIGURATION_ERROR",  # Server-side config; needs admin, not buyer
@@ -123,7 +135,7 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 )
 
 # Sanity check: every mapping target must be a standard code.
-_NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(STANDARD_ERROR_CODES)
+_NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(WIRE_STANDARD_CODES)
 assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
 
 
@@ -151,7 +163,7 @@ def to_wire_error_code(code: str) -> str:
     server-side advisory), so no internal code can reach the buyer.
     """
     translated = translate_error_code(code)
-    return translated if translated in STANDARD_ERROR_CODES else "SERVICE_UNAVAILABLE"
+    return translated if translated in WIRE_STANDARD_CODES else "SERVICE_UNAVAILABLE"
 
 
 def _serialize_context(
@@ -674,13 +686,13 @@ class AdCPContextNotFoundError(AdCPNotFoundError):
 
 
 class AdCPCreativeNotFoundError(AdCPNotFoundError):
-    """Requested creative does not exist (404, wire → INVALID_REQUEST).
+    """Requested creative does not exist (404, wire CREATIVE_NOT_FOUND).
 
-    The SDK has no ``CREATIVE_NOT_FOUND`` standard code, so the raw code is
-    internal and translated to ``INVALID_REQUEST`` at the wire boundary (see
-    ERROR_CODE_MAPPING). The buyer-visible gain over the bare
-    ``AdCPNotFoundError`` is recovery=correctable + a typed identity callers and
-    guards can pin — not a distinct wire code.
+    ``CREATIVE_NOT_FOUND`` is a pinned-spec wire code (enums/error-code.json @
+    04f59d2d5): correctable, and MANDATED uniformly for any creative_id not
+    owned by the calling account — never distinguish "exists under another
+    principal/tenant" from "does not exist" (anti-enumeration). It reaches the
+    wire untranslated via the WIRE_STANDARD_CODES spec supplement.
 
     Recovery=correctable: the buyer can correct by supplying a valid creative_id
     (discoverable via list_creatives / sync_creatives).

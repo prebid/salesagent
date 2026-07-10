@@ -324,6 +324,41 @@ class TestValidationModeSemantics:
             for r in good_results:
                 assert r.action != "failed", f"Creative {r.creative_id} should succeed in lenient mode"
 
+    def test_strict_mode_unknown_assignment_creative_is_creative_not_found_on_wire(self, integration_db):
+        """Strict-mode assignment to an UNKNOWN creative_id must emit CREATIVE_NOT_FOUND.
+
+        Spec grounding (pinned 3.1 enum, enums/error-code.json @ 04f59d2d5):
+        CREATIVE_NOT_FOUND — "Referenced creative does not exist in the agent's
+        creative library. Recovery: correctable (...). Sellers MUST return this
+        code uniformly for any creative_id not owned by the calling account".
+        The parallel package-not-found branch in the same function already uses
+        the entity-specific PACKAGE_NOT_FOUND; creative-not-found rode the
+        generic VALIDATION_ERROR instead (PR #1430 review, CON-07).
+        """
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[],
+                assignments={"c_never_synced": [pkg.package_id]},
+                validation_mode="strict",
+            )
+
+            assert result.is_error, f"Strict mode must abort on unknown creative: {result.payload!r}"
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "CREATIVE_NOT_FOUND",
+                recovery="correctable",
+                message_substr="c_never_synced",
+            )
+
     def test_strict_mode_also_processes_all_creatives(self, integration_db):
         """Covers: UC-006-EXT-C-02 — strict: validation errors still per-creative in strict mode."""
         with CreativeSyncEnv() as env:

@@ -4,7 +4,11 @@ import logging
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPCreativeRejectedError, AdCPPackageNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPCreativeNotFoundError,
+    AdCPCreativeRejectedError,
+    AdCPPackageNotFoundError,
+)
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._processing import _failed_sync_result
@@ -96,7 +100,10 @@ def _process_assignments(
                     for package_id in package_ids:
                         assignment_errors_by_creative[creative_id][package_id] = error_msg
                     if validation_mode == "strict":
-                        raise AdCPValidationError(
+                        # Entity-specific spec code (pinned enum: CREATIVE_NOT_FOUND,
+                        # correctable, MANDATED uniformly for unowned creative_ids) —
+                        # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
+                        raise AdCPCreativeNotFoundError(
                             error_msg,
                             suggestion=(
                                 "Sync the creative via sync_creatives (or include it in this "

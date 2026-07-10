@@ -513,16 +513,18 @@ class TestFastAPIExceptionHandlers:
         assert_envelope_shape(response.json(), "SESSION_NOT_FOUND", recovery="correctable")
 
     def test_creative_not_found_error_returns_404(self, exc_handler_test_app):
-        """AdCPCreativeNotFoundError → 404, wire INVALID_REQUEST, correctable.
+        """AdCPCreativeNotFoundError → 404, wire CREATIVE_NOT_FOUND, correctable.
 
-        The internal CREATIVE_NOT_FOUND code translates to INVALID_REQUEST at the
-        boundary (ERROR_CODE_MAPPING). recovery=correctable distinguishes it from
-        the base AdCPNotFoundError (terminal) — that override is the regression this pins.
+        CREATIVE_NOT_FOUND is a pinned-spec wire code (enums/error-code.json @
+        04f59d2d5: correctable, mandated uniformly for unowned creative_ids), so
+        it passes the boundary untranslated via the WIRE_STANDARD_CODES spec
+        supplement (#1430 review — the old INVALID_REQUEST demotion rode a stale
+        claim that the SDK lacked the code).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/creative-not-found")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+        assert_envelope_shape(response.json(), "CREATIVE_NOT_FOUND", recovery="correctable")
 
     def test_format_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPFormatNotFoundError → 404, wire INVALID_REQUEST, correctable.
