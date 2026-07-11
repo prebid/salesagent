@@ -58,6 +58,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.uc002_unknown_top_level_field",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -3223,6 +3224,22 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # remaining @idempotency-key scenarios (in-flight, expired, conflict,
             # pattern, canonical) stay blanket-xfailed below until their
             # production gaps + steps are wired.
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
+        elif "T-UC-002-local-unknown-top-level-field" in marker_names:
+            # Locally-added Pattern #7 top-level unknown-field scenario (GH #1442).
+            # Its Given forces dispatch_mode=create_raw so the unknown key reaches
+            # the production transport boundary unfiltered; REST/A2A grade the
+            # INVALID_REQUEST envelope, MCP grades the FastMCP signature-level
+            # rejection (owner decision 2026-07-11, salesagent-cyz0).
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
             with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
