@@ -53,7 +53,7 @@ class TestMcpDevMode:
                 result.wire_error_envelope,
                 "VALIDATION_ERROR",
                 recovery="correctable",
-                message_substr="Extra inputs are not permitted",
+                message_substr="Unexpected keyword argument",
             )
             assert result.wire_error_envelope["errors"][0]["field"] == "nonsense_field"
 

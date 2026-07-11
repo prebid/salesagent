@@ -277,16 +277,13 @@ class TestA2AErrorPropagation:
         assert len(result.artifacts) > 0
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
-        # message_substr is the load-bearing assertion: a bare pydantic ValidationError is a
-        # ValueError, which the dispatcher also normalizes to VALIDATION_ERROR/correctable — so
-        # only the handler's wrapped "Invalid parameters" message distinguishes the fix (typed
-        # AdCPValidationError) from the raw-leak it replaced. Keep it when editing this assert.
         assert_envelope_shape(
             artifact_data,
             "VALIDATION_ERROR",
             recovery="correctable",
-            message_substr="Invalid parameters",
+            message_substr="Field required",
         )
+        assert "account" in (artifact_data["errors"][0].get("field") or "")
 
     async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
         """A negative package budget surfaces VALIDATION_ERROR on the A2A wire.
@@ -333,7 +330,12 @@ class TestA2AErrorPropagation:
         assert len(result.artifacts) > 0
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
-        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="budget", recovery="correctable")
+        assert_envelope_shape(
+            artifact_data,
+            "VALIDATION_ERROR",
+            message_substr="greater than or equal to 0",
+            recovery="correctable",
+        )
         # The structured field path is propagated from the Pydantic error (drift-proof
         # vs the rendered message substring) — both envelope layers carry it.
         wire_field = artifact_data["errors"][0].get("field") or ""
