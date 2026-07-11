@@ -300,3 +300,44 @@ def get_test_date_range(days_from_now: int = 1, duration_days: int = 30) -> tupl
     end = start + timedelta(days=duration_days)
 
     return (start.isoformat(), end.isoformat())
+
+
+def build_a2a_message_send(
+    *,
+    text: str | None = None,
+    skill: str | None = None,
+    parameters: dict[str, Any] | None = None,
+    context_id: str | None = None,
+    push_notification_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build an A2A JSON-RPC ``message/send`` envelope (GH #1423 consolidation).
+
+    Single home for the envelope previously copy-pasted across the a2a e2e
+    files. Exactly one of ``text`` (natural-language part) or ``skill``
+    (explicit-skill data part, with ``parameters``) must be given. ``context_id``
+    defaults to a fresh uuid; ``push_notification_config`` (webhook tests) is
+    placed under ``params.configuration.pushNotificationConfig``.
+    """
+    if (text is None) == (skill is None):
+        raise ValueError("build_a2a_message_send: provide exactly one of text= or skill=")
+    part: dict[str, Any]
+    if text is not None:
+        part = {"kind": "text", "text": text}
+    else:
+        part = {"kind": "data", "data": {"skill": skill, "parameters": parameters or {}}}
+    params: dict[str, Any] = {
+        "message": {
+            "messageId": str(uuid.uuid4()),
+            "contextId": context_id or str(uuid.uuid4()),
+            "role": "user",  # Required by A2A spec
+            "parts": [part],
+        }
+    }
+    if push_notification_config is not None:
+        params["configuration"] = {"pushNotificationConfig": push_notification_config}
+    return {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": "message/send",
+        "params": params,
+    }

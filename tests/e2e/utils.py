@@ -1,12 +1,14 @@
 import shutil
 import subprocess
 import time
+from contextlib import contextmanager
 
 import httpx
 import psycopg2
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
+from sqlalchemy import select
 
 
 def make_mcp_client(
@@ -49,6 +51,60 @@ def make_mcp_client(
         headers.update(extra_headers)
     transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
     return Client(transport=transport)
+
+
+class _LiveDBEnv:
+    """Minimal env shim exposing ``get_session()`` over the live e2e database.
+
+    Bridges ``tests/factories`` helpers (which expect a harness env exposing
+    ``get_session()``, see tests/harness/_base.py) to the Docker-hosted e2e
+    stack, where only the DSN in ``live_server['postgres']`` is available
+    (GH #1423 consolidation).
+    """
+
+    def __init__(self, session):
+        self._session = session
+
+    def get_session(self):
+        return self._session
+
+
+@contextmanager
+def live_db_env(live_server: dict):
+    """Yield a ``get_session()``-bearing env bound to the live e2e database."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    engine = create_engine(live_server["postgres"])
+    session = Session(engine)
+    try:
+        yield _LiveDBEnv(session)
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-test", **behavior):
+    """Upsert adapter test-behavior on the live e2e DB via the shared factory helper.
+
+    Single e2e entry point for what used to be five copy-pasted psycopg2
+    upserts of ``adapter_config.mock_manual_approval_required``. Delegates to
+    tests/factories/core.py ``set_adapter_test_behavior`` — the one home for
+    the logical operation — through :func:`live_db_env`. Fails loud: a missing
+    tenant or DB error is a test-infrastructure defect, never something to
+    print-and-continue past.
+    """
+    from src.core.database.models import Tenant
+    from tests.factories.core import set_adapter_test_behavior
+
+    with live_db_env(live_server) as env:
+        tenant = env.get_session().scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
+        if tenant is None:
+            raise RuntimeError(
+                f"Tenant with subdomain {tenant_subdomain!r} not found in the live e2e DB — "
+                "did the stack's init_database_ci.py seed run?"
+            )
+        return set_adapter_test_behavior(env, tenant.tenant_id, **behavior)
 
 
 def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
