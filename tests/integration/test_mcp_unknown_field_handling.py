@@ -11,8 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from src.core.exceptions import AdCPValidationError
 from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+from tests.harness.transport import Transport
+from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -45,8 +46,16 @@ class TestMcpDevMode:
 
         with ProductEnv(tenant_id=TENANT_ID) as env:
             _create_tenant_with_product()
-            with pytest.raises(AdCPValidationError, match="nonsense_field"):
-                env.call_mcp(brief="test ads", nonsense_field="bar")
+            result = env.call_via(Transport.MCP, brief="test ads", nonsense_field="bar")
+
+            assert result.is_error
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                message_substr="Extra inputs are not permitted",
+            )
+            assert result.wire_error_envelope["errors"][0]["field"] == "nonsense_field"
 
     def test_deprecated_field_translated_even_in_dev(self, integration_db):
         """Deprecated field translation works in dev mode (always active)."""

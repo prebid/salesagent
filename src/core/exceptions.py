@@ -427,12 +427,12 @@ class AdCPValidationError(AdCPError):
 
 
 class AdCPInvalidRequestError(AdCPValidationError):
-    """A request value is well-formed but semantically invalid (400 → INVALID_REQUEST).
+    """A structurally invalid request graded as INVALID_REQUEST by the storyboard (400).
 
-    Distinct from the schema-level VALIDATION_ERROR: the value passes type/shape
-    validation but is invalid in context (e.g. start_time in the past, end_time
-    before start_time). Carries the INVALID_REQUEST standard wire code as class
-    identity; inherits 400 + correctable from AdCPValidationError.
+    Distinct from operation-level VALIDATION_ERROR failures. The AdCP storyboard
+    defines the code per operation, so callers must use the exception class graded
+    for that scenario rather than inferring the code from validation phase alone.
+    Inherits 400 + correctable from AdCPValidationError.
     """
 
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
@@ -1030,13 +1030,35 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
-    boundaries (MCP, A2A, REST).  Already-typed ``AdCPError`` passes through
-    unchanged.  ``ValueError`` maps to ``AdCPValidationError``,
-    ``PermissionError`` to ``AdCPAuthorizationError``, and anything else
-    wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    boundaries (MCP, A2A, REST). Already-typed ``AdCPError`` passes through
+    unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
+    ``AdCPValidationError``; other ``ValueError`` instances map to the plain
+    validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
+    anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
         return exc
+    from pydantic import ValidationError
+
+    if isinstance(exc, ValidationError):
+        from src.core.validation_helpers import first_validation_error_field
+
+        errors = exc.errors()
+        return AdCPValidationError(
+            errors[0].get("msg") if errors else "Request failed schema validation",
+            field=first_validation_error_field(exc),
+            suggestion="check request parameters and fix",
+            details={
+                "validation_errors": [
+                    {
+                        "loc": list(error.get("loc", ())),
+                        "msg": error.get("msg"),
+                        "type": error.get("type"),
+                    }
+                    for error in errors
+                ]
+            },
+        )
     if isinstance(exc, ValueError):
         return AdCPValidationError(str(exc))
     if isinstance(exc, PermissionError):

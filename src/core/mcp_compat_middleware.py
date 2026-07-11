@@ -13,11 +13,11 @@ from typing import Any
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
+from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
+from src.core.exceptions import normalize_to_adcp_error
 from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
-from src.core.tool_error_logging import AdCPToolError
-from src.core.validation_helpers import first_validation_error_field
+from src.core.tool_error_logging import _translate_to_tool_error, record_boundary_error
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,25 @@ class RequestCompatMiddleware(Middleware):
                                 raise
                             exc = retry_exc
 
-            raise _typeadapter_validation_tool_error(exc) from exc
+            typed = normalize_to_adcp_error(exc)
+            tenant_id = None
+            principal_id = None
+            if context.fastmcp_context is not None:
+                try:
+                    identity = await context.fastmcp_context.get_state("identity")
+                    if identity is not None:
+                        tenant_id = identity.tenant_id
+                        principal_id = identity.principal_id
+                except Exception:
+                    logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
+            record_boundary_error(
+                "mcp",
+                tool_name,
+                typed,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            )
+            _translate_to_tool_error(exc)
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:
@@ -131,21 +149,11 @@ class RequestCompatMiddleware(Middleware):
         """
         from src.core.config import is_production
 
-        if not is_production():
-            return False
-
-        from pydantic import ValidationError
-
-        if not isinstance(exc, ValidationError):
-            return False
-
-        return exc.title.startswith("call[")
+        return is_production() and RequestCompatMiddleware._is_typeadapter_validation_error(exc)
 
     @staticmethod
     def _is_typeadapter_validation_error(exc: Exception) -> bool:
         """Return True for FastMCP TypeAdapter validation failures."""
-        from pydantic import ValidationError
-
         return isinstance(exc, ValidationError) and exc.title.startswith("call[")
 
     async def _get_tool_schema(
@@ -199,28 +207,3 @@ def _summarize_error(exc: Exception) -> str:
     # Take first line or first 150 chars
     first_line = text.split("\n")[0]
     return first_line[:150] if len(first_line) > 150 else first_line
-
-
-def _typeadapter_validation_tool_error(exc: Exception) -> AdCPToolError:
-    """Translate FastMCP TypeAdapter schema failures to the AdCP MCP wire shape."""
-    from pydantic import ValidationError
-
-    if not isinstance(exc, ValidationError):
-        raise TypeError(f"expected ValidationError, got {type(exc).__name__}")
-
-    typed = AdCPValidationError(
-        f"Invalid parameters: {exc}",
-        field=first_validation_error_field(exc),
-        suggestion="check request parameters and fix",
-        details={
-            "validation_errors": [
-                {
-                    "loc": list(error.get("loc", ())),
-                    "msg": error.get("msg"),
-                    "type": error.get("type"),
-                }
-                for error in exc.errors()
-            ]
-        },
-    )
-    return AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code)

@@ -44,28 +44,29 @@ def _call_mcp_tool_capturing_envelope(tool_name: str, params: dict) -> tuple[boo
     return is_error, json.loads(envelope_text) if envelope_text else None
 
 
-@pytest.mark.parametrize(
-    ("tool_name", "params", "message_substr", "field_prefix"),
-    [
-        (
-            "list_creatives",
-            {"filters": {"concept_ids": []}},
-            "filters.concept_ids",
-            "filters.concept_ids",
-        ),
-        (
-            "create_media_buy",
-            {"brand": "wiretest.example", "packages": [{}]},
-            "packages.0",
-            "packages[0].",
-        ),
-    ],
-)
-def test_typeadapter_validation_error_emits_adcp_envelope_on_mcp_wire(tool_name, params, message_substr, field_prefix):
+def test_typeadapter_validation_error_emits_adcp_envelope_on_mcp_wire():
+    tool_name = "list_creatives"
+    params = {"filters": {"concept_ids": []}}
     is_error, envelope = _call_mcp_tool_capturing_envelope(tool_name, params)
 
     assert is_error, f"{tool_name}: invalid typed params must produce a tool error"
     assert envelope is not None, f"{tool_name}: no MCP wire error envelope captured"
-    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable", message_substr=message_substr)
+    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable", message_substr="List should have")
     assert envelope["errors"][0].get("suggestion"), f"{tool_name}: envelope must include a recovery suggestion"
-    assert envelope["errors"][0].get("field", "").startswith(field_prefix)
+    assert envelope["errors"][0].get("field") == "filters.concept_ids"
+    assert "input_value" not in envelope["errors"][0]["message"]
+    assert "errors.pydantic.dev" not in envelope["errors"][0]["message"]
+
+
+@pytest.mark.xfail(
+    reason="AdCP 3.1 grades create_media_buy schema failures INVALID_REQUEST; all transports currently emit VALIDATION_ERROR",
+    strict=True,
+)
+def test_create_media_buy_typeadapter_error_uses_storyboard_invalid_request_code():
+    is_error, envelope = _call_mcp_tool_capturing_envelope(
+        "create_media_buy",
+        {"brand": "wiretest.example", "packages": [{}]},
+    )
+
+    assert is_error
+    assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable", message_substr="Field required")

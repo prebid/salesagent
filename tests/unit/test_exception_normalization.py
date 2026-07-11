@@ -1,0 +1,58 @@
+import pytest
+from pydantic import ValidationError
+
+from src.core.exceptions import AdCPValidationError, normalize_to_adcp_error
+from src.core.validation_helpers import adcp_validation_boundary
+
+
+def test_pydantic_validation_error_normalization_is_structured_and_sanitized():
+    error = ValidationError.from_exception_data(
+        title="call[create_media_buy]",
+        line_errors=[
+            {
+                "type": "missing",
+                "loc": ("packages", 0, "product_id"),
+                "input": {"secret": "buyer-input"},
+            }
+        ],
+    )
+
+    normalized = normalize_to_adcp_error(error)
+
+    assert isinstance(normalized, AdCPValidationError)
+    assert normalized.message == "Field required"
+    assert normalized.field == "packages[0].product_id"
+    assert normalized.details == {
+        "validation_errors": [
+            {
+                "loc": ["packages", 0, "product_id"],
+                "msg": "Field required",
+                "type": "missing",
+            }
+        ]
+    }
+    assert "buyer-input" not in normalized.message
+    assert "errors.pydantic.dev" not in normalized.message
+
+
+def test_a2a_validation_boundary_uses_shared_sanitized_normalization():
+    error = ValidationError.from_exception_data(
+        title="CreateMediaBuyRequest",
+        line_errors=[
+            {
+                "type": "missing",
+                "loc": ("packages", 0, "product_id"),
+                "input": {"secret": "buyer-input"},
+            }
+        ],
+    )
+
+    with pytest.raises(AdCPValidationError) as exc_info:
+        with adcp_validation_boundary():
+            raise error
+
+    assert exc_info.value.message == "Field required"
+    assert exc_info.value.field == "packages[0].product_id"
+    assert exc_info.value.details == normalize_to_adcp_error(error).details
+    assert "buyer-input" not in exc_info.value.message
+    assert "errors.pydantic.dev" not in exc_info.value.message
