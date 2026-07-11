@@ -59,6 +59,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc002_unknown_top_level_field",
+    "tests.bdd.steps.domain.uc001_discover_inventory",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -2053,6 +2054,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # --- UC-001: xfails for spec-production gaps (salesagent-8wf2 wiring) ---
+        # T-UC-001-main is env-wired and its steps run for real, but the wire
+        # carries neither relevance_score ordering nor brief_relevance — the
+        # impl sorts internally when AI ranking is enabled and never serializes
+        # either field. Strict: the moment production emits them, this must
+        # graduate (xpass-graduation workflow).
+        _UC001_XFAIL_TAGS: set[str] = {
+            "T-UC-001-main",
+            # Anonymous discovery: the spec expects success with pricing
+            # suppressed when brand_manifest_policy is public, but every _impl
+            # runs the require_identity gate (src/core/auth.py require_identity)
+            # — a token-less wire request gets AUTH_REQUIRED on all transports.
+            # Production gap owned by the #1088 boundary work (salesagent-8xi7).
+            "T-UC-001-alt-anonymous",
+        }
+        if marker_names & _UC001_XFAIL_TAGS:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="UC-001 spec-production gap — see _UC001_XFAIL_TAGS comments",
+                    strict=True,
+                )
+            )
+
         # --- UC-019: xfails for spec-production gaps ---
         # Graduated (k31s): status_computation active variants, default_status_filter
         # simple variants, status_filter boundary simple variants, inv-150-2/4,
@@ -3038,6 +3062,8 @@ def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal:
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags."""
     marker_names = {m.name for m in request.node.iter_markers()}
+    if any(t.startswith("T-UC-001-") for t in marker_names):
+        return "UC-001"
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
     if any(t.startswith("T-UC-003") for t in marker_names):
@@ -3472,6 +3498,41 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-001":
+        # get_products discovery (salesagent-8wf2/pli8). The wired set runs a
+        # real get_products through every transport on ProductEnv; the seeded
+        # catalog (open US/guaranteed, open GB/non_guaranteed, and one product
+        # restricted to another principal) makes the visibility and filter
+        # asserts non-vacuous. T-UC-001-main additionally carries a strict
+        # xfail (production gap — see _UC001_XFAIL_TAGS). Everything else
+        # stays dormant here: wiring never forces graduation.
+        _UC001_WIRED = {
+            "T-UC-001-main",
+            "T-UC-001-alt-anonymous",
+            "T-UC-001-alt-empty",
+            "T-UC-001-alt-filtered",
+        }
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if marker_names & _UC001_WIRED:
+            from tests.factories import PricingOptionFactory, ProductFactory
+            from tests.harness.product import ProductEnv
+
+            with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
+                tenant, principal = env.setup_default_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                open_us = ProductFactory(tenant=tenant, countries=["US"])
+                PricingOptionFactory(product=open_us)
+                open_gb = ProductFactory(tenant=tenant, delivery_type="non_guaranteed", countries=["GB"])
+                PricingOptionFactory(product=open_gb)
+                restricted = ProductFactory(tenant=tenant, countries=["US"], allowed_principal_ids=["someone-else"])
+                PricingOptionFactory(product=restricted)
+                ctx["seeded_products"] = [open_us, open_gb, restricted]
+                ctx["restricted_product_ids"] = {restricted.product_id}
+                yield
+        else:
+            pytest.xfail("UC-001 harness not yet wired for this scenario (salesagent-8wf2)")
     elif uc == "UC-GET-PRODUCTS":
         from tests.harness.product import ProductEnv
 
