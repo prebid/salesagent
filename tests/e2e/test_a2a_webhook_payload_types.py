@@ -20,11 +20,10 @@ from typing import Any
 import httpx
 import psycopg2
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e._webhook_capture import run_webhook_capture_server
 from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
+from tests.e2e.utils import make_mcp_client
 
 
 async def _discover_product_and_pricing(live_server: dict, test_auth_token: str) -> tuple[str, str]:
@@ -37,9 +36,7 @@ async def _discover_product_and_pricing(live_server: dict, test_auth_token: str)
     (salesagent-18h.3). Building a valid packages request needs a real
     pricing_option_id; discover it like test_adcp_full_lifecycle does.
     """
-    headers = {"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"}
-    transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-    async with Client(transport=transport) as client:
+    async with make_mcp_client(live_server, token=test_auth_token) as client:
         products_result = await client.call_tool(
             "get_products",
             {"brand": {"domain": "testbrand.com"}, "brief": "video advertising"},

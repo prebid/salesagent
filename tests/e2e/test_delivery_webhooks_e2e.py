@@ -16,8 +16,6 @@ from typing import Any
 
 import psycopg2
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
@@ -26,7 +24,7 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
-from tests.e2e.utils import force_approve_media_buy_in_db, wait_for_server_readiness
+from tests.e2e.utils import force_approve_media_buy_in_db, make_mcp_client, wait_for_server_readiness
 
 
 class DeliveryWebhookReceiver(WebhookCaptureHandler):
@@ -167,18 +165,10 @@ class TestDailyDeliveryWebhookFlow:
         """
         self.setup_adapter_config(live_server)
 
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        print("live_server")
-        print(live_server)
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
         # Wait for server readiness
         wait_for_server_readiness(live_server["mcp"])
 
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # 1. Discover Product
             product_id, pricing_option_id, format_ids = await self.discover_product(client)
 

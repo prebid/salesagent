@@ -554,24 +554,20 @@ def test_auth_token(live_server):
 
 @pytest.fixture
 async def e2e_client(live_server, test_auth_token):
-    """Provide async client for E2E testing with testing hooks."""
-    from fastmcp.client import Client
-    from fastmcp.client.transports import StreamableHttpTransport
+    """Provide async client for E2E testing with testing hooks.
 
-    # Create MCP client with test session ID
-    # Note: Host header is automatically set by HTTP client based on URL,
-    # so we use x-adcp-tenant header for explicit tenant selection in E2E tests
-    test_session_id = str(uuid.uuid4())
-    headers = {
-        "x-adcp-auth": test_auth_token,
-        "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        "X-Test-Session-ID": test_session_id,
-        "X-Dry-Run": "true",  # Always use dry-run for tests
-    }
+    Dry-run + per-test session id; tenant selected via x-adcp-tenant (the Host
+    header is set by the HTTP client from the URL). Tests needing other header
+    shapes call tests.e2e.utils.make_mcp_client directly (GH #1423).
+    """
+    from tests.e2e.utils import make_mcp_client
 
-    transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-    client = Client(transport=transport)
-
+    client = make_mcp_client(
+        live_server,
+        token=test_auth_token,
+        dry_run=True,
+        session_id=str(uuid.uuid4()),
+    )
     async with client:
         yield client
 

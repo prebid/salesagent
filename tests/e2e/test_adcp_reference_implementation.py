@@ -9,8 +9,6 @@ import uuid
 from time import sleep
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
@@ -20,6 +18,7 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
+from tests.e2e.utils import make_mcp_client
 
 
 class WebhookReceiver(WebhookCaptureHandler):
@@ -48,13 +47,7 @@ class TestAdCPReferenceImplementation:
         print("REFERENCE E2E TEST: Complete Campaign Lifecycle")
         print("=" * 80)
 
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             print("\n📦 PHASE 1: Product Discovery")
 
             products_result = await client.call_tool(
@@ -262,11 +255,8 @@ class TestAdCPReferenceImplementation:
         loopback-pinned fixture — so the webhook lands once the server links the mapping
         before firing. Discovers all ids from prior responses.
         """
-        headers = {"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"}
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
         with run_webhook_capture_server(WebhookReceiver, WebhookReceiver.received_webhooks) as webhook:
-            async with Client(transport=transport) as client:
+            async with make_mcp_client(live_server, token=test_auth_token) as client:
                 products_data = parse_tool_result(
                     await client.call_tool(
                         "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "display advertising"}

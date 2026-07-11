@@ -11,8 +11,6 @@ import json
 import uuid
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
@@ -21,6 +19,7 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
+from tests.e2e.utils import make_mcp_client
 
 
 def discover_pricing_option_id(product: dict) -> str:
@@ -84,13 +83,7 @@ class TestCreativeAssignment:
         print("=" * 80)
 
         # Setup MCP client
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # ================================================================
             # PHASE 1: Product Discovery
             # ================================================================
@@ -288,13 +281,7 @@ class TestCreativeAssignment:
         print("E2E TEST: Multiple Creatives → Multiple Packages")
         print("=" * 80)
 
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # ================================================================
             # PHASE 1: Product Discovery
             # ================================================================

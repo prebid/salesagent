@@ -14,8 +14,6 @@ Does NOT test webhooks or budget updates.
 import uuid
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
@@ -24,7 +22,7 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
-from tests.e2e.utils import force_approve_media_buy_in_db
+from tests.e2e.utils import force_approve_media_buy_in_db, make_mcp_client
 
 
 class TestAdCPFullLifecycle:
@@ -37,14 +35,8 @@ class TestAdCPFullLifecycle:
 
         This test uses its own Client (not e2e_client) to avoid X-Dry-Run:true.
         """
-        # Setup MCP client without dry-run
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        # Setup MCP client without dry-run (make_mcp_client defaults to dry_run=False)
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # ============================================================
             # PHASE 1: Product Discovery
             # ============================================================
