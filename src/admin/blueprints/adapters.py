@@ -11,7 +11,8 @@ from src.adapters import get_adapter_schemas
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Product
+from src.core.database.models import Product
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 logger = logging.getLogger(__name__)
 
@@ -174,20 +175,10 @@ def save_adapter_config(tenant_id, **kwargs):
         config_value = validated_config if validated_config is not None else config_data
 
         with get_db_session() as session:
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = session.scalars(stmt).first()
-
-            if not adapter_config:
-                adapter_config = AdapterConfig(
-                    tenant_id=tenant_id,
-                    adapter_type=adapter_type,
-                    config_json=config_value,
-                )
-                session.add(adapter_config)
-            else:
-                adapter_config.adapter_type = adapter_type
-                adapter_config.config_json = config_value
-                attributes.flag_modified(adapter_config, "config_json")
+            adapter_config = AdapterConfigRepository(session, tenant_id).get_or_create(adapter_type=adapter_type)
+            adapter_config.adapter_type = adapter_type
+            adapter_config.config_json = config_value
+            attributes.flag_modified(adapter_config, "config_json")
 
             # Write to legacy columns for backwards compatibility
             if adapter_type == "mock" and validated_config is not None:
@@ -273,8 +264,7 @@ def list_broadstreet_zones(tenant_id, **kwargs):
     try:
         # Get adapter config for this tenant
         with get_db_session() as session:
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = session.scalars(stmt).first()
+            adapter_config = AdapterConfigRepository(session, tenant_id).find_by_tenant()
 
             if not adapter_config:
                 return jsonify({"zones": [], "error": "No adapter configured"}), 200

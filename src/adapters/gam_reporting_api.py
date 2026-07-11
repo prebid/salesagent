@@ -19,7 +19,8 @@ from sqlalchemy import select
 from scripts.ops.gam_helper import get_ad_manager_client_for_tenant
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Principal, Tenant
+from src.core.database.models import Principal, Tenant
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 logger = logging.getLogger(__name__)
 
@@ -341,8 +342,9 @@ def get_principal_reporting(tenant_id: str, principal_id: str):
 
         # Get the network timezone from adapter config
         with get_db_session() as db_session:
-            stmt_config = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-            adapter_config = db_session.scalars(stmt_config).first()
+            adapter_config = AdapterConfigRepository(db_session, tenant_id).find_by_tenant(
+                adapter_type="google_ad_manager"
+            )
 
         if not adapter_config:
             # Default to America/New_York if no config found
@@ -619,8 +621,9 @@ def get_principal_summary(tenant_id: str, principal_id: str):
 
         # Get the network timezone from adapter config
         with get_db_session() as db_session:
-            stmt_config = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-            adapter_config = db_session.scalars(stmt_config).first()
+            adapter_config = AdapterConfigRepository(db_session, tenant_id).find_by_tenant(
+                adapter_type="google_ad_manager"
+            )
 
         if not adapter_config:
             # Default to America/New_York if no config found

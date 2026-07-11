@@ -39,6 +39,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
@@ -110,9 +111,9 @@ from src.core.auth import (
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.database.models import CurrencyLimit, MediaBuy
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
@@ -2403,8 +2404,7 @@ async def _create_media_buy_impl(
 
             # Check if currency is supported by GAM network (if GAM is configured)
             # GAM only accepts: primary currency OR enabled secondary currencies
-            adapter_config_stmt = select(AdapterConfig).where(AdapterConfig.tenant_id == tenant["tenant_id"])
-            adapter_config = session.scalars(adapter_config_stmt).first()
+            adapter_config = AdapterConfigRepository(session, tenant["tenant_id"]).find_by_tenant()
             if adapter_config and adapter_config.gam_network_currency:
                 # Build list of supported currencies: primary + any secondary
                 supported_currencies = {adapter_config.gam_network_currency}

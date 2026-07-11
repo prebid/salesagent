@@ -21,6 +21,7 @@ from src.core.database.models import (
     Tenant,
     User,
 )
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 logger = logging.getLogger(__name__)
 
@@ -319,8 +320,7 @@ def get_tenant(tenant_id):
             }
 
             # Get adapter config
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter = db_session.scalars(stmt).first()
+            adapter = AdapterConfigRepository(db_session, tenant_id).find_by_tenant()
             if adapter:
                 adapter_data = {
                     "adapter_type": adapter.adapter_type,
@@ -431,8 +431,7 @@ def update_tenant(tenant_id):
                 adapter_data = data["adapter_config"]
 
                 # Get current adapter
-                stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-                adapter = db_session.scalars(stmt).first()
+                adapter = AdapterConfigRepository(db_session, tenant_id).find_by_tenant()
 
                 if adapter:
                     if adapter.adapter_type == "google_ad_manager":

@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, scoped_session
 
 from src.core.database.models import AdapterConfig
 
@@ -55,7 +55,7 @@ class AdapterConfigRepository:
         tenant_id: Tenant scope for all queries.
     """
 
-    def __init__(self, session: Session, tenant_id: str) -> None:
+    def __init__(self, session: Session | scoped_session[Session], tenant_id: str) -> None:
         self._session = session
         self._tenant_id = tenant_id
 
@@ -78,13 +78,21 @@ class AdapterConfigRepository:
             raise TenantNotConfiguredError(self._tenant_id)
         return config
 
-    def find_by_tenant(self) -> AdapterConfig | None:
+    def find_by_tenant(self, adapter_type: str | None = None) -> AdapterConfig | None:
         """Get the adapter configuration for the tenant, or None if not configured.
 
         Use this when absence is a normal case (e.g., checking whether a tenant
         has been set up yet, or defaulting to mock adapter).
+
+        Args:
+            adapter_type: When given, only return the row if it has this
+                adapter_type (e.g. 'google_ad_manager'); a tenant configured
+                with a different adapter yields None, preserving the callers'
+                not-configured error paths.
         """
         stmt = select(AdapterConfig).filter_by(tenant_id=self._tenant_id)
+        if adapter_type is not None:
+            stmt = stmt.filter_by(adapter_type=adapter_type)
         return self._session.scalars(stmt).first()
 
     def get_adapter_type(self) -> str | None:
@@ -95,6 +103,28 @@ class AdapterConfigRepository:
         """
         config = self.find_by_tenant()
         return config.adapter_type if config else None
+
+    def get_or_create(self, adapter_type: str = "google_ad_manager") -> AdapterConfig:
+        """Get the tenant's AdapterConfig row, constructing one if absent.
+
+        Finds by tenant_id ONLY — tenant_id is the primary key (strict 1:1
+        with tenant), so an existing row is returned even when its
+        adapter_type differs from the requested one. Filtering the find by
+        adapter_type would miss that row and a subsequent add() would raise
+        a duplicate-PK IntegrityError on adapter_type changes.
+
+        Does not commit — caller mutates the returned row and owns the
+        transaction boundary.
+
+        Args:
+            adapter_type: Default adapter_type for a NEWLY constructed row.
+                Ignored when a row already exists.
+        """
+        config = self.find_by_tenant()
+        if config is None:
+            config = AdapterConfig(tenant_id=self._tenant_id, adapter_type=adapter_type)
+            self._session.add(config)
+        return config
 
     # ------------------------------------------------------------------
     # Logic methods (pure — accept pre-loaded config, no DB)

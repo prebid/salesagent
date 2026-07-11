@@ -23,6 +23,7 @@ from src.admin.auth_utils import extract_user_info
 from src.admin.utils import is_admin_production, is_super_admin
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.domain_config import (
     extract_subdomain_from_host,
     get_oauth_redirect_uri,
@@ -1049,18 +1050,15 @@ def gam_callback():
 
         # Store refresh token in tenant's adapter config
         with get_db_session() as db_session:
-            from src.core.database.models import AdapterConfig
-
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if not tenant:
                 flash("Tenant not found", "error")
                 return redirect(url_for("auth.login"))
 
             # Get or create adapter config
-            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
-            if not adapter_config:
-                adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="google_ad_manager")
-                db_session.add(adapter_config)
+            adapter_config = AdapterConfigRepository(db_session, tenant_id).get_or_create(
+                adapter_type="google_ad_manager"
+            )
 
             # Store the refresh token
             adapter_config.gam_refresh_token = refresh_token
