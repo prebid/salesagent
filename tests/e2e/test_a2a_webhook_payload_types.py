@@ -9,18 +9,14 @@ Per AdCP A2A spec (https://docs.adcontextprotocol.org/docs/protocols/a2a-guide#p
 This test validates that our A2A server sends the correct payload type based on status.
 """
 
-import json
-import socket
 import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
 from time import sleep
 from typing import Any
 
 import httpx
 import pytest
 
-from tests.e2e._webhook_capture import run_webhook_capture_server
+from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
     build_a2a_message_send,
     build_adcp_media_buy_request,
@@ -119,70 +115,51 @@ def assert_no_classification_errors(received: list[dict[str, Any]]) -> None:
     )
 
 
-class WebhookPayloadCapture(BaseHTTPRequestHandler):
-    """Simple webhook receiver that captures all payloads with their types."""
+class WebhookPayloadCapture(WebhookCaptureHandler):
+    """Webhook receiver that captures each payload with its A2A classification.
 
-    received_payloads: list[dict[str, Any]] = []
+    Extends the shared capture handler via the ``record`` hook — only the
+    classification logic lives here, never a copied ``do_POST``.
+    """
 
-    def do_POST(self):
-        """Handle POST requests (webhook notifications)."""
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
+    received_webhooks: list[dict[str, Any]] = []
 
+    def record(self, payload):
+        # Extract status
+        status = None
+        if "status" in payload:
+            status_obj = payload["status"]
+            if isinstance(status_obj, dict):
+                status = status_obj.get("state")
+            else:
+                status = str(status_obj)
+
+        # A2A wire contract is camelCase (proto json_name): taskId, contextId,
+        # messageId. snake_case (task_id, context_id) is a spec violation — the
+        # a2a-sdk protobuf descriptor declares the JSON names explicitly. Record
+        # the classification (or its failure) BEFORE responding so a regression
+        # in protocol_webhook_service is observable to the test instead of being
+        # swallowed by an "unknown" classification (gh-#1299 follow-up).
+        classification_error = None
+        payload_type = None
         try:
-            payload = json.loads(body.decode("utf-8"))
+            payload_type = classify_a2a_payload(payload)
+        except AssertionError as classify_exc:
+            classification_error = str(classify_exc)
 
-            # Extract status
-            status = None
-            if "status" in payload:
-                status_obj = payload["status"]
-                if isinstance(status_obj, dict):
-                    status = status_obj.get("state")
-                else:
-                    status = str(status_obj)
-
-            # A2A wire contract is camelCase (proto json_name): taskId, contextId,
-            # messageId. snake_case (task_id, context_id) is a spec violation — the
-            # a2a-sdk protobuf descriptor declares the JSON names explicitly. Record
-            # the classification (or its failure) BEFORE responding so a regression
-            # in protocol_webhook_service is observable to the test instead of being
-            # swallowed by an "unknown" classification (gh-#1299 follow-up).
-            classification_error = None
-            payload_type = None
-            try:
-                payload_type = classify_a2a_payload(payload)
-            except AssertionError as classify_exc:
-                classification_error = str(classify_exc)
-
-            self.received_payloads.append(
-                {
-                    "payload": payload,
-                    "payload_type": payload_type,
-                    "classification_error": classification_error,
-                    "status": status,
-                    "path": self.path,
-                }
-            )
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "received"}')
-        except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
-
-    def log_message(self, format, *args):
-        """Silence HTTP server logs during tests."""
-        pass
+        return {
+            "payload": payload,
+            "payload_type": payload_type,
+            "classification_error": classification_error,
+            "status": status,
+            "path": self.path,
+        }
 
 
 @pytest.fixture
 def webhook_capture_server():
     """Start a local HTTP server to capture webhook payloads."""
-    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_payloads) as info:
+    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks) as info:
         yield info
 
 
@@ -649,38 +626,30 @@ class TestProtocolWebhookWireFormat:
 
     def _send_and_capture(self, payload) -> dict[str, Any]:
         """Send `payload` via the real service and return the classified capture."""
+        import asyncio
+
         from src.core.database.models import PushNotificationConfig
         from src.services.protocol_webhook_service import ProtocolWebhookService
 
-        WebhookPayloadCapture.received_payloads.clear()
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-        sock.close()
-
-        server = HTTPServer(("127.0.0.1", port), WebhookPayloadCapture)
-        thread = Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
+        # host='127.0.0.1': this class is unit-style (no Docker) — the service
+        # runs in-process, so loopback is always the right callback host.
+        with run_webhook_capture_server(
+            WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
+        ) as info:
             config = PushNotificationConfig(
                 id="pnc-test",
                 tenant_id="t-test",
                 principal_id="p-test",
-                url=f"http://127.0.0.1:{port}/webhook",
+                url=info["url"],
                 authentication_type=None,
                 authentication_token=None,
             )
             service = ProtocolWebhookService()
-            import asyncio
-
             sent = asyncio.run(service.send_notification(config, payload, metadata={"task_type": "create_media_buy"}))
             assert sent is True, "ProtocolWebhookService.send_notification should report success"
-        finally:
-            server.shutdown()
-            server.server_close()
 
-        received = WebhookPayloadCapture.received_payloads
+            received = list(info["received"])
+
         assert len(received) == 1, f"Expected exactly one captured webhook, got {len(received)}"
         return received[0]
 
