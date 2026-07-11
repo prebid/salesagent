@@ -60,6 +60,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc002_unknown_top_level_field",
     "tests.bdd.steps.domain.uc001_discover_inventory",
+    "tests.bdd.steps.domain.uc009_performance",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -3064,6 +3065,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     marker_names = {m.name for m in request.node.iter_markers()}
     if any(t.startswith("T-UC-001-") for t in marker_names):
         return "UC-001"
+    if any(t.startswith("T-UC-009-") for t in marker_names):
+        return "UC-009"
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
     if any(t.startswith("T-UC-003") for t in marker_names):
@@ -3498,6 +3501,30 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-009":
+        # update_performance_index (salesagent-8wf2/cmjm). The five main-flow
+        # scenarios run a real update_performance_index through every
+        # transport on PerformanceEnv (adapter + audit logger mocked, all
+        # else real). Everything else stays dormant here.
+        _UC009_WIRED = {
+            "T-UC-009-main-mcp",
+            "T-UC-009-main-mcp-adapter",
+            "T-UC-009-main-mcp-audit",
+            "T-UC-009-main-rest",
+            "T-UC-009-main-rest-adapter",
+        }
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if marker_names & _UC009_WIRED:
+            from tests.harness.performance import PerformanceEnv
+
+            with _db_scope_for(request, e2e_config), PerformanceEnv(e2e_config=e2e_config) as env:
+                tenant, principal = env.setup_default_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                yield
+        else:
+            pytest.xfail("UC-009 harness not yet wired for this scenario (salesagent-8wf2)")
     elif uc == "UC-001":
         # get_products discovery (salesagent-8wf2/pli8). The wired set runs a
         # real get_products through every transport on ProductEnv; the seeded
