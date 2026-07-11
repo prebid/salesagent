@@ -58,6 +58,35 @@ def test_typeadapter_validation_error_emits_adcp_envelope_on_mcp_wire():
     assert "errors.pydantic.dev" not in envelope["errors"][0]["message"]
 
 
+def test_create_media_buy_missing_key_preserves_field_on_mcp_wire():
+    is_error, envelope = _call_mcp_tool_capturing_envelope(
+        "create_media_buy",
+        {
+            "brand": {"domain": "wiretest.example"},
+            "packages": [
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000,
+                    "pricing_option_id": "cpm_usd_fixed",
+                }
+            ],
+            "start_time": "2026-08-01T00:00:00Z",
+            "end_time": "2026-09-01T00:00:00Z",
+            "po_number": "WIRE-1",
+        },
+    )
+
+    assert is_error
+    assert envelope is not None
+    assert_envelope_shape(
+        envelope,
+        "VALIDATION_ERROR",
+        recovery="correctable",
+        message_substr="Required field is missing",
+    )
+    assert envelope["errors"][0].get("field") == "idempotency_key"
+
+
 @pytest.mark.xfail(
     reason="AdCP 3.1 grades create_media_buy schema failures INVALID_REQUEST; all transports currently emit VALIDATION_ERROR",
     strict=True,

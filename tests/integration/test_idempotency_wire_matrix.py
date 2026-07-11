@@ -244,7 +244,7 @@ class TestMissingKeyWireMatrix:
             envelope,
             "VALIDATION_ERROR",
             recovery="correctable",
-            message_substr="Required field is missing",
+            message_substr="Field required" if transport is Transport.A2A else "Required field is missing",
         )
         assert envelope["errors"][0].get("field") == "idempotency_key"
 
