@@ -2080,9 +2080,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-inv-153-3",
             "T-UC-019-inv-153-4",
             "T-UC-019-inv-153-5",
-            # Sandbox mode — not implemented
+            # Sandbox mode (response echo) — not implemented
             "T-UC-019-sandbox-happy",
-            "T-UC-019-sandbox-validation",
+            # Graduated (6szx): T-UC-019-sandbox-validation — BR-RULE-209 INV-7:
+            # invalid status_filter on a sandbox account yields a REAL rejection
+            # (_resolve_status_filter → AdCPValidationError → VALIDATION_ERROR wire
+            # envelope). Given now seeds a real sandbox Account + AgentAccountAccess
+            # (was an inert ctx flag); Then steps assert wire-first.
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
             # Extension errors — error code mismatches / not implemented.
@@ -2092,7 +2096,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
-            "T-UC-019-ext-d",
+            # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected
+            # inside the shared adcp_validation_boundary (_build_get_media_buys_request)
+            # with VALIDATION_ERROR, field-level details (field="media_buy_ids"),
+            # recovery=correctable and a top-level suggestion, on the A2A wire and via
+            # the typed exception on the legacy MCP wrapper. Then steps assert wire-first.
             "T-UC-019-ext-e",
             # Main flow snapshots — adapter not wired
             "T-UC-019-main-snapshot",
