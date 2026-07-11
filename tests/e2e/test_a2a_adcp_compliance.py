@@ -16,14 +16,12 @@ Usage:
     pytest tests/e2e/test_a2a_adcp_compliance.py --server-url=https://example.com/a2a
 """
 
-import json
 import os
-from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
 
+from tests.e2e._compliance_report import ComplianceReportBase
 from tests.e2e.adcp_request_builder import build_a2a_message_send
 from tests.factories.creative_asset import build_assets, image_spec
 
@@ -170,14 +168,10 @@ class A2AAdCPComplianceClient:
         return result
 
 
-class A2AAdCPComplianceReport:
+class A2AAdCPComplianceReport(ComplianceReportBase):
     """Collects and reports on A2A/AdCP compliance results."""
 
-    def __init__(self):
-        self.results: list[dict[str, Any]] = []
-        self.passed = 0
-        self.failed = 0
-        self.warnings = 0
+    title = "A2A/AdCP COMPLIANCE SUMMARY"
 
     def add_result(self, validation_result: dict):
         """Add a compliance validation result."""
@@ -191,16 +185,7 @@ class A2AAdCPComplianceReport:
         if validation_result["warnings"]:
             self.warnings += 1
 
-    def print_summary(self):
-        """Print compliance summary."""
-        print("\n" + "=" * 60)
-        print("A2A/AdCP COMPLIANCE SUMMARY")
-        print("=" * 60)
-        print(f"✓ Passed: {self.passed}")
-        print(f"⚠ Warnings: {self.warnings}")
-        print(f"✗ Failed: {self.failed}")
-        print(f"Total Tests: {len(self.results)}")
-
+    def _print_details(self):
         print("\nDETAILED RESULTS:")
         for result in self.results:
             skill = result["skill"]
@@ -215,21 +200,6 @@ class A2AAdCPComplianceReport:
             if result["warnings"]:
                 for warning in result["warnings"]:
                     print(f"    WARNING: {warning}")
-
-    def save_report(self, filepath: Path):
-        """Save compliance report to JSON file."""
-        report_data = {
-            "summary": {
-                "passed": self.passed,
-                "failed": self.failed,
-                "warnings": self.warnings,
-                "total": len(self.results),
-            },
-            "results": self.results,
-        }
-
-        with open(filepath, "w") as f:
-            json.dump(report_data, f, indent=2)
 
 
 @pytest.fixture

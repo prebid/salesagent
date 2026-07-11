@@ -341,3 +341,32 @@ def build_a2a_message_send(
         "method": "message/send",
         "params": params,
     }
+
+
+def build_default_campaign_request(
+    product_id: str,
+    pricing_option_id: str,
+    *,
+    total_budget: float = 5000.0,
+    days_from_now: int = 1,
+    duration_days: int = 30,
+    brand_domain: str = "testbrand.com",
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Build the default e2e campaign request (GH #1423 consolidation).
+
+    Single home for the "$5000 testbrand.com buy starting tomorrow for 30 days"
+    block previously copy-pasted across the lifecycle/reference/creative e2e
+    suites. Anything test-specific (targeting_overlay, webhook_url, context, ...)
+    passes through ``**overrides`` to :func:`build_adcp_media_buy_request`.
+    """
+    start_time, end_time = get_test_date_range(days_from_now=days_from_now, duration_days=duration_days)
+    return build_adcp_media_buy_request(
+        product_ids=[product_id],
+        total_budget=total_budget,
+        start_time=start_time,
+        end_time=end_time,
+        brand={"domain": brand_domain},
+        pricing_option_id=pricing_option_id,
+        **overrides,
+    )

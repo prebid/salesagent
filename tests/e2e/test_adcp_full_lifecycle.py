@@ -16,10 +16,9 @@ import uuid
 import pytest
 
 from tests.e2e.adcp_request_builder import (
-    build_adcp_media_buy_request,
     build_creative,
+    build_default_campaign_request,
     build_sync_creatives_request,
-    get_test_date_range,
     parse_tool_result,
 )
 from tests.e2e.utils import force_approve_media_buy_in_db, make_mcp_client
@@ -29,7 +28,7 @@ class TestAdCPFullLifecycle:
     """Minimal E2E test for the core AdCP 4-phase lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_four_phase_lifecycle(self, docker_services_e2e, live_server, test_auth_token):
+    async def test_four_phase_lifecycle(self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter):
         """
         Minimal lifecycle: get_products -> create_media_buy -> sync_creatives -> get_media_buy_delivery.
 
@@ -69,15 +68,9 @@ class TestAdCPFullLifecycle:
             # ============================================================
             # PHASE 2: Create Media Buy
             # ============================================================
-            start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-
-            media_buy_request = build_adcp_media_buy_request(
-                product_ids=[product_id],
-                total_budget=5000.0,
-                start_time=start_time,
-                end_time=end_time,
-                brand={"domain": "testbrand.com"},
-                pricing_option_id=pricing_option_id,
+            media_buy_request = build_default_campaign_request(
+                product_id,
+                pricing_option_id,
                 context={"e2e": "full_lifecycle_create"},
             )
 

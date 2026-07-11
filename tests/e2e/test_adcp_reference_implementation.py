@@ -12,10 +12,9 @@ import pytest
 
 from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
-    build_adcp_media_buy_request,
     build_creative,
+    build_default_campaign_request,
     build_sync_creatives_request,
-    get_test_date_range,
     parse_tool_result,
 )
 from tests.e2e.utils import make_mcp_client
@@ -40,7 +39,7 @@ class TestAdCPReferenceImplementation:
 
     @pytest.mark.asyncio
     async def test_complete_campaign_lifecycle_with_webhooks(
-        self, docker_services_e2e, live_server, test_auth_token, webhook_server
+        self, docker_services_e2e, live_server, test_auth_token, webhook_server, auto_approval_adapter
     ):
         """Discovery → create → creatives → delivery → update → verify, over sync + webhook responses."""
         print("\n" + "=" * 80)
@@ -85,15 +84,9 @@ class TestAdCPReferenceImplementation:
 
             print("\n🎯 PHASE 2: Create Media Buy (with webhook for async updates)")
 
-            start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-
-            media_buy_request = build_adcp_media_buy_request(
-                product_ids=[product_id],
-                total_budget=5000.0,
-                start_time=start_time,
-                end_time=end_time,
-                brand={"domain": "testbrand.com"},
-                pricing_option_id=pricing_option_id,
+            media_buy_request = build_default_campaign_request(
+                product_id,
+                pricing_option_id,
                 targeting_overlay={
                     "geo_countries": ["US", "CA"],
                 },
@@ -248,7 +241,9 @@ class TestAdCPReferenceImplementation:
             "fires; update_media_buy needs the same treatment. Remove this marker once it does."
         ),
     )
-    async def test_update_media_buy_push_webhook_delivery(self, docker_services_e2e, live_server, test_auth_token):
+    async def test_update_media_buy_push_webhook_delivery(
+        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
+    ):
         """update_media_buy must deliver a task-status push webhook to the configured URL.
 
         Uses the shared helper's default (reachable) callback host — not the lifecycle's
@@ -266,15 +261,7 @@ class TestAdCPReferenceImplementation:
                 pricing_option_id = product["pricing_options"][0]["pricing_option_id"]
 
                 # create is the only op that persists the PushNotificationConfig row delivery needs.
-                start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-                create_request = build_adcp_media_buy_request(
-                    product_ids=[product["product_id"]],
-                    total_budget=5000.0,
-                    start_time=start_time,
-                    end_time=end_time,
-                    brand={"domain": "testbrand.com"},
-                    pricing_option_id=pricing_option_id,
-                )
+                create_request = build_default_campaign_request(product["product_id"], pricing_option_id)
                 create_request["push_notification_config"] = {"url": webhook["url"]}
                 create_data = parse_tool_result(await client.call_tool("create_media_buy", create_request))
                 media_buy_id = create_data.get("media_buy_id")
