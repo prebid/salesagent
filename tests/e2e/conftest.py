@@ -553,6 +553,23 @@ def test_auth_token(live_server):
 
 
 @pytest.fixture
+def auto_approval_adapter(live_server):
+    """Pin the ci-test mock adapter to auto-approval before the test runs.
+
+    The e2e suite shares ONE live database and pytest-randomly reorders tests
+    per run, so a prior test that enables manual approval (the a2a submitted-
+    webhook tests) leaks that state into any later test asserting the
+    synchronous success shape — create/update then returns Submitted with no
+    media_buy_id, flakily (salesagent-d1n0). Every test that requires the mock
+    adapter's auto-approval path must request this fixture instead of trusting
+    whatever state the previous test left behind.
+    """
+    from tests.e2e.utils import set_live_adapter_behavior
+
+    set_live_adapter_behavior(live_server, manual_approval_required=False)
+
+
+@pytest.fixture
 async def e2e_client(live_server, test_auth_token):
     """Provide async client for E2E testing with testing hooks.
 
