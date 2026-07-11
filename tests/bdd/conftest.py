@@ -61,6 +61,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_unknown_top_level_field",
     "tests.bdd.steps.domain.uc001_discover_inventory",
     "tests.bdd.steps.domain.uc009_performance",
+    "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -2078,6 +2079,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # --- UC-010: xfails for spec-production gaps (salesagent-8wf2 wiring) ---
+        # Both rich main scenarios demand the `account` section (POST-S3:
+        # sandbox flag + billing models), which production never populates —
+        # GetAdcpCapabilitiesResponse.account stays None pending the account
+        # management epic (salesagent-oj0). Steps are wired and every other
+        # assert runs for real; strict so population day forces graduation.
+        _UC010_XFAIL_TAGS: set[str] = {
+            "T-UC-010-main-mcp",
+            "T-UC-010-main-rest",
+        }
+        if marker_names & _UC010_XFAIL_TAGS:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="UC-010 spec-production gap — account section not populated (salesagent-oj0)",
+                    strict=True,
+                )
+            )
+
         # --- UC-019: xfails for spec-production gaps ---
         # Graduated (k31s): status_computation active variants, default_status_filter
         # simple variants, status_filter boundary simple variants, inv-150-2/4,
@@ -3067,6 +3086,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-001"
     if any(t.startswith("T-UC-009-") for t in marker_names):
         return "UC-009"
+    if any(t.startswith("T-UC-010-") for t in marker_names):
+        return "UC-010"
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
     if any(t.startswith("T-UC-003") for t in marker_names):
@@ -3501,6 +3522,29 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-010":
+        # get_adcp_capabilities (salesagent-8wf2/fxot). The main-flow scenarios
+        # run a real get_adcp_capabilities through the wire transports on
+        # CapabilitiesEnv (REST dispatches as GET via REST_METHOD). Everything
+        # else stays dormant here.
+        _UC010_WIRED = {
+            "T-UC-010-main-mcp",
+            "T-UC-010-main-rest",
+            "T-UC-010-main-readonly",
+            "T-UC-010-main-timestamp",
+        }
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if marker_names & _UC010_WIRED:
+            from tests.harness.capabilities import CapabilitiesEnv
+
+            with _db_scope_for(request, e2e_config), CapabilitiesEnv(e2e_config=e2e_config) as env:
+                tenant, principal = env.setup_default_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                yield
+        else:
+            pytest.xfail("UC-010 harness not yet wired for this scenario (salesagent-8wf2)")
     elif uc == "UC-009":
         # update_performance_index (salesagent-8wf2/cmjm). The five main-flow
         # scenarios run a real update_performance_index through every

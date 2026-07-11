@@ -55,7 +55,11 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response should include adcp.major_versions containing 3
     And the response should include supported_protocols containing "media_buy"
     And the response should include account section with sandbox flag and billing models
-    And the response should include media_buy.features section with all 7 flags
+    # RECONCILED with pinned spec v3.1.1: core/media-buy-features.json declares exactly 4
+    # flags (inline_creative_management, property_list_filtering, catalog_management,
+    # committed_metrics_supported); 'all 7 flags' came from the older v3.1-04f59d2d5 ref.
+    # Mirror upstream in adcp-req.
+    And the response should include media_buy.features section with all 4 flags
     And the response should include media_buy.supported_pricing_models
     And the response should include media_buy.reporting_delivery_methods section
     And the response should include media_buy.execution section with targeting
@@ -86,7 +90,11 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response should include adcp.major_versions containing 3
     And the response should include supported_protocols containing "media_buy"
     And the response should include account section with sandbox flag and billing models
-    And the response should include media_buy.features section with all 7 flags
+    # RECONCILED with pinned spec v3.1.1: core/media-buy-features.json declares exactly 4
+    # flags (inline_creative_management, property_list_filtering, catalog_management,
+    # committed_metrics_supported); 'all 7 flags' came from the older v3.1-04f59d2d5 ref.
+    # Mirror upstream in adcp-req.
+    And the response should include media_buy.features section with all 4 flags
     And the response should include media_buy.supported_pricing_models
     And the response should include media_buy.reporting_delivery_methods section
     And the response should include media_buy.execution section with targeting
