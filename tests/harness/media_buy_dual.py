@@ -29,7 +29,17 @@ _UPDATE_PATCHES = {
 
 def _is_update_request(kwargs: dict[str, Any]) -> bool:
     req = kwargs.get("req")
-    return isinstance(req, UpdateMediaBuyRequest)
+    if isinstance(req, UpdateMediaBuyRequest):
+        return True
+    if req is not None:
+        return False  # an explicit non-update req (e.g. a CreateMediaBuyRequest)
+    # No req object — a raw payload (e.g. an update whose invalid revision failed
+    # UpdateMediaBuyRequest construction, so the step sends the raw fields). It
+    # MUST still route to update, not create: ``revision`` is an update-only
+    # optimistic-concurrency token and ``media_buy_id`` targets an existing buy,
+    # so either identifies a raw update payload. Routing it to create would fail
+    # on missing brand/packages/start_time instead of validating the revision.
+    return "revision" in kwargs or "media_buy_id" in kwargs
 
 
 class MediaBuyDualEnv(MediaBuyCreateEnv):
@@ -164,6 +174,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         from fastmcp.server.context import Context
 
+        from src.core.tool_error_logging import _translate_to_tool_error
         from src.core.tools.media_buy_update import update_media_buy
         from tests.harness.transport import Transport
 
@@ -188,7 +199,25 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         mock_ctx.get_state = AsyncMock(side_effect=_get_state)
 
-        tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
+        # Direct-wrapper dispatch (bypasses FastMCP's TypeAdapter, so the AdCP
+        # boundary — not FastMCP's arg validation — rejects a bad field, matching
+        # a2a/rest). On error, mirror the FULL production MCP boundary round-trip
+        # the in-memory Client would run: translate AdCPError -> AdCPToolError
+        # (two-layer JSON envelope), then unwrap it back to a reconstructed
+        # AdCPError with the real envelope stashed as ``_wire_error_envelope`` —
+        # exactly what ``_run_mcp_client`` does. This gives the McpDispatcher BOTH
+        # a proper AdCPError (``ctx["error"]``) and the real
+        # ``wire_error_envelope`` (e.g. the CONFLICT resource_id/expected/current
+        # details). A bare AdCPError would yield ``wire_error_envelope=None``.
+        from tests.harness._base import _unwrap_mcp_tool_error
+
+        try:
+            tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
+        except Exception as exc:  # noqa: BLE001 — normalized to the MCP wire shape below
+            try:
+                _translate_to_tool_error(exc)  # always raises (AdCPToolError / ToolError)
+            except Exception as tool_exc:
+                raise _unwrap_mcp_tool_error(tool_exc) from exc
         data = dict(tool_result.structured_content)
         return self._parse_update_rest_response(data)
 

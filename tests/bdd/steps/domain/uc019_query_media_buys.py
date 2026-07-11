@@ -2491,16 +2491,21 @@ def _create_real_buy(ctx: dict, mb_id: str, principal_id: str) -> Any:
 
 
 def _seed_buy_confirmed_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
-    """Real-create a buy, then pin its created_at to the literal the scenario asserts.
+    """Real-create a buy, then pin its confirmed_at to the literal the scenario asserts.
 
     On the synchronous path the create response constitutes confirmation, so
-    confirmed_at == created_at; pinning created_at (test plumbing on the
-    factory-bound session — the column is repository-immutable by design)
-    makes the read-back value deterministic.
+    production stamps confirmed_at == created_at at the real wall clock. Pin BOTH
+    columns to the scenario's literal (test plumbing on the factory-bound session
+    — the columns are repository-immutable by design) so the read-back value is
+    deterministic. Pinning created_at alone is NOT enough: confirmed_at is a
+    separate persisted column already stamped during create, so it must be pinned
+    explicitly or the read-back returns the real creation instant.
     """
     env = ctx["env"]
     media_buy = _create_real_buy(ctx, mb_id, principal_id)
-    media_buy.created_at = _parse_iso_utc(timestamp)
+    pinned = _parse_iso_utc(timestamp)
+    media_buy.created_at = pinned
+    media_buy.confirmed_at = pinned
     env._commit_factory_data()
 
 

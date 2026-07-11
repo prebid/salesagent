@@ -126,7 +126,10 @@ class TestMediaBuyRepositoryCreateFromRequest:
         )
 
         session.add.assert_called_once()
-        session.flush.assert_called_once()
+        # "active" is a seller-confirmed status, so create_from_request flushes
+        # twice: once to assign created_at on insert, then again to persist
+        # confirmed_at (= created_at). Both flushes are expected.
+        assert session.flush.call_count == 2
 
 
 class TestContextManagerAcceptsModel:

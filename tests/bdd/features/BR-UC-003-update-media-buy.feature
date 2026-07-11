@@ -2126,8 +2126,11 @@ Feature: BR-UC-003 Update Media Buy
       | partition      | value | outcome                            |
       | stale_revision | 5     | error "CONFLICT" with suggestion   |
       | ahead_revision | 99    | error "CONFLICT" with suggestion   |
-      | below_min      | 0     | error "INVALID_REQUEST" with suggestion |
-      | wrong_type     | "7"   | error "INVALID_REQUEST" with suggestion |
+      | below_min      | 0             | error "INVALID_REQUEST" with suggestion |
+      # A non-numeric string (not a coercible numeral like "7", which pydantic
+      # lax-coerces to a valid int on the JSON transports) so the wrong-TYPE is
+      # rejected consistently on every transport, not just A2A.
+      | wrong_type     | "not-an-int"  | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-003-boundary-revision @boundary @revision @schema-v3.1
   Scenario Outline: Revision optimistic-concurrency boundary validation - <boundary_point>
