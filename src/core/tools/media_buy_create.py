@@ -106,9 +106,9 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
     require_identity,
+    require_principal,
     require_principal_id,
     require_tenant,
-    resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.models import Creative as DBCreative
@@ -2037,7 +2037,7 @@ async def _create_media_buy_impl(
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.
-    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+    principal = require_principal(identity, context=req.context)
 
     # Idempotency (AdCP 3.0.1): a retry with the same key replays the ORIGINAL success
     # verbatim; the same key with a different canonical payload is a conflict; errors are

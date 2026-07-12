@@ -334,6 +334,29 @@ def resolve_principal_or_raise(
     return principal
 
 
+def require_principal(
+    identity: "ResolvedIdentity",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> Principal:
+    """Return the identity's Principal or raise ``AdCPAuthenticationError``.
+
+    Identity-first replacement for per-tool ``resolve_principal_or_raise``
+    calls (#1088): the transport boundary eagerly loads ``identity.principal``
+    (zero extra queries), so _impl functions take it from the identity.
+
+    Transitional fallback: construction sites that predate the eager boundary
+    (background schedulers, the ToolContext fallback branch) carry a
+    principal_id but no principal object — those resolve via the same DB
+    lookup and raise the same "Principal {id} not found" error text as
+    before, keeping the wire byte-identical.
+    """
+    principal_id = require_principal_id(identity, context=context)
+    if identity.principal is not None:
+        return identity.principal
+    return resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=context)
+
+
 def require_principal_id(
     identity: "ResolvedIdentity | None",
     *,

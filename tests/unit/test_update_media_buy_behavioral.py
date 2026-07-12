@@ -83,11 +83,16 @@ def test_principal_not_found_returns_error():
     """When auth resolves to a non-existent principal, impl returns
     UpdateMediaBuyError with code='principal_not_found'."""
     with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-        # Principal ID resolves but the object doesn't exist in DB
+        # Principal ID resolves but the object doesn't exist in DB.
+        # Post-#1088 the boundary eagerly loads identity.principal, so this
+        # state only occurs on pre-boundary construction sites (background
+        # schedulers, ToolContext fallback) — pin that transitional fallback
+        # by stripping the eager principal from the harness identity.
         env.mock["principal"].return_value = None
+        identity_without_principal = env.identity.model_copy(update={"principal": None})
 
         with pytest.raises(AdCPAuthenticationError, match="principal_test") as exc_info:
-            env.call_impl(media_buy_id="mb_001")
+            env.call_impl(media_buy_id="mb_001", identity=identity_without_principal)
 
         assert exc_info.value.error_code == "AUTH_REQUIRED"
         # _update_media_buy_impl wraps its body in the ``audit_workflow_step_failure_ctx`` context
@@ -2027,7 +2032,9 @@ class TestUC003ExtA:
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             env.mock["principal"].return_value = None
 
-            identity = env.identity
+            # Pre-boundary identity (no eager principal) — pins the transitional
+            # DB-fallback path in require_principal (#1088).
+            identity = env.identity.model_copy(update={"principal": None})
             req = UpdateMediaBuyRequest(media_buy_id="mb_no_principal")
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2042,7 +2049,7 @@ class TestUC003ExtA:
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             env.mock["principal"].return_value = None
 
-            identity = env.identity
+            identity = env.identity.model_copy(update={"principal": None})
             req = UpdateMediaBuyRequest(media_buy_id="mb_auth_fail")
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)

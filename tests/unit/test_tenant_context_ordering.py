@@ -88,10 +88,14 @@ def test_update_media_buy_calls_auth_before_tenant():
     auth_pos = impl_source.find("require_principal_id(")
     if auth_pos == -1:
         auth_pos = impl_source.find("identity.principal_id")
-    tenant_pos = impl_source.find("identity.tenant")
+    # After the require_principal migration (#1088) the impl reads tenant via
+    # the require_tenant helper; accept either marker.
+    tenant_pos = impl_source.find("require_tenant(")
+    if tenant_pos == -1:
+        tenant_pos = impl_source.find("identity.tenant")
 
     assert auth_pos != -1, "principal-from-identity extraction not found in _update_media_buy_impl"
-    assert tenant_pos != -1, "identity.tenant not found in _update_media_buy_impl"
+    assert tenant_pos != -1, "tenant-from-identity extraction not found in _update_media_buy_impl"
 
     # Auth (identity.principal_id) must come before tenant access
     assert auth_pos < tenant_pos, (
