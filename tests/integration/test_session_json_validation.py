@@ -370,7 +370,7 @@ class TestIntegration:
             assert len(p.format_ids) == 1
             # format_ids is stored as a list of dicts in the database (not FormatId objects)
             # Database model: list[dict[str, str]] with keys: agent_url, id
-            assert p.format_ids[0]["id"] == "display_300x250"
+            assert p.format_ids[0].id == "display_300x250"  # typed FormatId column (#1172)
             assert p.targeting_template["geo_targets"] == ["US", "CA"]
 
             # Check principal

@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from src.core.exceptions import AdCPNotFoundError
-from src.core.schemas import SyncCreativeResult
+from src.core.schemas import FormatId, SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
 from src.core.tools.creatives._workflow import _send_creative_notifications
 from tests.harness import make_mock_uow
@@ -343,8 +343,9 @@ class TestLenientAssignmentSkip:
         # Mock product with different formats
         mock_product = Mock()
         mock_product.name = "Display Product"
+        # Typed column (#1172): ORM reads yield FormatId models, not dicts
         mock_product.format_ids = [
-            {"agent_url": "https://agent.example.com", "id": "display_300x250"},
+            FormatId(agent_url="https://agent.example.com", id="display_300x250"),
         ]
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]

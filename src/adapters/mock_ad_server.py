@@ -1544,10 +1544,16 @@ class MockAdServer(AdServerAdapter):
                             },
                         }
 
-                        # Handle format selection
+                        # Handle format selection. The form posts bare format id strings;
+                        # the typed format_ids column (#1172) stores FormatId objects, so
+                        # resolve each id's agent_url (cache or default) and persist objects.
                         formats = request.form.getlist("formats")
                         if formats:
-                            product_obj.format_ids = formats
+                            from src.core.format_cache import get_agent_url_for_format
+
+                            product_obj.format_ids = [
+                                {"agent_url": get_agent_url_for_format(fmt), "id": fmt} for fmt in formats
+                            ]
 
                         # Validate the configuration
                         validation_errors = self.validate_product_config(new_config)

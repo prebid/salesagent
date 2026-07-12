@@ -4,6 +4,10 @@ Tests that products with multiple format IDs:
 1. Can be created in the database
 2. Preserve all format_ids (not just the first one)
 3. Have correct agent URLs after migration
+
+Since GH #1172 the format_ids column is typed (JSONType(model=FormatId,
+is_list=True)) — ORM reads yield FormatId models, so assertions use typed
+attribute access (fmt.id, fmt.agent_url), not dict keys.
 """
 
 import pytest
@@ -11,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import attributes
 
 from src.core.database.models import Product, Tenant
+from src.core.schemas._base import FormatId
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -59,17 +64,16 @@ def test_create_product_with_multiple_format_ids(integration_db, test_tenant):
         assert product is not None, "Product should be created"
         assert len(product.format_ids) == 3, "All 3 format_ids should be saved"
 
-        # Verify each format_id has correct structure
-        format_ids_set = {fmt["id"] for fmt in product.format_ids}
+        # Verify each format_id has correct structure (typed FormatId models, #1172)
+        format_ids_set = {fmt.id for fmt in product.format_ids}
         assert format_ids_set == {"display_300x250", "display_728x90", "video_15s"}
 
-        # Verify all format_ids have agent_url field
+        # Verify all format_ids carry the agent_url namespace
         for fmt in product.format_ids:
-            assert "agent_url" in fmt, f"Format {fmt['id']} should have agent_url"
-            assert "id" in fmt, "Format should have id field"
+            assert isinstance(fmt, FormatId), f"Expected FormatId model, got {type(fmt).__name__}"
             # Verify agent_url is correct (not 'creatives')
-            assert "creative.adcontextprotocol.org" in fmt["agent_url"], (
-                f"Format {fmt['id']} should use 'creative' not 'creatives'"
+            assert "creative.adcontextprotocol.org" in str(fmt.agent_url), (
+                f"Format {fmt.id} should use 'creative' not 'creatives'"
             )
 
 
@@ -99,8 +103,8 @@ def test_update_product_format_ids_preserves_all_formats(integration_db, test_te
         stmt = select(Product).filter_by(product_id="update_format_product", tenant_id=test_tenant)
         product = session.scalars(stmt).first()
 
-        # Add a third format
-        product.format_ids.append({"agent_url": "https://creative.adcontextprotocol.org", "id": "video_30s"})
+        # Add a third format (typed column: append a FormatId model)
+        product.format_ids.append(FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_30s"))
 
         # Flag as modified
         attributes.flag_modified(product, "format_ids")
@@ -112,7 +116,7 @@ def test_update_product_format_ids_preserves_all_formats(integration_db, test_te
         product = session.scalars(stmt).first()
 
         assert len(product.format_ids) == 3, "All 3 format_ids should be saved"
-        format_ids_set = {fmt["id"] for fmt in product.format_ids}
+        format_ids_set = {fmt.id for fmt in product.format_ids}
         assert format_ids_set == {"display_300x250", "display_728x90", "video_30s"}
 
 
@@ -147,14 +151,16 @@ def test_product_format_ids_migration_compatibility(integration_db, test_tenant)
         stmt = select(Product).filter_by(product_id="legacy_format_product", tenant_id=test_tenant)
         product = session.scalars(stmt).first()
 
-        # Update all format_ids (migration logic)
-        updated_formats = []
-        for fmt in product.format_ids:
-            updated_fmt = fmt.copy()
-            updated_fmt["agent_url"] = updated_fmt["agent_url"].replace(
-                "creatives.adcontextprotocol.org", "creative.adcontextprotocol.org"
+        # Update all format_ids (migration logic) — typed models, rebuild with new URL
+        updated_formats = [
+            FormatId(
+                agent_url=str(fmt.agent_url).replace(
+                    "creatives.adcontextprotocol.org", "creative.adcontextprotocol.org"
+                ),
+                id=fmt.id,
             )
-            updated_formats.append(updated_fmt)
+            for fmt in product.format_ids
+        ]
 
         product.format_ids = updated_formats
         attributes.flag_modified(product, "format_ids")
@@ -169,7 +175,7 @@ def test_product_format_ids_migration_compatibility(integration_db, test_tenant)
 
         # Verify ALL have the new URL (this was the bug - only first one was updated)
         for i, fmt in enumerate(product.format_ids):
-            assert "creative.adcontextprotocol.org" in fmt["agent_url"], (
-                f"Format {i} should have migrated URL, got: {fmt['agent_url']}"
+            assert "creative.adcontextprotocol.org" in str(fmt.agent_url), (
+                f"Format {i} should have migrated URL, got: {fmt.agent_url}"
             )
-            assert "creatives.adcontextprotocol.org" not in fmt["agent_url"], f"Format {i} should not have old URL"
+            assert "creatives.adcontextprotocol.org" not in str(fmt.agent_url), f"Format {i} should not have old URL"

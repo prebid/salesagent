@@ -151,14 +151,11 @@ def _process_assignments(
                         product = assignment_repo.get_product_by_id(product_id)
 
                         if product and product.format_ids:
-                            # Build set of supported formats (agent_url, format_id) tuples
-                            supported_formats: set[tuple[str, str]] = set()
-                            for fmt in product.format_ids:
-                                if isinstance(fmt, dict):
-                                    agent_url_val = fmt.get("agent_url")
-                                    format_id_val = fmt.get("id") or fmt.get("format_id")
-                                    if agent_url_val and format_id_val:
-                                        supported_formats.add((str(agent_url_val), str(format_id_val)))
+                            # Build set of supported formats (agent_url, format_id) tuples.
+                            # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+                            supported_formats: set[tuple[str, str]] = {
+                                (str(fmt.agent_url), fmt.id) for fmt in product.format_ids
+                            }
 
                             # Check creative format against supported formats
                             creative_agent_url = db_creative_result.agent_url

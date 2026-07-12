@@ -259,13 +259,10 @@ def _validate_creatives_for_assignment(
     display_name = product_name or getattr(product, "name", None) or getattr(product, "product_id", "")
 
     # Build the set of supported (normalized_agent_url, format_id) pairs.
-    supported_formats: set[tuple[str | None, str]] = set()
-    for fmt in product.format_ids:
-        if isinstance(fmt, dict):
-            agent_url = fmt.get("agent_url")
-            format_id = fmt.get("id") or fmt.get("format_id")
-            if format_id:
-                supported_formats.add((_normalize_creative_agent_url(agent_url), format_id))
+    # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+    supported_formats: set[tuple[str | None, str]] = {
+        (_normalize_creative_agent_url(str(fmt.agent_url)), fmt.id) for fmt in product.format_ids
+    }
 
     if not supported_formats:
         return  # No usable format restrictions — allow all.

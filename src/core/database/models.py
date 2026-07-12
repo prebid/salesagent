@@ -34,6 +34,7 @@ from sqlalchemy.sql import func
 from src.core.database.json_type import JSONType
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
+from src.core.schemas._base import FormatId
 
 logger = logging.getLogger(__name__)
 
@@ -235,9 +236,10 @@ class Product(Base, JSONValidatorMixin):
     product_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Type hint: list of FormatId dicts with {agent_url: str, id: str}
-    # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
-    format_ids: Mapped[list[dict[str, str]]] = mapped_column(JSONType, nullable=False)
+    # Typed at the DB boundary (#1172): reads yield list[FormatId], writes accept
+    # models or dicts. Validated at database level via CHECK constraint
+    # (see migrations: rename_formats_to_format_ids, allow_width_height_duration_in_format)
+    format_ids: Mapped[list[FormatId]] = mapped_column(JSONType(model=FormatId, is_list=True), nullable=False)
     # Type hint: targeting template dict structure
     targeting_template: Mapped[dict] = mapped_column(JSONType, nullable=False)
     delivery_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -347,10 +349,10 @@ class Product(Base, JSONValidatorMixin):
 
     # Effective properties - auto-resolve from inventory profile if set
     @property
-    def effective_format_ids(self) -> list[dict[str, str]]:
+    def effective_format_ids(self) -> list[FormatId]:
         """Get format_ids from inventory profile (if set) or product itself.
 
-        Returns format_ids as list of FormatId dicts: [{"agent_url": str, "id": str}, ...]
+        Returns typed FormatId models (#1172 — the column TypeDecorator coerces on read).
         When inventory_profile_id is set, returns current profile's format_ids (auto-updates).
         When inventory_profile_id is null, returns product's own format_ids.
 
@@ -1465,10 +1467,9 @@ class InventoryProfile(Base, JSONValidatorMixin):
     # }
     inventory_config: Mapped[dict] = mapped_column(JSONType, nullable=False)
 
-    # Creative formats (FormatId objects)
-    # Structure: [{"agent_url": "...", "id": "display_300x250_image"}]
+    # Creative formats — typed at the DB boundary (#1172): list[FormatId].
     # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
-    format_ids: Mapped[list] = mapped_column(JSONType, nullable=False)
+    format_ids: Mapped[list[FormatId]] = mapped_column(JSONType(model=FormatId, is_list=True), nullable=False)
 
     # Publisher properties (AdCP spec-compliant)
     # Structure: [

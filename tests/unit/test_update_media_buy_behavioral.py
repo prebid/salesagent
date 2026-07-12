@@ -33,6 +33,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import (
     Budget,
+    FormatId,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuySubmitted,
@@ -1258,7 +1259,7 @@ class TestUC003UpdateCreativeIds:
 
             # Product with only "display" format
             mock_product = MagicMock()
-            mock_product.format_ids = [{"agent_url": "http://test.com", "id": "display"}]
+            mock_product.format_ids = [FormatId(agent_url="http://test.com", id="display")]
             mock_product.name = "Display Product"
             uow.products.get_by_id.return_value = mock_product
 

@@ -43,6 +43,7 @@ from src.core.schemas import (
     CreateMediaBuyResult,
     CreateMediaBuySuccess,
     DeliveryTotals,
+    FormatId,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
     GetMediaBuysMediaBuy,
@@ -131,7 +132,7 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
     product.name = "Test Product"
     product.pricing_options = [pricing_option]
     product.delivery_type = "non_guaranteed"
-    product.format_ids = [{"agent_url": "http://agent.test", "id": "fmt_1"}]
+    product.format_ids = [FormatId(agent_url="http://agent.test", id="fmt_1")]
     return product
 
 
@@ -967,7 +968,7 @@ class TestCreateMediaBuyCreativeValidation:
         # Product only accepts display_300x250
         mock_product = MagicMock()
         mock_product.product_id = "prod_display"
-        mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
+        mock_product.format_ids = [FormatId(agent_url="http://agent.test", id="display_300x250")]
 
         package = MagicMock()
         package.creative_ids = ["c_mismatch"]
@@ -2552,7 +2553,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_package.package_config = {"product_id": "prod_1"}
 
         mock_product = MagicMock()
-        mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
+        mock_product.format_ids = [FormatId(agent_url="http://agent.test", id="display_300x250")]
         mock_product.name = "Test Product"
         mock_product.placements = None
 
@@ -2638,7 +2639,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_package.package_config = {"product_id": "prod_1"}
 
         mock_product = MagicMock()
-        mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
+        mock_product.format_ids = [FormatId(agent_url="http://agent.test", id="display_300x250")]
         mock_product.name = "Test Product"
         mock_product.placements = None
 

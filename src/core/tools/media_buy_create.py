@@ -452,16 +452,11 @@ def _validate_creatives_before_adapter_call(
         )
         products_list = list(session.scalars(product_stmt).all())
 
-        # Build product_id -> set of accepted format id strings
-        product_format_map: dict[str, set[str]] = {}
-        for product in products_list:
-            accepted_formats: set[str] = set()
-            if product.format_ids:
-                for fmt in product.format_ids:
-                    fmt_id = fmt.get("id")
-                    if fmt_id:
-                        accepted_formats.add(str(fmt_id))
-            product_format_map[product.product_id] = accepted_formats
+        # Build product_id -> set of accepted format id strings.
+        # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+        product_format_map: dict[str, set[str]] = {
+            product.product_id: {fmt.id for fmt in product.format_ids or []} for product in products_list
+        }
 
         # Check each package's creatives against its product's accepted formats
         for package in packages:
@@ -937,23 +932,15 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     if delivery_type_str not in ["guaranteed", "non_guaranteed"]:
                         delivery_type_str = "non_guaranteed"  # Default fallback
 
-                    # Convert formats to FormatId objects with comprehensive validation
-                    format_ids_list: list[FormatId] = []
-                    formats = product.format_ids or []
-
-                    logger.debug(f"[APPROVAL] Converting {len(formats)} formats for package {package_id}")
-
-                    for idx, fmt in enumerate(formats):
-                        try:
-                            validated = FormatId.model_validate(fmt)
-                            url_str = str(validated.agent_url)
-                            if not url_str.startswith(("http://", "https://")):
-                                raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
-                            format_ids_list.append(validated)
-                        except (ValueError, ValidationError) as e:
+                    # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+                    # Only business validation remains: agent_url must be HTTP(S).
+                    format_ids_list: list[FormatId] = list(product.format_ids or [])
+                    for idx, fmt in enumerate(format_ids_list):
+                        url_str = str(fmt.agent_url)
+                        if not url_str.startswith(("http://", "https://")):
                             error_msg = (
                                 f"Failed to reconstruct package {package_id}: "
-                                f"Format validation failed at index {idx}: {e}"
+                                f"Format validation failed at index {idx}: agent_url must be HTTP(S), got: {url_str}"
                             )
                             logger.error(f"[APPROVAL] {error_msg}")
                             return False, error_msg

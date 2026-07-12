@@ -337,7 +337,7 @@ class TestInventoryProfileTransitions:
             )
 
             # Verify we have the expected profile_a data
-            profile_a_format_ids = [f["id"] for f in profile_a_obj.format_ids]
+            profile_a_format_ids = [f.id for f in profile_a_obj.format_ids]  # typed FormatId column (#1172)
             assert "format_a1" in profile_a_format_ids
             assert "format_a2" in profile_a_format_ids
 
@@ -354,7 +354,7 @@ class TestInventoryProfileTransitions:
             )
 
             # Verify we now have profile_b data
-            profile_b_format_ids = [f["id"] for f in profile_b_obj.format_ids]
+            profile_b_format_ids = [f.id for f in profile_b_obj.format_ids]
             assert "format_b1" in profile_b_format_ids
             assert "format_b2" in profile_b_format_ids
 

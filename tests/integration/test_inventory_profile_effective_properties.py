@@ -188,7 +188,7 @@ class TestEffectiveFormats:
 
             # Should NOT return product's custom formats
             assert effective != product.format_ids
-            assert product.format_ids[0]["id"] == "ignored_format"
+            assert product.format_ids[0].id == "ignored_format"  # typed FormatId column (#1172)
 
     @pytest.mark.requires_db
     def test_effective_formats_returns_custom_formats_when_profile_not_set(self, integration_db, test_product_custom):

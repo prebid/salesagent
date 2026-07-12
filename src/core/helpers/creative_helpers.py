@@ -453,43 +453,19 @@ def validate_creative_format_against_product(
         return str(url_val).rstrip("/")
 
     # Simple equality check: does creative's format_id match any product format_id?
+    # format_ids entries are typed FormatId models on both the ORM (#1172, column
+    # TypeDecorator) and schema (Pydantic-coerced) paths — no shape re-parsing.
     for product_format in product_format_ids:
-        # Handle both FormatId objects and dicts (database stores as dicts)
-        if isinstance(product_format, dict):
-            product_agent_url: str | None = product_format.get("agent_url")
-            product_fmt_id: str | None = product_format.get("id") or product_format.get("format_id")
-        elif isinstance(product_format, LibraryFormatId):
-            # Convert AnyUrl to string for consistent comparison
-            product_agent_url = str(product_format.agent_url) if product_format.agent_url else None
-            product_fmt_id = product_format.id
-        else:
-            # Skip invalid format entries
-            continue
-
-        if not product_agent_url or not product_fmt_id:
-            continue
-
         # Format IDs match if both agent_url and id are equal (normalized to strip trailing slashes)
-        if normalize_url(creative_agent_url) == normalize_url(product_agent_url) and creative_id == product_fmt_id:
+        if (
+            normalize_url(creative_agent_url) == normalize_url(product_format.agent_url)
+            and creative_id == product_format.id
+        ):
             return True, None
 
-    # Build error message with supported formats
-    supported_formats = []
-    for fmt in product_format_ids:
-        # Handle both FormatId objects and dicts
-        if isinstance(fmt, dict):
-            agent_url: str | None = fmt.get("agent_url")
-            fmt_id: str | None = fmt.get("id") or fmt.get("format_id")
-        elif isinstance(fmt, LibraryFormatId):
-            # Convert AnyUrl to string for consistent handling
-            agent_url = str(fmt.agent_url) if fmt.agent_url else None
-            fmt_id = fmt.id
-        else:
-            continue
-
-        if agent_url and fmt_id:
-            # Use normalized URL in display to avoid double slashes
-            supported_formats.append(f"{normalize_url(agent_url)}/{fmt_id}")
+    # Build error message with supported formats.
+    # Normalized URL in display avoids double slashes.
+    supported_formats = [f"{normalize_url(fmt.agent_url)}/{fmt.id}" for fmt in product_format_ids]
 
     creative_format_display = f"{normalize_url(creative_agent_url)}/{creative_id}"
     error_msg = (

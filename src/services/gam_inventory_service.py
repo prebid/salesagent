@@ -1237,17 +1237,20 @@ class GAMInventoryService:
         if not product:
             return []
 
-        # Extract product characteristics
+        # Extract product characteristics.
+        # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
         creative_sizes: list[dict[str, int]] = []
-        if product.format_ids:
-            # Parse formats to get sizes
-            for format_id in product.format_ids:
-                if isinstance(format_id, str) and "display" in format_id:
-                    # Extract size from format like "display_300x250"
-                    parts = format_id.split("_")
-                    if len(parts) > 1 and "x" in parts[1]:
-                        width, height = parts[1].split("x")
-                        creative_sizes.append({"width": int(width), "height": int(height)})
+        for fmt in product.format_ids or []:
+            dimensions = fmt.get_dimensions()
+            if dimensions is None and "display" in fmt.id:
+                # Fall back to sizes encoded in the id, e.g. "display_300x250"
+                parts = fmt.id.split("_")
+                if len(parts) > 1 and "x" in parts[1]:
+                    width_str, _, height_str = parts[1].partition("x")
+                    if width_str.isdigit() and height_str.isdigit():
+                        dimensions = (int(width_str), int(height_str))
+            if dimensions is not None:
+                creative_sizes.append({"width": dimensions[0], "height": dimensions[1]})
 
         # Get keywords from product name and description
         keywords: list[str] = []

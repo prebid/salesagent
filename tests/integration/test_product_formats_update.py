@@ -84,10 +84,11 @@ def test_product_formats_update_with_flag_modified(integration_db, sample_produc
         stmt = select(Product).filter_by(product_id=sample_product)
         product = session.scalars(stmt).first()
         assert product is not None
+        # Typed column (#1172): ORM reads yield FormatId models
         assert len(product.format_ids) == 3
-        assert product.format_ids[0]["id"] == "new_format_1"
-        assert product.format_ids[1]["id"] == "new_format_2"
-        assert product.format_ids[2]["id"] == "new_format_3"
+        assert product.format_ids[0].id == "new_format_1"
+        assert product.format_ids[1].id == "new_format_2"
+        assert product.format_ids[2].id == "new_format_3"
 
 
 @pytest.mark.requires_db
@@ -122,9 +123,10 @@ def test_product_formats_update_without_flag_modified_fails(integration_db, samp
         product = session.scalars(stmt).first()
         assert product is not None
         # Changes were saved because we reassigned the entire field
+        # (typed column, #1172: ORM reads yield FormatId models)
         assert len(product.format_ids) == 2
-        assert product.format_ids[0]["id"] == "should_save_1"
-        assert product.format_ids[1]["id"] == "should_save_2"
+        assert product.format_ids[0].id == "should_save_1"
+        assert product.format_ids[1].id == "should_save_2"
 
 
 @pytest.mark.requires_db

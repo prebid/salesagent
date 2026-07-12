@@ -202,7 +202,7 @@ class TestFormatValidationAgentUp:
             ).first()
             assert product is not None, "Product should have been saved"
             assert len(product.format_ids) == 1
-            assert product.format_ids[0]["id"] == "display_image"
+            assert product.format_ids[0].id == "display_image"  # typed FormatId column (#1172)
 
     def test_invalid_format_ids_rejected(self, app_client, tenant_with_prereqs):
         """Submitting format IDs that DON'T exist in the agent → flash error, not saved."""
@@ -240,7 +240,7 @@ class TestFormatValidationAgentDown:
             ).first()
             assert product is not None, "Product should save when agent is down (graceful degradation)"
             assert len(product.format_ids) == 1
-            assert product.format_ids[0]["id"] == "video_standard"
+            assert product.format_ids[0].id == "video_standard"  # typed FormatId column (#1172)
 
 
 class TestFormatValidationNoFormatsNoErrors:

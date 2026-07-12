@@ -3433,7 +3433,7 @@ class TestFormatCompatibility:
                 mock_db,
                 creative_agent_url="https://creative.example.com",
                 creative_format="display_300x250",
-                product_format_ids=[{"agent_url": "https://creative.example.com/mcp/", "id": "display_300x250"}],
+                product_format_ids=[FormatId(agent_url="https://creative.example.com/mcp/", id="display_300x250")],
             )
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
@@ -3464,7 +3464,7 @@ class TestFormatCompatibility:
                 mock_db,
                 creative_agent_url="https://creative.example.com",
                 creative_format="video_30s",
-                product_format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250"}],
+                product_format_ids=[FormatId(agent_url="https://creative.example.com", id="display_300x250")],
             )
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
@@ -3512,23 +3512,23 @@ class TestFormatCompatibility:
             # Should succeed regardless of creative format
             assert len(assignment_list) == 1
 
-    def test_product_format_ids_dual_key_support(self):
-        """Format match checks both 'id' and 'format_id' key names.
+    def test_product_format_ids_typed_key_match(self):
+        """Format match uses the typed FormatId.id attribute.
 
         Spec: UNSPECIFIED (implementation-defined format compatibility logic).
-        Product format_ids dicts can use either 'id' or 'format_id' key
-        (line 112 of _assignments.py: fmt.get('id') or fmt.get('format_id')).
+        Since GH #1172 the format_ids column is typed (JSONType(model=FormatId,
+        is_list=True)) — ORM reads yield FormatId models, so the legacy dict
+        'format_id' key path was retired; matching goes through fmt.id.
         Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-05
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            # Use 'format_id' key instead of 'id'
             self._setup_assignment_mocks(
                 mock_db,
                 creative_agent_url="https://creative.example.com",
                 creative_format="display_300x250",
-                product_format_ids=[{"agent_url": "https://creative.example.com", "format_id": "display_300x250"}],
+                product_format_ids=[FormatId(agent_url="https://creative.example.com", id="display_300x250")],
             )
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
@@ -3540,7 +3540,7 @@ class TestFormatCompatibility:
                 principal_id="principal_1",
             )
 
-            # Should match via 'format_id' key
+            # Should match via the typed FormatId.id attribute
             assert len(assignment_list) == 1
 
     def test_package_without_product_skips_format_check(self):
@@ -4454,7 +4454,7 @@ class TestExtensionGaps:
             mock_assignment_repo.get_creative_by_id.return_value = mock_creative
 
             mock_product = MagicMock()
-            mock_product.format_ids = [{"agent_url": "https://agent.example.com", "id": "display_300x250"}]
+            mock_product.format_ids = [FormatId(agent_url="https://agent.example.com", id="display_300x250")]
             mock_product.name = "Display Only Product"
             mock_assignment_repo.get_product_by_id.return_value = mock_product
 

@@ -52,8 +52,8 @@ class TestProductFormatFieldPersistence:
             reloaded = repo.get_by_id(product.product_id)
             assert reloaded is not None
             assert len(reloaded.format_ids) == 2
-            assert reloaded.format_ids[0]["id"] == "video_16x9"
-            assert reloaded.format_ids[1]["id"] == "display_728x90"
+            assert reloaded.format_ids[0].id == "video_16x9"  # typed FormatId column (#1172)
+            assert reloaded.format_ids[1].id == "display_728x90"
 
     def test_update_formats_raises_via_repository(self, integration_db):
         """Using 'formats' (wrong column name) through the repository raises ValueError.
