@@ -59,7 +59,7 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
-from src.core.auth import get_principal_object, require_identity, require_tenant
+from src.core.auth import find_principal, require_identity, require_tenant
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.exceptions import (
@@ -118,7 +118,7 @@ def _get_media_buys_impl(
             ],
         )
 
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
+    principal = find_principal(identity)
     if not principal:
         return GetMediaBuysResponse(
             media_buys=[],

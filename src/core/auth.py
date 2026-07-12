@@ -357,6 +357,20 @@ def require_principal(
     return resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=context)
 
 
+def find_principal(identity: "ResolvedIdentity | None") -> Principal | None:
+    """Return the identity's Principal, or None when unauthenticated.
+
+    Soft counterpart of ``require_principal`` for tools where a missing
+    principal is a normal case (anonymous discovery, degrade-to-error lists).
+    Same transitional DB fallback for pre-boundary construction sites.
+    """
+    if identity is None or not identity.principal_id:
+        return None
+    if identity.principal is not None:
+        return identity.principal
+    return get_principal_object(identity.principal_id, tenant_id=identity.tenant_id)
+
+
 def require_principal_id(
     identity: "ResolvedIdentity | None",
     *,

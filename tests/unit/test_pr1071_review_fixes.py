@@ -137,7 +137,7 @@ class TestBrandExtractionFromPydanticModel:
         )
 
         with (
-            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.find_principal", return_value=None),
             patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
         ):
             mock_uow = MagicMock()
@@ -183,7 +183,7 @@ class TestAuditLogBrandFieldName:
         )
 
         with (
-            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.find_principal", return_value=None),
             patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
             patch("src.core.tools.products.get_audit_logger") as mock_audit_logger,
         ):

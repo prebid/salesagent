@@ -28,7 +28,7 @@ from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
 
-from src.core.auth import get_principal_object, require_identity, require_principal_id, require_tenant
+from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ActivateSignalRequest,
@@ -268,9 +268,6 @@ async def _activate_signal_impl(
     identity = require_identity(identity, context=context)
     principal_id = require_principal_id(identity, context=context)
     require_tenant(identity, context=context)
-
-    # Get the Principal object with ad server mappings
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
 
     testing_ctx = identity.testing_context or AdCPTestContext()
     campaign_info = {"endpoint": "activate_signal", "signal_id": signal_agent_segment_id}

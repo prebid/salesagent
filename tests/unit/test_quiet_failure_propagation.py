@@ -51,7 +51,7 @@ def _base_patches(mock_uow, convert_fn=None):
         convert_fn = lambda p, **kw: p  # noqa: E731
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-        patch("src.core.tools.products.get_principal_object", return_value=None),
+        patch("src.core.tools.products.find_principal", return_value=None),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
     ]
 
@@ -158,7 +158,7 @@ class TestDynamicPricingExceptionPropagation:
 
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.find_principal", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -195,7 +195,7 @@ class TestDynamicPricingExceptionPropagation:
 
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.find_principal", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -306,7 +306,7 @@ class TestAdapterAnnotationExceptionPropagation:
 
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=mock_principal),
+            patch("src.core.tools.products.find_principal", return_value=mock_principal),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",

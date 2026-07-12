@@ -313,7 +313,7 @@ class TestGetAdcpCapabilitiesWithTenant:
                     protocol="mcp",
                 )
 
-                with patch("src.core.tools.capabilities.get_principal_object") as mock_principal:
+                with patch("src.core.tools.capabilities.find_principal") as mock_principal:
                     mock_principal.return_value = MagicMock()
 
                     with patch("src.core.tools.capabilities.get_adapter") as mock_get_adapter:
@@ -410,10 +410,10 @@ def _patch_capabilities_deps(
 
     # Mock get_principal_object
     if adapter is not None:
-        stack.enter_context(patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()))
+        stack.enter_context(patch("src.core.tools.capabilities.find_principal", return_value=MagicMock()))
         stack.enter_context(patch("src.core.tools.capabilities.get_adapter", return_value=adapter))
     else:
-        stack.enter_context(patch("src.core.tools.capabilities.get_principal_object", return_value=None))
+        stack.enter_context(patch("src.core.tools.capabilities.find_principal", return_value=None))
 
     return stack
 
@@ -520,7 +520,7 @@ class TestGracefulDegradation:
         with (
             patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
             patch("src.core.tools.capabilities.log_tool_activity"),
-            patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()),
+            patch("src.core.tools.capabilities.find_principal", return_value=MagicMock()),
             patch("src.core.tools.capabilities.get_adapter", side_effect=Exception("Adapter init failed")),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
@@ -540,7 +540,7 @@ class TestGracefulDegradation:
         with (
             patch("src.core.tools.capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
             patch("src.core.tools.capabilities.log_tool_activity"),
-            patch("src.core.tools.capabilities.get_principal_object", return_value=None),
+            patch("src.core.tools.capabilities.find_principal", return_value=None),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 
