@@ -2,16 +2,33 @@
 
 import hmac
 import logging
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
 from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal, Tenant
 
+if TYPE_CHECKING:
+    from src.core.schemas import Principal as SchemaPrincipal
+
 logger = logging.getLogger(__name__)
 
 
-def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[str | None, dict | None]:
+def _to_schema_principal(principal: Principal) -> "SchemaPrincipal":
+    """Convert the ORM row (already loaded at the boundary) to the schema Principal."""
+    from src.core.schemas import Principal as SchemaPrincipal
+
+    return SchemaPrincipal(
+        principal_id=principal.principal_id,
+        name=principal.name,
+        platform_mappings=principal.platform_mappings,
+    )
+
+
+def get_principal_from_token(
+    token: str, tenant_id: str | None = None
+) -> tuple[str | None, dict | None, "SchemaPrincipal | None"]:
     """Looks up a principal_id from the database using a token with retry logic.
 
     If tenant_id is provided, only looks in that specific tenant.
@@ -22,8 +39,11 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
         tenant_id: Optional tenant ID to restrict search
 
     Returns:
-        (principal_id, tenant_dict) tuple. tenant_dict is only populated when
-        the tenant was discovered from a global token lookup (no tenant_id provided).
+        (principal_id, tenant_dict, principal) tuple. tenant_dict is only
+        populated when the tenant was discovered from a global token lookup
+        (no tenant_id provided). ``principal`` is the schema Principal built
+        from the row already loaded here — the boundary's eager principal
+        (#1088), costing zero extra queries. Admin tokens yield principal=None.
     """
 
     def _lookup_principal(session):
@@ -32,16 +52,16 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
             stmt = select(Principal).filter_by(access_token=token, tenant_id=tenant_id)
             principal = session.scalars(stmt).first()
             if principal:
-                return principal.principal_id, None
+                return principal.principal_id, None, _to_schema_principal(principal)
 
             # Check if it's the admin token for this specific tenant
             tenant_stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
             tenant_obj = session.scalars(tenant_stmt).first()
             if tenant_obj and tenant_obj.admin_token and hmac.compare_digest(tenant_obj.admin_token, token):
                 logger.debug("Token matches admin token for tenant '%s'", tenant_id)
-                return f"{tenant_id}_admin", None
+                return f"{tenant_id}_admin", None, None
 
-            return None, None
+            return None, None, None
         else:
             # No tenant specified - search globally
             stmt = select(Principal).filter_by(access_token=token)
@@ -57,7 +77,7 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
                     from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
                     tenant_dict = serialize_tenant_to_dict(tenant)
-                    return principal.principal_id, tenant_dict
+                    return principal.principal_id, tenant_dict, _to_schema_principal(principal)
                 else:
                     logger.error(
                         f"[AUTH] ERROR: Tenant NOT FOUND for tenant_id={principal.tenant_id} with is_active=True"
@@ -72,10 +92,10 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
             else:
                 logger.error(f"[AUTH] ERROR: Principal NOT FOUND for token {token[:20]}...")
 
-        return None, None
+        return None, None, None
 
     try:
         return execute_with_retry(_lookup_principal)
     except Exception as e:
         logger.error(f"[AUTH] Database error during principal lookup: {e}", exc_info=True)
-        return None, None
+        return None, None, None

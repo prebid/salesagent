@@ -255,7 +255,7 @@ def get_principal_from_context(
         logger.debug("Using global token lookup (finds tenant from token)")
         detection_method = "global token lookup"
 
-    principal_id, token_tenant = get_principal_from_token(auth_token, requested_tenant_id)
+    principal_id, token_tenant, _principal = get_principal_from_token(auth_token, requested_tenant_id)
 
     # If token was provided but invalid, raise an error (unless require_valid_token=False for discovery)
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)

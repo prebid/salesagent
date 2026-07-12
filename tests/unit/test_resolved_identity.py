@@ -85,7 +85,7 @@ class TestResolveIdentity:
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
     def test_resolve_with_tenant_header_and_token(self, mock_get_subdomain, mock_get_vhost, mock_get_principal):
         """resolve_identity() extracts tenant from x-adcp-tenant header and validates token."""
-        mock_get_principal.return_value = ("principal_123", None)
+        mock_get_principal.return_value = ("principal_123", None, None)
         mock_get_subdomain.return_value = {
             "tenant_id": "test_tenant",
             "name": "Test Tenant",
@@ -112,7 +112,7 @@ class TestResolveIdentity:
             "tenant_id": "acme",
             "name": "Acme Corp",
         }
-        mock_get_principal.return_value = ("principal_456", None)
+        mock_get_principal.return_value = ("principal_456", None, None)
 
         identity = resolve_identity(
             headers={"host": "acme.example.com", "x-adcp-auth": "tok_xyz"},

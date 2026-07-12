@@ -29,6 +29,11 @@ class ResolvedIdentity(BaseModel, frozen=True):
     """
 
     principal_id: str | None = None
+    # Eagerly-loaded schema Principal (#1088): populated at the boundary from
+    # the row the token lookup already fetched — zero extra queries. None for
+    # admin tokens, unauthenticated identities, and pre-#1088 construction
+    # sites (each must populate or prove unreachable before _impl migration).
+    principal: Any = None  # schemas.Principal | None (Any avoids import cycle)
     tenant_id: str | None = None
     tenant: Any = None  # TenantContext | dict[str, Any] | None (transitional)
     auth_token: str | None = None
@@ -166,8 +171,9 @@ def resolve_identity(
 
     # Step 3: Validate token → principal_id (and discover tenant from token if needed)
     principal_id = None
+    principal = None
     if auth_token:
-        principal_id, token_tenant = get_principal_from_token(auth_token, tenant_id)
+        principal_id, token_tenant, principal = get_principal_from_token(auth_token, tenant_id)
 
         if principal_id is None:
             if require_valid_token:
@@ -195,6 +201,7 @@ def resolve_identity(
 
     return ResolvedIdentity(
         principal_id=principal_id,
+        principal=principal,
         tenant_id=tenant_id,
         tenant=tenant_model,
         auth_token=auth_token,
