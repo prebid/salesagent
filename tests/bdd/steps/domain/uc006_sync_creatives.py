@@ -30,6 +30,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.format_assertions import assert_wire_format_id_is_object
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -7003,4 +7004,127 @@ def then_no_operation_level_errors(ctx: dict) -> None:
     operation_errors = getattr(response, "errors", None)
     assert operation_errors is None, (
         f"success variant must not carry operation-level errors[]; got {operation_errors!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Format_id roundtrip on sync (T-UC-006-storyboard-format-id-roundtrip-on-sync)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the Buyer Agent captured a format_id {agent_url, id} from a prior get_products response")
+def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
+    """Call get_products in-process to capture the seller's advertised format_id.
+
+    Mirrors the UC-005 roundtrip capture (uc005_format_id_roundtrip.py): seeds a
+    Product whose format_ids entry matches the format the sync path accepts on the
+    current transport (``_product_format_entry``), then calls ``_get_products_impl``
+    with the env identity and captures ``products[].format_ids[0]`` verbatim.
+
+    TRANSPORT-BYPASS: the capture is scenario seeding, not a When dispatch — the
+    transport only varies the subsequent sync_creatives call in the When step.
+    """
+    import asyncio
+
+    from src.core.schemas import GetProductsRequest
+    from src.core.tools.products import _get_products_impl
+    from tests.factories import PricingOptionFactory, ProductFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    product = ProductFactory(
+        tenant=ctx["tenant"],
+        product_id=_e2e_unique_id("prod-fmt-roundtrip") if is_e2e(ctx) else "prod-fmt-roundtrip-001",
+        format_ids=[_product_format_entry(ctx, env)],
+    )
+    PricingOptionFactory(product=product)
+    env._commit_factory_data()
+
+    req = GetProductsRequest(brief="format_id roundtrip on sync")
+    response = asyncio.run(_get_products_impl(req, env.identity))
+
+    assert response.products, "get_products returned no products — cannot capture format_id"
+    matching = [p for p in response.products if p.product_id == product.product_id]
+    assert matching, f"seeded product {product.product_id!r} not in get_products response"
+    assert matching[0].format_ids, "seeded product has no format_ids — cannot capture format_id"
+
+    fid = matching[0].format_ids[0]
+    captured = {"agent_url": str(fid.agent_url), "id": str(fid.id)}
+    # Shape guard: the captured reference must already be the {agent_url, id} object.
+    assert_wire_format_id_is_object(captured)
+    ctx["captured_format_id"] = captured
+
+
+@when("the Buyer Agent sends sync_creatives carrying a creative whose format_id matches the captured object")
+def when_sync_creative_with_captured_format_id(ctx: dict) -> None:
+    """Sync a creative whose format_id is the EXACT object captured from get_products."""
+    env = ctx["env"]
+    captured = ctx["captured_format_id"]
+
+    # Assets matching the (display) format on the current transport.
+    _, _, assets = _format_payload(ctx, env)
+    creative_id = _e2e_unique_id("creative-fmt-roundtrip") if is_e2e(ctx) else "creative-fmt-roundtrip-001"
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": "Roundtrip Creative (seller's own format_id)",
+        "format_id": dict(captured),
+        "assets": assets,
+    }
+    ctx["creatives"] = [creative_payload]
+    ctx["creative_id"] = creative_id
+    dispatch_request(ctx, creatives=ctx["creatives"])
+
+
+@then('the per-creative result should NOT report action "failed" due to format_id rejection')
+def then_per_creative_result_not_failed_on_format_id(ctx: dict) -> None:
+    """The seller MUST accept its own advertised format_id on sync_creatives.
+
+    Success-path assertion on the typed response payload (per tests/CLAUDE.md
+    error-verification policy — wire-envelope asserts are for error paths; the
+    CreativeSyncEnv A2A dispatcher does not stash a success wire body).
+    """
+    assert ctx.get("error") is None, (
+        f"sync_creatives raised an operation-level error for the seller's own "
+        f"format_id {ctx['captured_format_id']!r}: {ctx.get('error')!r}"
+    )
+    response = ctx.get("response")
+    assert response is not None, "expected a sync_creatives response payload"
+    results = response.creatives
+    assert results, "expected at least one per-creative result"
+
+    entry = next((r for r in results if r.creative_id == ctx["creative_id"]), None)
+    assert entry is not None, (
+        f"no per-creative result for {ctx['creative_id']!r}; got {[r.creative_id for r in results]}"
+    )
+    action = _action_str(entry.action)
+    assert action != "failed", (
+        f"seller rejected its OWN advertised format_id {ctx['captured_format_id']!r} "
+        f"(catalog does not roundtrip): action={action!r}, errors={entry.errors!r}"
+    )
+
+
+@then("the seller's own format_id object should roundtrip through sync_creatives without modification")
+def then_format_id_roundtrips_unmodified_through_sync(ctx: dict) -> None:
+    """The persisted creative carries the captured {agent_url, id} pair verbatim.
+
+    The sync_creatives response does not echo format_id, so "roundtrip without
+    modification" is proven at the persistence boundary: the stored creative's
+    (agent_url, format) columns must equal the captured object exactly.
+    """
+    from src.core.database.models import Creative as CreativeModel
+
+    env = ctx["env"]
+    if not getattr(env, "use_real_db", False):
+        pytest.xfail("harness does not provide a DB session — cannot verify persistence")
+
+    captured = ctx["captured_format_id"]
+    tenant_id = getattr(ctx.get("tenant"), "tenant_id", None) or env._tenant_id
+    creative = env.get_one(CreativeModel, tenant_id=tenant_id, creative_id=ctx["creative_id"])
+    assert creative is not None, f"creative {ctx['creative_id']!r} was not persisted"
+
+    persisted = {"agent_url": creative.agent_url, "id": creative.format}
+    assert_wire_format_id_is_object(persisted)
+    assert persisted == captured, (
+        f"format_id was modified through sync_creatives: sent {captured!r}, persisted {persisted!r}"
     )

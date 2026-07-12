@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from src.core.testing_context import TestingContext
 
 from src.core.schemas import Creative
+from src.core.validation import normalize_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -445,29 +446,27 @@ def validate_creative_format_against_product(
     if not creative_agent_url or not creative_id:
         return False, "Creative format_id is missing agent_url or id"
 
-    # Helper to normalize URLs for comparison (strip trailing slashes)
-    # Pydantic AnyUrl adds trailing slash when converting to string, causing mismatches
-    def normalize_url(url_val: Any) -> str:
-        if not url_val:
-            return ""
-        return str(url_val).rstrip("/")
+    # normalize_agent_url is the shared comparison normalizer (strips trailing
+    # slashes and transport suffixes like /mcp) — Pydantic AnyUrl adds a trailing
+    # slash when converting to string, which would otherwise cause mismatches.
+    normalized_creative_url = normalize_agent_url(str(creative_agent_url))
 
     # Simple equality check: does creative's format_id match any product format_id?
     # format_ids entries are typed FormatId models on both the ORM (#1172, column
     # TypeDecorator) and schema (Pydantic-coerced) paths — no shape re-parsing.
     for product_format in product_format_ids:
-        # Format IDs match if both agent_url and id are equal (normalized to strip trailing slashes)
+        # Format IDs match if both agent_url and id are equal (normalized)
         if (
-            normalize_url(creative_agent_url) == normalize_url(product_format.agent_url)
+            normalized_creative_url == normalize_agent_url(str(product_format.agent_url))
             and creative_id == product_format.id
         ):
             return True, None
 
     # Build error message with supported formats.
     # Normalized URL in display avoids double slashes.
-    supported_formats = [f"{normalize_url(fmt.agent_url)}/{fmt.id}" for fmt in product_format_ids]
+    supported_formats = [f"{normalize_agent_url(str(fmt.agent_url))}/{fmt.id}" for fmt in product_format_ids]
 
-    creative_format_display = f"{normalize_url(creative_agent_url)}/{creative_id}"
+    creative_format_display = f"{normalized_creative_url}/{creative_id}"
     error_msg = (
         f"Creative format '{creative_format_display}' does not match product '{product_name}' ({product_id}). "
         f"Supported formats: {supported_formats}"

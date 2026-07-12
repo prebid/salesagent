@@ -96,6 +96,7 @@ from src.core.tools.financial_validation import (
 )
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.utils import utc_flight_start
+from src.core.validation import normalize_agent_url
 from src.core.validation_helpers import adcp_validation_boundary, package_field_path
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
@@ -162,17 +163,6 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     if req.packages:
         actions.append("update_packages")
     return actions
-
-
-def _normalize_creative_agent_url(url: str | None) -> str | None:
-    """Normalize a creative/format agent_url for comparison.
-
-    Strips a trailing slash and an optional ``/mcp`` suffix so the two
-    URL variants a buyer may use compare equal.
-    """
-    if not url:
-        return None
-    return url.rstrip("/").removesuffix("/mcp")
 
 
 def _validate_creatives_for_assignment(
@@ -260,8 +250,10 @@ def _validate_creatives_for_assignment(
 
     # Build the set of supported (normalized_agent_url, format_id) pairs.
     # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+    # normalize_agent_url is the shared comparison normalizer (strips trailing
+    # slash and transport suffixes like /mcp), so URL variants compare equal.
     supported_formats: set[tuple[str | None, str]] = {
-        (_normalize_creative_agent_url(str(fmt.agent_url)), fmt.id) for fmt in product.format_ids
+        (normalize_agent_url(str(fmt.agent_url)), fmt.id) for fmt in product.format_ids
     }
 
     if not supported_formats:
@@ -269,7 +261,10 @@ def _validate_creatives_for_assignment(
 
     incompatible: list[str] = []
     for creative in creatives_list:
-        creative_pair = (_normalize_creative_agent_url(creative.agent_url), creative.format)
+        creative_pair = (
+            normalize_agent_url(creative.agent_url) if creative.agent_url else None,
+            creative.format,
+        )
         if creative_pair not in supported_formats:
             display = f"{creative.agent_url}/{creative.format}" if creative.agent_url else str(creative.format)
             incompatible.append(f"{creative.creative_id} (format '{display}')")

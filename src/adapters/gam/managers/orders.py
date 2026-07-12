@@ -569,22 +569,12 @@ class GAMOrdersManager:
                             creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
 
                         # Check FormatId parameters (AdCP 2.5 parameterized formats)
-                        # The buyer can specify width/height directly in the FormatId object
-                        if not (width and height):
-                            # Handle both FormatId objects and dicts (from database JSONB)
-                            if hasattr(format_id_obj, "width") and hasattr(format_id_obj, "height"):
-                                if format_id_obj.width and format_id_obj.height:
-                                    width = format_id_obj.width
-                                    height = format_id_obj.height
-                                    log(f"  [blue]Using dimensions from FormatId parameters: {width}x{height}[/blue]")
-                            elif isinstance(format_id_obj, dict):
-                                # Fallback for dict format (shouldn't happen after fix, but defensive)
-                                dict_width = format_id_obj.get("width")
-                                dict_height = format_id_obj.get("height")
-                                if dict_width and dict_height:
-                                    width = int(dict_width)
-                                    height = int(dict_height)
-                                    log(f"  [blue]Using dimensions from FormatId dict: {width}x{height}[/blue]")
+                        # The buyer can specify width/height directly in the FormatId
+                        # object — always a typed model here (#1172), never a dict.
+                        if not (width and height) and format_id_obj.width and format_id_obj.height:
+                            width = format_id_obj.width
+                            height = format_id_obj.height
+                            log(f"  [blue]Using dimensions from FormatId parameters: {width}x{height}[/blue]")
 
                         # Last resort: Try to extract dimensions from format_id (e.g., "display_970x250_image")
                         if not (width and height):

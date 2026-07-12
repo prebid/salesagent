@@ -3398,14 +3398,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034"}:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "format-id-roundtrip"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
             # response invariants (e.g. all-failed still returns the success variant);
             # @BR-RULE-034 scenarios drive cross-principal isolation (triple-key
             # creative lookup) — dormant until the cross-principal existence-gate
-            # fix (PR #1430 review) made the surface safe to grade.
+            # fix (PR #1430 review) made the surface safe to grade;
+            # @format-id-roundtrip drives the storyboard format_id roundtrip on sync
+            # (seller MUST accept its own advertised format_id, #1172).
             from tests.harness.creative_sync import CreativeSyncEnv
 
             with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:

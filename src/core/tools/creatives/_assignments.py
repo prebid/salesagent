@@ -12,6 +12,7 @@ from src.core.exceptions import (
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._processing import _failed_sync_result
+from src.core.validation import normalize_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -161,17 +162,16 @@ def _process_assignments(
                             creative_agent_url = db_creative_result.agent_url
                             creative_format_id = db_creative_result.format
 
-                            # Allow /mcp URL variant (creative agent may return format with /mcp suffix)
-                            def normalize_url(url: str | None) -> str | None:
-                                if not url:
-                                    return None
-                                return url.rstrip("/").removesuffix("/mcp")
-
-                            normalized_creative_url = normalize_url(creative_agent_url)
+                            # Allow /mcp URL variant (creative agent may return format
+                            # with /mcp suffix) — normalize_agent_url is the shared
+                            # comparison normalizer (strips trailing slash + /mcp).
+                            normalized_creative_url = (
+                                normalize_agent_url(creative_agent_url) if creative_agent_url else None
+                            )
                             is_supported = False
 
                             for supported_url, supported_format_id in supported_formats:
-                                normalized_supported_url = normalize_url(supported_url)
+                                normalized_supported_url = normalize_agent_url(supported_url)
                                 if (
                                     normalized_creative_url == normalized_supported_url
                                     and creative_format_id == supported_format_id
