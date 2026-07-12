@@ -70,7 +70,7 @@ from src.core.exceptions import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
-from src.core.schemas import CreativeStatusEnum
+from src.core.schemas import CreativeStatusEnum, GetSignalsResponse
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
 from src.core.tools import (
@@ -82,11 +82,15 @@ from src.core.tools import (
 from src.core.tools import (
     get_products_raw as core_get_products_tool,
 )
+
+# get_signals exposed on the wire (owner decision 2026-07-11, salesagent-8wf2);
+# activate_signal stays unregistered until v3.1.1-conformant (salesagent-42ap).
+from src.core.tools import (
+    get_signals_raw as core_get_signals_tool,
+)
 from src.core.tools import (
     list_accounts_raw as core_list_accounts_tool,
 )
-
-# Signals tools removed - should come from dedicated signals agents, not sales agent
 from src.core.tools import (
     list_authorized_properties_raw as core_list_authorized_properties_tool,
 )
@@ -1436,6 +1440,7 @@ class AdCPRequestHandler(RequestHandler):
             "get_media_buys": self._handle_get_media_buys_skill,
             "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
             "update_performance_index": self._handle_update_performance_index_skill,
+            "get_signals": self._handle_get_signals_skill,
             # AdCP Spec Creative Management (centralized library approach)
             "sync_creatives": self._handle_sync_creatives_skill,
             "list_creatives": self._handle_list_creatives_skill,
@@ -2035,6 +2040,17 @@ class AdCPRequestHandler(RequestHandler):
 
         return response
 
+    async def _handle_get_signals_skill(self, parameters: dict, identity: ResolvedIdentity) -> GetSignalsResponse:
+        """Handle explicit get_signals skill invocation (signal discovery)."""
+        # Identity already resolved at transport boundary (on_message_send)
+        from src.core.schemas import GetSignalsRequest
+
+        with adcp_validation_boundary():
+            req = GetSignalsRequest.model_validate(parameters)
+
+        response = await core_get_signals_tool(req=req, identity=identity)
+        return response
+
     async def _get_products(self, query: str, identity: ResolvedIdentity | None) -> dict:
         """Get available advertising products by calling core functions directly.
 
@@ -2202,6 +2218,12 @@ def create_agent_card() -> AgentCard:
                 name="list_authorized_properties",
                 description="List authorized properties this agent can sell advertising for",
                 tags=["properties", "authorization", "publisher", "adcp"],
+            ),
+            AgentSkill(
+                id="get_signals",
+                name="get_signals",
+                description="Discover available audience and contextual signals for targeting",
+                tags=["signals", "audience", "discovery", "adcp"],
             ),
             AgentSkill(
                 id="list_accounts",

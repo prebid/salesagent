@@ -22,9 +22,12 @@ from src.core.tools.performance import update_performance_index_raw
 from src.core.tools.products import get_products_raw
 from src.core.tools.properties import list_authorized_properties_raw
 
-# Signals tools removed - should come from dedicated signals agents, not sales agent
+# get_signals exposed on the wire (owner decision 2026-07-11, salesagent-8wf2);
+# activate_signal stays unregistered until v3.1.1-conformant (salesagent-42ap).
+from src.core.tools.signals import get_signals_raw
 
 __all__ = [
+    "get_signals_raw",
     "list_accounts_raw",
     "sync_accounts_raw",
     "get_adcp_capabilities_raw",

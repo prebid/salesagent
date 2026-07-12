@@ -661,6 +661,7 @@ class TestA2ASkillInvocation:
                 # but we can at least verify the skill name is recognized
                 assert skill_name in [
                     "get_adcp_capabilities",  # AdCP v3 discovery endpoint
+                    "get_signals",  # exposed 2026-07-11 (salesagent-8wf2 owner decision)
                     "get_products",
                     "create_media_buy",
                     "update_media_buy",  # Added for media buy management

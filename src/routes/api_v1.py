@@ -39,6 +39,7 @@ from src.core.tools import media_buy_update as media_buy_update_module
 from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
 from src.core.tools import properties as properties_module
+from src.core.tools import signals as signals_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
@@ -189,6 +190,24 @@ class ListCreativeFormatsBody(SalesAgentBaseModel):
 class ListAuthorizedPropertiesBody(SalesAgentBaseModel):
     property_tags: list[str] | None = None
     publisher_domains: list[str] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetSignalsBody(SalesAgentBaseModel):
+    """POST /signals request body — mirrors v3.1.1 get-signals-request (all fields optional)."""
+
+    discovery_mode: str | None = None
+    account: dict[str, Any] | None = None
+    signal_spec: str | None = None
+    signal_refs: list[str] | None = None
+    signal_ids: list[str] | None = None
+    destinations: list[dict[str, Any]] | None = None
+    countries: list[str] | None = None
+    filters: dict[str, Any] | None = None
+    fields: list[str] | None = None
+    max_results: int | None = None
+    pagination: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -459,6 +478,17 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
         context=to_context_object(body.context),
         identity=identity,
     )
+    return response.model_dump(mode="json")
+
+
+@router.post("/signals")
+async def get_signals(body: GetSignalsBody, identity: ResolvedIdentity = require_auth):
+    """Discover available signals (principal-scoped; auth required)."""
+    from src.core.schemas import GetSignalsRequest
+
+    with adcp_validation_boundary(context="get_signals request"):
+        req = GetSignalsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    response = await signals_module.get_signals_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 
