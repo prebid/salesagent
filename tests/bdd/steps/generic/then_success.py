@@ -32,6 +32,7 @@ def then_no_media_buy_record_persisted(ctx: dict) -> None:
 # "completed" — at least one must be present and a list, not None.
 _STATUSLESS_SUCCESS_ATTRS: tuple[str, ...] = (
     "formats",  # ListCreativeFormatsResponse
+    "products",  # GetProductsResponse (UC-001)
     "media_buy_deliveries",  # GetMediaBuyDeliveryResponse
     "aggregated_totals",  # GetMediaBuyDeliveryResponse
 )

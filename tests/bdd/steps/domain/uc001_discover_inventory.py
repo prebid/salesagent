@@ -17,7 +17,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response, wire_field
+from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 
@@ -119,11 +119,10 @@ def _wire_products(ctx: dict) -> list[dict[str, Any]]:
     return wire_field(ctx, "products")
 
 
-@then(parsers.parse('the response status should be "completed"'))
-def then_status_completed(ctx: dict) -> None:
-    """get_products succeeded — a completed synchronous discovery response."""
-    assert ctx.get("error") is None, f"Request failed: {ctx.get('error')}"
-    assert _require_response(ctx).products is not None
+# 'the response status should be "completed"' is served by the GENERIC step
+# (steps/generic/then_success.py) — a domain copy here would shadow it for
+# every use case (it did: uc003 regression). products is in
+# _STATUSLESS_SUCCESS_ATTRS so the generic step proves UC-001 completion.
 
 
 @then('the response should contain "products" array')

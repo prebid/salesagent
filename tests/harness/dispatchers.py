@@ -271,8 +271,12 @@ class RestE2EDispatcher:
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
-            method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+            method = getattr(env, "REST_METHOD", "post").lower()
+            if method == "get":
+                # httpx Client.get() takes no json= kwarg (GET routes carry no body)
+                response = client.get(endpoint, headers=headers)
+            else:
+                response = getattr(client, method)(endpoint, json=body, headers=headers)
 
         envelope = {
             "transport": "e2e_rest",

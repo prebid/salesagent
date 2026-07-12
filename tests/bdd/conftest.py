@@ -62,6 +62,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc001_discover_inventory",
     "tests.bdd.steps.domain.uc009_performance",
     "tests.bdd.steps.domain.uc010_capabilities",
+    "tests.bdd.steps.domain.uc008_signals",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -2097,6 +2098,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # --- UC-008: xfails for spec-production gaps (salesagent-8wf2 wiring) ---
+        # main-mcp demands value_type on every signal; the production catalog
+        # (src/core/tools/signals.py) never sets it (schema default None).
+        # Strict so a populated catalog forces graduation.
+        _UC008_XFAIL_TAGS: set[str] = {
+            "T-UC-008-main-mcp",
+        }
+        if marker_names & _UC008_XFAIL_TAGS:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="UC-008 spec-production gap — signal catalog carries no value_type",
+                    strict=True,
+                )
+            )
+
         # --- UC-019: xfails for spec-production gaps ---
         # Graduated (k31s): status_computation active variants, default_status_filter
         # simple variants, status_filter boundary simple variants, inv-150-2/4,
@@ -3088,6 +3104,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-009"
     if any(t.startswith("T-UC-010-") for t in marker_names):
         return "UC-010"
+    if any(t.startswith("T-UC-008-") for t in marker_names):
+        return "UC-008"
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
     if any(t.startswith("T-UC-003") for t in marker_names):
@@ -3522,6 +3540,29 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-008":
+        # get_signals discovery (salesagent-8wf2/d0l4; surface exposed by
+        # salesagent-2rls). SignalsEnv is zero-mock — the static catalog is
+        # production code. main-mcp is wired but strict-xfailed (no value_type
+        # in the catalog, _UC008_XFAIL_TAGS). activate_signal scenarios stay
+        # dormant here: the tool is deliberately unregistered (salesagent-42ap).
+        _UC008_WIRED = {
+            "T-UC-008-main-mcp",
+            "T-UC-008-main-rest",
+            "T-UC-008-main-context-echo",
+        }
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if marker_names & _UC008_WIRED:
+            from tests.harness.signals import SignalsEnv
+
+            with _db_scope_for(request, e2e_config), SignalsEnv(e2e_config=e2e_config) as env:
+                tenant, principal = env.setup_default_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                yield
+        else:
+            pytest.xfail("UC-008 harness not yet wired for this scenario (salesagent-8wf2)")
     elif uc == "UC-010":
         # get_adcp_capabilities (salesagent-8wf2/fxot). The main-flow scenarios
         # run a real get_adcp_capabilities through the wire transports on
