@@ -100,11 +100,13 @@ class TestExecuteApprovedPendingReviewFilter:
         mock_adapter.creatives_manager = MagicMock()
         mock_adapter.orders_manager.approve_order.return_value = True
 
+        for _u in (uow1, uow2, uow3):
+            _u.principals.find_by_id.return_value = principal
+
         with (
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=lambda _: next(uow_iter)),
             patch("src.core.config_loader.set_current_tenant"),
             patch("src.core.config_loader.get_tenant_by_id", return_value={"tenant_id": "t1"}),
-            patch(f"{_MODULE}.get_principal_object", return_value=principal),
             patch(f"{_MODULE}._execute_adapter_media_buy_creation", return_value=adapter_response),
             patch(f"{_MODULE}._validate_creatives_before_adapter_call"),
             patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),

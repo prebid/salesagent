@@ -104,7 +104,6 @@ def validate_agent_url(url: str | None) -> bool:
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
-    get_principal_object,
     require_identity,
     require_principal,
     require_principal_id,
@@ -1013,10 +1012,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # Get the Principal object (needed for adapter). Capture the id while
             # the session is open — media_buy detaches (attributes expired) when
             # this block commits, and the creative reload below runs in a later UoW.
-            from src.core.auth import get_principal_object
-
             buy_principal_id = media_buy.principal_id
-            principal = get_principal_object(buy_principal_id, tenant_id=tenant_id)
+            assert uow.principals is not None
+            principal = uow.principals.find_by_id(buy_principal_id)
             if not principal:
                 error_msg = f"Principal {buy_principal_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
@@ -1309,7 +1307,8 @@ def push_creative_to_existing_buy(
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
-            principal = get_principal_object(creative.principal_id, tenant_id=tenant_id)
+            assert uow.principals is not None
+            principal = uow.principals.find_by_id(creative.principal_id)
             if not principal:
                 return False, f"Principal {creative.principal_id} not found"
 

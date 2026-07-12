@@ -39,6 +39,7 @@ from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -135,6 +136,7 @@ class MediaBuyUoW(BaseUoW):
     creatives: CreativeRepository | None
     currency_limits: CurrencyLimitRepository | None
     idempotency_attempts: IdempotencyAttemptRepository | None
+    principals: PrincipalRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -143,6 +145,7 @@ class MediaBuyUoW(BaseUoW):
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
         self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
+        self.principals = PrincipalRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
@@ -150,6 +153,7 @@ class MediaBuyUoW(BaseUoW):
         self.creatives = None
         self.currency_limits = None
         self.idempotency_attempts = None
+        self.principals = None
 
 
 class ProductUoW(BaseUoW):
@@ -300,6 +304,7 @@ class AdminCreativeUoW(BaseUoW):
     products: ProductRepository | None
     workflows: WorkflowRepository | None
     tenant_config: TenantConfigRepository | None
+    principals: PrincipalRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
@@ -309,6 +314,7 @@ class AdminCreativeUoW(BaseUoW):
         self.products = ProductRepository(self._session, self._tenant_id)
         self.workflows = WorkflowRepository(self._session, self._tenant_id)
         self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
+        self.principals = PrincipalRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.creatives = None
@@ -317,3 +323,4 @@ class AdminCreativeUoW(BaseUoW):
         self.products = None
         self.workflows = None
         self.tenant_config = None
+        self.principals = None
