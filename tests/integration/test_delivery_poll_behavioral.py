@@ -2593,8 +2593,11 @@ class TestPrincipalNotFoundReturnsError:
             TenantFactory(tenant_id="t1")
             # Don't create any principal — ghost_principal doesn't exist
 
+            # Pre-boundary identity (no eager principal) — pins the transitional
+            # DB-fallback path in require_principal (#1088).
+            identity = env.identity.model_copy(update={"principal": None})
             with pytest.raises(AdCPAuthenticationError, match="ghost_principal"):
-                env.call_impl()
+                env.call_impl(identity=identity)
 
 
 # ---------------------------------------------------------------------------

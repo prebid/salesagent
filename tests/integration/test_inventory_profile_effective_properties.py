@@ -183,8 +183,8 @@ class TestEffectiveFormats:
             effective = product.effective_format_ids
             assert effective == test_profile.format_ids
             assert len(effective) == 2
-            assert effective[0]["id"] == "display_300x250_image"
-            assert effective[1]["id"] == "display_728x90_image"
+            assert effective[0].id == "display_300x250_image"
+            assert effective[1].id == "display_728x90_image"
 
             # Should NOT return product's custom formats
             assert effective != product.format_ids
@@ -211,8 +211,8 @@ class TestEffectiveFormats:
             effective = product.effective_format_ids
             assert effective == product.format_ids
             assert len(effective) == 2
-            assert effective[0]["id"] == "video_15s"
-            assert effective[1]["id"] == "video_30s"
+            assert effective[0].id == "video_15s"
+            assert effective[1].id == "video_30s"
 
 
 class TestEffectiveProperties:

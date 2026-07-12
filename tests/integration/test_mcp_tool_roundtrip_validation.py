@@ -28,6 +28,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import Tenant
 from src.core.schemas import Product as ProductSchema
+from src.core.schemas._base import format_id_identity
 from src.core.testing_hooks import TestingContext, apply_testing_hooks
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -268,9 +269,14 @@ class TestMCPToolRoundtripValidation:
             # Step 3: Reconstruct Product from dict (data is unchanged by hooks)
             reconstructed_product = ProductSchema(**product_dict)
 
-            # Step 4: Verify reconstruction succeeded
+            # Step 4: Verify reconstruction succeeded. The source product carries
+            # typed FormatId models from the DB column while revalidation may yield
+            # the SDK FormatReferenceStructuredObject — compare on federation
+            # identity (canonical agent_url, id), which is what the spec keys on.
             assert reconstructed_product.product_id == product.product_id
-            assert reconstructed_product.format_ids == product.format_ids
+            assert [format_id_identity(f) for f in reconstructed_product.format_ids] == [
+                format_id_identity(f) for f in product.format_ids
+            ]
             assert reconstructed_product.name == product.name
 
         # Test specific products that were created by fixture
@@ -414,9 +420,11 @@ class TestMCPToolRoundtripValidation:
                 # Step 3: Reconstruct Product from dict (data is unchanged by hooks)
                 reconstructed_product = ProductSchema(**product_dict)
 
-                # Step 4: Verify reconstruction succeeded
+                # Step 4: Verify reconstruction succeeded (format identity — see above)
                 assert reconstructed_product.product_id == product.product_id
-                assert reconstructed_product.format_ids == product.format_ids
+                assert [format_id_identity(f) for f in reconstructed_product.format_ids] == [
+                    format_id_identity(f) for f in product.format_ids
+                ]
                 assert reconstructed_product.name == product.name
                 assert reconstructed_product.delivery_type == product.delivery_type
 

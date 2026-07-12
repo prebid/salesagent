@@ -1526,7 +1526,9 @@ class TestCrossCuttingObligations:
 
         creative_format = FormatId(agent_url="https://creative.example.com", id="display_300x250")
         product = MagicMock()
-        product.format_ids = [{"agent_url": "https://creative.example.com", "id": "display_300x250"}]
+        # Typed FormatId column (#1172): production reads product.format_ids as
+        # list[FormatId] models, so the stub must carry the typed shape.
+        product.format_ids = [FormatId(agent_url="https://creative.example.com", id="display_300x250")]
 
         is_valid, error = validate_creative_format_against_product(creative_format_id=creative_format, product=product)
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product
+from src.core.schemas._base import FormatId
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -70,8 +71,8 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
         for product in db_products:
             effective_formats = product.effective_format_ids
             assert len(effective_formats) == 2
-            assert {"agent_url": "https://test.example.com", "id": "format_a"} in effective_formats
-            assert {"agent_url": "https://test.example.com", "id": "format_b"} in effective_formats
+            assert FormatId(agent_url="https://test.example.com", id="format_a") in effective_formats
+            assert FormatId(agent_url="https://test.example.com", id="format_b") in effective_formats
 
         # Update profile formats
         stmt = select(InventoryProfile).where(InventoryProfile.id == profile_id)
@@ -90,11 +91,11 @@ def test_updating_profile_formats_affects_all_products(integration_db, sample_te
         for product in db_products:
             effective_formats = product.effective_format_ids
             assert len(effective_formats) == 2
-            assert {"agent_url": "https://test.example.com", "id": "format_c"} in effective_formats
-            assert {"agent_url": "https://test.example.com", "id": "format_d"} in effective_formats
+            assert FormatId(agent_url="https://test.example.com", id="format_c") in effective_formats
+            assert FormatId(agent_url="https://test.example.com", id="format_d") in effective_formats
             # Old formats should not be present
-            assert {"agent_url": "https://test.example.com", "id": "format_a"} not in effective_formats
-            assert {"agent_url": "https://test.example.com", "id": "format_b"} not in effective_formats
+            assert FormatId(agent_url="https://test.example.com", id="format_a") not in effective_formats
+            assert FormatId(agent_url="https://test.example.com", id="format_b") not in effective_formats
 
 
 @pytest.mark.requires_db

@@ -131,6 +131,18 @@ class TestProductFormatIdsTypedRoundtrip:
             product.format_ids = written
             session.commit()
 
+            # The stored JSONB must have optional keys ABSENT, not null — the
+            # migrated DB's validate_format_ids CHECK rejects null-valued keys,
+            # but create_all-built test DBs have no trigger, so pin the stored
+            # shape directly.
+            stored = session.execute(
+                text("SELECT format_ids FROM products WHERE tenant_id = :t AND product_id = :p"),
+                {"t": "t_fmt_rt_write", "p": "prod_fmt_rt_write"},
+            ).scalar_one()
+            for entry in stored:
+                null_keys = [k for k, v in entry.items() if v is None]
+                assert null_keys == [], f"bind serialization must omit unset optional keys, got null for {null_keys}"
+
             _reload(env, product)
             loaded = product.format_ids
             assert len(loaded) == 2

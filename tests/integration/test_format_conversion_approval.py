@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -24,6 +24,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.tools.media_buy_create import execute_approved_media_buy
+from tests.harness._base import IntegrationEnv
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -53,6 +54,24 @@ def create_media_package(
             },
         )
         session.add(media_package)
+        session.commit()
+
+
+def _cleanup_media_buy_and_product(tenant_id: str, media_buy_id: str, product_id: str) -> None:
+    """Delete the per-test MediaPackage/MediaBuy/PricingOption/Product rows.
+
+    Uses bulk DELETE statements (FK order) rather than ORM loads: several tests
+    deliberately store invalid format_ids shapes, and materializing such a
+    Product through the typed FormatId column (#1172) raises ValidationError.
+    """
+    with IntegrationEnv() as env:
+        session = env.get_session()
+        session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id == media_buy_id))
+        session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
+        session.execute(
+            delete(PricingOption).where(PricingOption.tenant_id == tenant_id, PricingOption.product_id == product_id)
+        )
+        session.execute(delete(Product).where(Product.product_id == product_id))
         session.commit()
 
 
@@ -242,32 +261,7 @@ class TestFormatConversionApproval:
         # Success returns (True, None), so no message to check
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_invalid_format_missing_agent_url(
         self, test_tenant, test_principal, test_currency_limit, test_property_tag
@@ -341,36 +335,14 @@ class TestFormatConversionApproval:
         success, message = execute_approved_media_buy(media_buy_id, test_tenant)
 
         assert not success, "Approval should fail with missing agent_url"
+        # Typed FormatId reconstruction (#1172) rejects earlier with new wording;
+        # the missing field must still be NAMED in the message.
         assert "agent_url" in message.lower()
-        assert "format validation failed" in message.lower()
+        assert "failed to reconstruct package" in message.lower()
+        assert "field is missing" in message.lower()
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_invalid_format_empty_agent_url(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """❌ FormatReference dict with empty agent_url should fail validation."""
@@ -445,32 +417,7 @@ class TestFormatConversionApproval:
         assert "agent_url" in message.lower()
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_invalid_agent_url_not_http(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """❌ FormatReference with non-HTTP(S) agent_url should fail validation."""
@@ -546,32 +493,7 @@ class TestFormatConversionApproval:
         assert "http" in message.lower()
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_invalid_format_missing_format_id(
         self, test_tenant, test_principal, test_currency_limit, test_property_tag
@@ -649,32 +571,7 @@ class TestFormatConversionApproval:
         assert "format" in message.lower() or "id" in message.lower()
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_valid_format_id_dict_conversion(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """✅ Valid FormatId dict (with 'id' key) converts successfully."""
@@ -749,32 +646,7 @@ class TestFormatConversionApproval:
         # Success returns (True, None), so no message to check
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_invalid_dict_missing_id(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """❌ Dict with neither 'id' nor 'format_id' should fail validation."""
@@ -849,32 +721,7 @@ class TestFormatConversionApproval:
         assert "id" in message.lower()
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_empty_formats_list_fails(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """❌ Product with empty formats list should fail validation."""
@@ -944,32 +791,7 @@ class TestFormatConversionApproval:
         assert "no valid formats" in message.lower()
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_mixed_valid_format_types(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """✅ Product with mixed valid format types (FormatRef, FormatId, dict) succeeds."""
@@ -1055,32 +877,7 @@ class TestFormatConversionApproval:
         # Success returns (True, None), so no message to check
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
     def test_invalid_format_unknown_type(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """❌ Format with unknown type (string, int) should fail validation."""
@@ -1147,32 +944,10 @@ class TestFormatConversionApproval:
         success, message = execute_approved_media_buy(media_buy_id, test_tenant)
 
         assert not success, "Approval should fail with unknown format type"
-        assert "unknown format type" in message.lower() or "format validation failed" in message.lower()
+        # Typed FormatId reconstruction (#1172): a bare string is rejected as
+        # not being a FormatId object — the message must name the expected type.
+        assert "failed to reconstruct package" in message.lower()
+        assert "instance of formatid" in message.lower()
 
         # Cleanup
-        with get_db_session() as session:
-            # Delete MediaPackage first (foreign key constraint to MediaBuy)
-            stmt_pkg = select(MediaPackage).filter_by(media_buy_id=media_buy_id)
-            packages = session.scalars(stmt_pkg).all()
-            for pkg in packages:
-                session.delete(pkg)
-
-            # Then delete MediaBuy
-            stmt_mb = select(MediaBuy).filter_by(media_buy_id=media_buy_id)
-            media_buy = session.scalars(stmt_mb).first()
-            if media_buy:
-                session.delete(media_buy)
-
-            # Delete PricingOption (foreign key constraint to Product)
-            stmt_pricing = select(PricingOption).filter_by(tenant_id=test_tenant, product_id=product_id)
-            pricing_options = session.scalars(stmt_pricing).all()
-            for pricing in pricing_options:
-                session.delete(pricing)
-
-            # Finally delete Product
-            stmt_prod = select(Product).filter_by(product_id=product_id)
-            product = session.scalars(stmt_prod).first()
-            if product:
-                session.delete(product)
-
-            session.commit()
+        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)

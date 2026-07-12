@@ -145,13 +145,15 @@ class TestA2AErrorPropagation:
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Principal-not-found surfaces AUTH_REQUIRED as a two-layer envelope on the A2A wire."""
         # Mock identity with non-existent principal — simulates resolved but invalid principal
+        # Pre-boundary identity (no eager principal) — pins the transitional
+        # DB-fallback path in require_principal (#1088).
         identity = PrincipalFactory.make_identity(
             principal_id="nonexistent_principal",
             tenant_id=test_tenant["tenant_id"],
             tenant=test_tenant,
             auth_token="invalid_token",
             protocol="a2a",
-        )
+        ).model_copy(update={"principal": None})
         handler._get_auth_token = MagicMock(return_value="invalid_token")
         handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
