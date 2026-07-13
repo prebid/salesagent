@@ -309,6 +309,39 @@ class TestRestGetProductsWrapper:
         """POST /api/v1/products (no query pins) with a fixed-price product."""
         return self._post_products_to("/api/v1/products", body)
 
+    def test_rest_forwards_and_echoes_request_context(self):
+        """REST /products forwards the buyer's context so the response echoes it (#1512).
+
+        REST was the only transport dropping context (MCP/A2A forward it and the impl
+        already echoes ``req.context``). Asserts the actual wire JSON, mutation-sensitive
+        to the REST forward: if the handler drops context, ``req.context`` is None and the
+        echoed response context is absent.
+        """
+
+        async def _echo_context_impl(req, identity):
+            resp = _response_with_fixed_price(fixed_price=5.0)
+            resp.context = req.context  # mirror the production impl's context echo
+            return resp
+
+        identity = PrincipalFactory.make_identity(protocol="rest")
+        with patch("src.core.tools.products._get_products_impl", new=_echo_context_impl):
+            from starlette.testclient import TestClient
+
+            from src.app import app
+            from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+
+            app.dependency_overrides[_require_auth_dep] = lambda: identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+            try:
+                response = TestClient(app).post(
+                    "/api/v1/products", json={"brief": "ads", "context": {"context_id": "ctx-rest-echo"}}
+                )
+            finally:
+                app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert response.json()["context"] == {"context_id": "ctx-rest-echo"}
+
     def _post_products_to(self, url: str, body: dict):
         """POST to a products URL (optionally carrying query version pins).
 

@@ -208,6 +208,7 @@ class GetProductsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (P
     brief: str = ""
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None  # adcp application-level context, echoed on the response (#1512)
     adcp_version: str = "1.0.0"
 
 
@@ -333,6 +334,10 @@ async def get_products(
         brief=body.brief,
         brand=body.brand,
         filters=body.filters,
+        # Forward the buyer's application context so _get_products_impl echoes it
+        # back unchanged on the response — REST was the only transport missing this
+        # (MCP/A2A already forward it, the impl already echoes it) (#1512).
+        context=body.context,
     )
     response = await products_module._get_products_impl(req, identity)
     # Gate response compatibility on the release the buyer actually negotiated
