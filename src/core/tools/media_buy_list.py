@@ -60,8 +60,9 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object, require_identity, require_tenant
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
@@ -560,12 +561,9 @@ def _fetch_creative_approvals(
     # tenant_id, principal_id) — a tenant-only load could resolve a colliding id
     # to ANOTHER principal's row and show their approval status to this buyer.
     creative_ids = [a.creative_id for a in assignments]
-    creative_stmt = select(Creative).where(
-        Creative.tenant_id == tenant_id,
-        Creative.principal_id == principal_id,
-        Creative.creative_id.in_(creative_ids),
-    )
-    creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
+    creatives = {
+        c.creative_id: c for c in CreativeRepository(session, tenant_id).get_by_ids(creative_ids, principal_id)
+    }
 
     # Build approval objects grouped by (media_buy_id, package_id)
     result: dict[tuple[str, str], list[CreativeApproval]] = {}

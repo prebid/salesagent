@@ -1079,7 +1079,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # FIXME(salesagent-9f2): creative handling should use repository methods
             assert uow2.session is not None
             session = uow2.session
-            from src.core.database.models import Creative as CreativeModel
             from src.core.database.models import CreativeAssignment
 
             # Import adapter helper here (used for both creative upload and order approval)
@@ -1111,12 +1110,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 # under two principals — a tenant-only load keyed by bare creative_id
                 # could upload the wrong principal's creative to the ad server.
                 all_creative_ids = list(packages_by_creative.keys())
-                stmt_creatives = select(CreativeModel).filter(
-                    CreativeModel.tenant_id == tenant_id,
-                    CreativeModel.principal_id == buy_principal_id,
-                    CreativeModel.creative_id.in_(all_creative_ids),
-                )
-                creatives = session.scalars(stmt_creatives).all()
+                creatives = CreativeRepository(session, tenant_id).get_by_ids(all_creative_ids, buy_principal_id)
 
                 # Create creative map
                 creative_map = {c.creative_id: c for c in creatives}
