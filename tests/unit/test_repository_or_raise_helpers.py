@@ -90,7 +90,7 @@ class TestMediaBuyOrRaise:
         assert package.package_config == raw_pkg
         # Added to the session (UoW owns the commit), flushed for immediate use
         session.add.assert_called_once_with(package)
-        session.flush.assert_called_once()
+        session.flush.assert_called_once_with()
 
     def test_get_package_or_raise_inherits_raw_request_fallback(self):
         media_buy = MagicMock()
