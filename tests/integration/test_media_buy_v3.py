@@ -310,7 +310,11 @@ class TestCreateMediaBuyManualApproval:
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-08
         Integration equivalent of unit xfail test_execute_approved_calls_adapter.
-        Verifies that execute_approved_media_buy updates status to 'active' (UC-002:437).
+        Verifies execute_approved_media_buy triggers adapter creation and succeeds.
+        Status finalization is the approval ROUTE's job (#1544): execute does adapter
+        work only, then the route stamps the FLIGHT-DERIVED status + approved_at in one
+        write. This buy's flight starts tomorrow, so the correct finalized status is
+        'scheduled' (the old unconditional 'active' ignored a future flight window).
         """
         from src.core.tools.media_buy_create import (
             _create_media_buy_impl,
@@ -337,16 +341,29 @@ class TestCreateMediaBuyManualApproval:
 
         media_buy_id = result.response.media_buy_id
 
-        success, error = execute_approved_media_buy(
-            media_buy_id=media_buy_id,
-            tenant_id=mb_tenant_with_approval["tenant_id"],
-        )
+        tenant_id = mb_tenant_with_approval["tenant_id"]
+        success, error = execute_approved_media_buy(media_buy_id=media_buy_id, tenant_id=tenant_id)
         assert success, f"execute_approved_media_buy should succeed, got error: {error}"
+
+        # Finalize as the approval route does: flight-derived status + approved_at in
+        # one write (execute no longer sets status — #1544).
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
+
+        with MediaBuyUoW(tenant_id) as uow:
+            buy = uow.media_buys.get_by_id(media_buy_id)
+            final_status = lifecycle_status_for_window(datetime.now(UTC), *resolve_flight_window_utc(buy))
+            uow.media_buys.update_status_or_raise(
+                media_buy_id, final_status, approved_at=datetime.now(UTC), approved_by="admin@test.com"
+            )
 
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None
-            assert mb.status == "active", f"Status should be 'active' after approval, got {mb.status}"
+            # Flight starts tomorrow → 'scheduled' (not the old buggy unconditional 'active').
+            assert mb.status == "scheduled", f"future-flight buy should finalize to 'scheduled', got {mb.status}"
+            # confirmed_at is the approval instant (write-once), stamped by the finalization.
+            assert mb.confirmed_at is not None
 
 
 class TestCreateMediaBuyAdapterAtomicity:

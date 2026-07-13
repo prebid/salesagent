@@ -468,11 +468,11 @@ class TestRevisionBumpsOnStatusTransition:
         unrelated request for 10s. It must re-raise WITHOUT flipping _is_healthy,
         so a subsequent get_db_session still works. #1544.
         """
-        import src.core.database.database_session as dbs
         from sqlalchemy import select, text
         from sqlalchemy.exc import OperationalError
         from sqlalchemy.orm import Session as SASession
 
+        import src.core.database.database_session as dbs
         from src.core.database.database_session import get_db_session, get_engine, reset_health_state
         from src.core.database.models import MediaBuy
 

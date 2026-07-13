@@ -79,7 +79,10 @@ class TestA2AEndpointsActual:
                         break
 
                 assert adcp_ext is not None, "AdCP extension not found in live agent card"
-                assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
+                # Wire adcp_version is release-precision, not the raw pin (#1544).
+                from src.a2a_server.adcp_a2a_server import adcp_wire_version
+
+                assert adcp_ext["params"]["adcp_version"] == adcp_wire_version()
                 assert "media_buy" in adcp_ext["params"]["protocols_supported"]
 
         except (requests.ConnectionError, requests.Timeout):
@@ -189,7 +192,7 @@ class TestA2AAgentCardCreation:
 
     def test_agent_card_adcp_extension(self):
         """Test that agent card includes AdCP 2.5 extension."""
-        from src.a2a_server.adcp_a2a_server import create_agent_card
+        from src.a2a_server.adcp_a2a_server import adcp_wire_version, create_agent_card
 
         agent_card = create_agent_card()
 
@@ -209,7 +212,8 @@ class TestA2AAgentCardCreation:
 
         assert adcp_ext is not None, "AdCP extension not found in capabilities.extensions"
 
-        # Validate AdCP extension structure
+        # Validate AdCP extension structure. The URI references the FULL pinned
+        # schema version; the wire adcp_version is release-precision (#1544).
         adcp_version = get_adcp_spec_version()
         assert adcp_ext.uri == f"https://adcontextprotocol.org/schemas/{adcp_version}/protocols/adcp-extension.json"
         assert adcp_ext.params is not None
@@ -218,8 +222,8 @@ class TestA2AAgentCardCreation:
         assert "adcp_version" in params.fields
         assert "protocols_supported" in params.fields
 
-        # Validate AdCP extension values
-        assert params.fields["adcp_version"].string_value == adcp_version
+        # Validate AdCP extension values — wire adcp_version is release-precision.
+        assert params.fields["adcp_version"].string_value == adcp_wire_version()
         protocols_value = params.fields["protocols_supported"].list_value
         protocols = [v.string_value for v in protocols_value.values]
         assert len(protocols) >= 1
