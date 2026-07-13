@@ -37,11 +37,14 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # adcp 5.7's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
 # cross-check, not the authority. CREATIVE_NOT_FOUND per the enum: correctable,
 # and "Sellers MUST return this code uniformly for any creative_id not owned by
-# the calling account" (#1430 review). The two further demoted spec codes
-# (CONFIGURATION_ERROR, BILLING_NOT_SUPPORTED) are tracked for the same
-# treatment in a follow-up.
+# the calling account" (#1430 review). CONFIGURATION_ERROR per the enum:
+# terminal — "the buyer cannot resolve a seller-side deployment
+# misconfiguration and MUST NOT auto-retry" (salesagent-nr2q). The remaining
+# demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same treatment
+# in salesagent-zgpb.
 _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
+    "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
 }
 
 # The authoritative wire-code table: SDK baseline + pinned-spec supplement.
@@ -62,7 +65,6 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "FORMAT_NOT_FOUND": "INVALID_REQUEST",
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
-    "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
@@ -120,7 +122,6 @@ INTERNAL_CODES: frozenset[str] = frozenset(
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
         "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
         "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
-        "CONFIGURATION_ERROR",  # Server-side config; needs admin, not buyer
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
         "LINE_ITEM_CREATION_FAILED",  # GAM line-item creation detail
@@ -232,9 +233,13 @@ class AdCPError(Exception):
     """
 
     # Class-level identity defaults. Subclasses override these.
+    # Recovery follows the WIRE code, not the internal taxonomy: the base
+    # INTERNAL_ERROR maps to SERVICE_UNAVAILABLE on the wire, whose pinned
+    # enumMetadata classification is transient (salesagent-nr2q). Subclasses
+    # whose wire code is pinned terminal declare terminal explicitly.
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     error_code: str
@@ -486,16 +491,28 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
 
 
 class AdCPNotFoundError(AdCPError):
-    """Requested resource does not exist (404)."""
+    """Requested resource does not exist (404).
+
+    Recovery=correctable: the wire code is INVALID_REQUEST (via
+    ERROR_CODE_MAPPING), whose pinned enumMetadata classification is
+    correctable — recovery follows the wire code (salesagent-nr2q).
+    """
 
     _default_status_code: ClassVar[int] = 404
     _default_error_code: ClassVar[str] = "NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
-    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
+    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND).
+
+    Recovery=terminal per the pinned enumMetadata for ACCOUNT_NOT_FOUND —
+    declared explicitly (the AdCPNotFoundError parent is correctable to
+    match its INVALID_REQUEST wire code).
+    """
 
     _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPAccountSetupRequiredError(AdCPError):
@@ -507,23 +524,30 @@ class AdCPAccountSetupRequiredError(AdCPError):
 
 
 class AdCPAccountSuspendedError(AdCPError):
-    """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED)."""
+    """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED).
+
+    Recovery=terminal per the pinned enumMetadata — declared explicitly
+    (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
+    """
 
     _default_status_code: ClassVar[int] = 403
     _default_error_code: ClassVar[str] = "ACCOUNT_SUSPENDED"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPAccountPaymentRequiredError(AdCPError):
     """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
 
-    Recovery=terminal (inherited): from the sales agent's perspective there is
+    Recovery=terminal: from the sales agent's perspective there is
     no in-band remediation — the buyer must settle the outstanding balance
     externally before resubmitting. Matches the BDD storyboard contract for
-    UC-002 account-reference partition/boundary rows.
+    UC-002 account-reference partition/boundary rows. Declared explicitly
+    (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
     """
 
     _default_status_code: ClassVar[int] = 402
     _default_error_code: ClassVar[str] = "ACCOUNT_PAYMENT_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPConflictError(AdCPError):
@@ -598,11 +622,15 @@ class AdCPConfigurationError(AdCPError):
     Raised when encrypted secrets cannot be decrypted (key rotation,
     corruption, missing ENCRYPTION_KEY). Callers should NOT silently
     fall back — the configuration needs admin intervention, so recovery is
-    ``terminal`` (inherited): the buyer has no lever to fix server config.
+    ``terminal``: the buyer has no lever to fix server config and per the
+    pinned enum "MUST NOT auto-retry". CONFIGURATION_ERROR is a
+    _SPEC_SUPPLEMENT_CODES pass-through — it reaches the wire untranslated
+    (salesagent-nr2q).
     """
 
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPServiceUnavailableError(AdCPError):

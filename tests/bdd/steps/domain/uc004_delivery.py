@@ -2783,10 +2783,11 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         code = layer.get("code")
         recovery = layer.get("recovery")
         # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
-        # INTERNAL_ERROR / CONFIGURATION_ERROR to SERVICE_UNAVAILABLE, and the base
-        # AdCPError default recovery is "terminal" — so a {SERVICE_UNAVAILABLE,
-        # terminal} server fault would otherwise pass as a field rejection. (#1420 should-fix)
-        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "AUTH_REQUIRED"}, (
+        # INTERNAL_ERROR to SERVICE_UNAVAILABLE — a server fault would otherwise
+        # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now
+        # passes through untranslated (salesagent-nr2q) and is likewise a
+        # seller-side fault, never a field rejection.
+        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR", "AUTH_REQUIRED"}, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
         )
