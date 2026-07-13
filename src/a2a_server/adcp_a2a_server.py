@@ -985,17 +985,14 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
-            # Use identity resolved at transport boundary (if available)
-            err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-            err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-            record_boundary_error(
-                "a2a",
-                "message_processing",
-                e,
-                tenant_id=err_tenant_id,
-                principal_id=err_principal_id,
-            )
+            # Route through the identity-aware helper, exactly like the
+            # AdCPAuthenticationError branch above: a non-auth failure can reach
+            # here with identity still None (e.g. an error raised during identity
+            # resolution, before it is assigned). A fabricated "unknown" tenant is
+            # truthy, so record_boundary_error would wrongly drive the activity-feed
+            # + audit writes for a caller with no resolved tenant. Degrading
+            # tenant_id to None via the helper skips those sinks correctly.
+            record_boundary_error_for_identity("a2a", "message_processing", e, identity)
 
             # Send protocol-level webhook notification for failure if configured
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))

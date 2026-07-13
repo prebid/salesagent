@@ -191,6 +191,47 @@ class TestAuthOptionalSkills:
         assert self.handler._task_push_configs == {}
 
     @pytest.mark.asyncio
+    async def test_generic_processing_error_with_no_identity_skips_tenant_scoped_sinks(self):
+        """A non-auth failure with an unresolved identity must not fabricate a tenant.
+
+        The generic ``except Exception`` handler in ``on_message_send`` is reachable
+        with ``identity`` still ``None`` — e.g. identity resolution itself raises a
+        non-``AdCPAuthenticationError`` (a transient tenant-lookup failure). It must
+        route through ``record_boundary_error_for_identity`` so ``tenant_id`` degrades
+        to ``None`` and the activity-feed + audit writes are skipped, exactly like the
+        auth branch above. A regression that hand-rolled a fabricated ``"unknown"``
+        tenant (truthy) would drive those tenant-scoped sinks for a caller with no
+        resolved tenant; pinning the identity-aware call with ``None`` catches it.
+        """
+        from a2a.server.routes.common import ServerCallContext
+        from a2a.types import InternalError, SendMessageRequest
+
+        from tests.utils.a2a_helpers import create_a2a_message_with_skill
+
+        # A discovery skill needs no auth, so identity resolution runs for an
+        # anonymous caller; we make that resolution raise a non-auth error so the
+        # generic handler fires before ``identity`` is ever assigned.
+        params = SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "video"}))
+
+        with (
+            patch.object(
+                self.handler,
+                "_resolve_a2a_identity",
+                side_effect=RuntimeError("tenant lookup failed"),
+            ),
+            patch("src.a2a_server.adcp_a2a_server.record_boundary_error_for_identity") as record_error,
+            patch("src.a2a_server.adcp_a2a_server.record_boundary_error") as record_raw,
+            patch.object(self.handler, "_send_protocol_webhook", new_callable=AsyncMock),
+            pytest.raises(InternalError),
+        ):
+            await self.handler.on_message_send(params, ServerCallContext())
+
+        # Routed through the identity-aware helper with the unresolved (None) identity…
+        record_error.assert_called_once_with("a2a", "message_processing", ANY, None)
+        # …and never through the raw sink with a fabricated "unknown" tenant.
+        record_raw.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_discovery_skills_accept_anonymous_identity(self):
         """Discovery skills should accept anonymous identity (no principal_id)."""
         discovery_skills = {
