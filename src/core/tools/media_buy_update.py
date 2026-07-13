@@ -207,6 +207,9 @@ def _validate_creatives_for_assignment(
     found_by_id = {c.creative_id: c for c in creatives_list}
     missing_ids = [cid for cid in requested_ids if cid not in found_by_id]
     if missing_ids:
+        # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
+        # CREATIVE_NOT_FOUND uniformity MUST — the BR-UC-003 ext-i storyboard
+        # cell grades CREATIVE_REJECTED; deferred pending upstream reconciliation.
         raise AdCPCreativeRejectedError(
             f"Creative IDs not found: {', '.join(missing_ids)}",
             suggestion=(

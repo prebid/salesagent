@@ -371,6 +371,10 @@ def _validate_creatives_before_adapter_call(
     if missing_ids:
         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
         logger.error(log_safe(error_msg))
+        # FIXME(#1598): pinned enum says CREATIVE_NOT_FOUND MUST be uniform for
+        # unowned creative_ids, but this surface emits CREATIVE_REJECTED (the
+        # BR-UC-003 ext-i storyboard cell grades it) — deferred pending
+        # upstream reconciliation.
         raise AdCPCreativeRejectedError(
             error_msg,
             suggestion=(
@@ -3775,6 +3779,9 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
+                        # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
+                        # CREATIVE_NOT_FOUND uniformity MUST — deferred pending
+                        # upstream reconciliation.
                         raise AdCPCreativeRejectedError(
                             error_msg,
                             suggestion=(
