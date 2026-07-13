@@ -236,14 +236,14 @@ class TestNoPrincipalDbLookupsInTools:
 
         tools_dir = Path(__file__).parent.parent.parent / "src" / "core" / "tools"
         violations: list[tuple[str, str]] = []
-        for path in sorted(tools_dir.glob("*.py")):
+        for path in sorted(tools_dir.rglob("*.py")):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
                     fn = node.func
                     name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
                     if name in self._BANNED:
-                        violations.append((f"src/core/tools/{path.name}", name))
+                        violations.append((f"src/core/tools/{path.relative_to(tools_dir)}", name))
         new = [v for v in violations if v not in self.ALLOWLIST]
         assert not new, (
             "principal DB lookups inside tool modules (use identity.principal via "
