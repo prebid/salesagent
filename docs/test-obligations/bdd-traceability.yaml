@@ -2875,8 +2875,8 @@ mappings:
     - adcp_scenario_id: "T-UC-004-poll-omits-webhook-fields"
       adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
       obligation_id: null
-      upstream_refs: ["BR-UC-004-alt-webhook", "BR-RULE-222"]
-      business_rules: ["BR-RULE-222"]
+      upstream_refs: ["BR-UC-004-alt-webhook", "BR-RULE-029"]
+      business_rules: ["BR-RULE-029"]
       status: new
     - adcp_scenario_id: "T-UC-004-webhook-retry-5xx"
       adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"

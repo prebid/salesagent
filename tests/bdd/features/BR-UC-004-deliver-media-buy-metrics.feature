@@ -300,11 +300,13 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the payload should not include "aggregated_totals" field
     # UC-004 note: aggregated totals are polling-only (not webhook)
 
-  @T-UC-004-webhook-scheduler-derivation @alternative @polling @invariant @BR-RULE-029 @hand-edited
   # HAND-EDITED: salesagent-local scenario (not in adcp-req). The @hand-edited
   # marker makes compile_bdd.py --merge classify this LEGACY-PRESERVE, and its
   # bdd-traceability.yaml entry survives the rederive prune (id kept in
   # all_scenario_ids). Added for the #1570 review (grade the real scheduler path).
+  # NOTE: this comment MUST stay ABOVE the tag line — a comment between the tag
+  # line and Scenario: makes the compiler parse tags=[]/id=None -> LEGACY-DELETE.
+  @T-UC-004-webhook-scheduler-derivation @alternative @polling @invariant @BR-RULE-029 @hand-edited
   Scenario: Delivery webhook scheduler derives notification_type and sequence from production state
     # Drives the REAL DeliveryWebhookScheduler — not the WebhookDeliveryService
     # is_final/is_adjusted flags: notification_type comes from
@@ -317,9 +319,10 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the scheduler webhook payload notification_type should be "scheduled"
     And the scheduler webhook payload sequence_number should be 1
 
-  @T-UC-004-poll-omits-webhook-fields @main-flow @polling @v3-1 @invariant @BR-RULE-222 @hand-edited
   # HAND-EDITED: salesagent-local scenario (not in adcp-req). See the
-  # @hand-edited note on the scheduler-derivation scenario above.
+  # @hand-edited note on the scheduler-derivation scenario above (comment stays
+  # ABOVE the tag line so the compiler classifies it LEGACY-PRESERVE).
+  @T-UC-004-poll-omits-webhook-fields @main-flow @polling @v3-1 @invariant @BR-RULE-029 @hand-edited
   Scenario: Synchronous poll omits the webhook-only fields
     # #1570: notification_type / sequence_number / next_expected_at are "only
     # present in webhook deliveries" — the synchronous poll must omit all three,

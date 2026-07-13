@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require_error, _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -1738,7 +1739,7 @@ def then_poll_omits_webhook_only_fields(ctx: dict) -> None:
     """
     wire = ctx.get("wire_response")
     if wire is None:
-        wire = ctx["response"].model_dump(mode="json")
+        wire = _require_response(ctx).model_dump(mode="json")
     for field in ("notification_type", "sequence_number", "next_expected_at"):
         assert field not in wire, (
             f"synchronous poll must omit webhook-only {field!r}, got {wire.get(field)!r} (keys={list(wire.keys())})"
