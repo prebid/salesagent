@@ -588,9 +588,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # GRADUATED (#1417/nzjx): UC-003 empty update now rejected. Production raises
+        # UC-003 empty update (#1417/nzjx): production now rejects with
         # AdCPInvalidRequestError (INVALID_REQUEST + buyer suggestion) per BR-RULE-022
-        # INV-3. Grounded against AdCP 3.1 GA: update fields are all optional in
+        # INV-3, but the @T-UC-003-empty-update BDD scenario stays DORMANT — it is
+        # neither ext-* nor targeting-overlay, so the UC-003 harness gate below
+        # ("UC-003 harness not yet wired for non-extension scenarios") xfails it.
+        # The behavior is graded by tests/integration/test_uc003_mcp_update_error_capture.py
+        # (per-transport: INVALID_REQUEST + non-empty top-level suggestion on the wire).
+        # Grounded against AdCP 3.1 GA: update fields are all optional in
         # update-media-buy-request.json, so an empty update passes schema validation and
         # is a SEMANTIC rejection → INVALID_REQUEST, not the schema-level VALIDATION_ERROR
         # (GA L3 error-handling). The two Scenario-Outline rows that asserted
