@@ -149,12 +149,36 @@ class TestValidateCallbackUrl:
             is_valid, _ = WebhookURLValidator.validate_callback_url("http://localhost:8765/webhook")
         assert is_valid is True
 
+    def test_test_mode_allows_private_compose_host(self):
+        """Test mode reaches a Docker-compose receiver on a private (RFC-1918) address.
+
+        The E2E runner exposes its webhook receiver via the compose alias ``tests``,
+        which resolves to a private 172.x IP. Round-1 blocked it (SSRF range), failing
+        5 E2E webhook tests; allow_private in non-prod reaches it (#1512).
+        """
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with (
+            patch("src.core.config.is_production", return_value=False),
+            patch("src.core.security.url_validator.socket.gethostbyname", return_value="172.20.0.5"),
+        ):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("http://tests:8765/webhook")
+        assert is_valid is True
+
     def test_metadata_ip_blocked_even_in_test_mode(self):
-        """Localhost tolerance must NOT extend to link-local/metadata targets."""
+        """Private-target tolerance must NOT extend to link-local/metadata targets."""
         from src.core.webhook_validator import WebhookURLValidator
 
         with patch("src.core.config.is_production", return_value=False):
             is_valid, _ = WebhookURLValidator.validate_callback_url("http://169.254.169.254/latest/meta-data")
+        assert is_valid is False
+
+    def test_metadata_hostname_blocked_even_in_test_mode(self):
+        """The GCP metadata hostname is blocked regardless of allow_private."""
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with patch("src.core.config.is_production", return_value=False):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("http://metadata.google.internal/computeMetadata")
         assert is_valid is False
 
 

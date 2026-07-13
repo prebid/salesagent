@@ -88,10 +88,12 @@ class WebhookURLValidator:
         """Env-gated validation for a buyer-supplied push callback URL (#1512).
 
         The single gate used at callback registration AND delivery. Production
-        requires HTTPS and blocks loopback/localhost (so a plain-HTTP or internal
-        target is refused); non-production relaxes both so local webhook receivers
-        (e.g. the E2E localhost receiver) work. In every environment the SSRF
-        range checks (link-local/metadata 169.254.169.254, RFC-1918) still apply.
+        requires HTTPS and blocks all internal targets (loopback, RFC-1918,
+        localhost/Docker aliases). Non-production passes ``allow_private=True`` so a
+        trusted test/dev receiver on the local host or a Docker-compose network
+        (e.g. the E2E ``tests`` alias, which resolves to a private 172.x address)
+        is reachable. Cloud-metadata / link-local targets (169.254.x, fe80::,
+        metadata.google.internal) stay blocked in EVERY environment.
 
         HTTPS-in-prod plus disabled redirects on the outbound client (see
         protocol_webhook_service) close the demonstrated redirect-to-metadata and
@@ -102,4 +104,4 @@ class WebhookURLValidator:
 
         if is_production():
             return check_url_ssrf(url, require_https=True)
-        return cls.validate_for_testing(url, allow_localhost=True)
+        return check_url_ssrf(url, allow_private=True)
