@@ -103,11 +103,16 @@ class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
 
 
 class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
-    """A verified authorized property — satisfies the create_media_buy setup
-    checklist's "Authorized Properties" gate (SetupChecklistService counts
-    AuthorizedProperty rows for the tenant). The in-process transports skip the
-    gate via the testing context; the live e2e_rest server enforces it, so a
-    fully-set-up tenant needs at least one of these.
+    """A verified AuthorizedProperty row.
+
+    Satisfies the create_media_buy setup checklist's "Authorized Properties" gate
+    (SetupChecklistService counts AuthorizedProperty rows for the tenant; in-process
+    transports skip it via the testing context, the live e2e_rest server enforces
+    it). Also the row a product's ``by_id`` selector references: ``property_id`` is
+    the slug PK, ``identifiers`` carries the concrete values (domains) a buyer's
+    property_list resolves to. Override ``publisher_domain``/``identifiers``/``tags``
+    together when a test needs the faithful intersection to map id/tag → identifier
+    value.
     """
 
     class Meta:
@@ -120,8 +125,13 @@ class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):
     property_id = Sequence(lambda n: f"prop_{n:04d}")
     property_type = "website"
     name = LazyAttribute(lambda o: f"Authorized Property {o.property_id}")
-    publisher_domain = Sequence(lambda n: f"authorized-{n:04d}.example.com")
+    # Fixed (not a unique Sequence): property-list tests pair un-overridden rows with by_id/by_tag
+    # selectors that name this exact domain, and the setup-checklist gate counts rows (domain-
+    # insensitive — property_id is the unique PK). A unique-per-row domain silently breaks the
+    # former. Override publisher_domain/identifiers when a test needs distinct values.
+    publisher_domain = "example.com"
     identifiers = LazyAttribute(lambda o: [{"type": "domain", "value": o.publisher_domain}])
+    tags = None
     verification_status = "verified"
 
 

@@ -70,6 +70,14 @@ repos:
         entry: uv run pytest tests/unit/test_adcp_contract.py -v --tb=short
         language: system
         pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: check-full-suite-before-push
+        name: Full suite verified this HEAD (pre-push)
+        entry: uv run python .pre-commit-hooks/check_full_suite_before_push.py
+        language: system
+        pass_filenames: false
+        always_run: true
         stages: [pre-push]
 
       - id: mcp-schema-alignment

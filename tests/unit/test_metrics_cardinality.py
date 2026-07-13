@@ -33,9 +33,9 @@ def test_no_histogram_has_tenant_id_label():
 
 def test_categorize_error_bounds_error_type_to_enum():
     """categorize_error must collapse arbitrary exceptions into a fixed enum."""
-    from src.core.metrics import categorize_error
+    from src.core.metrics import ERROR_TYPE_VALUES, categorize_error
 
-    allowed = {"validation", "timeout", "model_error", "other"}
+    allowed = set(ERROR_TYPE_VALUES)
 
     # 1000 distinct exception classes must all map into the fixed enum.
     seen = set()
@@ -45,6 +45,26 @@ def test_categorize_error_bounds_error_type_to_enum():
 
     assert seen <= allowed, f"categorize_error produced out-of-enum values: {seen - allowed}"
     assert len(allowed) <= 5
+
+
+def test_categorize_error_buckets_known_adcp_classes():
+    """The typed AdCP error families map to their intended (distinct) buckets — in
+    particular an operator-config/credential failure (the ad-server 403) is its own
+    'configuration' bucket, not collapsed into 'validation' or 'other'."""
+    from src.core.exceptions import (
+        AdCPConfigurationError,
+        AdCPRateLimitError,
+        AdCPServiceUnavailableError,
+        AdCPValidationError,
+    )
+    from src.core.metrics import categorize_error
+
+    assert categorize_error(AdCPConfigurationError("boom")) == "configuration"
+    assert categorize_error(AdCPValidationError("boom")) == "validation"
+    assert categorize_error(AdCPServiceUnavailableError("boom")) == "timeout"
+    assert categorize_error(AdCPRateLimitError("boom")) == "timeout"
+    assert categorize_error(RuntimeError("boom")) == "model_error"
+    assert categorize_error(Exception("boom")) == "other"
 
 
 def test_record_ai_review_error_cardinality_bounded():

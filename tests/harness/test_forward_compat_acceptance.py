@@ -126,7 +126,7 @@ def _get_products_patches():
         patch("src.services.dynamic_products.generate_variants_for_brief", new_callable=AsyncMock, return_value=[]),
         patch("src.services.ai.factory.get_factory"),
         patch("src.services.dynamic_pricing_service.DynamicPricingService"),
-        patch("src.core.property_list_resolver.resolve_property_list", new_callable=AsyncMock, return_value=[]),
+        patch("src.core.property_list_resolver.resolve_property_list_typed", new_callable=AsyncMock, return_value=[]),
         patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
     ]
 

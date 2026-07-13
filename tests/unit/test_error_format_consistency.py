@@ -535,6 +535,126 @@ class TestCrossTransportErrorConsistency:
         assert serialized["errors"][0]["code"] == "VALIDATION_ERROR"
         assert "message" in serialized  # Protocol message field added by serializer
 
+    @pytest.mark.asyncio
+    async def test_serialize_for_a2a_success_flag_is_type_based(self):
+        """The A2A ``success`` flag reflects the response TYPE, never errors-presence.
+
+        Advisory errors[] legitimately ride non-error envelopes (the create
+        submitted variant, delivery advisories, hydration advisories) — a
+        booked buy with a zero-overlap advisory must NOT wire as a failure,
+        or buyers retry and double-book.
+        """
+        from src.core.schemas import (
+            CreateMediaBuyError,
+            CreateMediaBuyResult,
+            CreateMediaBuySubmitted,
+            CreateMediaBuySuccess,
+            Error,
+            GetMediaBuysResponse,
+        )
+
+        advisory = Error(code="PRODUCT_UNAVAILABLE", message="zero overlap with product p1")
+
+        # Submitted (pending approval) carrying advisory errors → success True.
+        submitted = CreateMediaBuyResult(
+            status="submitted",
+            response=CreateMediaBuySubmitted(task_id="step_1", errors=[advisory], status="submitted"),
+        )
+        serialized = AdCPRequestHandler._serialize_for_a2a(submitted)
+        assert serialized["success"] is True
+        assert serialized["errors"][0]["code"] == "PRODUCT_UNAVAILABLE"
+        assert serialized["status"] == "submitted"
+        assert "media_buy_id" not in serialized  # spec forbids it on the submitted variant
+
+        # Completed success with advisory ext → success True, advisory in message.
+        from src.core.tools.media_buy_create import _advisory_ext
+
+        completed = CreateMediaBuyResult(
+            status="completed",
+            response=CreateMediaBuySuccess(media_buy_id="mb1", packages=[], ext=_advisory_ext([advisory])),
+        )
+        serialized = AdCPRequestHandler._serialize_for_a2a(completed)
+        assert serialized["success"] is True
+        assert "zero overlap" in serialized["message"]
+
+        # Error union member wrapped in the result → success False.
+        failed = CreateMediaBuyResult(
+            status="failed",
+            response=CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="bad")]),
+        )
+        assert AdCPRequestHandler._serialize_for_a2a(failed)["success"] is False
+
+        # Degraded-but-completed task (errors-only GetMediaBuysResponse, e.g.
+        # the AUTH_REQUIRED degradation) → success True: the task completed
+        # and returned a result with an advisory explaining the degradation.
+        degraded = GetMediaBuysResponse(
+            media_buys=[],
+            errors=[Error(code="AUTH_REQUIRED", message="Principal ID not found in context")],
+        )
+        serialized = AdCPRequestHandler._serialize_for_a2a(degraded)
+        assert serialized["success"] is True
+        assert serialized["errors"][0]["code"] == "AUTH_REQUIRED"
+
+    def test_success_map_covers_every_error_union_member(self):
+        """Fitness function: a future response union's error member must not
+        silently default to success=True (fail-open) in the A2A flag map.
+
+        Enumerates every `*Response = A | B` union in the schemas package and
+        asserts the serializer reports False for each member whose name ends
+        in Error.
+        """
+        import typing
+
+        from src.core import schemas
+
+        error_members = []
+        for name in dir(schemas):
+            obj = getattr(schemas, name)
+            if typing.get_origin(obj) in (typing.Union, __import__("types").UnionType):
+                for member in typing.get_args(obj):
+                    if isinstance(member, type) and member.__name__.endswith("Error"):
+                        error_members.append(member)
+        assert error_members, "expected at least the create/update error unions"
+        for member in error_members:
+            instance = member.model_construct()
+            assert AdCPRequestHandler._response_indicates_success(instance) is False, (
+                f"{member.__name__} would wire success=True — add it to the type map"
+            )
+
+    @pytest.mark.asyncio
+    async def test_reconstruct_submitted_create_response(self):
+        """The artifact text-part reconstruction handles the submitted variant.
+
+        The envelope's ``status`` is the TASK status; ``CreateMediaBuySuccess``
+        would reject ``"submitted"`` (it is not a MediaBuyStatus) — the
+        discriminator must pick ``CreateMediaBuySubmitted`` first or the text
+        part is silently lost.
+        """
+        from src.core.schemas import CreateMediaBuySubmitted
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        data = {"status": "submitted", "task_id": "step_9", "message": "pending approval"}
+        obj = handler._reconstruct_response_object("create_media_buy", data)
+        assert isinstance(obj, CreateMediaBuySubmitted)
+        assert "step_9" in str(obj)
+
+    @pytest.mark.asyncio
+    async def test_reconstruct_submitted_update_response(self):
+        """The update artifact reconstruction handles the submitted variant.
+
+        update_media_buy gained a submitted variant (approval-pending recompile).
+        Without a ``status == "submitted"`` branch mirroring create, the payload
+        (task_id, no media_buy_id) falls into ``UpdateMediaBuyError`` and the text
+        part reads as a failure instead of a pending-approval submission.
+        """
+        from src.core.schemas import UpdateMediaBuySubmitted
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        data = {"status": "submitted", "task_id": "step_42", "message": "pending approval"}
+        obj = handler._reconstruct_response_object("update_media_buy", data)
+        assert isinstance(obj, UpdateMediaBuySubmitted)
+        assert obj.task_id == "step_42"
+
 
 # ---------------------------------------------------------------------------
 # Recovery field in MCP error responses
@@ -564,6 +684,7 @@ class TestMCPRecoveryInErrorResponses:
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
             ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPServiceUnavailableError", "offline", "SERVICE_UNAVAILABLE", "transient"),
+            ("AdCPCapabilityNotSupportedError", "no property_list", "UNSUPPORTED_FEATURE", "correctable"),
         ],
         ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
     )

@@ -62,10 +62,10 @@ def _discover_integration_test_files() -> list[str]:
     conftest.py files. These suites all exercise real DB state and must use
     factories, not inline session.add() / get_db_session() in test bodies.
 
-    Also scans every module under tests/helpers/. Shared DB-seed helpers there are
-    not named test_*.py but must follow the same factory-only rule, so that new
-    session.add() debt in helper code is caught at the source rather than hidden
-    behind a module the guard never reads.
+    Also scans every module under tests/helpers/ and tests/utils/. Shared DB-seed
+    helpers there (e.g. seed_*_tenant) are not named test_*.py but must follow the
+    same factory-only rule, so that new session.add() debt in helper code is caught
+    at the source rather than hidden behind a module the guard never reads.
     """
     roots = ("tests/integration*", "tests/admin", "tests/e2e")
     test_files: list[str] = []
@@ -73,7 +73,10 @@ def _discover_integration_test_files() -> list[str]:
     for root in roots:
         test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
+    # tests/helpers/ and tests/utils/ both host shared DB-seed helpers; a future
+    # session.add() in either must be caught at the source, not escape the scan.
     helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
+    helper_files += glob.glob("tests/utils/**/*.py", recursive=True)
     return sorted(set(test_files + conftest_files + helper_files))
 
 

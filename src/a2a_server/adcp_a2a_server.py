@@ -4,6 +4,7 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
+import asyncio
 import copy
 import json
 import logging
@@ -68,7 +69,12 @@ from src.core.exceptions import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
-from src.core.schemas import CreativeStatusEnum
+from src.core.schemas import (
+    CreateMediaBuyError,
+    CreateMediaBuyResult,
+    CreativeStatusEnum,
+    UpdateMediaBuyError,
+)
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
 from src.core.tools import (
@@ -453,6 +459,7 @@ class AdCPRequestHandler(RequestHandler):
             # Import response classes - for union types, import the concrete variants
             from src.core.schemas import (
                 CreateMediaBuyError,
+                CreateMediaBuySubmitted,
                 CreateMediaBuySuccess,
                 GetMediaBuyDeliveryResponse,
                 GetMediaBuysResponse,
@@ -464,23 +471,29 @@ class AdCPRequestHandler(RequestHandler):
                 SyncAccountsResponse,
                 SyncCreativesResponse,
                 UpdateMediaBuyError,
+                UpdateMediaBuySubmitted,
                 UpdateMediaBuySuccess,
+                classify_media_buy_response_payload,
             )
 
             # For union types (CreateMediaBuyResponse, UpdateMediaBuyResponse),
-            # determine which concrete class based on data content
-            if skill_name == "create_media_buy":
-                # Success responses have media_buy_id, error responses have errors
-                if "media_buy_id" in data:
-                    return CreateMediaBuySuccess(**data)
-                else:
-                    return CreateMediaBuyError(**data)
-            elif skill_name == "update_media_buy":
-                # Success responses have media_buy_id, error responses have errors
-                if "media_buy_id" in data:
-                    return UpdateMediaBuySuccess(**data)
-                else:
-                    return UpdateMediaBuyError(**data)
+            # pick the concrete variant with the shared shape classifier — the
+            # same decision the idempotency replay path consumes.
+            media_buy_variants: dict[str, dict[str, type]] = {
+                "create_media_buy": {
+                    "success": CreateMediaBuySuccess,
+                    "submitted": CreateMediaBuySubmitted,
+                    "error": CreateMediaBuyError,
+                },
+                "update_media_buy": {
+                    "success": UpdateMediaBuySuccess,
+                    "submitted": UpdateMediaBuySubmitted,
+                    "error": UpdateMediaBuyError,
+                },
+            }
+            if skill_name in media_buy_variants:
+                variant = classify_media_buy_response_payload(data)
+                return media_buy_variants[skill_name][variant](**data)
 
             # Non-union response types - use the concrete class directly
             response_map: dict[str, type] = {
@@ -666,21 +679,19 @@ class AdCPRequestHandler(RequestHandler):
                         )
                         results.append(self._build_failed_skill_result(skill_name, e))
 
-                # Check for submitted status (manual approval required) - return early without artifacts
-                # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
-                for res in results:
-                    if res["success"] and isinstance(res["result"], dict):
-                        result_status = res["result"].get("status")
-                        if result_status == "submitted":
-                            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
-                            del task.artifacts[:]  # No artifacts for pending tasks
-                            logger.info(
-                                f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
-                            )
-                            # Send protocol-level webhook notification
-                            await self._send_protocol_webhook(task, status="submitted")
-                            self.tasks[task_id] = task
-                            return task
+                # Submitted AdCP status (manual approval required): the A2A
+                # Task COMPLETES with the artifact carrying the ``submitted``
+                # variant. The spec's extraction algorithm reads artifacts only
+                # on final A2A states (interim SUBMITTED reads status.message,
+                # which carries no DataPart here), and the calling-an-agent
+                # prose explicitly sanctions a completed A2A task carrying a
+                # submitted AdCP response — the payload's own ``status`` field
+                # is the discriminator. The AdCP task_id additionally rides
+                # ``artifact.metadata.adcp_task_id`` for protocol routers.
+                has_submitted = any(
+                    res["success"] and isinstance(res["result"], dict) and res["result"].get("status") == "submitted"
+                    for res in results
+                )
 
                 # Create artifacts for all skill results with human-readable text
                 for i, res in enumerate(results):
@@ -717,13 +728,29 @@ class AdCPRequestHandler(RequestHandler):
                         parts.append(Part(text=text_message))
                     parts.append(Part(data=_dict_to_value(artifact_data)))
 
-                    task.artifacts.append(
-                        Artifact(
-                            artifact_id=f"skill_result_{i + 1}",
-                            name=f"{'error' if not res['success'] else res['skill']}_result",
-                            parts=parts,
-                        )
+                    skill_artifact = Artifact(
+                        artifact_id=f"skill_result_{i + 1}",
+                        name=f"{'error' if not res['success'] else res['skill']}_result",
+                        parts=parts,
                     )
+                    if (
+                        res["success"]
+                        and isinstance(artifact_data, dict)
+                        and artifact_data.get("status") == "submitted"
+                        and artifact_data.get("task_id")
+                    ):
+                        skill_artifact.metadata.update({"adcp_task_id": artifact_data["task_id"]})
+                    task.artifacts.append(skill_artifact)
+
+                if has_submitted:
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
+                    logger.info(
+                        "Task %s requires manual approval: completed A2A task carries the submitted payload",
+                        task_id,
+                    )
+                    await self._send_protocol_webhook(task, status="submitted")
+                    self.tasks[task_id] = task
+                    return task
 
                 # Check if any skills failed and determine task status
                 failed_skills = [res["skill"] for res in results if not res["success"]]
@@ -918,7 +945,10 @@ class AdCPRequestHandler(RequestHandler):
                                 data_dict = json.loads(json_format.MessageToJson(part.data))
                                 result_data[artifact.name] = data_dict
 
-                                # Check if this is a sync_creatives response with pending creatives
+                                # Check if this is a sync_creatives response with pending creatives.
+                                # The A2A task state stays COMPLETED in both submitted cases (the
+                                # extraction algorithm reads artifacts only on final states); only
+                                # the AdCP-level webhook status reports "submitted".
                                 if artifact.name == "result" and isinstance(data_dict, dict):
                                     creatives = data_dict.get("creatives", [])
                                     if any(
@@ -926,14 +956,14 @@ class AdCPRequestHandler(RequestHandler):
                                         for c in creatives
                                         if isinstance(c, dict)
                                     ):
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
                                         task_status_str = "submitted"
 
                                     # Check for explicit status field (e.g., create_media_buy returns this)
                                     result_status = data_dict.get("status")
                                     if result_status == "submitted":
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
                                         task_status_str = "submitted"
+                                        if data_dict.get("task_id"):
+                                            artifact.metadata.update({"adcp_task_id": data_dict["task_id"]})
 
             # Mark task with appropriate status
             task.status.CopyFrom(TaskStatus(state=task_state))
@@ -1331,15 +1361,31 @@ class AdCPRequestHandler(RequestHandler):
             return response
 
         response_data = response.model_dump(mode="json")
-        response_data["message"] = str(response)
+        # Only synthesize the protocol message when the payload didn't supply
+        # one: the submitted variant's ``message`` is a genuine spec field
+        # whose wire content must match REST/MCP — overwriting it here both
+        # diverged the transports and doubled the tracking sentence in the
+        # reconstructed text part. (``.get(...) is None`` also covers a dump
+        # that emits an explicit ``message: None``, where setdefault keeps
+        # the None instead of synthesizing.)
+        if response_data.get("message") is None:
+            response_data["message"] = str(response)
 
-        # Derive success from errors field if present, default True otherwise
-        if "errors" in response_data:
-            response_data["success"] = not bool(response_data["errors"])
-        else:
-            response_data.setdefault("success", True)
+        # Success reflects the TASK outcome, derived from the response TYPE —
+        # never from errors-presence: advisory errors[] legitimately ride
+        # success/submitted envelopes (delivery, creative formats, hydration,
+        # the create submitted variant) and must not flip the flag. Error-union
+        # members and failed-status results are the failures.
+        response_data["success"] = AdCPRequestHandler._response_indicates_success(response)
 
         return response_data
+
+    @staticmethod
+    def _response_indicates_success(response: BaseModel) -> bool:
+        """Type-based task outcome for the A2A ``success`` flag."""
+        if isinstance(response, CreateMediaBuyResult):
+            return not isinstance(response.response, CreateMediaBuyError) and response.status != "failed"
+        return not isinstance(response, (CreateMediaBuyError, UpdateMediaBuyError))
 
     async def _handle_explicit_skill(
         self,
@@ -1499,13 +1545,10 @@ class AdCPRequestHandler(RequestHandler):
         if isinstance(response, dict):
             response_data = response
         else:
-            # Capture human-readable message before converting to dict
-            message = str(response)
-            response_data = response.model_dump(mode="json")
-            # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
-            # since returning a dict bypasses that logic
-            response_data["message"] = message
-            response_data.setdefault("success", True)
+            # The canonical serializer owns the protocol fields (message
+            # no-clobber, type-derived success) — a hand-rolled copy here
+            # silently diverges the day its semantics change again.
+            response_data = self._serialize_for_a2a(response)
         return apply_version_compat("get_products", response_data, adcp_version)
 
     async def _handle_create_media_buy_skill(
@@ -1897,8 +1940,11 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
 
-        # Call core function with validated fields + raw nested structures and identity
-        response = core_update_media_buy_tool(
+        # Call core function with validated fields + raw nested structures and identity.
+        # Offloaded to a worker thread: the sync update path's Kevel targeting compile can
+        # make a multi-second /v1/site fetch that would otherwise block the event loop.
+        response = await asyncio.to_thread(
+            core_update_media_buy_tool,
             media_buy_id=req.media_buy_id or "",
             paused=req.paused,
             start_time=params.get("start_time"),

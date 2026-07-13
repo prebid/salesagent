@@ -256,13 +256,15 @@ class TestGetAdcpCapabilitiesWithTenant:
                 assert response.media_buy.features is not None
                 assert response.media_buy.features.inline_creative_management is True
 
-                # Honesty assertions: capabilities the seller can't actually fulfill
-                # MUST declare False so buyers see the gap at discovery time, not at
-                # task-dispatch time. property_list_filtering: no adapter compiles it
-                # yet — flips True via supports_property_list_filtering().
+                # property_list_filtering names the get_products filter, which the
+                # PropertyIntersection serves for every tenant — True regardless of
+                # adapter. The create-targeting capability is the separate
+                # ext.prebid.property_list_targeting signal: False here because no
+                # adapter is resolved for this principal-less call.
                 # catalog_management: no sync_catalogs tool ships in this codebase;
                 # admin product CRUD is NOT the spec's buyer-driven catalog sync.
-                assert response.media_buy.features.property_list_filtering is False
+                assert response.media_buy.features.property_list_filtering is True
+                assert response.ext.prebid["property_list_targeting"] is False
                 assert response.media_buy.features.catalog_management is False
 
                 # Should have execution with targeting
@@ -654,10 +656,12 @@ class TestResponseShapeCapabilities:
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
-        """Features defaults: inline_creative_management=True, property_list_filtering=False.
+        """Features defaults: inline_creative_management=True, property_list_filtering=True.
 
-        property_list_filtering is False until an adapter actually compiles
-        `targeting_overlay.property_list` into native ad-server targeting.
+        property_list_filtering names the get_products filter (unconditional);
+        the adapter-derived create-targeting signal is
+        ext.prebid.property_list_targeting — False here because this
+        principal-less call resolves no adapter.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -669,7 +673,44 @@ class TestResponseShapeCapabilities:
 
         features = response.media_buy.features
         assert features.inline_creative_management is True
-        assert features.property_list_filtering is False
+        assert features.property_list_filtering is True
+        assert response.ext.prebid["property_list_targeting"] is False
+
+    def test_adapter_with_property_list_support_advertises_capability(self):
+        """Adapter with supports_property_list_targeting=True flips the
+        ``ext.prebid.property_list_targeting`` wire signal to True.
+
+        This is the cross-boundary contract that lets Kevel (which declares
+        supports_property_list_targeting=True) advertise
+        the create-targeting capability to buyers. Without this test, the True
+        path is silent — only the False path (the non-compiling adapters) is
+        covered.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        # Adapter whose CLASS has supports_property_list_targeting=True
+        # (the supports_property_list_targeting() helper checks the class attribute,
+        # not the instance, so we need a real class with the attribute set).
+        supporting_adapter_class = type(
+            "_SupportingAdapter",
+            (object,),
+            {
+                "supports_property_list_targeting": True,
+                "default_channels": [],
+            },
+        )
+        mock_adapter = supporting_adapter_class()
+        mock_adapter.get_targeting_capabilities = MagicMock(return_value=None)
+
+        identity = _make_capabilities_identity()
+        stack = _patch_capabilities_deps(adapter=mock_adapter)
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.features.property_list_filtering is True
+        assert response.ext.prebid["property_list_targeting"] is True
 
     def test_full_response_serialization_shape(self):
         """Full response model_dump(mode='json') has expected keys."""

@@ -1,18 +1,32 @@
 import json
 import uuid
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, ClassVar
 
 import requests
+from adcp.types import PropertyListReference
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.kevel_site_resolver import (
+    KevelSiteResolver,
+    ResolvedSiteIds,
+)
+from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
+    AdCPError,
     AdCPPackageNotFoundError,
+    AdCPValidationError,
+)
+from src.core.property_list_resolver import (
+    iter_package_property_list_refs,
+    property_list_cache_key,
+    resolve_property_list_typed_sync,
 )
 from src.core.schemas import *
+from src.core.validation_helpers import package_field_path
 
 
 class Kevel(AdServerAdapter):
@@ -21,6 +35,10 @@ class Kevel(AdServerAdapter):
     """
 
     adapter_name = "kevel"
+
+    # Kevel has a native property_list compilation path via Site.Id → siteIds
+    # targeting. See src/adapters/kevel_site_resolver.py.
+    supports_property_list_targeting: ClassVar[bool] = True
 
     # Kevel specializes in social and retail_media
     # V3 channel names: native → social, retail → retail_media
@@ -52,6 +70,10 @@ class Kevel(AdServerAdapter):
         self.userdb_enabled = self.config.get("userdb_enabled", False)
         self.frequency_capping_enabled = self.config.get("frequency_capping_enabled", False)
 
+        # Annotate once above the branch so both arms share the type and the
+        # ``self._site_resolver is None`` guard in _resolve_property_list reads
+        # as the type-narrowing it is, not a disguised ``if self.dry_run``.
+        self._site_resolver: KevelSiteResolver | None = None
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
         else:
@@ -62,12 +84,207 @@ class Kevel(AdServerAdapter):
                 self.api_key, field="api_key", message="Kevel config is missing 'api_key'"
             )
             self.headers = {"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"}
+            self._site_resolver = KevelSiteResolver(
+                network_id=self.network_id, api_key=self.api_key, base_url=self.base_url
+            )
+
+        # Per-request memoization of property_list resolutions. The adapter
+        # instance is constructed per ``create_media_buy`` call via
+        # ``get_adapter()``, so this dict is effectively request-scoped.
+        # ``_raise_if_property_list_uncompilable`` and ``_build_targeting`` both
+        # need the same ``ResolvedSiteIds`` per package; memoizing here keeps
+        # the resolver call count at 1 per (agent_url, list_id) per request.
+        self._property_list_cache: dict[tuple[str, str, str], ResolvedSiteIds] = {}
 
     # Supported device types (Kevel doesn't support CTV)
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet"}
 
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"display", "native"}
+
+    def _resolve_property_list(self, ref: PropertyListReference) -> ResolvedSiteIds:
+        """Resolve a ``PropertyListReference`` once per request, with dry-run support.
+
+        Memoizes by ``(agent_url, list_id, auth_partition)`` so
+        ``_raise_if_property_list_uncompilable`` and ``_build_targeting`` share a
+        single resolution per package per request.
+
+        Dry-run path (``_site_resolver is None``): still inspect identifier
+        types (no Kevel HTTP needed — types come from the property-list agent
+        fetch which is its own cached call). Returns ``ResolvedSiteIds`` with
+        ``site_ids=set()`` because we don't have Kevel's index, so the
+        dry-run buy is accept-with-empty-siteIds. Identifier-type validation
+        still runs in dry-run so ``ios_bundle``-only lists surface as
+        ``UNSUPPORTED_FEATURE`` instead of being silently accepted.
+        """
+        cache_key = property_list_cache_key(ref)
+        if cache_key in self._property_list_cache:
+            return self._property_list_cache[cache_key]
+
+        if self._site_resolver is None:
+            # Dry-run: identifier-type validation only, no Kevel /v1/site HTTP.
+            identifiers = resolve_property_list_typed_sync(ref)
+            unsupported_types = KevelSiteResolver.classify_identifier_types(identifiers)
+            resolved = ResolvedSiteIds(site_ids=set(), unsupported_types=unsupported_types, unresolvable_values=[])
+        else:
+            resolved = self._site_resolver.resolve(ref)
+
+        self._property_list_cache[cache_key] = resolved
+        return resolved
+
+    def prewarm_targeting(self, packages: list[Any]) -> None:
+        """Resolve each package's property_list once so the ``/v1/site`` index is cached.
+
+        ``_build_targeting`` (run synchronously inside ``create_media_buy``, itself
+        called from the async ``_create_media_buy_impl``) compiles property_list to
+        siteIds via the resolver, whose ``/v1/site`` index fetch takes seconds.
+        Resolving here — the async caller invokes this through ``asyncio.to_thread``
+        — populates the shared ClassVar site cache and the per-request
+        ``_property_list_cache`` so the later synchronous compile hits a warm cache
+        instead of blocking the event loop. Dry-run (no site resolver) has no index
+        fetch to warm. Best-effort: a fetch failure is left for the compile path to
+        surface as a typed ``AdCPError`` (transient for an outage; correctable for a
+        list-service 4xx).
+        """
+        if self._site_resolver is None:
+            return
+        for _index, _package, ref, _key in iter_package_property_list_refs(packages):
+            try:
+                self._resolve_property_list(ref)
+            except Exception as exc:  # noqa: BLE001 — best-effort warm; the compile path re-resolves and surfaces any error
+                self.log(
+                    f"prewarm_targeting: deferring property_list resolution to compile path: {exc}",
+                    dry_run_prefix=False,
+                )
+
+    def _raise_if_property_list_uncompilable(self, packages: list[MediaPackage]) -> None:
+        """Reject property_list identifier types Kevel cannot compile to siteIds.
+
+        Kevel compiles ``domain``/``subdomain`` identifiers to ``siteId`` via
+        the resolver. Other types (``ios_bundle``, ``rss_url``, etc.) don't map
+        to Kevel's Site primitive and are rejected with ``UNSUPPORTED_FEATURE``
+        so the buyer gets a clean envelope instead of silently-truncated
+        targeting.
+
+        Kevel declares ``supports_property_list_targeting = True``, so the
+        ``_impl``-boundary ``raise_if_property_list_unsupported`` gate passes it
+        through; this per-identifier-type check is the Kevel-specific second
+        layer the generic boundary cannot perform without resolving the list.
+
+        Zero-match (every supported-type identifier exists in the list but
+        none correspond to a Kevel ``Site``) is **accepted** here: the buy
+        is created with empty ``siteIds`` and the downstream
+        ``inventory_list_no_match`` storyboard contract handles surfacing
+        that to the buyer. Compilation in ``_build_targeting`` will write
+        ``siteIds=[]`` in that case.
+
+        Dry-run path: STILL validates identifier types. The type list comes
+        from the property-list agent fetch which doesn't hit Kevel's API,
+        so dry-run can validate the spec contract without crossing the live
+        boundary.
+
+        Raises:
+            AdCPCapabilityNotSupportedError: when a package's property_list
+                contains identifier types Kevel cannot translate.
+        """
+        for index, _package, ref, _key in iter_package_property_list_refs(packages):
+            try:
+                resolved = self._resolve_property_list(ref)
+            except AdCPValidationError as exc:
+                # Re-field the shared resolver's bare 'property_list' buyer-4xx (a
+                # list_id the buyer's list service rejected) with this package's
+                # indexed overlay path, matching the identifier-type gate below, so
+                # the buyer can tell which package's reference the list rejected.
+                exc.field = package_field_path("targeting_overlay.property_list", index)
+                raise
+            if resolved.unsupported_types:
+                raise AdCPCapabilityNotSupportedError(
+                    message=(
+                        "Kevel compiles property_list domain/subdomain identifiers to siteIds "
+                        f"but the referenced list contains identifier types it cannot translate: "
+                        f"{sorted(resolved.unsupported_types)}. Remove these identifier types "
+                        "from the list, or use a different property list scoped to domain/subdomain."
+                    ),
+                    field=package_field_path("targeting_overlay.property_list", index),
+                    suggestion=(
+                        "Remove the unsupported identifier types from the property list, or "
+                        "scope the list to domain/subdomain identifiers."
+                    ),
+                )
+
+    def validate_targeting_update(self, packages: list[Any]) -> None:
+        """Update-side identifier-type gate — same check create runs pre-booking.
+
+        Delegates to ``_raise_if_property_list_uncompilable`` (the package
+        objects expose ``targeting_overlay`` the same way create's
+        MediaPackages do), so create and update reject the same lists with
+        byte-identical envelopes.
+        """
+        self._raise_if_property_list_uncompilable(packages)
+
+    def _fetch_campaign_flights(self, campaign_id: str) -> list[dict[str, Any]]:
+        """GET every Kevel flight for a campaign.
+
+        ``campaign_id`` is the numeric Kevel campaign id (the ``kevel_`` prefix on
+        ``media_buy_id`` already stripped). A transport failure surfaces as a typed
+        transient ``AdCPAdapterError`` via the shared mapping.
+        """
+        with wrap_request_errors():
+            response = requests.get(f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id})
+            response.raise_for_status()
+        return response.json().get("items", [])
+
+    def _resolve_flight_by_name(self, campaign_id: str, package_id: str) -> dict[str, Any]:
+        """Resolve an AdCP ``package_id`` to its live Kevel flight within ``campaign_id``.
+
+        Kevel keys flights by numeric ``Id``; ``create_media_buy`` stores the AdCP
+        package id as the flight ``Name``. Every flight mutation must resolve
+        Name->Id before addressing ``/flight/{Id}`` — PUTting ``/flight/{Name}``
+        404s and the live flight keeps serving the stale configuration.
+        """
+        flight = next(
+            (f for f in self._fetch_campaign_flights(campaign_id) if f.get("Name") == package_id),
+            None,
+        )
+        if not flight:
+            raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+        if flight.get("Id") is None:
+            # Symmetric with the site path's malformed-record guard: a flight without
+            # a numeric Id can't be addressed at /flight/{Id}; surface a typed transient
+            # rather than letting the caller's ``flight['Id']`` escape as INTERNAL_ERROR/terminal.
+            raise AdCPAdapterError(
+                f"Malformed Kevel flight record for '{package_id}' (campaign {campaign_id}): missing 'Id'"
+            )
+        return flight
+
+    def update_package_targeting(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        targeting_overlay: Any,
+        today: date,
+    ) -> None:
+        """Recompile the overlay and push it to the live flight.
+
+        Mirrors create's compile step: ``_build_targeting`` resolves
+        property_list to siteIds (memoized resolver, types already gated by
+        ``validate_targeting_update``) and the result lands on the flight via
+        PUT — the same endpoint shape the action-based updates use. Without
+        this push the recompiled list would exist only in package_config while
+        the flight kept serving the old siteIds.
+        """
+        self.log(f"Kevel.update_package_targeting for flight '{package_id}'", dry_run_prefix=False)
+        targeting = self._build_targeting(targeting_overlay)
+        if self.dry_run:
+            self.log(f"Would call: PUT {self.base_url}/flight/{package_id}")
+            if targeting:
+                self.log(f"  Payload: {json.dumps(targeting, default=list)}")
+            return
+        flight = self._resolve_flight_by_name(media_buy_id.replace("kevel_", ""), package_id)
+        with wrap_request_errors():
+            response = requests.put(f"{self.base_url}/flight/{flight['Id']}", headers=self.headers, json=targeting)
+            response.raise_for_status()
+        self.audit_logger.log_success(f"Updated Kevel flight {package_id} targeting for {media_buy_id}")
 
     def _validate_targeting(self, targeting_overlay):
         """Validate targeting and return unsupported features."""
@@ -177,6 +394,27 @@ class Kevel(AdServerAdapter):
             if "custom_targeting" in kevel_custom:
                 kevel_targeting["CustomTargeting"] = kevel_custom["custom_targeting"]
 
+        # AdCP property_list → Kevel siteIds. Identifier-type validation already
+        # ran in _raise_if_property_list_uncompilable (rejected unsupported types
+        # with UNSUPPORTED_FEATURE), so by the time we get here the list
+        # contains only domain/subdomain identifiers. Unresolvable values
+        # (publisher not onboarded to Kevel) silently fall out of the
+        # resulting set — zero-match is accept-with-context, not reject.
+        # Uses ``_resolve_property_list`` so the resolver fires once per
+        # (agent_url, list_id) per request — the call already happened in
+        # ``_raise_if_property_list_uncompilable`` and the cache hit here returns
+        # the same ``ResolvedSiteIds``. Dry-run mode returns
+        # ``site_ids=set()`` which writes ``siteIds=[]``.
+        if targeting_overlay.property_list is not None:
+            resolved = self._resolve_property_list(targeting_overlay.property_list)
+            existing = set(kevel_targeting.get("siteIds") or [])
+            combined = existing | resolved.site_ids
+            kevel_targeting["siteIds"] = sorted(combined)
+            self.log(
+                f"property_list resolved to {len(resolved.site_ids)} Kevel siteIds "
+                f"({len(resolved.unresolvable_values)} identifiers had no matching Site)"
+            )
+
         # AEE signal integration via CustomTargeting (managed-only)
         if targeting_overlay.key_value_pairs:
             self.log("[bold cyan]Adding AEE signals to Kevel CustomTargeting[/bold cyan]")
@@ -222,6 +460,13 @@ class Kevel(AdServerAdapter):
             f"Kevel.create_media_buy for principal '{self.principal.name}' (Kevel advertiser ID: {self.advertiser_id})",
             dry_run_prefix=False,
         )
+
+        # Per-identifier-type honest-declaration gate. The _impl-boundary
+        # raise_if_property_list_unsupported already let Kevel through
+        # (supports_property_list_targeting=True); this rejects property lists
+        # carrying identifier types Kevel can't compile (ios_bundle, rss_url,
+        # etc.) with UNSUPPORTED_FEATURE rather than silently dropping them.
+        self._raise_if_property_list_uncompilable(packages)
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
@@ -316,8 +561,9 @@ class Kevel(AdServerAdapter):
                 "IsActive": True,
             }
 
-            response = requests.post(f"{self.base_url}/campaign", headers=self.headers, json=campaign_payload)
-            response.raise_for_status()
+            with wrap_request_errors():
+                response = requests.post(f"{self.base_url}/campaign", headers=self.headers, json=campaign_payload)
+                response.raise_for_status()
             campaign_data = response.json()
             campaign_id = campaign_data["Id"]
             self.audit_logger.log_success(f"Created Kevel Campaign ID: {campaign_id}")
@@ -363,8 +609,11 @@ class Kevel(AdServerAdapter):
                             )  # Convert to hours, minimum 1 (int for Kevel API)
                             flight_payload["FreqCapType"] = 1  # 1 = per user (cookie-based)
 
-                flight_response = requests.post(f"{self.base_url}/flight", headers=self.headers, json=flight_payload)
-                flight_response.raise_for_status()
+                with wrap_request_errors():
+                    flight_response = requests.post(
+                        f"{self.base_url}/flight", headers=self.headers, json=flight_payload
+                    )
+                    flight_response.raise_for_status()
 
             # Use the actual campaign ID from Kevel
             media_buy_id = f"kevel_{campaign_id}"
@@ -409,13 +658,16 @@ class Kevel(AdServerAdapter):
                 created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
         else:
             try:
-                # Get all flights for the campaign to map package names to flight IDs
-                flights_response = requests.get(
-                    f"{self.base_url}/flight", headers=self.headers, params={"campaignId": media_buy_id}
-                )
-                flights_response.raise_for_status()
-                flights = flights_response.json().get("items", [])
-                flight_map = {flight["Name"]: flight["Id"] for flight in flights}
+                # Map package names to flight IDs via the shared campaign-flights fetch.
+                # ``kevel_`` is stripped to match the campaignId convention every other
+                # flight-fetch path uses (update_package_targeting, update_media_buy); the
+                # shared fetch's status-aware wrap raises a typed AdCPError (429 rate-limit,
+                # 4xx validation, 5xx/outage adapter), all caught below so any flight-fetch
+                # failure degrades gracefully rather than escaping the per-asset status contract.
+                flight_map = {
+                    flight["Name"]: flight["Id"]
+                    for flight in self._fetch_campaign_flights(media_buy_id.replace("kevel_", ""))
+                }
 
                 for asset in assets:
                     creative_payload = {
@@ -460,7 +712,12 @@ class Kevel(AdServerAdapter):
 
                     created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
 
-            except requests.exceptions.RequestException as e:
+            except (requests.exceptions.RequestException, AdCPError) as e:
+                # RequestException covers the per-creative POST /creative and POST /ad calls;
+                # AdCPError covers EVERY typed failure the shared _fetch_campaign_flights wrap can
+                # produce — AdCPRateLimitError (429), AdCPValidationError (4xx), AdCPAdapterError
+                # (5xx/outage) — not just the 5xx subtype. All degrade gracefully so one flight-fetch
+                # failure marks assets "failed" rather than escaping the per-asset status contract.
                 self.log(f"Error creating Kevel Creative or Ad: {e}")
                 for asset in assets:
                     if not any(s.creative_id == asset["creative_id"] for s in created_asset_statuses):
@@ -548,8 +805,9 @@ class Kevel(AdServerAdapter):
                 "Filter": {"CampaignId": media_buy_id},
             }
 
-            response = requests.post(f"{self.base_url}/report/queue", headers=self.headers, json=report_request)
-            response.raise_for_status()
+            with wrap_request_errors():
+                response = requests.post(f"{self.base_url}/report/queue", headers=self.headers, json=report_request)
+                response.raise_for_status()
             report_id = response.json()["Id"]
 
             # Poll for report completion (simplified - in production would need proper polling)
@@ -558,8 +816,9 @@ class Kevel(AdServerAdapter):
             time.sleep(1)
 
             # Get report results
-            results_response = requests.get(f"{self.base_url}/report/{report_id}/results", headers=self.headers)
-            results_response.raise_for_status()
+            with wrap_request_errors():
+                results_response = requests.get(f"{self.base_url}/report/{report_id}/results", headers=self.headers)
+                results_response.raise_for_status()
 
             # Parse results and aggregate
             results = results_response.json()
@@ -681,7 +940,7 @@ class Kevel(AdServerAdapter):
                 implementation_date=today,
             )
         else:
-            try:
+            with wrap_request_errors():
                 # Extract campaign ID
                 campaign_id = media_buy_id.replace("kevel_", "")
 
@@ -694,16 +953,7 @@ class Kevel(AdServerAdapter):
                     update_response.raise_for_status()
 
                 elif action in ["pause_package", "resume_package"] and package_id:
-                    # Get flight ID by name
-                    flights_response = requests.get(
-                        f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id}
-                    )
-                    flights_response.raise_for_status()
-                    flights = flights_response.json().get("items", [])
-
-                    flight = next((f for f in flights if f["Name"] == package_id), None)
-                    if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+                    flight = self._resolve_flight_by_name(campaign_id, package_id)
 
                     # Update flight status
                     is_resume = action == "resume_package"
@@ -732,16 +982,7 @@ class Kevel(AdServerAdapter):
                     and package_id
                     and budget is not None
                 ):
-                    # Get flight ID by name
-                    flights_response = requests.get(
-                        f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id}
-                    )
-                    flights_response.raise_for_status()
-                    flights = flights_response.json().get("items", [])
-
-                    flight = next((f for f in flights if f["Name"] == package_id), None)
-                    if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+                    flight = self._resolve_flight_by_name(campaign_id, package_id)
 
                     # Calculate impressions based on action
                     if action == "update_package_budget":
@@ -763,7 +1004,3 @@ class Kevel(AdServerAdapter):
                     affected_packages=[],
                     implementation_date=today,
                 )
-
-            except requests.exceptions.RequestException as e:
-                self.log(f"Error updating Kevel flight: {e}")
-                raise AdCPAdapterError(str(e)) from e

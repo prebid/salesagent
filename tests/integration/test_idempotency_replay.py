@@ -39,6 +39,26 @@ def _seed_success(tenant_id, principal_id, idempotency_key, *, payload_hash, med
     )
 
 
+def _seed_submitted(tenant_id, principal_id, idempotency_key, *, payload_hash, task_id="task_original_xyz"):
+    """Seed a cached approval-pending SUBMITTED response (the verbatim cache, submitted variant).
+
+    security.mdx idempotency rule 2 caches BOTH the sync-success and the
+    async-``submitted`` create responses; this seeds the latter so the
+    shape-discriminator's ``submitted`` branch is exercised end to end.
+    """
+    from src.core.schemas._base import CreateMediaBuySubmitted
+    from tests.helpers import seed_cached_success
+
+    seed_cached_success(
+        tenant_id,
+        principal_id,
+        idempotency_key,
+        response_model=CreateMediaBuySubmitted(task_id=task_id, message="Pending manual approval"),
+        payload_hash=payload_hash,
+        protocol_status="submitted",
+    )
+
+
 def _make_request(idempotency_key, *, po_number="REPLAY-1"):
     from src.core.schemas import CreateMediaBuyRequest
 
@@ -92,6 +112,46 @@ class TestImplReplaysCachedSuccess:
         assert result.response.media_buy_id == "mb_original_123"
         assert result.status == "completed"
         assert result.replayed is True  # top-level replay marker, injected at replay time
+
+    async def test_cached_submitted_replayed_verbatim(self, integration_db):
+        """An approval-pending SUBMITTED create replays as CreateMediaBuySubmitted, not a fresh execution.
+
+        The verbatim cache stores both the sync-success and the async-``submitted``
+        variants (security.mdx idempotency rule 2). ``_replay_cached_success``
+        reconstructs the original BY SHAPE: ``task_id`` present + ``media_buy_id``
+        absent → ``CreateMediaBuySubmitted``. If that discriminator branch were lost
+        (always ``CreateMediaBuySuccess.model_validate``), the submitted shape would
+        either fail success-validation → cache miss → re-execution (``replayed`` False),
+        or validate into the WRONG type — both reden this oracle. ``replayed is True``
+        proves the replay short-circuited before any second workflow step.
+        """
+        from src.core.idempotency_canonical import canonical_request_hash
+        from src.core.schemas._base import CreateMediaBuyResult, CreateMediaBuySubmitted
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        idem_key = f"replay-sub-{uuid.uuid4().hex}"
+        tenant_id = f"replay_sub_t_{uuid.uuid4().hex[:6]}"
+        principal_id = f"p_{uuid.uuid4().hex[:8]}"
+
+        seed_principal(tenant_id, principal_id)
+        # Stored hash matches the retry's canonical hash → a true replay of the submitted variant.
+        _seed_submitted(
+            tenant_id,
+            principal_id,
+            idem_key,
+            payload_hash=canonical_request_hash(_make_request(idem_key)),
+            task_id="task_original_xyz",
+        )
+
+        result = await _create_media_buy_impl(req=_make_request(idem_key), identity=_identity(tenant_id, principal_id))
+
+        assert isinstance(result, CreateMediaBuyResult)
+        assert isinstance(result.response, CreateMediaBuySubmitted), (
+            f"submitted-shape cache must replay as CreateMediaBuySubmitted, got {type(result.response).__name__}"
+        )
+        assert result.response.task_id == "task_original_xyz"  # the ORIGINAL task, verbatim — not a fresh one
+        assert result.status == "submitted"  # the stored protocol status, not a re-mapped one
+        assert result.replayed is True  # replay short-circuited — no re-execution, no second workflow step
 
     async def test_different_payload_same_key_raises_conflict(self, integration_db):
         from src.core.exceptions import AdCPError

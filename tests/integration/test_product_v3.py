@@ -479,6 +479,7 @@ class TestMainFlow:
         result = await _call_get_products(brief="adapter test")
         for product in result.products:
             for po in product.pricing_options:
+                # pricing_options are RootModel-wrapped; the type is known.
                 inner = po.root
                 # Mock adapter supports CPM, so should be annotated
                 assert hasattr(inner, "supported") or hasattr(inner, "pricing_model")
@@ -938,8 +939,12 @@ class TestEmptyResults:
         Covers: UC-001-ALT-EMPTY-RESULTS-04
         """
         # Mock property list resolver to return non-matching properties
-        with patch("src.core.property_list_resolver.resolve_property_list", new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.return_value = ["nonexistent_property"]
+        from tests.helpers.adcp_factories import create_test_identifiers
+
+        with patch(
+            "src.core.property_list_resolver.resolve_property_list_typed", new_callable=AsyncMock
+        ) as mock_resolve:
+            mock_resolve.return_value = create_test_identifiers("nonexistent-property.example")
 
             result = await _call_get_products(
                 brief="display ads",
@@ -948,8 +953,13 @@ class TestEmptyResults:
                     "list_id": "test_list",
                 },
             )
-            # May return empty if no products match the property list
-            assert result is not None
+            # Zero products remain (UC-001-ALT-EMPTY-RESULTS-04), the response
+            # says the filter ran, and each dropped product is surfaced as a
+            # per-item advisory rather than silently vanishing.
+            assert result.products == []
+            assert result.property_list_applied is True
+            assert result.errors, "dropped products must surface as errors[] advisories"
+            assert {e.code for e in result.errors} == {"PRODUCT_UNAVAILABLE"}
 
     @pytest.mark.asyncio
     async def test_empty_results_product_selectors(self, uc001_products):

@@ -35,6 +35,32 @@ def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
     pytest.fail(f"Server at {mcp_url} did not become ready within {timeout} seconds")
 
 
+def resolve_media_buy_for_task_in_db(live_server: dict, task_id: str) -> str:
+    """Resolve the media_buy_id an approval-pending create's task_id names.
+
+    The spec ``submitted`` create variant carries ``task_id`` only
+    (``media_buy_id`` is forbidden on that oneOf branch and arrives on the
+    completion artifact); e2e flows that need the persisted row follow the
+    workflow mapping the same way the approval machinery does. Connects
+    host-side via ``live_server["postgres"]`` — the same proven path the
+    webhook payload tests use (the docker-compose exec route silently
+    depends on compose project context and broke in the full-suite run).
+    """
+    conn = psycopg2.connect(live_server["postgres"])
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT object_id FROM object_workflow_mappings WHERE step_id = %s AND object_type = 'media_buy'",
+            (task_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
+    finally:
+        conn.close()
+    assert row is not None, f"No media_buy workflow mapping found for step {task_id}"
+    return row[0]
+
+
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):
     """
     Force approve media buy in database to bypass approval workflow.
@@ -128,3 +154,33 @@ except Exception as e:
             _direct_db_update(e)
     else:
         _direct_db_update(None)
+
+
+def build_jsonrpc_message_send(
+    parts: list[dict], *, context_id: str | None = None, configuration: dict | None = None
+) -> dict:
+    """Raw A2A ``message/send`` JSON-RPC envelope for direct-HTTP e2e tests.
+
+    The webhook and compliance e2e suites hand-rolled this envelope at seven
+    sites; the message/id fields are always fresh UUIDs, ``context_id``
+    defaults to a fresh UUID, and ``configuration`` (e.g.
+    ``pushNotificationConfig``) is attached only when given.
+    """
+    import uuid as _uuid
+
+    params: dict = {
+        "message": {
+            "messageId": str(_uuid.uuid4()),
+            "contextId": context_id or str(_uuid.uuid4()),
+            "role": "user",
+            "parts": parts,
+        }
+    }
+    if configuration is not None:
+        params["configuration"] = configuration
+    return {
+        "jsonrpc": "2.0",
+        "id": str(_uuid.uuid4()),
+        "method": "message/send",
+        "params": params,
+    }

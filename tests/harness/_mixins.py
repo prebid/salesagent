@@ -480,13 +480,19 @@ class ProductMixin:
         """
         self.mock["dynamic_variants"].return_value = variants or []  # type: ignore[attr-defined]
 
-    def set_property_list(self, property_ids: list[str] | None = None) -> None:
-        """Configure resolve_property_list to return specific property IDs.
+    def set_property_list(self, property_values: list[str] | None = None) -> None:
+        """Configure the property-list resolver to return domain identifiers.
+
+        The production resolver returns TYPED ``Identifier`` objects (the
+        ``.type`` participates in matching), so the seam builds domain-typed
+        identifiers from the plain value strings tests pass.
 
         Args:
-            property_ids: List of property identifier strings. Defaults to [].
+            property_values: Identifier value strings (domains). Defaults to [].
         """
-        self.mock["resolve_property_list"].return_value = property_ids or []  # type: ignore[attr-defined]
+        from tests.helpers.adcp_factories import create_test_identifiers
+
+        self.mock["resolve_property_list"].return_value = create_test_identifiers(*(property_values or []))  # type: ignore[attr-defined]
 
     def set_ranking_disabled(self) -> None:
         """Disable AI ranking by making the factory report AI as not enabled."""
@@ -520,7 +526,7 @@ class ProductMixin:
         # Ranking factory: AI not enabled
         self.set_ranking_disabled()
 
-        # Property list resolver: returns [] (AsyncMock from ASYNC_PATCHES)
+        # Property list resolver (typed): returns [] (AsyncMock from ASYNC_PATCHES)
         self.mock["resolve_property_list"].return_value = []  # type: ignore[attr-defined]
 
     async def call_impl(  # type: ignore[override]

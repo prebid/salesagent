@@ -228,9 +228,14 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
         assert result.status in ("submitted", "completed"), f"Unexpected status: {result.status}"
         assert result.response is not None
 
-        # Extract media_buy_id from the response
-        media_buy_id = getattr(result.response, "media_buy_id", None)
-        assert media_buy_id is not None, "Response should contain media_buy_id"
+        # The submitted variant carries task_id, not media_buy_id (the spec
+        # forbids media_buy_id/packages on it) — resolve the persisted buy
+        # through the workflow step the task_id names.
+        task_id = getattr(result.response, "task_id", None)
+        assert task_id is not None, "Submitted response should carry the tracking task_id"
+        from tests.utils.database_helpers import media_buy_id_for_task
+
+        media_buy_id = media_buy_id_for_task(task_id)
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant_with_approval["tenant_id"], media_buy_id)

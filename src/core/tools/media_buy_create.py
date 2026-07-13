@@ -8,6 +8,7 @@ Handles media buy creation including:
 - Budget validation
 """
 
+import asyncio
 import logging
 import random
 import secrets
@@ -25,11 +26,12 @@ from sqlalchemy.orm import selectinload
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
     from src.core.database.repositories.media_buy import MediaBuyRepository
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
-from adcp.types import AccountReference, BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
+from adcp.types import AccountReference, BrandReference, ContextObject, Identifier, MediaBuyStatus, ReportingWebhook
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
@@ -116,6 +118,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+from src.core.ext_namespace import PROPERTY_LIST_ADVISORIES_KEY, prebid_ext
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -131,8 +134,10 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
+    Error,
     FormatId,
     MediaPackage,
     Package,
@@ -140,6 +145,7 @@ from src.core.schemas import (
     Principal,
     Product,
     Targeting,
+    classify_media_buy_response_payload,
 )
 from src.core.schemas import (
     url as make_url,
@@ -156,13 +162,16 @@ from src.core.tools.financial_validation import (
 from src.core.validation_helpers import format_validation_error, package_field_path
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
+from src.services.property_intersection import (
+    INTERSECTION_ADVISORY_MARKER,
+    PropertyIntersection,
+    property_list_drop_advisory,
+)
 from src.services.targeting_capabilities import (
-    property_list_unsupported_advisories,
+    raise_for_overlay_targeting,
+    raise_if_property_list_unsupported,
     raise_if_property_targeting_violations,
-    validate_geo_overlap,
-    validate_overlay_targeting,
     validate_property_targeting_allowed,
-    validate_unknown_targeting_fields,
 )
 
 # --- Helper Functions ---
@@ -1549,6 +1558,210 @@ from src.services.slack_notifier import get_slack_notifier
 _IDEMPOTENCY_TOOL_NAME = "create_media_buy"
 
 
+async def _resolve_property_list_identifiers(packages: list | None) -> dict[tuple[str, str, str], list[Identifier]]:
+    """Resolve each package's buyer ``property_list`` to its typed identifiers.
+
+    Runs BEFORE the create validation transaction opens, so the external HTTP
+    fetch never holds a DB connection, and uses the async resolver so the event
+    loop is not blocked. Identifiers stay TYPED — ``.type`` participates in the
+    intersection's matching. Best-effort: a resolution failure is logged and
+    that list is omitted (the advisory then skips packages whose list didn't
+    resolve). Keyed by ``property_list_cache_key`` so a list referenced by several
+    packages (same principal) is fetched once.
+    """
+    # Lazy import: the prefetch unit tests patch ``resolve_property_list_typed``
+    # at its source module, so it must resolve at call time (a module-top import
+    # would bind a ref the patch can't reach).
+    from src.core.property_list_resolver import (
+        iter_package_property_list_refs,
+        loggable_list_id,
+        resolve_property_list_typed,
+    )
+
+    resolved: dict[tuple[str, str, str], list[Identifier]] = {}
+    for _index, _package, ref, key in iter_package_property_list_refs(packages or []):
+        if key in resolved:
+            continue
+        try:
+            identifiers = await resolve_property_list_typed(ref)
+        except Exception as exc:
+            logger.warning(
+                INTERSECTION_ADVISORY_MARKER + " Failed to resolve property_list %s/%s: %s",
+                ref.agent_url,
+                loggable_list_id(ref.list_id),
+                exc,
+                exc_info=True,
+            )
+            continue
+        resolved[key] = identifiers
+    return resolved
+
+
+def _build_property_list_advisories(
+    packages: list,
+    product_map: dict,
+    authorized_property_repo: "AuthorizedPropertyRepository",
+    resolved_identifiers: dict[tuple[str, str, str], list[Identifier]],
+) -> list[Error]:
+    """Buyer-visible advisories when a package's property_list has zero overlap.
+
+    The ``inventory_list_no_match`` storyboard contract is accept-with-CONTEXT:
+    a zero-overlap buy proceeds, and the success envelope must carry a message
+    explaining the list mismatch — a silently-successful buy with normal
+    numbers is the storyboard's named not-acceptable outcome. This helper
+    never raises; it returns the per-package ``Error`` advisories the caller
+    attaches to the response (completed success: ``ext`` + protocol message;
+    the submitted variant: its spec ``errors[]`` slot), and logs each one at
+    WARNING (greppable ``[INTERSECTION-ADVISORY]`` marker) for operator-side
+    alerting.
+
+    Runs inside the create validation transaction so each ORM product can be
+    converted to its schema form: ``convert_product_model_to_schema`` reads
+    ``effective_properties`` (which traverses the lazy ``inventory_profile``
+    relationship, hence the attached session), and the resulting schema
+    ``Product`` carries the ``publisher_properties`` selector objects the
+    intersection reads — the SAME object get_products hands the intersection, so
+    the two paths stay consistent (the ORM model has no ``publisher_properties``
+    attribute). The buyer property_lists were resolved over HTTP by
+    ``_resolve_property_list_identifiers`` BEFORE the transaction opened and are
+    passed in via ``resolved_identifiers`` — so no network call is made while a
+    DB connection is held. Best-effort: ANY exception from the per-package
+    intersection (schema conversion errors incl. detached-ORM access, repo/DB
+    failures, malformed AuthorizedProperty.identifiers rows) is swallowed and
+    logged so create_media_buy proceeds — advisory computation must never veto
+    a booking. The cost is that a broken advisory pipeline degrades to the
+    silent-success the storyboard forbids, which is why the helper's RETURN
+    value is pinned by integration tests rather than only its logs. A list that
+    failed to resolve is absent from ``resolved_identifiers`` and skipped here.
+    """
+    # Lazy import: ``convert_product_model_to_schema`` is patched at its source
+    # module by the advisory unit/integration tests, so it must resolve at call
+    # time (a module-top import would bind a ref the patch can't reach).
+    from src.core.product_conversion import convert_product_model_to_schema
+    from src.core.property_list_resolver import iter_package_property_list_refs
+
+    intersection = PropertyIntersection(authorized_property_repo)
+    advisories: list[Error] = []
+
+    for index, package, ref, key in iter_package_property_list_refs(packages):
+        product = product_map.get(package.product_id)
+        if product is None:
+            continue
+        buyer_identifiers = resolved_identifiers.get(key)
+        if buyer_identifiers is None:
+            continue
+        try:
+            # The intersection reads ``publisher_properties`` (AdCP selector
+            # objects); the ORM model exposes those only via ``effective_properties``,
+            # so convert to the schema Product first — the same object get_products
+            # hands the intersection.
+            schema_product = convert_product_model_to_schema(product)
+            result = intersection.filter_products([schema_product], buyer_identifiers)
+        except Exception as exc:
+            logger.warning(
+                INTERSECTION_ADVISORY_MARKER + " Intersection failed for packages[%d]: %s",
+                index,
+                exc,
+                exc_info=True,
+            )
+            continue
+        if result.zero_match:
+            reason = enum_value(result.dropped_products[0].reason) if result.dropped_products else "zero_match"
+            # The operator [INTERSECTION-ADVISORY] marker is emitted once, inside
+            # PropertyIntersection.filter_products (shared by get_products + create).
+            advisories.append(
+                property_list_drop_advisory(
+                    message=(
+                        f"Buyer property_list {ref.agent_url}/{ref.list_id} has zero overlap with "
+                        f"product {product.product_id}'s properties ({reason}); the buy proceeds "
+                        "but this package may deliver no matching inventory"
+                    ),
+                    field=package_field_path("targeting_overlay.property_list", index),
+                    suggestion=(
+                        "Verify the referenced list targets this seller's properties, or choose a "
+                        "product whose publisher_properties overlap the list."
+                    ),
+                    product_id=product.product_id,
+                    reason=reason,
+                    list_id=ref.list_id,
+                )
+            )
+    return advisories
+
+
+def _submitted_message_max() -> int:
+    """The submitted variant's spec ``message`` maxLength, read from the model.
+
+    Derived (not hand-copied) so a spec bump that changes the cap cannot
+    drift: an over-long join would raise at response construction AFTER the
+    buy persisted.
+    """
+    from annotated_types import MaxLen
+
+    for meta in CreateMediaBuySubmitted.model_fields["message"].metadata:
+        if isinstance(meta, MaxLen):
+            return int(meta.max_length)
+    raise AssertionError("CreateMediaBuySubmitted.message lost its MaxLen constraint")
+
+
+_ADVISORY_MESSAGE_MAX = _submitted_message_max()
+
+
+def _advisory_message(advisories: list[Error]) -> str | None:
+    """Join advisory messages for the payload-level ``message`` channel, bounded.
+
+    Full per-advisory detail always rides ``errors[]``/``ext``; the message is
+    the human-readable summary and truncates with an ellipsis at the spec cap.
+    """
+    joined = " ".join(advisory.message for advisory in advisories)
+    if not joined:
+        return None
+    if len(joined) > _ADVISORY_MESSAGE_MAX:
+        return joined[: _ADVISORY_MESSAGE_MAX - 1] + "…"
+    return joined
+
+
+def _advisory_ext(advisories: list[Error]) -> dict | None:
+    """Machine-readable advisory detail for the spec-open ``ext`` slot.
+
+    The create-success variant forbids ``errors``; agents that want the
+    structured advisory (code/field/details) read it from
+    ``ext.prebid.property_list_advisories`` instead.
+    """
+    if not advisories:
+        return None
+    # Vendor-namespaced per the spec's ExtensionObject description ("must be
+    # namespaced under a vendor/platform key"); the namespace lives in prebid_ext and
+    # the sub-key in PROPERTY_LIST_ADVISORIES_KEY, so producer and reader share both.
+    return prebid_ext(
+        **{
+            PROPERTY_LIST_ADVISORIES_KEY: [
+                advisory.model_dump(mode="json", exclude_none=True) for advisory in advisories
+            ]
+        }
+    )
+
+
+def _submitted_result(step_id: str, advisories: list[Error], context: ContextObject | None) -> CreateMediaBuyResult:
+    """Build the approval-pending ``submitted`` variant result.
+
+    The spec ``submitted`` variant carries task_id (the workflow step id, resolvable
+    via get_task) + the advisory message/errors slot; media_buy_id and packages are
+    FORBIDDEN — they arrive on the completion artifact after approval. Both approval
+    branches (manual review and config approval) return this identical envelope, so it
+    has a single home here rather than two byte-identical inline constructions.
+    """
+    return CreateMediaBuyResult(
+        response=CreateMediaBuySubmitted(
+            task_id=step_id,
+            message=_advisory_message(advisories),
+            errors=advisories or None,
+            context=context,
+        ),
+        status=AdcpTaskStatus.submitted.value,
+    )
+
+
 def _raise_degraded_replay_outcome(
     tenant_id: str,
     idempotency_key: str,
@@ -1643,22 +1856,40 @@ def _raise_on_payload_conflict(stored_hash: str | None, request_hash: str | None
 def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | None:
     """Reconstruct a cached success from the verbatim idempotency cache, marked replayed.
 
-    The cache stores ``{"status": <protocol task status>, "response": <CreateMediaBuySuccess
-    dump>}``. The domain response carries its own valid ``MediaBuyStatus``; the protocol
-    status is applied to the plain-``str`` wrapper, and ``replayed=True`` is injected at the
-    wrapper so the wire carries the top-level marker (it is never stored in the body).
+    The cache stores ``{"status": <protocol task status>, "response": <success or
+    submitted dump>}``. Both the synchronous-success and the approval-pending
+    ``submitted`` create responses are cached (AdCP 3.1.0-beta.3 security.mdx
+    idempotency rule 2 — sync-success and async-``submitted`` branches), so the
+    original variant is reconstructed BY ITS SHAPE: the submitted variant carries
+    ``task_id`` and forbids ``media_buy_id``; the success variant carries
+    ``media_buy_id``. Discriminating on the stored shape (not on the current
+    code's status mapping) replays the original payload verbatim even across a
+    deploy that changes which variant the approval path emits — so an in-flight
+    retry never re-executes into a second workflow step. ``replayed=True`` is
+    injected at the wrapper so the wire carries the top-level marker (never stored
+    in the body).
 
     Returns ``None`` when the stored envelope no longer validates against the current
     schema (drift between the writing and the replaying deploy inside the TTL window) —
     callers treat that as a cache miss so the retry re-executes instead of erroring.
     """
     try:
-        success = CreateMediaBuySuccess.model_validate(envelope["response"])
         protocol_status = envelope["status"]
+        raw = envelope["response"]
+        response: CreateMediaBuySuccess | CreateMediaBuySubmitted
+        variant = classify_media_buy_response_payload(raw) if isinstance(raw, dict) else "error"
+        if variant == "submitted":
+            response = CreateMediaBuySubmitted.model_validate(raw)
+        elif variant == "success":
+            response = CreateMediaBuySuccess.model_validate(raw)
+        else:
+            # Error variants are never cached; a stored body with neither shape is drift.
+            logger.warning("Cached idempotency envelope has neither success nor submitted shape — treating as a miss")
+            return None
     except (KeyError, TypeError, ValidationError):
         logger.warning("Cached idempotency envelope failed validation — treating as a miss", exc_info=True)
         return None
-    return CreateMediaBuyResult(response=success, status=protocol_status, replayed=True)
+    return CreateMediaBuyResult(response=response, status=protocol_status, replayed=True)
 
 
 def _lookup_cached_replay(
@@ -1758,8 +1989,9 @@ def _cache_and_return(
     # success. The TestErrorsAreNeverCached suite pins it. This precondition is a
     # fail-loud contract guard: if a future refactor ever routes a non-success
     # here it raises, instead of silently skipping the cache write.
-    assert isinstance(result.response, CreateMediaBuySuccess), (
-        "_cache_and_return must be called only with a successful result"
+    assert isinstance(result.response, (CreateMediaBuySuccess, CreateMediaBuySubmitted)), (
+        "_cache_and_return must be called only with a successful result — the sync "
+        "success or the approval-pending submitted variant; errors are never cached"
     )
 
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
@@ -2182,6 +2414,14 @@ async def _create_media_buy_impl(
         # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
         from src.core.database.repositories import MediaBuyUoW
 
+        # Resolve buyer property_lists (external HTTP) before opening the
+        # validation transaction, so no DB connection is held across a network
+        # call and the event loop isn't blocked. Best-effort; feeds the advisory.
+        property_list_identifiers = await _resolve_property_list_identifiers(req.packages)
+        # Zero-overlap advisories computed during validation; attached to every
+        # success envelope below so the buy is never silently successful.
+        property_list_advisories: list[Error] = []
+
         # Get products first to determine currency from pricing options
         with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
             # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
@@ -2224,6 +2464,19 @@ async def _create_media_buy_impl(
                     )
                 ]
                 raise_if_property_targeting_violations(property_targeting_violations)
+
+                # Faithful intersection advisory: when the buyer's
+                # property_list resolves to zero overlap with a product's
+                # publisher_properties, do NOT reject — the storyboard
+                # ``inventory_list_no_match`` contract is accept-with-CONTEXT.
+                # The advisories ride the response (completed success: ext +
+                # protocol message; submitted variant: its errors[] slot) and
+                # are logged for operator alerting; a silently-successful buy
+                # is the storyboard's named not-acceptable outcome.
+                assert validation_uow.authorized_properties is not None
+                property_list_advisories = _build_property_list_advisories(
+                    req.packages, product_map, validation_uow.authorized_properties, property_list_identifiers
+                )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
@@ -2506,25 +2759,7 @@ async def _create_media_buy_impl(
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
-            for pkg in req.packages:
-                if pkg.targeting_overlay is not None:
-                    # Reject unknown targeting fields (typos, bogus names) via model_extra
-                    unknown_violations = validate_unknown_targeting_fields(pkg.targeting_overlay)
-
-                    # Validate access control (managed-only, removed dimensions)
-                    access_violations = validate_overlay_targeting(pkg.targeting_overlay)
-
-                    # Reject same-value geo inclusion/exclusion overlap (AdCP SHOULD requirement)
-                    geo_overlap_violations = validate_geo_overlap(pkg.targeting_overlay)
-
-                    violations = unknown_violations + access_violations + geo_overlap_violations
-                    if violations:
-                        error_msg = f"Targeting validation failed: {'; '.join(violations)}"
-                        raise AdCPInvalidRequestError(
-                            error_msg,
-                            suggestion="Check targeting constraints.",
-                            field="targeting_overlay",
-                        )
+            raise_for_overlay_targeting(req.packages)
 
     except (AdCPError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation
@@ -2581,6 +2816,23 @@ async def _create_media_buy_impl(
         # Get the appropriate adapter with testing context
         # Use dry_run from testing context (which comes from config or testing flags)
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+
+        # Honest-declaration check for property_list targeting. Runs once
+        # here — right after adapter resolution, before any dry_run /
+        # approval / execution branch — so every response path (sync, async,
+        # dry_run, manual approval) honors the contract uniformly. Adapters
+        # that declare ``supports_property_list_targeting = False`` reject
+        # the request with ``AdCPCapabilityNotSupportedError`` (recovery=
+        # correctable) carrying ``field`` + ``suggestion`` so the buyer
+        # agent can drop the field and retry or pick a capable seller.
+        raise_if_property_list_unsupported(req.packages, adapter)
+
+        # Warm any adapter targeting index (e.g. Kevel's multi-second /v1/site
+        # fetch) on a worker thread so the synchronous adapter compile below does
+        # not block the event loop. The buyer property *lists* are already
+        # prefetched off-loop above; this does the same for the adapter-side index.
+        # No-op for adapters without an external index (base default).
+        await asyncio.to_thread(adapter.prewarm_targeting, req.packages or [])
 
         # Check if manual approval is required
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
@@ -3007,19 +3259,13 @@ async def _create_media_buy_impl(
 
             # Return success response with packages awaiting approval
             # The workflow_step_id in packages indicates approval is required
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    creative_deadline=None,
-                    packages=pending_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
-                    workflow_step_id=step.step_id,  # Client can track approval via this ID
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                ),
-                status=AdcpTaskStatus.submitted.value,
+            # Spec ``submitted`` variant: task_id (the workflow step id,
+            # resolvable via get_task) + message + the variant's advisory
+            # errors slot. media_buy_id/packages are FORBIDDEN here — they
+            # arrive on the completion artifact after approval.
+            return _cache_and_return(
+                _submitted_result(step.step_id, property_list_advisories, req.context), req, identity, request_hash
             )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy: tests patch src.core.tools.products.get_product_catalog; the call-time import binds the patched object.
@@ -3162,18 +3408,9 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    packages=response_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
-                    workflow_step_id=step.step_id,
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                ),
-                status=AdcpTaskStatus.submitted.value,
+            return _cache_and_return(
+                _submitted_result(step.step_id, property_list_advisories, req.context), req, identity, request_hash
             )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
 
         # Continue with synchronized media buy creation
 
@@ -3505,7 +3742,7 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
                 context=req.context,
-                errors=property_list_unsupported_advisories(req.packages, adapter),
+                ext=_advisory_ext(property_list_advisories),
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -4000,7 +4237,7 @@ async def _create_media_buy_impl(
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
-            errors=property_list_unsupported_advisories(req.packages, adapter),
+            ext=_advisory_ext(property_list_advisories),
         )
 
         # Log activity

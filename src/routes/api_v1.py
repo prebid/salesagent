@@ -7,6 +7,7 @@ and applies version compat at the boundary.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -65,6 +66,7 @@ class GetProductsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (P
     brief: str = ""
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     filters: dict[str, Any] | None = None
+    property_list: dict[str, Any] | None = None  # PropertyListReference; coerced by the request factory
     adcp_version: str = "1.0.0"
 
 
@@ -186,6 +188,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
         brief=body.brief,
         brand=body.brand,
         filters=body.filters,
+        property_list=body.property_list,
     )
     response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")
@@ -280,7 +283,10 @@ async def create_media_buy(
 @router.put("/media-buys/{media_buy_id}")
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
-    response = media_buy_update_module.update_media_buy_raw(
+    # Offload the sync raw call to a worker thread: the update path's Kevel targeting compile
+    # can make a multi-second /v1/site fetch that would otherwise block the event loop.
+    response = await asyncio.to_thread(
+        media_buy_update_module.update_media_buy_raw,
         media_buy_id=media_buy_id,
         paused=body.paused,
         flight_start_date=body.flight_start_date,

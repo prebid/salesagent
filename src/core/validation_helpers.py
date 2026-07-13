@@ -138,16 +138,17 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     return "".join(parts)
 
 
-def package_field_path(attr: str) -> str:
+def package_field_path(attr: str, index: int | None = None) -> str:
     """Bracket-notation field path for a per-package field in an _impl-layer error.
 
-    Mirrors the list notation of :func:`first_validation_error_field` but without a
-    concrete index: the _impl layer validates the package collection as a whole and
-    raises ``packages[].budget`` / ``packages[].package_id`` / ``packages[].product_id``,
-    while the boundary-derived path carries the offending index (``packages[0].budget``).
+    Mirrors the list notation of :func:`first_validation_error_field`. Without an
+    index, the _impl layer validates the package collection as a whole and raises
+    ``packages[].budget`` / ``packages[].package_id``; with an index, per-package
+    checks name the offending entry (``packages[0].targeting_overlay.property_list``).
     Centralizing the prefix here stops the hand-rolled literals from drifting apart.
     """
-    return f"packages[].{attr}"
+    bracket = "" if index is None else index
+    return f"packages[{bracket}].{attr}"
 
 
 def format_validation_error(validation_error: ValidationError, context: str = "request") -> str:

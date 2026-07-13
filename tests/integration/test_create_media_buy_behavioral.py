@@ -38,6 +38,7 @@ Tests that exercise schema validation or pure helper functions (no DB pipeline)
 do not use the harness.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -46,6 +47,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExceededError,
@@ -61,10 +63,12 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools.task_management import get_task
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -1036,8 +1040,9 @@ class TestManualApprovalObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"  # Not "completed"
+        assert result.response.task_id is not None
 
     def test_adapter_requires_review_enters_manual_path(self, integration_db):
         """Adapter with manual_approval_required=true enters manual approval flow.
@@ -1055,7 +1060,7 @@ class TestManualApprovalObligations:
             mock_adapter.manual_approval_operations = ["create_media_buy"]
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"
 
     def test_seller_notification_sent_on_manual_approval(self, integration_db):
@@ -1097,8 +1102,10 @@ class TestManualApprovalObligations:
             result = env.call_impl(req=req)
 
         assert result.status == "submitted"
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        # task_id IS the workflow step id — and unlike the old internal
+        # workflow_step_id (popped from every wire), it reaches the buyer.
+        assert result.response.task_id is not None
 
     def test_no_adapter_execution_before_approval(self, integration_db):
         """Adapter is NOT called when manual approval is required.
@@ -1116,14 +1123,17 @@ class TestManualApprovalObligations:
             assert result.status == "submitted"
             env.mock["adapter"].return_value.create_media_buy.assert_not_called()
 
-    def test_seller_rejects_buyer_notified(self, integration_db):
-        """Seller rejection workflow returns appropriate status.
+    def test_seller_rejection_reaches_buyer_via_task_poll(self, integration_db):
+        """Seller rejection updates the task the buyer polls, carrying the reason.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-09
 
-        Note: The rejection workflow runs in a separate approve_media_buy path.
-        This test verifies the pending_approval state is set up correctly for
-        subsequent rejection handling.
+        Drives the same tenant-scoped repository call the admin reject route
+        makes (``WorkflowRepository.update_status(status="rejected")``), then
+        observes the rejection through the buyer's ``get_task`` poll. Webhook
+        push on rejection is not implemented yet — that contract is pinned by
+        the xfailed BDD scenario ``T-UC-002-alt-manual-reject-override``; buyer
+        visibility today is via task polling.
         """
         req = _make_request()
 
@@ -1132,18 +1142,25 @@ class TestManualApprovalObligations:
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
+            assert result.status == "submitted"  # arrange sanity: buy is pending approval
+            task_id = result.response.task_id
 
-        # Pending approval means it's ready for accept/reject
-        assert result.status == "submitted"
-        assert result.response.workflow_step_id is not None
+            with WorkflowUoW(_TENANT_ID) as uow:
+                assert uow.workflows is not None
+                rejected_step = uow.workflows.update_status(
+                    task_id, status="rejected", error_message="Budget too low for Q1 campaign"
+                )
+                assert rejected_step is not None
+
+            task = asyncio.run(get_task(task_id, identity=env.identity))
+
+        assert task["status"] == "rejected"
+        assert task["error_message"] == "Budget too low for Q1 campaign"
 
     def test_buyer_can_poll_approval_progress(self, integration_db):
-        """Response includes workflow_step_id for polling.
+        """``get_task`` with the returned task_id reports the live approval status.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-10
-
-        Note: Polling is via tasks/get with the workflow_step_id.
-        This test verifies the step_id is included in the response.
         """
         req = _make_request()
 
@@ -1152,9 +1169,12 @@ class TestManualApprovalObligations:
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
+            assert isinstance(result.response, CreateMediaBuySubmitted)
+            task = asyncio.run(get_task(result.response.task_id, identity=env.identity))
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        assert task["task_id"] == result.response.task_id
+        assert task["status"] == "requires_approval"
+        assert any(obj["type"] == "media_buy" for obj in task["associated_objects"])
 
 
 class TestInlineCreativeObligations:
@@ -1372,7 +1392,7 @@ class TestCrossCuttingObligations:
             # Manual path: adapter was NOT called, but records were persisted
             assert result.status == "submitted"
             env.mock["adapter"].return_value.create_media_buy.assert_not_called()
-            assert result.response.media_buy_id is not None
+            assert result.response.task_id is not None
 
     def test_manual_approval_calls_link_workflow_to_object(self, integration_db):
         """Manual-approval path calls link_workflow_to_object to create the ObjectWorkflowMapping row.
@@ -1391,14 +1411,20 @@ class TestCrossCuttingObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-            assert result.response.media_buy_id is not None
+            # Submitted variant (spec-shaped): the manual-approval response carries task_id, not
+            # media_buy_id (the buy id arrives on the completion artifact). The created buy's id is
+            # the object_id production passes to link_workflow_to_object — verify the link by shape
+            # and that a real buy id was linked.
             ctx_mgr_mock = env.mock["context_mgr"].return_value
             ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
                 step_id=ANY,
                 object_type="media_buy",
-                object_id=result.response.media_buy_id,
+                object_id=ANY,
                 action="create",
                 tenant_id=ANY,
+            )
+            assert ctx_mgr_mock.link_workflow_to_object.call_args.kwargs["object_id"], (
+                "manual-approval path must link the created media_buy's id"
             )
 
     @pytest.mark.asyncio

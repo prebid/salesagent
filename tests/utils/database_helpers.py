@@ -297,6 +297,47 @@ def add_targeting_test_product(
         return product
 
 
+def seed_property_list_capability_tenant(
+    session,
+    *,
+    tenant_id: str,
+    tenant_name: str,
+    subdomain: str,
+    access_token: str,
+    product_id: str,
+    product_name: str,
+    property_targeting_allowed: bool,
+) -> None:
+    """Shared seeder for property_list-capability integration tests.
+
+    Both ``test_property_targeting_allowed_enforcement.py`` (the product-flag
+    gate) and ``test_property_list_unsupported_capability.py``
+    (the adapter-capability gate) seed essentially the same shape:
+    a tenant + one (or more) targeting-test products whose
+    ``property_targeting_allowed`` setting controls whether the product-flag gate
+    fires before the adapter-capability gate. Extracting the call pair here keeps both
+    test files from carrying the same boilerplate and breaks the
+    R0801 duplicate-block match window.
+
+    Caller is responsible for ``session.commit()`` after returning so the
+    transaction boundary is explicit in the fixture body.
+    """
+    seed_targeting_test_tenant(
+        session,
+        tenant_id=tenant_id,
+        tenant_name=tenant_name,
+        subdomain=subdomain,
+        access_token=access_token,
+    )
+    add_targeting_test_product(
+        session,
+        tenant_id=tenant_id,
+        product_id=product_id,
+        name=product_name,
+        property_targeting_allowed=property_targeting_allowed,
+    )
+
+
 def seed_media_buy_with_package(
     session,
     *,
@@ -372,3 +413,60 @@ def cleanup_test_data(session, tenant_id: str, principal_id: str = None):
 
     session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
     session.commit()
+
+
+def media_buy_id_for_task(task_id: str) -> str:
+    """Resolve the persisted media buy a submitted response's task_id names.
+
+    The spec submitted variant carries no media_buy_id (it arrives on the
+    completion artifact); tests that need the DB row follow the workflow
+    mapping the same way the approval machinery does.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import ObjectWorkflowMapping
+
+    with get_db_session() as session:
+        mapping = session.scalars(
+            select(ObjectWorkflowMapping).filter_by(step_id=task_id, object_type="media_buy")
+        ).one_or_none()
+        assert mapping is not None, "Workflow step should map to the persisted media buy"
+        return mapping.object_id
+
+
+def set_media_buy_status(media_buy_id: str, status: str) -> None:
+    """Flip a persisted media buy's status (e.g. to 'active' so updates are actionable)."""
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
+
+    with get_db_session() as session:
+        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).one()
+        mb.status = status
+        session.commit()
+
+
+@contextmanager
+def manual_approval(tenant_id: str):
+    """Force a tenant onto the manual-approval path for the duration of a test.
+
+    Flips ``human_review_required`` and restores it on exit (including on
+    failure), so wire tests that need the submitted variant don't each carry
+    the same try/finally flip block.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Tenant as _Tenant
+
+    with get_db_session() as session:
+        tenant = session.get(_Tenant, tenant_id)
+        tenant.human_review_required = True
+        session.commit()
+    try:
+        yield
+    finally:
+        with get_db_session() as session:
+            tenant = session.get(_Tenant, tenant_id)
+            tenant.human_review_required = False
+            session.commit()

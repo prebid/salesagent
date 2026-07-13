@@ -206,6 +206,11 @@ docker run --rm \
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
+# Record the verified HEAD into the FINAL results dir (alongside the just-extracted
+# JSONs) so the check-full-suite-before-push pre-push gate confirms the newest results
+# dir matches the commit being pushed.
+git rev-parse HEAD > "$RESULTS_DIR/HEAD" 2>/dev/null || true
+
 # Security audit (uv-secure) — runs on the HOST (scans uv.lock; no Docker). The
 # host runner runs this too; keep parity so the canonical local gate still scans
 # for known vulnerabilities. Single-sourced in scripts/security-audit.sh (also

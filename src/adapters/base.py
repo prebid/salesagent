@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 if TYPE_CHECKING:
@@ -188,6 +188,15 @@ class AdServerAdapter(ABC):
 
     # Adapter capabilities - override in subclasses
     capabilities: AdapterCapabilities = AdapterCapabilities()
+
+    # Whether this adapter compiles AdCP targeting_overlay.property_list to native
+    # ad-server targeting. Default is False — adapters that silently drop
+    # property_list are explicitly unsupported per AdCP honest-declaration contract
+    # (each enabled adapter either translates the field or raises
+    # UNSUPPORTED_FEATURE — the spec's Validate-Targeting MUST).
+    # Override to True only when the adapter has a working property_list
+    # compilation path (e.g. resolving the list to native publisher identifiers).
+    supports_property_list_targeting: ClassVar[bool] = False
 
     # Connection config schema - override in subclasses
     connection_config_class: type[BaseConnectionConfig] | None = BaseConnectionConfig
@@ -392,6 +401,14 @@ class AdServerAdapter(ABC):
 
         return errors
 
+    # property_list honest-declaration check lives in
+    # ``_create_media_buy_impl`` / ``_update_media_buy_impl`` via
+    # ``raise_if_property_list_unsupported``. Adapters declare their
+    # capability via the ``supports_property_list_targeting`` ClassVar
+    # above; the runtime guard fires at the _impl boundary, before any
+    # dry_run / approval / execution branch, so every transport (REST,
+    # A2A, MCP) and every adapter honors the contract uniformly.
+
     @abstractmethod
     def create_media_buy(
         self,
@@ -485,6 +502,59 @@ class AdServerAdapter(ABC):
     ) -> UpdateMediaBuyResponse:
         """Updates a media buy with a specific action."""
         pass
+
+    def validate_targeting_update(self, packages: list[Any]) -> None:
+        """Adapter-specific pre-write validation of targeting_overlay updates.
+
+        Runs before the dry_run early-return and before any persistence, so
+        dry-run requests are validated identically to live ones (parity with
+        the create path's pre-booking gate). The default accepts everything;
+        adapters with compile-time constraints (e.g. Kevel's identifier-type
+        gate) override and raise a typed AdCPError.
+
+        ``packages`` carries the request's package-update objects; each
+        exposes ``targeting_overlay`` (possibly None).
+        """
+        return None
+
+    def update_package_targeting(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        targeting_overlay: Any,
+        today: date,
+    ) -> None:
+        """Recompile and push an updated targeting_overlay to the ad server.
+
+        Called by the update path only for overlays carrying ``property_list``
+        on adapters that declare ``supports_property_list_targeting=True`` (the
+        boundary gate rejects everyone else first). The default raises so a
+        future adapter that declares support but forgets this override fails
+        loud instead of silently persisting an overlay the live flight never
+        receives. Adapters whose persistence layer IS the compile path (Mock)
+        override with a documented no-op.
+        """
+        from src.core.exceptions import AdCPCapabilityNotSupportedError
+        from src.core.validation_helpers import package_field_path
+
+        raise AdCPCapabilityNotSupportedError(
+            f"{type(self).__name__} declares property_list support but cannot recompile targeting on update_media_buy.",
+            field=package_field_path("targeting_overlay.property_list"),
+            suggestion="Remove targeting_overlay changes from the update, or contact the seller.",
+        )
+
+    def prewarm_targeting(self, packages: list[Any]) -> None:
+        """Warm any external targeting indexes off the event loop before compilation.
+
+        Default no-op. ``create_media_buy`` runs synchronously inside the async
+        ``_create_media_buy_impl``; an adapter whose targeting compilation makes a
+        multi-second synchronous network call (e.g. Kevel's ``/v1/site`` index)
+        would block the event loop for the duration. Such an adapter overrides
+        this to perform the fetch here, and the async caller invokes it via
+        ``asyncio.to_thread`` so the work happens on a worker thread and the later
+        synchronous compile path hits a warm cache. Best-effort: errors are the
+        compile path's to surface, so an override must not raise.
+        """
 
     def get_config_ui_endpoint(self) -> str | None:
         """

@@ -217,7 +217,10 @@ class TestPropertyListResolution:
     """Test property list resolution error paths.
 
     Intent: property list resolution can fail due to external service issues.
-    AdCPAdapterError passes through; other errors get wrapped as AdCPValidationError.
+    Typed AdCP errors pass through; a malformed list-service payload maps to
+    AdCPValidationError (correctable); transient DB failures map to
+    AdCPServiceUnavailableError (transient); anything unexpected propagates to
+    the boundary unwrapped.
     """
 
     @pytest.mark.asyncio
@@ -241,7 +244,7 @@ class TestPropertyListResolution:
                 stack.enter_context(p)
             stack.enter_context(
                 patch(
-                    "src.core.property_list_resolver.resolve_property_list",
+                    "src.core.property_list_resolver.resolve_property_list_typed",
                     new_callable=AsyncMock,
                     side_effect=AdCPAdapterError("property list service unreachable"),
                 )
@@ -253,8 +256,17 @@ class TestPropertyListResolution:
                 await _get_products_impl(req, identity)
 
     @pytest.mark.asyncio
-    async def test_generic_error_wrapped_as_validation_error(self):
-        """Non-AdCPAdapterError from resolve_property_list → AdCPValidationError."""
+    async def test_db_failure_maps_to_service_unavailable(self):
+        """Infrastructure failure (SQLAlchemyError) → AdCPServiceUnavailableError.
+
+        SERVICE_UNAVAILABLE/transient per the spec's recovery taxonomy — NOT a
+        VALIDATION_ERROR: the buyer's request is fine, the seller's
+        infrastructure is not, and "retry later" is the honest recovery.
+        """
+        from sqlalchemy.exc import OperationalError
+
+        from src.core.exceptions import AdCPServiceUnavailableError
+
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
 
@@ -271,15 +283,129 @@ class TestPropertyListResolution:
                 stack.enter_context(p)
             stack.enter_context(
                 patch(
-                    "src.core.property_list_resolver.resolve_property_list",
+                    "src.core.property_list_resolver.resolve_property_list_typed",
                     new_callable=AsyncMock,
-                    side_effect=RuntimeError("DNS resolution failed"),
+                    side_effect=OperationalError("SELECT 1", {}, Exception("connection refused")),
                 )
             )
 
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(AdCPValidationError, match="Failed to resolve property list"):
+            with pytest.raises(AdCPServiceUnavailableError) as excinfo:
+                await _get_products_impl(req, identity)
+            assert excinfo.value.recovery == "transient"
+            assert excinfo.value.error_code == "SERVICE_UNAVAILABLE"
+
+    @pytest.mark.asyncio
+    async def test_invalid_list_payload_maps_to_validation_error(self):
+        """A list service answering 2xx with a non-conforming payload → AdCPValidationError.
+
+        Correctable on the buyer's side (fix the list service or the reference)
+        — not retryable as-is, and not the seller's infrastructure.
+        """
+        from adcp.types import GetPropertyListResponse, PropertyListReference
+        from pydantic import ValidationError
+
+        try:
+            GetPropertyListResponse.model_validate({"identifiers": 42})
+        except ValidationError as exc:
+            payload_error = exc
+
+        tenant = _make_tenant()
+        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
+
+        req = _make_request()
+        req.property_list = PropertyListReference(agent_url="https://example.com", list_id="test-list")
+
+        mock_uow = _mock_uow_with_products([])
+        patches = _standard_patches(mock_uow)
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(
+                patch(
+                    "src.core.property_list_resolver.resolve_property_list_typed",
+                    new_callable=AsyncMock,
+                    side_effect=payload_error,
+                )
+            )
+
+            from src.core.tools.products import _get_products_impl
+
+            with pytest.raises(AdCPValidationError, match="invalid response") as excinfo:
+                await _get_products_impl(req, identity)
+            assert excinfo.value.error_code == "VALIDATION_ERROR"
+            assert excinfo.value.recovery == "correctable"
+
+    @pytest.mark.asyncio
+    async def test_db_programming_error_propagates_to_boundary(self):
+        """DB-API programming errors are bugs, not retryable outages.
+
+        Pins the inner boundary of the transient tuple: widening the catch
+        back to SQLAlchemyError would mislabel a ProgrammingError as
+        SERVICE_UNAVAILABLE/transient and turn this red.
+        """
+        from adcp.types import PropertyListReference
+        from sqlalchemy.exc import ProgrammingError
+
+        tenant = _make_tenant()
+        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
+        req = _make_request()
+        req.property_list = PropertyListReference(agent_url="https://example.com", list_id="test-list")
+
+        mock_uow = _mock_uow_with_products([])
+        patches = _standard_patches(mock_uow)
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(
+                patch(
+                    "src.core.property_list_resolver.resolve_property_list_typed",
+                    new_callable=AsyncMock,
+                    side_effect=ProgrammingError("SELECT nope", {}, Exception("syntax error")),
+                )
+            )
+
+            from src.core.tools.products import _get_products_impl
+
+            with pytest.raises(ProgrammingError):
+                await _get_products_impl(req, identity)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_propagates_to_boundary(self):
+        """Unexpected exceptions propagate unwrapped from _impl.
+
+        The transport boundary's ``normalize_to_adcp_error`` owns the
+        unexpected→INTERNAL_ERROR translation; _impl must not flatten them
+        into a buyer-fault code with a misleading recovery hint.
+        """
+        tenant = _make_tenant()
+        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
+
+        from adcp.types import PropertyListReference
+
+        req = _make_request()
+        req.property_list = PropertyListReference(agent_url="https://example.com", list_id="test-list")
+
+        mock_uow = _mock_uow_with_products([])
+        patches = _standard_patches(mock_uow)
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(
+                patch(
+                    "src.core.property_list_resolver.resolve_property_list_typed",
+                    new_callable=AsyncMock,
+                    side_effect=RuntimeError("unexpected bug"),
+                )
+            )
+
+            from src.core.tools.products import _get_products_impl
+
+            with pytest.raises(RuntimeError, match="unexpected bug"):
                 await _get_products_impl(req, identity)
 
 
@@ -641,3 +767,37 @@ class TestGetProductCatalogConversionError:
 
             with pytest.raises(ValueError, match="corrupt"):
                 get_product_catalog(tenant_id="test-tenant")
+
+
+class TestDroppedProductAdvisoryBounds:
+    """_dropped_product_advisories enumerates up to the cap, then aggregates the tail."""
+
+    def test_overflow_aggregates_tail_beyond_cap(self):
+        from src.core.tools.products import _MAX_DROPPED_PRODUCT_ADVISORIES, _dropped_product_advisories
+        from src.services.property_intersection import DroppedProduct, DropReason
+
+        total = _MAX_DROPPED_PRODUCT_ADVISORIES + 3
+        dropped = tuple(
+            DroppedProduct(product=MagicMock(product_id=f"p{i}"), reason=DropReason.NO_PROPERTY_OVERLAP)
+            for i in range(total)
+        )
+
+        advisories = _dropped_product_advisories(dropped)
+
+        assert len(advisories) == _MAX_DROPPED_PRODUCT_ADVISORIES + 1
+        enumerated = advisories[:_MAX_DROPPED_PRODUCT_ADVISORIES]
+        assert [a.details["product_id"] for a in enumerated] == [
+            f"p{i}" for i in range(_MAX_DROPPED_PRODUCT_ADVISORIES)
+        ]
+        tail = advisories[-1]
+        assert tail.details == {"additional_dropped": 3}
+        assert "3 more products" in tail.message
+
+    def test_under_cap_has_no_aggregate_entry(self):
+        from src.core.tools.products import _dropped_product_advisories
+        from src.services.property_intersection import DroppedProduct, DropReason
+
+        dropped = (DroppedProduct(product=MagicMock(product_id="p0"), reason=DropReason.STRICT_MODE_VIOLATION),)
+        advisories = _dropped_product_advisories(dropped)
+
+        assert [a.details for a in advisories] == [{"product_id": "p0", "reason": "strict_mode_violation"}]

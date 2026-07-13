@@ -18,13 +18,13 @@ Usage:
 
 import json
 import os
-import uuid
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
+from tests.e2e.utils import build_jsonrpc_message_send
 from tests.factories.creative_asset import build_assets, image_spec
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
@@ -69,19 +69,7 @@ class A2AAdCPComplianceClient:
 
     async def send_natural_language_message(self, text: str) -> dict:
         """Send natural language message to A2A server."""
-        message = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": str(uuid.uuid4()),
-                    "contextId": str(uuid.uuid4()),
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": text}],
-                }
-            },
-        }
+        message = build_jsonrpc_message_send([{"kind": "text", "text": text}])
 
         headers = {"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"}
         if self.tenant:
@@ -93,19 +81,7 @@ class A2AAdCPComplianceClient:
 
     async def send_explicit_skill_message(self, skill: str, parameters: dict) -> dict:
         """Send explicit skill invocation to A2A server."""
-        message = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": str(uuid.uuid4()),
-                    "contextId": str(uuid.uuid4()),
-                    "role": "user",
-                    "parts": [{"kind": "data", "data": {"skill": skill, "parameters": parameters}}],
-                }
-            },
-        }
+        message = build_jsonrpc_message_send([{"kind": "data", "data": {"skill": skill, "parameters": parameters}}])
 
         headers = {"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"}
         if self.tenant:

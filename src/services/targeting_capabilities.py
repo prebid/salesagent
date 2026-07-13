@@ -12,11 +12,13 @@ does not yet define but that adapters actively support.  These are candidates
 for upstream inclusion in AdCP.
 """
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
-from src.core.exceptions import AdCPValidationError
-from src.core.schemas import Error, Targeting, TargetingCapability
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
+from src.core.property_list_resolver import iter_package_property_list_refs
+from src.core.schemas import Targeting, TargetingCapability
 from src.core.validation_helpers import package_field_path
 
 if TYPE_CHECKING:
@@ -196,26 +198,31 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
-def supports_property_list_filtering(adapter: object | None) -> bool:
+def supports_property_list_targeting(adapter: object | None) -> bool:
     """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
 
-    Today no adapter sets ``supports_property_list_filtering=True``; the
-    declaration in ``get_adcp_capabilities`` is the canonical "False until an
-    adapter actually compiles it" anchor. When Kevel's siteId resolver lands,
-    Kevel's adapter class will set this ClassVar to True and the helper will
-    start returning True for tenants on Kevel. Other adapters hard-reject, at
-    which point this advisory path is unreachable for them. Centralizing the
-    check here keeps the wire declaration (capabilities) and the per-call
-    advisory (this module) in lockstep with one source of truth.
+    The ``property_list_filtering`` wire flag in ``media-buy-features.json:12``
+    names the *get_products result-filter* capability — served unconditionally
+    by the PropertyIntersection, so it is declared True for every tenant. The
+    capability THIS helper gates is ``targeting_overlay.property_list`` — i.e.
+    *targeting*, not *filtering* — and is advertised separately via
+    ``ext.prebid.property_list_targeting`` on get_adcp_capabilities.
+
+    Adapter capability is read from the
+    ``supports_property_list_targeting: ClassVar[bool] = False`` declared in
+    ``AdServerAdapter``; adapters flip it to True once they implement the
+    compile path. Until then, ``_create_media_buy_impl`` /
+    ``_update_media_buy_impl`` reject ``property_list`` requests at the
+    boundary via ``raise_if_property_list_unsupported``.
     """
     if adapter is None:
         return False
-    return bool(getattr(adapter.__class__, "supports_property_list_filtering", False))
+    return bool(getattr(adapter.__class__, "supports_property_list_targeting", False))
 
 
 # ─── property_list targeting helpers ────────────────────────────────────
 #
-# Spec scope: these helpers only handle ``property_list``. The AdCP 3.0.0
+# Spec scope: these helpers only handle ``property_list``. The AdCP 3.1.0-beta.3
 # spec governs ``property_list`` via a per-product flag
 # (``Product.property_targeting_allowed``) and a per-capability declaration
 # (``MediaBuyFeatures.property_list_filtering``). ``collection_list`` and
@@ -227,70 +234,71 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
 # capability infrastructure lands separately.
 
 
-def build_property_list_unsupported_advisories(
-    packages: list[Any] | None,
-    capability_supported: bool,
-) -> list[Error]:
-    """Build per-package ``UNSUPPORTED_FEATURE`` advisories for property_list use.
+def raise_if_property_list_unsupported(packages: list[Any] | None, adapter: object | None) -> None:
+    """Honest-declaration boundary check: reject ``targeting_overlay.property_list``
+    against adapters that do not compile it.
 
-    AdCP spec 3.0.0 ``error-handling.mdx`` describes non-fatal errors as
-    "populate only the payload... MUST NOT populate ``adcp_error``" — i.e.
-    advisories ride on the success envelope. Buyers see the silent-drop
-    window during the rollout of property_list round-trip and adapter
-    compilation, without the request being rejected.
+    Raises ``AdCPCapabilityNotSupportedError`` (wire code ``UNSUPPORTED_FEATURE``,
+    recovery ``correctable``) on the first offending package, carrying
+    ``field=f"packages[{i}].targeting_overlay.property_list"`` and a
+    machine-actionable ``suggestion`` so the buyer agent can drop the field
+    and retry, or pick a capable seller.
 
-    Returns Error objects for each package whose ``targeting_overlay.property_list``
-    is set when the bound adapter does not compile the field. Caller appends
-    to ``CreateMediaBuySuccess.errors`` / ``UpdateMediaBuySuccess.errors``.
+    AdCP spec basis (3.1.0-beta.3): the spec's only property_list capability flag
+    (``features.property_list_filtering``) names the get_products filter; the
+    targeting side has no standard flag, so this seller advertises it via
+    ``ext.prebid.property_list_targeting`` in get_adcp_capabilities; honest
+    declaration means a seller that cannot compile the field rejects it with
+    UNSUPPORTED_FEATURE (error-code.json: "A requested feature or field is
+    not supported by this seller") rather than silently ignoring it — the
+    spec's Implementation Requirements state the rule as a MUST ("Publishers
+    MUST: ... Validate Targeting: Reject media buys with targeting that
+    cannot be supported", targeting.mdx). targeting.json's
+    property_list description carries a separate, product-level SHOULD
+    (validation error when ``property_targeting_allowed`` is false), handled
+    by ``raise_if_property_targeting_violations``, not here.
+
+    Centralized here so ``_create_media_buy_impl`` and
+    ``_update_media_buy_impl`` share a single rejection path.
+
+    Args:
+        packages: Request packages, possibly None. Each is inspected for a
+            non-None ``targeting_overlay.property_list``.
+        adapter: The resolved adapter instance. Capability is read from
+            ``adapter.__class__.supports_property_list_targeting`` via
+            ``supports_property_list_targeting()``.
+
+    Raises:
+        AdCPCapabilityNotSupportedError: when the adapter has not declared
+            property_list-targeting support and any package requests it.
     """
-    if capability_supported or not packages:
-        return []
-
-    advisories: list[Error] = []
-    for index, package in enumerate(packages):
-        overlay = getattr(package, "targeting_overlay", None)
-        if overlay is None or getattr(overlay, "property_list", None) is None:
-            continue
-        advisories.append(
-            Error(
-                code="UNSUPPORTED_FEATURE",
-                message=(
-                    "property_list_filtering is declared off for this seller. "
-                    "The list_id is persisted on the package but will not affect "
-                    "targeting until adapter compilation lands."
-                ),
-                field=f"packages[{index}].targeting_overlay.property_list",
-                suggestion=(
-                    "Continue to send property_list; the seller will activate it "
-                    "once the adapter compiles list_ids into native targeting."
-                ),
-            )
+    if supports_property_list_targeting(adapter) or not packages:
+        return
+    for index, _package, _ref, _key in iter_package_property_list_refs(packages):
+        adapter_label = getattr(adapter.__class__, "adapter_name", adapter.__class__.__name__) if adapter else "adapter"
+        raise AdCPCapabilityNotSupportedError(
+            message=(
+                f"{adapter_label} does not support property_list targeting. "
+                "This seller's adapter cannot compile targeting_overlay.property_list "
+                "into native ad-server targeting. The buyer can drop the field and "
+                "retry, or use a seller whose get_adcp_capabilities advertises "
+                "ext.prebid.property_list_targeting=true."
+            ),
+            field=package_field_path("targeting_overlay.property_list", index),
+            suggestion=(
+                "Remove targeting_overlay.property_list from this package and retry, "
+                "or choose a seller whose get_adcp_capabilities declares "
+                "ext.prebid.property_list_targeting=true."
+            ),
         )
-    return advisories
-
-
-def property_list_unsupported_advisories(
-    packages: list[Any] | None,
-    adapter: object | None,
-) -> list[Error] | None:
-    """High-level wrapper: build advisories or return ``None`` when none apply.
-
-    Single entry point for both create and update paths; mirrors
-    ``MediaBuyFeatures.property_list_filtering`` source-of-truth via
-    ``supports_property_list_filtering()`` so the per-call advisory and the
-    capability declaration cannot drift. ``None`` (not ``[]``) so the
-    optional ``errors`` field round-trips cleanly through
-    ``model_dump(exclude_none=True)``.
-    """
-    advisories = build_property_list_unsupported_advisories(packages, supports_property_list_filtering(adapter))
-    return advisories or None
 
 
 def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
-    AdCP 3.0.0 (core/product.json ``property_targeting_allowed``): "Sellers
-    SHOULD return a validation error if the product has
+    AdCP 3.1.0-beta.3 — the ``property_targeting_allowed`` flag lives in
+    ``core/product.json``; the rule prose is in ``core/targeting.json``
+    ``property_list``: "Sellers SHOULD return a validation error if the product has
     property_targeting_allowed: false."
 
     Used at both create_media_buy and update_media_buy validation sites; pulled
@@ -438,3 +446,50 @@ def validate_geo_overlap(targeting: Targeting) -> list[str]:
                 )
 
     return violations
+
+
+def collect_overlay_targeting_violations(targeting_overlay: Targeting) -> list[str]:
+    """Run the three per-package overlay-targeting validators and return all violations.
+
+    Shared by ``_create_media_buy_impl`` and ``_update_media_buy_impl`` so a
+    buyer cannot bypass unknown-field rejection, managed-only dimension checks,
+    or geo inclusion/exclusion overlap by routing the same change through a
+    different path.
+    """
+    return (
+        validate_unknown_targeting_fields(targeting_overlay)
+        + validate_overlay_targeting(targeting_overlay)
+        + validate_geo_overlap(targeting_overlay)
+    )
+
+
+def raise_if_overlay_targeting_violations(violations: list[str]) -> None:
+    """Single raise shape for overlay-targeting violations on create AND update.
+
+    Both paths emit byte-identical envelopes (INVALID_REQUEST, same field,
+    same suggestion) for identical violations from the shared collector.
+    """
+    if violations:
+        raise AdCPInvalidRequestError(
+            f"Targeting validation failed: {'; '.join(violations)}",
+            suggestion="Check targeting constraints.",
+            field="targeting_overlay",
+        )
+
+
+def raise_for_overlay_targeting(packages: Iterable[Any]) -> None:
+    """Validate every package's ``targeting_overlay`` and raise ONCE with all violations.
+
+    The shared create/update walk: collect violations from each non-null overlay
+    via ``collect_overlay_targeting_violations`` and raise the single
+    ``INVALID_REQUEST`` envelope. Accumulate-all (not first-offender), so a buyer
+    with multiple offending packages sees every package's problems in one
+    response — and create/update emit byte-identical envelopes for identical
+    violations rather than create truncating to the first offending package.
+    """
+    violations: list[str] = []
+    for package in packages:
+        overlay = package.targeting_overlay
+        if overlay is not None:
+            violations.extend(collect_overlay_targeting_violations(overlay))
+    raise_if_overlay_targeting_violations(violations)

@@ -52,6 +52,7 @@ from src.core.schemas import (
     ReportingPeriod,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
+    UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
@@ -2968,13 +2969,14 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        # Should return success but workflow step should be marked as requires_approval
-        assert isinstance(result, UpdateMediaBuySuccess)
+        # Approval-pending returns the spec submitted variant; the workflow step
+        # is still marked requires_approval.
+        assert isinstance(result, UpdateMediaBuySubmitted)
+        assert result.status == "submitted"
+        assert result.task_id == "step_1"
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
-        # Affected packages should be empty (not yet applied)
-        assert result.affected_packages == []
 
     def test_implementation_date_null_when_pending(self):
         """UC-003-MA02: implementation_date is null until approved.
@@ -3032,10 +3034,12 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        # Pending approval is the spec submitted variant — implementation_date and
+        # the other success resource fields are absent (they arrive on completion
+        # once approval resolves), which satisfies "null if pending approval".
+        assert isinstance(result, UpdateMediaBuySubmitted)
         dumped = result.model_dump()
-        # implementation_date should be None when pending approval
-        assert dumped.get("implementation_date") is None
+        assert "implementation_date" not in dumped
 
 
 class TestUpdateMediaBuyAdapterFailure:

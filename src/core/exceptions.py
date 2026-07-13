@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+import httpx
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel
 
@@ -722,25 +723,13 @@ class AdCPBudgetTooLowError(AdCPError):
 class AdCPCapabilityNotSupportedError(AdCPError):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
-    .. note::
-        **Intentional spec divergence.** The AdCP spec classifies
-        ``UNSUPPORTED_FEATURE`` as ``terminal``; we emit ``correctable``.
-        The salesagent raises this exception only when the buyer holds the
-        recovery lever — they can fix the request by dropping the
-        unsupported feature (e.g. removing ``property_list`` targeting
-        against an adapter that doesn't compile it). Classifying it
-        ``terminal`` would tell the buyer agent to give up on a recoverable
-        condition.
-
-        **Revisit condition:** if the SDK runtime starts enforcing the
-        spec's ``terminal`` classification at the wire (rejecting our
-        ``correctable`` recovery hint), drop this override and update
-        affected raise-site call sites to either select a different code or
-        accept the ``terminal`` retry semantics. Until then this is the
-        documented, expected behavior — not a TODO.
-
-        FIXME(salesagent-unsupported-feature-recovery): grep tag for the
-        revisit condition above. Remove when the SDK enforces terminal.
+    Recovery is ``correctable``, matching the spec: AdCP 3.1.0-beta.3
+    ``error-handling.mdx`` classifies ``UNSUPPORTED_FEATURE`` as ``correctable``
+    ("Check ``get_adcp_capabilities`` and remove unsupported fields"). The buyer
+    holds the recovery lever — they fix the request by dropping the unsupported
+    feature (e.g. removing ``property_list`` targeting against an adapter that
+    doesn't compile it) — so ``terminal`` (give up / escalate to a human) would be
+    the wrong instruction for a buyer-resolvable condition.
     """
 
     _default_status_code: ClassVar[int] = 422
@@ -753,7 +742,7 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
 
     Recovery=correctable: the buyer can fix this and resend — either replay the
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
-    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    new payload. This matches the AdCP 3.1.0-beta.3 prose example envelope and the
     conformance storyboard's stated expectation. The SDK's
     ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
     table is only a default applied when no recovery is supplied — an explicit
@@ -778,7 +767,7 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     buyer agent recovers autonomously — a natural-key existence check (e.g.
     ``get_media_buys`` by ``context.internal_campaign_id``) to learn whether the
     original request succeeded, then either accept that result or mint a fresh
-    idempotency_key for a new attempt. The 3.0.1 ``error-code.json`` enum
+    idempotency_key for a new attempt. The 3.1.0-beta.3 ``error-code.json`` enum
     description classifies the code ``correctable`` (that buyer-recovery path),
     and the recovery taxonomy reserves ``terminal`` for conditions requiring
     HUMAN action (account suspended, payment required) — not an agent-resolvable
@@ -907,6 +896,147 @@ class AdCPInventoryUnavailableError(AdCPError):
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "INVENTORY_UNAVAILABLE"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+# ---------------------------------------------------------------------------
+# HTTP status -> AdCP recovery, single-sourced per boundary.
+# ---------------------------------------------------------------------------
+# An outbound HTTP failure maps to an AdCP recovery class, and the verdict has
+# exactly one home per boundary so consumers cannot drift (the failure mode that
+# let an error type hand-copy the table and then mis-set a 403). Two boundaries,
+# two tables, because the buyer's lever differs:
+#
+#   * GENERAL / buyer-facing (a buyer's referenced resource — e.g. the buyer's
+#     property-list service fetched in ``property_list_resolver``): a 4xx is the
+#     buyer's reference/token, so "fix the request and resend" -> correctable.
+#   * AD-SERVER (the tenant operator's ad server — Kevel/Xandr/Triton/Broadstreet
+#     writes + the Kevel site read): a 403 is the operator's credential being
+#     denied, which the buyer has no lever to fix, so per the spec recovery
+#     taxonomy ("terminal: requires human action") it is terminal — matching the
+#     application-level credential-rejection raise sites (e.g. Xandr _authenticate).
+#
+# Each table is keyed off a single class selector, so the (error_code, recovery)
+# pair is read from the chosen subclass's ``_default_*`` — one source, no copy.
+
+
+def _adcp_error_class_for_http_status(status: int) -> type[AdCPError]:
+    """The AdCPError subclass a GENERAL (buyer-facing) HTTP status maps to.
+
+    - ``429`` -> ``AdCPRateLimitError`` (RATE_LIMITED / transient)
+    - other ``4xx`` -> ``AdCPValidationError`` (VALIDATION_ERROR / correctable)
+    - ``5xx`` and any non-4xx -> ``AdCPAdapterError`` (SERVICE_UNAVAILABLE / transient)
+    """
+    if status == 429:
+        return AdCPRateLimitError
+    if 400 <= status < 500:
+        return AdCPValidationError
+    return AdCPAdapterError
+
+
+def _instantiate_status_error(
+    cls: type[AdCPError], message: str, *, field: str | None, suggestion: str | None
+) -> AdCPError:
+    """Instantiate the selected status->error class, threading ``field``/``suggestion`` only for the validation class.
+
+    ``field``/``suggestion`` enrich the correctable (4xx validation) case; a
+    transient 429/5xx is not fixed by editing the request, so they are ignored
+    there. Shared by the general and ad-server status factories so the
+    class-instantiation rule lives in exactly one place.
+    """
+    if cls is AdCPValidationError:
+        return cls(message, field=field, suggestion=suggestion)
+    return cls(message)
+
+
+def adcp_error_for_http_status(
+    status: int, message: str, *, field: str | None = None, suggestion: str | None = None
+) -> AdCPError:
+    """Map a GENERAL (buyer-facing) outbound HTTP status to its typed AdCP error.
+
+    The boundary where a 4xx is the buyer's referenced resource (the property-list
+    fetch in ``property_list_resolver``): a 4xx is correctable (fix the reference and
+    resend), 429/5xx are transient (AdCP 3.1.0-beta.3 recovery taxonomy). Ad-server
+    writes/reads use ``adcp_adapter_error_for_http_status`` instead — a 403 there is
+    the tenant operator's credential, which is terminal, not buyer-correctable.
+
+    ``field``/``suggestion`` enrich the correctable (4xx) case; they are ignored for the
+    transient classes (a 429/5xx is not fixed by editing the request).
+    """
+    return _instantiate_status_error(
+        _adcp_error_class_for_http_status(status), message, field=field, suggestion=suggestion
+    )
+
+
+def _adcp_adapter_error_class_for_http_status(status: int) -> type[AdCPError]:
+    """The AdCPError subclass an AD-SERVER HTTP status maps to.
+
+    The general selector refined for the one status whose buyer recovery differs at
+    an ad-server boundary: a ``403`` is the tenant operator's credential being denied
+    -> ``AdCPConfigurationError`` (CONFIGURATION_ERROR / terminal), matching the
+    application-level credential-rejection raise sites. All other statuses share the
+    general selector.
+    """
+    if status == 403:
+        return AdCPConfigurationError
+    return _adcp_error_class_for_http_status(status)
+
+
+def ad_server_error_attrs(status: int) -> tuple[str, RecoveryHint, int]:
+    """The ``(error_code, recovery, status_code)`` an AD-SERVER HTTP status maps to.
+
+    The pure-mapping form for a consumer that configures its error attributes in
+    ``__init__`` (``BroadstreetAPIError``) and so cannot consume a factory that hands
+    back a *different* object. Reads the selected class's ``_default_*`` so it produces
+    the SAME triple as ``adcp_adapter_error_for_http_status``'s factory path for the
+    same status — INCLUDING the buyer-facing HTTP ``status_code``, so one ad-server
+    event yields one buyer-facing status regardless of which adapter the tenant runs
+    (the upstream ad-server status stays in the error message / ``response_body``, not
+    the wire status line). A 403 is terminal (operator credential denied); all other
+    statuses share the general table.
+    """
+    cls = _adcp_adapter_error_class_for_http_status(status)
+    return (cls._default_error_code, cls._default_recovery, cls._default_status_code)
+
+
+def adcp_adapter_error_for_http_status(
+    status: int, message: str, *, field: str | None = None, suggestion: str | None = None
+) -> AdCPError:
+    """Map an AD-SERVER outbound HTTP status to its typed AdCP error.
+
+    The ad-server dual of ``adcp_error_for_http_status`` (``wrap_request_errors`` for
+    the ``requests``-based ad-server writes; ``adcp_error_for_httpx_exc`` for the
+    ``httpx``-based Kevel site read). A 403 (operator ``access_token``/credential
+    denied) is a terminal ``AdCPConfigurationError`` (wire ``SERVICE_UNAVAILABLE`` /
+    recovery ``terminal``): the buyer has no lever to fix the tenant's ad-server
+    credential, so "fix and resend" (correctable) would loop them wrongly. All other
+    statuses share the general factory (429/5xx -> transient, other 4xx -> correctable).
+    """
+    return _instantiate_status_error(
+        _adcp_adapter_error_class_for_http_status(status), message, field=field, suggestion=suggestion
+    )
+
+
+def adcp_error_for_httpx_exc(
+    exc: httpx.HTTPError, message: str, *, field: str | None = None, suggestion: str | None = None
+) -> AdCPError:
+    """Map an ``httpx`` transport failure to its typed AdCP error — the httpx dual of ``wrap_request_errors``.
+
+    Used by the Kevel site read (``kevel_site_resolver``), an AD-SERVER call authenticated with
+    the tenant operator's API key, so a response-bearing ``httpx.HTTPStatusError`` routes through
+    the ad-server table (``adcp_adapter_error_for_http_status``): a 403 is the operator's credential
+    -> terminal, other 4xx -> correctable, 429/5xx -> transient. A response-less failure
+    (``TimeoutException``/``RequestError`` — timeout, connection reset) has no status and is a
+    transient ``AdCPAdapterError``. Without this seam an httpx handler that re-wraps every failure as
+    ``AdCPAdapterError`` reports a status-bearing failure as transient (retry forever).
+
+    ``field``/``suggestion`` enrich the correctable (4xx) case; they are ignored for the
+    transient/terminal classes. ``property_list_resolver._raise_fetch_error`` is the buyer-facing
+    sibling (a 4xx there is the buyer's reference -> correctable) and uses the GENERAL table directly,
+    distinguishing timeout from connect in its message, so it does not route through here.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return adcp_adapter_error_for_http_status(exc.response.status_code, message, field=field, suggestion=suggestion)
+    return AdCPAdapterError(message)
 
 
 # ---------------------------------------------------------------------------

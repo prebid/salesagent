@@ -6,6 +6,7 @@ import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.utils import wrap_request_errors
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -150,6 +151,14 @@ class TritonDigital(AdServerAdapter):
             dry_run_prefix=False,
         )
 
+        # Honest-declaration property_list reject lives in
+        # ``_create_media_buy_impl``. Triton can in principle compile audio-
+        # property identifier types (station_id, podcast_guid, etc.) to its
+        # native targeting, but that requires resolver work not yet
+        # implemented — until then this adapter keeps
+        # ``supports_property_list_targeting = False`` and the boundary raise
+        # rejects the request up-front.
+
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
         for package in packages:
@@ -235,8 +244,9 @@ class TritonDigital(AdServerAdapter):
                 "active": True,
             }
 
-            response = requests.post(f"{self.base_url}/campaigns", headers=self.headers, json=campaign_payload)
-            response.raise_for_status()
+            with wrap_request_errors():
+                response = requests.post(f"{self.base_url}/campaigns", headers=self.headers, json=campaign_payload)
+                response.raise_for_status()
             campaign_data = response.json()
             campaign_id = campaign_data["id"]
 
@@ -270,8 +280,11 @@ class TritonDigital(AdServerAdapter):
                     if targeting and "stationIds" in targeting:
                         flight_payload["stationIds"] = targeting["stationIds"]
 
-                flight_response = requests.post(f"{self.base_url}/flights", headers=self.headers, json=flight_payload)
-                flight_response.raise_for_status()
+                with wrap_request_errors():
+                    flight_response = requests.post(
+                        f"{self.base_url}/flights", headers=self.headers, json=flight_payload
+                    )
+                    flight_response.raise_for_status()
 
             # Use the actual campaign ID from Triton
             media_buy_id = f"triton_{campaign_id}"
@@ -453,7 +466,7 @@ class TritonDigital(AdServerAdapter):
                 "columns": ["flightName", "impressions", "totalRevenue"],
             }
 
-            try:
+            with wrap_request_errors():
                 response = requests.post(f"{self.base_url}/reports", headers=self.headers, json=report_payload)
                 response.raise_for_status()
                 report_job = response.json()
@@ -470,7 +483,10 @@ class TritonDigital(AdServerAdapter):
                         break
                     time.sleep(0.5)
                 else:
-                    raise Exception("Triton report did not complete in time.")
+                    # Report generation didn't finish within the poll window — transient
+                    # (it may complete later; the buyer should retry), not an untyped
+                    # INTERNAL_ERROR/terminal that tells the buyer to escalate.
+                    raise AdCPAdapterError("Triton report did not complete in time.")
 
                 report_response = requests.get(report_url)
                 report_response.raise_for_status()
@@ -512,10 +528,6 @@ class TritonDigital(AdServerAdapter):
                     by_package=by_package,
                     currency="USD",
                 )
-
-            except requests.exceptions.RequestException as e:
-                self.log(f"Error getting delivery report from Triton: {e}")
-                raise
 
     def update_media_buy_performance_index(
         self, media_buy_id: str, package_performance: list[PackagePerformance]
@@ -615,7 +627,7 @@ class TritonDigital(AdServerAdapter):
                 implementation_date=today,
             )
         else:
-            try:
+            with wrap_request_errors():
                 campaign_id = media_buy_id.replace("triton_", "")
 
                 if action in ["pause_media_buy", "resume_media_buy"]:
@@ -695,7 +707,3 @@ class TritonDigital(AdServerAdapter):
                     affected_packages=[],  # List of package_ids affected by update
                     implementation_date=today,
                 )
-
-            except requests.exceptions.RequestException as e:
-                self.log(f"Error updating Triton campaign/flight: {e}")
-                raise AdCPAdapterError(str(e)) from e

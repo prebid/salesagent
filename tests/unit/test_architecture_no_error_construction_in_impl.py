@@ -37,18 +37,38 @@ import pytest
 # malformed directive.
 PATTERN_A_PER_FILE_CAP: dict[str, int] = {}
 
-_SKIP_MARKER = "# structural-guard:"
+# Sanctioned-advisory marker: the controlled prefix is enforced (any other
+# suffix after "structural-guard:" does NOT exempt a site), so the escape
+# hatch stays a vocabulary, not a free-text bypass.
+_SKIP_MARKER = "# structural-guard: advisory"
 
 from tests.unit._architecture_helpers import REPO_ROOT, SCAN_DIRS, iter_call_expressions, safe_parse
 from tests.unit._architecture_helpers import rel as _rel
+
+# Pattern A scans wider than the shared default: src/services builds advisory
+# payloads, so an Error(code=...) constructor relocated there must not escape.
+_PATTERN_A_SCAN_DIRS = [*SCAN_DIRS, REPO_ROOT / "src/services"]
+
+
+def _advisory_marker_lines(source: str) -> set[int]:
+    """Line numbers carrying the advisory marker as an actual comment token."""
+    import io
+    import tokenize
+
+    lines: set[int] = set()
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.COMMENT and tok.string.startswith(_SKIP_MARKER):
+            lines.add(tok.start[0])
+    return lines
 
 
 def _count_pattern_a_sites(filepath: Path) -> list[int]:
     """Return line numbers of ``Error(code=...)`` literals not marked for skip.
 
-    Sites carrying a ``# structural-guard:`` comment anywhere within the
-    call's line span are legitimate per-item advisory results in a success
-    envelope and are excluded.
+    Sites carrying the ``# structural-guard: advisory`` marker on the call's
+    first line are legitimate per-item advisory results in a success envelope
+    and are excluded; the marker is line-anchored so it can only exempt the
+    call it is visually attached to.
     """
     from tests.unit._architecture_helpers import collect_error_aliases
 
@@ -56,7 +76,8 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
     if tree is None:
         return []
 
-    source_lines = filepath.read_text().splitlines()
+    source = filepath.read_text()
+    advisory_comment_lines = _advisory_marker_lines(source)
     aliases = collect_error_aliases(tree)
     lines: list[int] = []
     for node in iter_call_expressions(tree):
@@ -70,9 +91,11 @@ def _count_pattern_a_sites(filepath: Path) -> list[int]:
             continue
         if not any(kw.arg == "code" for kw in node.keywords):
             continue
-        start = node.lineno - 1
-        end = (getattr(node, "end_lineno", None) or node.lineno) - 1
-        if any(_SKIP_MARKER in source_lines[i] for i in range(start, min(end + 1, len(source_lines)))):
+        # The marker must be a real COMMENT token on the call's OWN first
+        # line: a span-wide substring test let a marked nested call exempt an
+        # unmarked enclosing one, and marker text inside a string literal
+        # counted too.
+        if node.lineno in advisory_comment_lines:
             continue
         lines.append(node.lineno)
     return lines
@@ -89,7 +112,7 @@ class TestNoErrorConstructionInImpl:
         assert_per_file_caps(
             cap_dict=PATTERN_A_PER_FILE_CAP,
             count_sites=_count_pattern_a_sites,
-            scan_dirs=SCAN_DIRS,
+            scan_dirs=_PATTERN_A_SCAN_DIRS,
             site_label="Pattern A",
             typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPMediaBuyNotFoundError)",
             rel=_rel,
@@ -112,3 +135,69 @@ class TestNoErrorConstructionInImpl:
         from tests.unit._per_file_cap_guard import assert_caps_only_shrink
 
         assert_caps_only_shrink(PATTERN_A_PER_FILE_CAP, _count_pattern_a_sites, repo_root=REPO_ROOT)
+
+
+class TestSkipMarkerSemantics:
+    """The advisory marker exempts exactly the controlled prefix — nothing else."""
+
+    @staticmethod
+    def _count(source: str, tmp_path) -> list[int]:
+        f = tmp_path / "marker_probe.py"
+        f.write_text(source)
+        return _count_pattern_a_sites(f)
+
+    def test_advisory_marker_exempts_site(self, tmp_path):
+        src = (
+            "from src.core.schemas import Error\n"
+            "def f():\n"
+            "    return Error(  # structural-guard: advisory: per-item result on success envelope\n"
+            '        code="PRODUCT_UNAVAILABLE",\n'
+            "    )\n"
+        )
+        assert self._count(src, tmp_path) == []
+
+    def test_unmarked_site_is_counted(self, tmp_path):
+        src = 'from src.core.schemas import Error\ndef f():\n    return Error(code="VALIDATION_ERROR")\n'
+        assert self._count(src, tmp_path) == [3]
+
+    def test_marked_nested_call_does_not_exempt_unmarked_enclosing_call(self, tmp_path):
+        """The marker is line-anchored: an unmarked OUTER call stays counted."""
+        src = (
+            "from src.core.schemas import Error\n"
+            "def f():\n"
+            "    return Error(\n"
+            '        code="VALIDATION_ERROR",\n'
+            "        details=Error(  # structural-guard: advisory: inner only\n"
+            '            code="PRODUCT_UNAVAILABLE",\n'
+            "        ),\n"
+            "    )\n"
+        )
+        assert self._count(src, tmp_path) == [3]
+
+    def test_marker_text_inside_string_literal_does_not_exempt(self, tmp_path):
+        src = (
+            "from src.core.schemas import Error\n"
+            "def f():\n"
+            '    return Error(code="VALIDATION_ERROR", message="# structural-guard: advisory")\n'
+        )
+        assert self._count(src, tmp_path) == [3]
+
+    def test_adcp_types_alias_is_matched(self, tmp_path):
+        """`from adcp.types import Error as X` binds the same surface — counted."""
+        src = (
+            "from adcp.types import Error as AdCPErrorDetail\n"
+            "def f():\n"
+            '    return AdCPErrorDetail(code="SERVICE_UNAVAILABLE")\n'
+        )
+        assert self._count(src, tmp_path) == [3]
+
+    def test_uncontrolled_marker_suffix_does_not_exempt(self, tmp_path):
+        """A bare 'structural-guard:' comment with a non-advisory vocabulary is NOT a bypass."""
+        src = (
+            "from src.core.schemas import Error\n"
+            "def f():\n"
+            "    return Error(  # structural-guard: legacy-exception\n"
+            '        code="VALIDATION_ERROR",\n'
+            "    )\n"
+        )
+        assert self._count(src, tmp_path) == [3]
