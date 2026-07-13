@@ -1639,7 +1639,7 @@ Then status=pending_approval with setup.message
 **Scenario:**
 ```gherkin
 Given no auth on sync_accounts
-Then AUTH_TOKEN_INVALID error
+Then AUTH_REQUIRED error
 ```
 **Priority:** P0
 **Affected by 3.6:** Yes -- accounts domain is new in v3
