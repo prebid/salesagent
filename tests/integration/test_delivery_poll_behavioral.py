@@ -362,6 +362,123 @@ class TestWebhookNextExpectedAt:
 
 
 # ---------------------------------------------------------------------------
+# Failed send accounting + broadened dedup (#1570 review remediation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestFailedWebhookSendRaisesNotCountedAsSent:
+    """A failed webhook send (send_notification -> False) RAISES; the batch counts an error, not a "Sent".
+
+    Headline correctness fix (#1570/#1575): ``_send_report_for_media_buy`` returns
+    ``bool`` and raises ``RuntimeError`` when the outbound send reports failure,
+    and ``_send_reports`` increments ``reports_sent`` only on a truthy return.
+    Every ``fake_send_notification`` elsewhere in the suite returns ``True``, so
+    this is the only test that drives the ``if not delivered: raise`` branch —
+    deleting that branch turns this red.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_send_raises_runtime_error(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from unittest.mock import AsyncMock, patch
+
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="active",
+                start_date=datetime.now(UTC).date() - timedelta(days=30),
+                end_date=datetime.now(UTC).date() + timedelta(days=30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            scheduler = DeliveryWebhookScheduler()
+            # send_notification returns False (never raises) on permanent 4xx /
+            # exhausted retries — the buyer never received the webhook, so the
+            # scheduler must NOT log a "Sent"; it raises and the batch counts an error.
+            with patch.object(
+                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=False
+            ):
+                with pytest.raises(RuntimeError, match="webhook send failed"):
+                    await scheduler._send_report_for_media_buy(
+                        buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
+                    )
+
+
+@pytest.mark.requires_db
+class TestDedupSuppressesPriorFinalWebhook:
+    """A prior successful webhook of ANY notification_type dedups the next non-forced send.
+
+    #1570 broadened the 24h dedup by dropping the ``notification_type == "scheduled"``
+    predicate: a sent "final" must ALSO suppress a re-send within the window (the
+    durable stopper is the status scheduler flipping the buy out of the serving
+    selection, not this check). Seeding a prior successful "final" log — the
+    discriminating case the old "scheduled"-only query would have missed — and
+    asserting the next non-forced send is skipped pins the broadening: re-adding
+    the "scheduled"-only predicate lets the send through and turns this red.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_prior_final_success_suppresses_next_non_forced_send(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from unittest.mock import AsyncMock, patch
+
+        from src.core.database.repositories.delivery import DeliveryRepository
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="active",
+                start_date=datetime.now(UTC).date() - timedelta(days=30),
+                end_date=datetime.now(UTC).date() + timedelta(days=30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            # A "final" webhook was already delivered inside the 24h window.
+            session = env.get_session()
+            DeliveryRepository(session, "t1").create_log(
+                log_id="prior-final-success",
+                principal_id="p1",
+                media_buy_id=buy.media_buy_id,
+                webhook_url="https://example.com/webhook",
+                task_type="media_buy_delivery",
+                status="success",
+                notification_type="final",
+            )
+            session.commit()
+
+            scheduler = DeliveryWebhookScheduler()
+            with patch.object(
+                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=True
+            ) as mock_send:
+                delivered = await scheduler._send_report_for_media_buy(
+                    buy, buy.raw_request["reporting_webhook"], session, force=False
+                )
+
+            assert delivered is False
+            mock_send.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # Cross-transport: poll omits webhook-only fields on every wire (#1570)
 # ---------------------------------------------------------------------------
 

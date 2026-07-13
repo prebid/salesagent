@@ -1611,8 +1611,13 @@ def then_next_expected(ctx: dict, next_expected: str) -> None:
     if should_include:
         assert has_key, f"Expected 'next_expected_at' in webhook payload but was absent: {list(payload.keys())}"
     else:
-        assert not has_key or payload["next_expected_at"] is None, (
-            f"Expected 'next_expected_at' to be absent or null, got {payload.get('next_expected_at')!r}"
+        # A "final" webhook must OMIT the field entirely: the schema types
+        # next_expected_at as a non-nullable date-time "only present ... when
+        # notification_type is not 'final'" (get-media-buy-delivery-response.json
+        # @ v3.1-04f59d2d5), so an explicit null is non-conforming — UC-004-SERIAL-01.
+        assert not has_key, (
+            f"Expected 'next_expected_at' to be absent for a final notification, "
+            f"got {payload.get('next_expected_at')!r} (explicit null is non-conforming)"
         )
 
 
@@ -1638,6 +1643,101 @@ def then_first_sequence(ctx: dict) -> None:
     seq = first_payload.get("sequence_number")
     assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
+
+
+# ---------------------------------------------------------------------------
+# Real DeliveryWebhookScheduler path (#1570 review remediation, finding #3)
+#
+# The @T-UC-004-webhook-* scenarios above dispatch through the harness
+# is_final/is_adjusted flags and WebhookDeliveryService's own counter — they do
+# not exercise the scheduler's derive_notification_type() /
+# get_max_sequence_number() production logic. The steps below drive the REAL
+# DeliveryWebhookScheduler via DeliveryPollEnv.send_delivery_webhook (only the
+# outbound HTTP POST is mocked), so the notification_type and sequence_number on
+# the wire are the ones production derives, not test-supplied flags.
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('a media buy "{mb_id}" with a reporting_webhook and fresh delivery data'))
+def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str) -> None:
+    """Create an in-flight serving buy with a daily reporting_webhook + adapter data.
+
+    Requires the polling harness (DeliveryPollEnv) — the scenario must NOT be
+    tagged @webhook (that routes to CircuitBreakerEnv, which has no
+    send_delivery_webhook / set_adapter_response).
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+
+    env = ctx["env"]
+    owner = ctx.get("principal_id", "buyer-001")
+    if "db_tenant" not in ctx:
+        ctx["db_tenant"] = TenantFactory(tenant_id=ctx.get("tenant_id", "test_tenant"))
+    principal_key = f"db_principal_{owner}"
+    if principal_key not in ctx:
+        ctx[principal_key] = PrincipalFactory(tenant=ctx["db_tenant"], principal_id=owner)
+
+    buy = MediaBuyFactory(
+        tenant=ctx["db_tenant"],
+        principal=ctx[principal_key],
+        media_buy_id=mb_id,
+        status="active",
+        start_date=datetime.now(UTC).date() - timedelta(days=30),
+        end_date=datetime.now(UTC).date() + timedelta(days=30),
+        raw_request={"reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"}},
+    )
+    ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": owner, "status": "active"}
+    ctx["scheduler_buy"] = buy
+    env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+
+@when(parsers.parse('the delivery webhook scheduler sends a report for "{mb_id}"'))
+def when_scheduler_sends_report(ctx: dict, mb_id: str) -> None:
+    """Drive the real DeliveryWebhookScheduler send; capture the wire payload."""
+    import asyncio
+
+    env = ctx["env"]
+    buy = ctx["scheduler_buy"]
+    try:
+        ctx["scheduler_wire"] = asyncio.run(env.send_delivery_webhook(buy))
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@then(parsers.parse('the scheduler webhook payload notification_type should be "{ntype}"'))
+def then_scheduler_notification_type(ctx: dict, ntype: str) -> None:
+    """Assert the scheduler-derived notification_type on the wire (under ``result``)."""
+    result = ctx["scheduler_wire"]["result"]
+    assert result.get("notification_type") == ntype, (
+        f"Expected scheduler-derived notification_type={ntype!r}, got {result.get('notification_type')!r}"
+    )
+
+
+@then(parsers.parse("the scheduler webhook payload sequence_number should be {n:d}"))
+def then_scheduler_sequence_number(ctx: dict, n: int) -> None:
+    """Assert the scheduler-computed sequence_number on the wire (under ``result``)."""
+    result = ctx["scheduler_wire"]["result"]
+    assert result.get("sequence_number") == n, (
+        f"Expected scheduler-computed sequence_number={n}, got {result.get('sequence_number')!r}"
+    )
+
+
+@then("the response omits notification_type, sequence_number, and next_expected_at")
+def then_poll_omits_webhook_only_fields(ctx: dict) -> None:
+    """Assert the synchronous poll response carries none of the webhook-only fields.
+
+    #1570: notification_type / sequence_number / next_expected_at are "only
+    present in webhook deliveries" (get-media-buy-delivery-response.json @
+    v3.1-04f59d2d5). Serializing the payload the buyer received and checking the
+    three keys are absent grades that no transport injects them on the poll path.
+    """
+    response = ctx["response"]
+    dumped = response.model_dump(mode="json")
+    for field in ("notification_type", "sequence_number", "next_expected_at"):
+        assert field not in dumped, (
+            f"synchronous poll must omit webhook-only {field!r}, got {dumped.get(field)!r} (keys={list(dumped.keys())})"
+        )
 
 
 @then('the payload should not include "aggregated_totals" field')

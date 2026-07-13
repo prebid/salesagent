@@ -490,8 +490,11 @@ async def test_serving_persisted_status_receives_delivery_webhook(integration_db
         with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send:
             await scheduler._send_reports()
 
-        assert mock_send.call_count == 1, (
-            f"persisted status {persisted_status!r} with a reporting_webhook must be "
-            f"selected by the delivery webhook scheduler (got {mock_send.call_count} sends)"
+        # One atomic assertion: the scheduler awaited _send_report_for_media_buy
+        # exactly once, and for this buy. Asserting the list of awaited-arg
+        # media_buy_ids pins both the count and the argument together (a split
+        # call_count + call_args check slips past test_architecture_weak_mock_assertions).
+        assert [c.args[0].media_buy_id for c in mock_send.await_args_list] == [buy.media_buy_id], (
+            f"persisted status {persisted_status!r} with a reporting_webhook must be selected "
+            f"exactly once by the delivery webhook scheduler (awaited: {mock_send.await_args_list!r})"
         )
-        assert mock_send.call_args.args[0].media_buy_id == buy.media_buy_id

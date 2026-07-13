@@ -300,6 +300,29 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the payload should not include "aggregated_totals" field
     # UC-004 note: aggregated totals are polling-only (not webhook)
 
+  @T-UC-004-webhook-scheduler-derivation @alternative @polling @invariant @BR-RULE-029
+  Scenario: Delivery webhook scheduler derives notification_type and sequence from production state
+    # Drives the REAL DeliveryWebhookScheduler — not the WebhookDeliveryService
+    # is_final/is_adjusted flags: notification_type comes from
+    # derive_notification_type() over the buy's resolved delivery status, and
+    # sequence_number from the success-only WebhookDeliveryLog counter (#1570).
+    # NOT tagged @webhook so the polling harness (DeliveryPollEnv) is active — it
+    # exposes send_delivery_webhook / set_adapter_response.
+    Given a media buy "mb-100" with a reporting_webhook and fresh delivery data
+    When the delivery webhook scheduler sends a report for "mb-100"
+    Then the scheduler webhook payload notification_type should be "scheduled"
+    And the scheduler webhook payload sequence_number should be 1
+
+  @T-UC-004-poll-omits-webhook-fields @main-flow @polling @v3-1 @invariant @BR-RULE-222
+  Scenario: Synchronous poll omits the webhook-only fields
+    # #1570: notification_type / sequence_number / next_expected_at are "only
+    # present in webhook deliveries" — the synchronous poll must omit all three,
+    # on every transport.
+    Given a media buy "mb-001" owned by "buyer-001" with status "active"
+    And the ad server adapter has delivery data for "mb-001"
+    When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
+    Then the response omits notification_type, sequence_number, and next_expected_at
+
   @T-UC-004-webhook-retry-5xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029 @nfr @nfr-005
   Scenario: Webhook delivery retries on 5xx response
     Given a media buy "mb-001" with an active reporting_webhook
