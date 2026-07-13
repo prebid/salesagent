@@ -1900,6 +1900,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-main-snapshot",
             # Transport-agnostic main scenario
             "T-UC-019-main",
+            # #1544 revision/confirmed_at grading that outruns production. These
+            # three were previously in _UC019_WIRED but their Then steps have no
+            # handler, so they graded nothing while appearing wired. The gap:
+            # partition-revision needs Given plumbing to seed an exact persisted
+            # revision (e.g. 5 after four writes) plus a `revision should be <n>`
+            # step; boundary-revision and the invalid partition-confirmed-at rows
+            # grade a SCHEMA_VIOLATION on defective persisted seller data
+            # (revision 0/-1/absent, non-ISO confirmed_at) that get_media_buys
+            # does not emit — it reads persisted rows without re-validating them.
+            # The scalar revision/confirmed_at invariants ARE graded, by
+            # T-UC-019-inv-291-* and T-UC-019-inv-confirmed-at-*.
+            "T-UC-019-partition-revision",
+            "T-UC-019-boundary-revision",
+            "T-UC-019-partition-confirmed-at",
         }
         if marker_names & _UC019_XFAIL_TAGS:
             item.add_marker(
@@ -2605,9 +2619,10 @@ _UC019_WIRED: set[str] = {
     "T-UC-019-inv-confirmed-at-present",
     "T-UC-019-inv-confirmed-at-stable",
     "T-UC-019-lifecycle-approval",
-    "T-UC-019-partition-revision",
-    "T-UC-019-boundary-revision",
-    "T-UC-019-partition-confirmed-at",
+    # NOTE: partition-revision / boundary-revision / partition-confirmed-at are
+    # deliberately NOT wired here — they grade behavior production doesn't yet
+    # implement (see _UC019_XFAIL_TAGS). Wiring them would present them as graded
+    # when their steps don't exist.
 }
 
 # Admin scenarios have their own transport (Flask test_client / requests.Session).

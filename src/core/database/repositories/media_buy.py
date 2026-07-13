@@ -496,6 +496,7 @@ class MediaBuyRepository:
         mutate: Callable[[MediaBuy], None],
         *,
         expected_revision: int | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
     ) -> MediaBuy | None:
         """Shared single-row mutation skeleton: load-under-lock → mutate → bump → flush.
 
@@ -526,14 +527,22 @@ class MediaBuyRepository:
             # the identity-mapped revision with the committed value, so compare
             # directly — no second SELECT needed.
             if media_buy.revision != expected_revision:
-                raise media_buy_revision_conflict(media_buy_id, expected=expected_revision, current=media_buy.revision)
+                raise media_buy_revision_conflict(
+                    media_buy_id, expected=expected_revision, current=media_buy.revision, context=context
+                )
         mutate(media_buy)
         self._stamp_confirmation_if_needed(media_buy)
         self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
-    def bump_revision(self, media_buy_id: str, *, expected_revision: int | None = None) -> MediaBuy | None:
+    def bump_revision(
+        self,
+        media_buy_id: str,
+        *,
+        expected_revision: int | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> MediaBuy | None:
         """Bump the revision of a media buy that was mutated outside this repository.
 
         For tool paths that persist changes to a buy's packages/assignments
@@ -543,7 +552,9 @@ class MediaBuyRepository:
         ``expected_revision`` is checked under the row lock (CONFLICT on mismatch).
         """
         # No column change of its own — the shared skeleton does the bump/flush.
-        return self._locked_mutate_and_bump(media_buy_id, lambda _media_buy: None, expected_revision=expected_revision)
+        return self._locked_mutate_and_bump(
+            media_buy_id, lambda _media_buy: None, expected_revision=expected_revision, context=context
+        )
 
     def update_status(
         self,
@@ -599,14 +610,27 @@ class MediaBuyRepository:
             f"status transition to {status!r}",
         )
 
-    def bump_revision_or_raise(self, media_buy_id: str, *, expected_revision: int | None = None) -> MediaBuy:
+    def bump_revision_or_raise(
+        self,
+        media_buy_id: str,
+        *,
+        expected_revision: int | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> MediaBuy:
         """``bump_revision``, raising if the buy vanished mid-request (No Quiet Failures)."""
         return self._require_mutated(
-            self.bump_revision(media_buy_id, expected_revision=expected_revision), media_buy_id, "revision bump"
+            self.bump_revision(media_buy_id, expected_revision=expected_revision, context=context),
+            media_buy_id,
+            "revision bump",
         )
 
     def update_fields(
-        self, media_buy_id: str, *, expected_revision: int | None = None, **kwargs: Any
+        self,
+        media_buy_id: str,
+        *,
+        expected_revision: int | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.
 
@@ -629,14 +653,19 @@ class MediaBuyRepository:
                     raise ValueError(f"MediaBuy has no attribute {key!r}")
                 setattr(media_buy, key, value)
 
-        return self._locked_mutate_and_bump(media_buy_id, _apply, expected_revision=expected_revision)
+        return self._locked_mutate_and_bump(media_buy_id, _apply, expected_revision=expected_revision, context=context)
 
     def update_fields_or_raise(
-        self, media_buy_id: str, *, expected_revision: int | None = None, **kwargs: Any
+        self,
+        media_buy_id: str,
+        *,
+        expected_revision: int | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> MediaBuy:
         """``update_fields``, raising if the buy vanished mid-request (No Quiet Failures)."""
         return self._require_mutated(
-            self.update_fields(media_buy_id, expected_revision=expected_revision, **kwargs),
+            self.update_fields(media_buy_id, expected_revision=expected_revision, context=context, **kwargs),
             media_buy_id,
             "field update",
         )

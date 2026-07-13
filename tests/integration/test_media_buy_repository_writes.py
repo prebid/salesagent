@@ -748,24 +748,27 @@ class TestCreatePackagesBulk:
 
 
 class TestConcurrentRevisionBump:
-    """Two concurrent bumps on the SAME buy must land on distinct revisions.
+    """Two concurrent bumps on the SAME buy must land on distinct revisions —
+    on BOTH the locked and the unlocked mutation seams.
 
-    This is the test the sequential "rapid updates" case cannot provide: it runs
-    two bumps on two independent sessions/transactions that BOTH preload the row
-    into their identity map at the same starting revision before either commits.
+    The two mutation seams are protected by different mechanisms, so each needs
+    its own concurrent test:
 
-    Under a Python read-modify-write bump (``revision = mb.revision + 1``) both
-    transactions read the stale identity-mapped ``N`` — a ``SELECT ... FOR
-    UPDATE`` that finds the PK already in the session returns the in-memory
-    instance without ``populate_existing()`` — and both write ``N+1``: a lost
-    update, so the counter advances by 1 across two bumps and the two updates
-    share a revision (#1544 round-2 blocker #1).
+    - **Locked seam** (``bump_revision``/``update_fields``/``update_status`` →
+      ``_locked_mutate_and_bump``): the ``get_by_id(for_update=True,
+      populate_existing=True)`` re-reads the committed counter under the row lock
+      before the increment, so a stale identity-mapped read cannot survive. This
+      seam stays correct even under a Python read-modify-write — the lock +
+      ``populate_existing`` do the work, NOT the server-side increment.
 
-    Under the server-side ``revision = coalesce(revision, 0) + 1`` the database
-    computes the increment at flush under the row write-lock: the second bump
-    blocks until the first commits, then increments the committed value. The two
-    bumps deterministically produce ``N+1`` and ``N+2`` — the counter advances by
-    exactly 2, proving the two updates landed on distinct revisions.
+    - **Unlocked seam** (``apply_status_transition``, used by the cross-tenant
+      scheduler sweep and creative-sync): no ``FOR UPDATE``, no
+      ``populate_existing`` re-read, so the server-side ``revision =
+      coalesce(revision, 0) + 1`` is the SOLE protection. This is the seam that
+      goes red if the increment regresses to a Python read-modify-write.
+
+    The second test below is therefore the one that actually isolates the
+    server-side increment (#1544).
     """
 
     def test_two_concurrent_bumps_yield_distinct_revisions(self, tenant_a, principal_a):
@@ -812,6 +815,55 @@ class TestConcurrentRevisionBump:
             final_rev = MediaBuyRepository(session, tenant_a).get_by_id("mb_concurrent_rev").revision
         # Two bumps from revision 1 → 3. A collision (lost update) would leave 2.
         assert final_rev == 3, f"expected two distinct bumps 1→2→3, got final revision {final_rev}"
+
+    def test_two_concurrent_apply_status_transition_yield_distinct_revisions(self, tenant_a, principal_a):
+        """The unlocked seam relies solely on the server-side increment.
+
+        ``apply_status_transition`` (scheduler sweep, creative-sync) loads its row
+        WITHOUT ``FOR UPDATE`` and WITHOUT ``populate_existing``, so nothing
+        refreshes the stale identity-mapped counter before the bump — the
+        server-side ``coalesce(revision, 0) + 1`` is the only thing standing
+        between two concurrent transitions and a lost update. Unlike the locked
+        bump test above, THIS one goes red if the increment regresses to a Python
+        read-modify-write (both threads would write ``2``, leaving the final
+        revision at 2 instead of 3). #1544.
+        """
+        import threading
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_ast_concurrent"))
+
+        both_loaded = threading.Barrier(2, timeout=30)
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
+
+        def transition_once() -> None:
+            try:
+                with MediaBuyUoW(tenant_a) as uow:
+                    # Plain get_by_id: unlocked, no populate_existing — the stale
+                    # in-memory revision both threads hold before either commits.
+                    mb = uow.media_buys.get_by_id("mb_ast_concurrent")
+                    assert mb is not None
+                    both_loaded.wait()
+                    MediaBuyRepository.apply_status_transition(mb, "active")
+                    # UoW commit happens on clean exit.
+            except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
+                with errors_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=transition_once, name=f"ast-{i}") for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+
+        assert not any(t.is_alive() for t in threads), "a transition thread hung (possible deadlock)"
+        assert not errors, f"concurrent apply_status_transition thread(s) failed: {errors}"
+
+        with get_db_session() as session:
+            final_rev = MediaBuyRepository(session, tenant_a).get_by_id("mb_ast_concurrent").revision
+        # Two transitions from revision 1 → 3. A Python read-modify-write loses one → 2.
+        assert final_rev == 3, f"lost update on the unlocked seam: expected 3, got {final_rev}"
 
 
 # ---------------------------------------------------------------------------

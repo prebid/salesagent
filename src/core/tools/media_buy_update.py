@@ -31,7 +31,7 @@ from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -253,6 +253,14 @@ def _update_media_buy_impl(
             # Acquire the authoritative row lock before any workflow or adapter
             # side effect. The lock is held by this UoW until commit, so two
             # same-token requests cannot both reach the adapter.
+            #
+            # Pessimistic-lock tradeoff: because the FOR UPDATE lock is held
+            # across the adapter network call below (until commit), a slow or hung
+            # adapter would otherwise let a concurrent update to the SAME buy block
+            # until the global statement_timeout. Bound the wait tightly so a
+            # contended update fails fast (retryable) instead: SET LOCAL scopes
+            # this to the current transaction only. #1544.
+            session.execute(text("SET LOCAL lock_timeout = '5s'"))
             _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use, for_update=True, populate_existing=True)
             _current_status = _current_mb.status if _current_mb else ""
             if is_terminal_status(_current_status):
@@ -565,7 +573,7 @@ def _update_media_buy_impl(
                     # exists); derive the post-action status from that same row
                     # so valid_actions reflects what the buyer can do next.
                     _post_action_mb = uow.media_buys.bump_revision_or_raise(
-                        req.media_buy_id, expected_revision=req.revision
+                        req.media_buy_id, expected_revision=req.revision, context=req.context
                     )
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
@@ -1271,10 +1279,12 @@ def _update_media_buy_impl(
             # #1544.
             if pending_field_updates:
                 uow.media_buys.update_fields_or_raise(
-                    req.media_buy_id, expected_revision=req.revision, **pending_field_updates
+                    req.media_buy_id, expected_revision=req.revision, context=req.context, **pending_field_updates
                 )
             elif package_level_changed:
-                uow.media_buys.bump_revision_or_raise(req.media_buy_id, expected_revision=req.revision)
+                uow.media_buys.bump_revision_or_raise(
+                    req.media_buy_id, expected_revision=req.revision, context=req.context
+                )
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes

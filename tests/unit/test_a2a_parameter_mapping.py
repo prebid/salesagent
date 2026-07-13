@@ -93,6 +93,33 @@ class TestA2AParameterMapping:
             assert call_kwargs["pacing"] == "even"
             assert call_kwargs["daily_budget"] == 500.0
 
+    def test_update_media_buy_invalid_revision_emits_invalid_request(self):
+        """A schema-invalid revision emits INVALID_REQUEST on the A2A skill path,
+        matching MCP/REST — not the boundary's VALIDATION_ERROR.
+
+        Regression for the transport-parity divergence (#1544): the skill handler
+        used to validate ``revision`` inside ``adcp_validation_boundary`` (→
+        VALIDATION_ERROR); it now defers the raw value to the shared translator
+        (``invalid_update_request_error`` → INVALID_REQUEST). ``AdCPInvalidRequestError``
+        subclasses ``AdCPValidationError``, so the assertion is on the wire
+        ``error_code``, not the exception type. Validation fails before any DB
+        access, so no adapter/session mock is needed.
+        """
+        import asyncio
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPInvalidRequestError
+
+        handler = AdCPRequestHandler()
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+            parameters = {"media_buy_id": "mb_123", "revision": 0}  # below schema minimum of 1
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
+                asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
+            assert exc_info.value.error_code == "INVALID_REQUEST", (
+                f"A2A must emit INVALID_REQUEST for a schema-invalid revision "
+                f"(matching MCP/REST), got {exc_info.value.error_code}"
+            )
+
     def test_update_media_buy_backward_compatibility_with_updates(self):
         """
         Test backward compatibility with legacy 'updates' field.

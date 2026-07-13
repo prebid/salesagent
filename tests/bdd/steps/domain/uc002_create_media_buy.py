@@ -1895,6 +1895,11 @@ def then_adapter_never_invoked(ctx: dict) -> None:
     from tests.bdd.steps._outcome_helpers import is_e2e
 
     if is_e2e(ctx):
+        # Shared by INV-5 (dry-run) and INV-4 (pre-adapter validation failure).
+        # On the error path the rejection itself proves the adapter was never
+        # reached — there is no success response to inspect.
+        if ctx.get("error") is not None:
+            return
         resp = _require_success_response(ctx)
         media_buy_id = _get_response_field(resp, "media_buy_id")
         assert isinstance(media_buy_id, str) and media_buy_id.startswith("dry_run_"), (

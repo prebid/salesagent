@@ -624,12 +624,21 @@ def media_buy_revision_conflict(
     # (static/schemas/source/error-details/conflict.json:
     # resource_id / expected_version / current_version) so optimistic-
     # concurrency clients can re-read and retry generically.
+    #
+    # recovery=correctable, stated explicitly rather than inherited: the AdCP
+    # docs document CONFLICT's recovery as ``transient``, but a revision
+    # mismatch is not resolved by a blind retry — the buyer MUST re-read the buy
+    # and retry with the current token, which is exactly ``correctable``
+    # semantics (a stale-token transient retry never converges). Deliberate
+    # documented divergence, tracked with the other revision/confirmed_at
+    # spec-vs-emitter notes under #1564.
     return AdCPConflictError(
         f"Revision mismatch for media buy '{media_buy_id}': request expected "
         f"revision {expected}, current revision is {current}",
         field="revision",
         suggestion=(f"Re-read the media buy via get_media_buys and retry the update with revision {current}."),
         details={"resource_id": media_buy_id, "expected_version": expected, "current_version": current},
+        recovery="correctable",
         context=context,
     )
 

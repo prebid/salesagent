@@ -1887,7 +1887,12 @@ class AdCPRequestHandler(RequestHandler):
             )
 
         # Validate top-level fields via typed model (packages validated by _raw
-        # which handles legacy formats with extra fields like 'status')
+        # which handles legacy formats with extra fields like 'status').
+        # ``revision`` is deliberately NOT validated here: this boundary maps a
+        # rejection to VALIDATION_ERROR, but MCP/REST route a schema-invalid
+        # revision through the shared translator (invalid_update_request_error →
+        # INVALID_REQUEST). Passing the raw value straight to the core below lets
+        # that same translator emit one code across every transport. #1544.
         with adcp_validation_boundary():
             req = UpdateMediaBuyRequest(
                 media_buy_id=params.get("media_buy_id"),
@@ -1895,7 +1900,6 @@ class AdCPRequestHandler(RequestHandler):
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),
                 context=params.get("context"),
-                revision=params.get("revision"),
             )
 
         # Call core function with validated fields + raw nested structures and identity
@@ -1911,7 +1915,7 @@ class AdCPRequestHandler(RequestHandler):
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
-            revision=req.revision,
+            revision=params.get("revision"),
             identity=identity,
         )
 

@@ -32,9 +32,12 @@ not "no write through these eight names."
 
 The type inference is deliberately conservative, not exhaustive: a MediaBuy
 loaded through a raw ``select(MediaBuy)`` and bound to a novel name is
-invisible to this guard. That blind spot requires code the no-raw-select
-guard (test_architecture_no_raw_select.py) already rejects outside
-repositories, so the two guards compose to close it.
+invisible to this guard. OUTSIDE the no-raw-select allowlist that blind spot
+is covered — the no-raw-select guard (test_architecture_no_raw_select.py)
+rejects raw ``select(MediaBuy)`` there. INSIDE its allowlisted functions the
+two guards do NOT fully compose: a raw-selected MediaBuy bound to a novel name
+in one of those functions evades both. That residual gap is accepted debt —
+the no-raw-select allowlist only ever shrinks.
 
 Precedent: the no-raw-select guards (test_architecture_no_raw_select.py).
 
@@ -122,6 +125,14 @@ def _media_buy_typed_locals(tree: ast.AST) -> set[str]:
             and isinstance(node.target, ast.Name)
         ):
             names.add(node.target.id)
+        # ``for <name> in <media_buy source>:`` and the comprehension form bind
+        # <name> to each MediaBuy the iterable yields (e.g. the scheduler sweep
+        # ``for mb in uow.media_buys.get_active()``). A status write through the
+        # loop variable bypasses the seam exactly like a direct assignment, so
+        # the target is MediaBuy-typed here too.
+        elif isinstance(node, (ast.For, ast.comprehension)) and _rhs_is_media_buy(node.iter):
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
     return names
 
 
@@ -348,6 +359,22 @@ def test_guard_detects_write_through_inferred_binding_not_on_the_name_list():
     )
     assert ("fresh", "status") in _detector_hits(
         "def f():\n    fresh = MediaBuy(status='draft')\n    fresh.status = 'active'\n"
+    )
+
+
+def test_guard_detects_status_write_through_loop_variable():
+    """A ``for <name> in <media_buy source>: <name>.status = ...`` write is caught.
+
+    The scheduler sweep iterates ``uow.media_buys.get_active()`` / a cross-tenant
+    status query; a status write through the loop variable bypasses the seam just
+    like a direct assignment (guard durability — no current production violation).
+    """
+    assert ("row", "status") in _detector_hits(
+        "def f(uow):\n    for row in uow.media_buys.get_active():\n        row.status = 'active'\n"
+    )
+    # setattr through a comprehension-bound loop variable is caught too
+    assert ("row", "approved_by") in _detector_hits(
+        "def f(uow):\n    [setattr(row, 'approved_by', 'x') for row in uow.media_buys.get_active()]\n"
     )
 
 
