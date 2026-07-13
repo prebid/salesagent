@@ -105,6 +105,69 @@ def _chain_parts(node: ast.Call) -> tuple[ast.Call | None, list[ast.Call]]:
     return None, parts
 
 
+def _chain_base(node: ast.expr) -> tuple[ast.expr, list[ast.Call]]:
+    """Unwrap a ``<base>.where(...).filter(...)`` chain to its base expression.
+
+    Unlike ``_chain_parts`` this returns whatever the chain bottoms out in —
+    a ``select(...)`` call, a plain ``ast.Name`` (accumulator style), or
+    anything else — so callers can fold ``stmt = stmt.where(...)`` statements.
+    """
+    parts: list[ast.Call] = []
+    base: ast.expr = node
+    while (
+        isinstance(base, ast.Call)
+        and isinstance(base.func, ast.Attribute)
+        and base.func.attr in {"where", "filter", "filter_by"}
+    ):
+        parts.append(base)
+        base = base.func.value
+    return base, parts
+
+
+def _accumulated_chains(tree: ast.Module) -> list[tuple[ast.Call, list[ast.Call]]]:
+    """Merge accumulator-style queries into single (select_call, parts) chains.
+
+    Tracks simple ``name = select(...)...`` assignments per function scope and
+    folds subsequent ``name = name.where/filter/filter_by(...)`` statements into
+    the same chain, so the query is graded on its FULL accumulated filter set
+    (an unscoped accumulator is flagged; principal_id pinned in a later
+    statement is credited).
+    """
+    scopes: list[ast.AST] = [tree]
+    scopes.extend(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    merged: list[tuple[ast.Call, list[ast.Call]]] = []
+
+    def _local_assigns(scope: ast.AST) -> list[ast.Assign]:
+        """Assign statements in *scope*, not descending into nested functions."""
+        found: list[ast.Assign] = []
+        stack: list[ast.AST] = list(ast.iter_child_nodes(scope))
+        while stack:
+            node = stack.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(node, ast.Assign):
+                found.append(node)
+            stack.extend(ast.iter_child_nodes(node))
+        return sorted(found, key=lambda n: n.lineno)
+
+    for scope in scopes:
+        acc: dict[str, tuple[ast.Call, list[ast.Call]]] = {}
+        for stmt in _local_assigns(scope):
+            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+                continue
+            target = stmt.targets[0].id
+            base, parts = _chain_base(stmt.value)
+            if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "select":
+                acc[target] = (base, list(parts))
+            elif isinstance(base, ast.Name) and base.id in acc and parts:
+                sel, prev = acc[base.id]
+                acc[target] = (sel, prev + parts)
+            else:
+                acc.pop(target, None)
+        merged.extend(chain for chain in acc.values() if chain[1])
+    return merged
+
+
 def _attrs_compared_in_chain(parts: list[ast.Call], aliases: dict[str, str]) -> set[str]:
     """Collect model attrs pinned by a single query chain's filter stages.
 
@@ -165,14 +228,21 @@ def find_unscoped_creative_queries(tree: ast.Module) -> list[tuple[int, str]]:
     violations: list[tuple[int, str]] = []
     seen_selects: set[int] = set()
 
-    # Longest chains first so subchains of an already-processed chain are skipped.
+    # Accumulator-style queries first: their merged filter set replaces the
+    # grading of the bare initial chain (which would otherwise miss filters
+    # added by later ``stmt = stmt.where(...)`` statements — in either
+    # direction: unscoped accumulators hid, later-scoped ones false-flagged).
+    chains: list[tuple[ast.Call, list[ast.Call]]] = list(_accumulated_chains(tree))
+
+    # Then inline chains, longest first so subchains of a processed chain skip.
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
-    chains: list[tuple[ast.Call, list[ast.Call]]] = []
+    inline: list[tuple[ast.Call, list[ast.Call]]] = []
     for call in calls:
         select_call, parts = _chain_parts(call)
         if select_call is not None:
-            chains.append((select_call, parts))
-    chains.sort(key=lambda c: -len(c[1]))
+            inline.append((select_call, parts))
+    inline.sort(key=lambda c: -len(c[1]))
+    chains.extend(inline)
 
     for select_call, parts in chains:
         if id(select_call) in seen_selects:
@@ -329,6 +399,33 @@ class TestDetectorMetaTests:
             "        Creative.tenant_id == tid,\n"
             "        Creative.principal_id == pid,\n"
             "    )).all()\n"
+        )
+        assert find_unscoped_creative_queries(tree) == []
+
+    @pytest.mark.arch_guard
+    def test_detector_catches_unscoped_accumulator_query(self):
+        """Accumulator style (stmt = select(...); stmt = stmt.where(...)) must be graded
+        as ONE merged query — the shape the old detector silently dropped."""
+        tree = ast.parse(
+            "from src.core.database.models import Creative\n"
+            "def accumulate(session, tid, ids):\n"
+            "    stmt = select(Creative).where(Creative.tenant_id == tid)\n"
+            "    stmt = stmt.where(Creative.creative_id.in_(ids))\n"
+            "    return session.scalars(stmt).all()\n"
+        )
+        assert [f for _, f in find_unscoped_creative_queries(tree)] == ["accumulate"]
+
+    @pytest.mark.arch_guard
+    def test_detector_merges_accumulated_principal_scope(self):
+        """principal_id pinned in a LATER accumulation statement scopes the whole
+        query — the merged grading must not flag it (no false positive)."""
+        tree = ast.parse(
+            "from src.core.database.models import Creative\n"
+            "def accumulate(session, tid, pid, ids):\n"
+            "    stmt = select(Creative).filter_by(tenant_id=tid)\n"
+            "    stmt = stmt.where(Creative.creative_id.in_(ids))\n"
+            "    stmt = stmt.where(Creative.principal_id == pid)\n"
+            "    return session.scalars(stmt).all()\n"
         )
         assert find_unscoped_creative_queries(tree) == []
 
