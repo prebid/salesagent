@@ -291,7 +291,15 @@ jobs:
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/e2e/
-          extra_args: --timeout=300
+          # timeout_func_only: the 300s budget applies to TEST BODIES only.
+          # Since the pinned creative agent was un-gated, the first
+          # stack-needing test's session fixture does agent build/pull +
+          # compose up + migrations — >300s on a 4-core runner when the pin's
+          # ghcr tag isn't published yet (source-build fallback). With
+          # func_only=false that killed the fixture at exactly 300s and
+          # error-cascaded the remaining 40 tests. A genuinely hung bring-up
+          # now surfaces as the job timeout instead.
+          extra_args: --timeout=300 -o timeout_func_only=true
         env:
           # Override workflow env — conftest starts docker-compose.e2e.yml (legacy test.yml parity).
           ADCP_TESTING: ""
