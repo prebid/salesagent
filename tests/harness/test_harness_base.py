@@ -421,6 +421,25 @@ class TestBaseClassContract:
         assert av.supported_adcp_versions() == default_versions
         assert av.adcp_build_version() == default_build
 
+    def test_capabilities_advertises_configured_supported_versions(self):
+        """Capabilities ADVERTISES the configured policy, not a stale by-name import (#1512).
+
+        The prior test only proved the patch took on src.core.adcp_version. This
+        exercises the actual consumer: _build_adcp_block must resolve
+        supported_versions through the same canonical attribute the harness
+        overrides, or advertisement splits from what validate_adcp_version_pins
+        negotiates. Asserts the advertised versions themselves, not merely the
+        absence of an error.
+        """
+        from src.core.tools.capabilities import _build_adcp_block
+        from tests.harness.transport import Transport
+
+        with _make_unit_capabilities_env() as env:
+            env.configure_version_policy(Transport.REST, supported_versions=("3.0", "3.1"))
+            block = _build_adcp_block()
+            advertised = [sv.root for sv in block.supported_versions]
+            assert advertised == ["3.0", "3.1"]
+
     def test_capabilities_e2e_policy_setup_is_secret_gated_and_reset_on_failure(self):
         """Live-server setup sends a leased snapshot and teardown always resets it."""
         from tests.harness.transport import E2EConfig, Transport

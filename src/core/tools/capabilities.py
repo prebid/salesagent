@@ -31,7 +31,13 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.adcp_version import adcp_build_version, adcp_major_version, supported_adcp_versions
+# Imported as a module (not by-name) so the advertised version block resolves
+# supported_adcp_versions / adcp_major_version / adcp_build_version through the
+# single canonical attribute on src.core.adcp_version. A by-name import binds a
+# private copy at import time, which a testing policy override (or a test patch)
+# applied at src.core.adcp_version.* would not reach — splitting what capabilities
+# advertises from what validate_adcp_version_pins negotiates (#1512).
+from src.core import adcp_version
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
@@ -57,9 +63,9 @@ def _build_adcp_block() -> Adcp:
     is declared in exactly one place and cannot drift between them.
     """
     return Adcp(
-        major_versions=[MajorVersion(root=adcp_major_version())],
-        supported_versions=[SupportedVersion(root=v) for v in supported_adcp_versions()],
-        build_version=adcp_build_version(),
+        major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
+        supported_versions=[SupportedVersion(root=v) for v in adcp_version.supported_adcp_versions()],
+        build_version=adcp_version.adcp_build_version(),
         idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
     )
 
