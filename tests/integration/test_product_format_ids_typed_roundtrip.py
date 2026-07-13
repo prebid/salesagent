@@ -309,3 +309,41 @@ class TestMockAdServerFormatWritePath:
                     "after the mock adapter config POST the persisted format_ids must be "
                     f"FormatId objects ({{agent_url, id}}), never strings — got {type(fid).__name__}: {fid!r}"
                 )
+
+
+@pytest.mark.requires_db
+class TestBindTimeValidationRejectsBadAgentUrl:
+    """JSONType(model=...) validates raw dicts at the write boundary (salesagent-5mu0).
+
+    The typed column validates on every READ (FormatId.agent_url is AnyUrl), so a
+    non-URL agent_url that reaches storage makes the row unreadable. The plpgsql
+    CHECK only enforces shape (non-empty string), not URL syntax — the bind param
+    is the write boundary and must reject what the read path cannot load. This
+    covers ALL writers at once (inventory_profiles admin routes, products routes,
+    the mock-adapter config route).
+    """
+
+    def test_invalid_agent_url_dict_rejected_at_write_boundary(self, integration_db):
+        from pydantic import ValidationError
+        from sqlalchemy.exc import StatementError
+
+        with BareIntegrationEnv() as env:
+            profile = InventoryProfileFactory()
+            session = env.get_session()
+            # The unguarded-writer shape: raw form dict straight into the typed column.
+            profile.format_ids = [{"agent_url": "not a url", "id": "display_300x250"}]
+            with pytest.raises((ValidationError, StatementError)):
+                session.commit()
+            session.rollback()
+
+    def test_valid_raw_dict_still_persists_and_roundtrips(self, integration_db):
+        with BareIntegrationEnv() as env:
+            profile = InventoryProfileFactory()
+            profile.format_ids = [{"agent_url": AGENT_URL, "id": "display_728x90"}]
+            env.get_session().commit()
+            _reload(env, profile)
+            loaded = profile.format_ids
+            assert len(loaded) == 1
+            assert isinstance(loaded[0], FormatId)
+            assert _norm_url(loaded[0].agent_url) == AGENT_URL
+            assert loaded[0].id == "display_728x90"

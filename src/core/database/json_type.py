@@ -78,6 +78,14 @@ class JSONType(TypeDecorator):
         the model would emit null-valued optional keys — a write that passes on
         ``create_all``-built test databases (no trigger) but fails on any
         Alembic-migrated database.
+
+        When ``model`` is configured, raw dicts are validated through it BEFORE
+        storage. The typed column validates on every read, so an invalid value
+        that reaches storage makes the row unreadable — the write boundary must
+        reject what the read path cannot load (salesagent-5mu0: a non-URL
+        agent_url persisted from a form; the plpgsql CHECK validates shape,
+        not URL syntax). Raises ``pydantic.ValidationError`` (surfaced by
+        SQLAlchemy as ``StatementError``) on invalid input.
         """
         if value is None:
             return None
@@ -86,7 +94,7 @@ class JSONType(TypeDecorator):
             return _dump_for_storage(value)
 
         if isinstance(value, list):
-            return [_dump_for_storage(item) if isinstance(item, BaseModel) else item for item in value]
+            return [self._dump_item(item) for item in value]
 
         if not isinstance(value, dict):
             logger.warning(
@@ -95,7 +103,18 @@ class JSONType(TypeDecorator):
             )
             value = {}
 
+        if self._model is not None and not self._is_list:
+            return _dump_for_storage(self._model.model_validate(value))
+
         return value
+
+    def _dump_item(self, item: Any) -> Any:
+        """Serialize one list element, validating raw dicts through the configured model."""
+        if isinstance(item, BaseModel):
+            return _dump_for_storage(item)
+        if self._model is not None and isinstance(item, dict):
+            return _dump_for_storage(self._model.model_validate(item))
+        return item
 
     def process_result_value(self, value: Any, dialect: Dialect) -> Any:
         """Deserialize value from database, coercing to Pydantic model if configured."""
