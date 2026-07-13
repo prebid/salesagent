@@ -459,7 +459,7 @@ errors with a version-too-old `FatalError`, run `uv tool install pre-commit` (pr
 Manual/on-demand: `pre-commit run smoke-tests --hook-stage manual`
 
 Running `make quality` or `make quality-ci` may update tracked ratchet baselines
-(`.duplication-baseline`, `.type-ignore-baseline`) when counts decrease. Commit those
+(`.duplication-baseline`, `.type-ignore-baseline`, `.ruff-complexity-baseline`) when counts decrease. Commit those
 updates intentionally; CI runs are ephemeral and do not persist baseline writes.
 
 **Contract Validation Prevention:**

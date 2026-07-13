@@ -46,6 +46,7 @@
 /tests/factories/                        @chrishuie
 /.duplication-baseline                   @chrishuie
 /.type-ignore-baseline                   @chrishuie
+/.ruff-complexity-baseline               @chrishuie
 /.coverage-baseline                      @chrishuie
 /.guard-baselines/                       @chrishuie
 /tests/unit/.allowlist-*.json            @chrishuie
