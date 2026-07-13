@@ -297,3 +297,35 @@ class TestResolvePrincipalOrRaise:
                 resolve_principal_or_raise("ghost", tenant_id="t1", context=ctx)
 
         assert exc_info.value.context == ctx
+
+
+class TestEagerPrincipalShortCircuit:
+    """require_principal / find_principal return the boundary's eager principal (#1088).
+
+    The transport boundary eagerly loads ``identity.principal`` exactly once;
+    with it populated, the helpers must return that object WITHOUT re-querying
+    the database. get_principal_object is patched to blow up on any call, so a
+    fallback-always implementation fails these tests.
+    """
+
+    def test_require_principal_returns_eager_object_without_db_query(self):
+        from src.core.auth import require_principal
+
+        identity = PrincipalFactory.make_identity(principal_id="p1")
+        assert identity.principal is not None
+        with patch(
+            "src.core.auth.get_principal_object",
+            side_effect=AssertionError("boundary must not re-query"),
+        ):
+            assert require_principal(identity) is identity.principal
+
+    def test_find_principal_returns_eager_object_without_db_query(self):
+        from src.core.auth import find_principal
+
+        identity = PrincipalFactory.make_identity(principal_id="p1")
+        assert identity.principal is not None
+        with patch(
+            "src.core.auth.get_principal_object",
+            side_effect=AssertionError("boundary must not re-query"),
+        ):
+            assert find_principal(identity) is identity.principal
