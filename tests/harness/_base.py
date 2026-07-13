@@ -953,11 +953,11 @@ class BaseTestEnv:
         """Flip ``human_review_required`` on the real tenant row AND the env identity.
 
         The single writer of the review mode: the manual/auto-approval Given
-        steps (via ``set_tenant_review_requirement``) and the e2e create
-        plumbing both realize the mode through the real surface — the tenant
-        row — plus the identity-side override, so in-process and live-server
-        behavior stay in lockstep. Commits the row and clears cached
-        identities so identities built later reflect the new mode.
+        steps (which call this method directly) and the e2e create plumbing both
+        realize the mode through the real surface — the tenant row — plus the
+        identity-side override, so in-process and live-server behavior stay in
+        lockstep. Commits the row and clears cached identities so identities
+        built later reflect the new mode.
         """
         tenant.human_review_required = required
         self._commit_factory_data()

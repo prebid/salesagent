@@ -99,7 +99,9 @@ def _get_media_buys_impl(
         req: Validated GetMediaBuysRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
         include_snapshot: When True, include near-real-time delivery stats per package.
-            This is an internal flag controlled by transport wrappers, not by the request object.
+            Exposed to callers via the MCP tool parameter and the REST request
+            body, but deliberately NOT a field of the AdCP ``GetMediaBuysRequest``
+            schema — the transport wrappers pass it alongside ``req``.
 
     Returns:
         GetMediaBuysResponse with matching media buys
@@ -288,7 +290,7 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                # AdCP 3.1.0-beta.3 GA item fields. confirmed_at is the
+                # AdCP 3.1.0-beta.3 media-buy item fields. confirmed_at is the
                 # seller's confirmation instant — None until the seller has
                 # committed to the buy. revision is the persisted
                 # monotonic counter bumped by MediaBuyRepository on every

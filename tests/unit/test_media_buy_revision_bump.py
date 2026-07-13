@@ -72,11 +72,15 @@ class TestMutationLoadsAreRowLocked:
     """The mutation load takes a row lock (SELECT ... FOR UPDATE).
 
     The lock serializes concurrent writers to the same buy's mutable columns
-    (status/budget/dates). It is COMPLEMENTARY to — not the source of — the
-    revision counter's collision-freedom: that is guaranteed by the server-side
-    ``coalesce(revision, 0) + 1`` increment, proven under real contention by
-    ``TestConcurrentRevisionBump``. These assertions only pin that the locking
-    read is issued; they intentionally say nothing about the resulting value.
+    (status/budget/dates). On the locked seams the lock — together with the
+    ``populate_existing`` re-read — is itself what keeps the revision counter
+    collision-free (proven by
+    ``TestConcurrentRevisionBump.test_two_concurrent_bumps_yield_distinct_revisions``).
+    The server-side ``coalesce(revision, 0) + 1`` increment is the SEPARATE, sole
+    protection for the UNLOCKED seam (``apply_status_transition``), proven by
+    ``TestConcurrentRevisionBump.test_two_concurrent_apply_status_transition_yield_distinct_revisions``.
+    These assertions only pin that the locking read is issued; they intentionally
+    say nothing about the resulting value.
     """
 
     @staticmethod
@@ -99,3 +103,31 @@ class TestMutationLoadsAreRowLocked:
     def test_plain_get_by_id_is_not_locked(self):
         # A read-only lookup must NOT hold a row lock.
         assert "FOR UPDATE" not in self._first_stmt_for(lambda r: r.get_by_id("mb-rev-1"))
+
+
+class TestRevisionNumericStringCoercionDivergence:
+    """#1582: a numeric-string revision like ``"7"`` diverges by transport.
+
+    JSON Schema declares ``revision`` as ``type: integer``, so ``"7"`` is a
+    wrong-TYPE value. The A2A raw-dict path (``UpdateMediaBuyRequest``) enforces
+    that in a before-validator and rejects it; the REST body
+    (``UpdateMediaBuyBody``) and the MCP typed param instead lax-coerce ``"7" ->
+    7`` before the request model runs, so they accept it. This case has no single
+    cross-transport outcome, which is why the BDD ``wrong_type`` partition uses
+    ``"not-an-int"`` (rejected everywhere) — a Scenario Outline row grades one
+    outcome per transport. This test is where the numeric-string coercion
+    divergence itself stays exercised. Deferred, tracked in #1582.
+    """
+
+    def test_a2a_raw_dict_rejects_numeric_string_revision(self):
+        from pydantic import ValidationError
+
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        with pytest.raises(ValidationError, match="revision"):
+            UpdateMediaBuyRequest(media_buy_id="mb-1", revision="7")
+
+    def test_rest_body_lax_coerces_numeric_string_revision(self):
+        from src.routes.api_v1 import UpdateMediaBuyBody
+
+        assert UpdateMediaBuyBody.model_validate({"media_buy_id": "mb-1", "revision": "7"}).revision == 7

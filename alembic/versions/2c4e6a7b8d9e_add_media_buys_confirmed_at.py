@@ -19,6 +19,12 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column("media_buys", sa.Column("confirmed_at", sa.DateTime(timezone=True), nullable=True))
+    # The hardcoded status set mirrors MEDIA_BUY_UNCONFIRMED_STATUSES
+    # (src/core/database/models.py) as of this migration's authoring. Migrations
+    # are frozen once committed, so this literal is deliberately NOT imported from
+    # that constant — a later change to the runtime set does not (and must not)
+    # rewrite already-applied history. Single, unbatched UPDATE: the media_buys
+    # table is small enough at this revision that batching is unwarranted.
     op.execute(
         sa.text(
             """

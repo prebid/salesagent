@@ -1902,6 +1902,16 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
 
+        # A2A carries numbers as protobuf doubles, so an inbound integer ``revision``
+        # arrives as a whole-number float (7 -> 7.0) — the same shape A2A serializes
+        # it as on the response. Coerce whole-number floats back to int here so a
+        # round-tripped token is accepted; a non-integral float (7.5) stays a float
+        # and is still rejected downstream. Tracked with the other A2A float-token
+        # notes under #1583.
+        _revision = params.get("revision")
+        if isinstance(_revision, float) and _revision.is_integer():
+            _revision = int(_revision)
+
         # Call core function with validated fields + raw nested structures and identity
         response = core_update_media_buy_tool(
             media_buy_id=req.media_buy_id or "",
@@ -1915,7 +1925,7 @@ class AdCPRequestHandler(RequestHandler):
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
-            revision=params.get("revision"),
+            revision=_revision,
             identity=identity,
         )
 

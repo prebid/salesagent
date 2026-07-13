@@ -4,10 +4,10 @@ import asyncio
 import logging
 
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 # FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import CreateMediaBuySuccessResponse, Package
-from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
@@ -558,13 +558,21 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     webhook_config = db_session.scalars(stmt_webhook).first()
 
                 if webhook_config and media_buy_data:
-                    reject_repo = MediaBuyRepository(db_session, tenant_id)
-                    all_packages = reject_repo.get_packages(media_buy_id)
+                    # media_buy_repo from the top of the route — same session/tenant scope.
+                    all_packages = media_buy_repo.get_packages(media_buy_id)
+                    rejected_buy = media_buy_repo.get_by_id(media_buy_id)
+                    if rejected_buy is None:
+                        raise RuntimeError(f"Media buy {media_buy_id!r} disappeared before rejection webhook")
 
-                    create_media_buy_rejected_result = CreateMediaBuySuccessResponse(
+                    # Mirror the approve arm: send the internal CreateMediaBuySuccess so the
+                    # rejection notification carries the persisted ``revision`` (the reject
+                    # transition bumped it). confirmed_at stays None for a rejected buy.
+                    create_media_buy_rejected_result = CreateMediaBuySuccess(
                         media_buy_id=media_buy_id,
                         packages=[Package(package_id=x.package_id) for x in all_packages],
                         context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                        confirmed_at=rejected_buy.confirmed_at,
+                        revision=rejected_buy.revision,
                     )
                     metadata = {
                         "task_type": step_data["tool_name"],

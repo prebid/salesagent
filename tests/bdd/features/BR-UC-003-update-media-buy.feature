@@ -2129,8 +2129,12 @@ Feature: BR-UC-003 Update Media Buy
       | below_min      | 0             | error "INVALID_REQUEST" with suggestion |
       # A non-numeric string (not a coercible numeral like "7", which pydantic
       # lax-coerces to a valid int on the JSON transports) so the wrong-TYPE is
-      # rejected consistently on every transport, not just A2A. The numeric-string
-      # divergence itself is deferred and tracked in #1582.
+      # rejected consistently on every transport, not just A2A. "7" has no single
+      # cross-transport outcome (A2A rejects; JSON transports coerce it to 7, which
+      # here MATCHES the current revision and succeeds), so it cannot be a Scenario
+      # Outline row; the numeric-string coercion divergence is exercised in
+      # tests/unit/test_media_buy_revision_bump.py::TestRevisionNumericStringCoercionDivergence
+      # and deferred/tracked in #1582.
       | wrong_type     | "not-an-int"  | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-003-boundary-revision @boundary @revision @schema-v3.1
