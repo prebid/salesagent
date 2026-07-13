@@ -366,9 +366,10 @@ class TestRevisionBumpsOnStatusTransition:
         UPDATE``, so its in-memory ``confirmed_at`` can be a stale ``None`` while a
         concurrent approval commits the real stamp. The transition must not
         overwrite that committed instant with this row's ``created_at``. Regression
-        for #1544: _stamp_confirmation_if_needed now writes a server-side COALESCE,
-        so the committed confirmed_at wins even though the sweeping session still
-        holds a stale None in memory.
+        for #1544: apply_status_transition now locks and refreshes ``confirmed_at``
+        (SELECT ... FOR UPDATE) before the write-once check, so the sweeping
+        session sees the committed stamp and skips the write instead of clobbering
+        it with the stale in-memory None.
         """
         from sqlalchemy.orm import Session as SASession
 

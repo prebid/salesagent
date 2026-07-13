@@ -217,8 +217,7 @@ class TestRevisionOptimisticConcurrency:
         terminal-state gate. Pre-fix the terminal check ran first and returned GONE,
         masking the stale write and denying the buyer the refetch recovery. #1544.
         """
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories import MediaBuyRepository
+        from src.core.database.repositories import MediaBuyUoW
         from src.core.exceptions import AdCPConflictError
         from tests.harness.media_buy_dual import MediaBuyDualEnv
 
@@ -226,10 +225,10 @@ class TestRevisionOptimisticConcurrency:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             created = _create_buy(env, product)  # persisted revision 1
 
-            # Drive the buy into a terminal state out-of-band (revision 1 → 2).
-            with get_db_session() as session:
-                MediaBuyRepository(session, env.identity.tenant_id).update_status(created.media_buy_id, "completed")
-                session.commit()
+            # Drive the buy into a terminal state out-of-band (revision 1 → 2)
+            # through the repository/UoW seam (commits on context exit).
+            with MediaBuyUoW(env.identity.tenant_id) as uow:
+                uow.media_buys.update_status(created.media_buy_id, "completed")
 
             # Buyer sends a STALE token (1) against the now-terminal buy (revision 2).
             with pytest.raises(AdCPConflictError) as exc_info:
