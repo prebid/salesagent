@@ -9,10 +9,10 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPPackageNotFoundError,
 )
+from src.core.helpers.creative_helpers import format_key, supported_format_keys, supported_formats_display
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._processing import _failed_sync_result
-from src.core.validation import normalize_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -152,36 +152,22 @@ def _process_assignments(
                         product = assignment_repo.get_product_by_id(product_id)
 
                         if product and product.format_ids:
-                            # Build set of supported formats (agent_url, format_id) tuples.
+                            # Build set of supported canonical format keys.
                             # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
-                            supported_formats: set[tuple[str, str]] = {
-                                (str(fmt.agent_url), fmt.id) for fmt in product.format_ids
-                            }
+                            # supported_format_keys is the ONE canonical comparison key shared by
+                            # every creative-vs-product format check (URL variants compare equal).
+                            supported_formats: set[tuple[str, str]] = supported_format_keys(product.format_ids)
 
                             # Check creative format against supported formats
                             creative_agent_url = db_creative_result.agent_url
                             creative_format_id = db_creative_result.format
 
-                            # Allow /mcp URL variant (creative agent may return format
-                            # with /mcp suffix) — normalize_agent_url is the shared
-                            # comparison normalizer (strips trailing slash + /mcp).
-                            normalized_creative_url = (
-                                normalize_agent_url(creative_agent_url) if creative_agent_url else None
+                            creative_key = (
+                                format_key(creative_agent_url, creative_format_id)
+                                if creative_agent_url
+                                else (None, creative_format_id)
                             )
-                            is_supported = False
-
-                            for supported_url, supported_format_id in supported_formats:
-                                normalized_supported_url = normalize_agent_url(supported_url)
-                                if (
-                                    normalized_creative_url == normalized_supported_url
-                                    and creative_format_id == supported_format_id
-                                ):
-                                    is_supported = True
-                                    break
-
-                            if not supported_formats:
-                                # Product has no format restrictions - allow all
-                                is_supported = True
+                            is_supported = creative_key in supported_formats or not supported_formats
 
                             if not is_supported:
                                 # Creative format not supported by product
@@ -190,13 +176,11 @@ def _process_assignments(
                                     if creative_agent_url
                                     else creative_format_id
                                 )
-                                supported_formats_display = ", ".join(
-                                    [f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in supported_formats]
-                                )
+                                supported_display = supported_formats_display(supported_formats)
                                 error_msg = (
                                     f"Creative {creative_id} format '{creative_format_display}' "
                                     f"is not supported by product '{product.name}' (package {package_id}). "
-                                    f"Supported formats: {supported_formats_display}"
+                                    f"Supported formats: {supported_display}"
                                 )
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
@@ -208,10 +192,10 @@ def _process_assignments(
                                         error_msg,
                                         suggestion=(
                                             "Assign a creative whose format matches one of the product's "
-                                            f"supported formats ({supported_formats_display}), or call "
+                                            f"supported formats ({supported_display}), or call "
                                             "list_creative_formats to discover supported formats."
                                         ),
-                                        details={"supported_formats": supported_formats_display},
+                                        details={"supported_formats": supported_display},
                                     )
                                 else:
                                     logger.warning(

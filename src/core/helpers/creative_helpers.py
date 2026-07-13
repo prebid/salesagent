@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from src.core.testing_context import TestingContext
 
 from src.core.schemas import Creative
-from src.core.validation import normalize_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +403,39 @@ def _detect_snippet_type(snippet: str) -> str:
         return "html"  # Default
 
 
+def supported_format_keys(format_ids: "list[Any] | None") -> set[tuple[str, str]]:
+    """Return the canonical comparison keys for a product's ``format_ids``.
+
+    The ONE canonicalization for every creative-vs-product format check (#1172):
+    ``format_id_identity`` — spec-canonical agent_url (lowercased host, dropped
+    default ports) with transport suffixes (/mcp, /a2a) stripped. All four entry
+    tools (create_media_buy package check, update_media_buy, sync_creatives
+    assignments, validate_creative_format_against_product) key on this, so the
+    same buyer input can never be accepted by one tool and rejected by another.
+    """
+    from src.core.schemas._base import format_id_identity
+
+    return {format_id_identity(fmt) for fmt in format_ids or []}
+
+
+def format_key(agent_url: object, format_id: str) -> tuple[str, str]:
+    """Canonical comparison key for one (agent_url, id) pair — see supported_format_keys."""
+    from src.core.schemas._base import canonical_agent_url
+
+    return (canonical_agent_url(agent_url), format_id)
+
+
+def format_key_display(key: tuple[str | None, str]) -> str:
+    """Render one canonical (agent_url, id) key for error messages."""
+    url, fid = key
+    return f"{url}/{fid}" if url else str(fid)
+
+
+def supported_formats_display(keys: set[tuple[str, str]]) -> str:
+    """Render a supported-format key set for error messages (sorted, joined)."""
+    return ", ".join(format_key_display(k) for k in sorted(keys, key=lambda p: (p[1], p[0])))
+
+
 def validate_creative_format_against_product(
     creative_format_id: "FormatId",
     product: "Product | DBProduct",
@@ -446,30 +478,18 @@ def validate_creative_format_against_product(
     if not creative_agent_url or not creative_id:
         return False, "Creative format_id is missing agent_url or id"
 
-    # normalize_agent_url is the shared comparison normalizer (strips trailing
-    # slashes and transport suffixes like /mcp) — Pydantic AnyUrl adds a trailing
-    # slash when converting to string, which would otherwise cause mismatches.
-    normalized_creative_url = normalize_agent_url(str(creative_agent_url))
-
-    # Simple equality check: does creative's format_id match any product format_id?
     # format_ids entries are typed FormatId models on both the ORM (#1172, column
     # TypeDecorator) and schema (Pydantic-coerced) paths — no shape re-parsing.
-    for product_format in product_format_ids:
-        # Format IDs match if both agent_url and id are equal (normalized)
-        if (
-            normalized_creative_url == normalize_agent_url(str(product_format.agent_url))
-            and creative_id == product_format.id
-        ):
-            return True, None
+    # One canonical comparison key across all entry tools (supported_format_keys).
+    supported = supported_format_keys(product_format_ids)
+    creative_key = format_key(creative_agent_url, creative_id)
+    if creative_key in supported:
+        return True, None
 
-    # Build error message with supported formats.
-    # Normalized URL in display avoids double slashes.
-    supported_formats = [f"{normalize_agent_url(str(fmt.agent_url))}/{fmt.id}" for fmt in product_format_ids]
-
-    creative_format_display = f"{normalized_creative_url}/{creative_id}"
     error_msg = (
-        f"Creative format '{creative_format_display}' does not match product '{product_name}' ({product_id}). "
-        f"Supported formats: {supported_formats}"
+        f"Creative format '{format_key_display(creative_key)}' does not match "
+        f"product '{product_name}' ({product_id}). "
+        f"Supported formats: {supported_formats_display(supported)}"
     )
 
     return False, error_msg

@@ -150,6 +150,34 @@ def url(value: str) -> AnyUrl:
     return AnyUrl(value)  # Pydantic handles string -> AnyUrl conversion
 
 
+#: Transport path suffixes that identify the SAME agent at its base URL
+#: (order matters — longest first; only one suffix is stripped).
+_TRANSPORT_SUFFIXES = (
+    "/.well-known/adcp/sales",
+    "/mcp",
+    "/a2a",
+)
+
+
+def strip_transport_suffixes(url: str) -> str:
+    """Strip a trailing transport path suffix (``/mcp``, ``/a2a``, well-known) from ``url``.
+
+    ``https://x.org/mcp`` and ``https://x.org/a2a`` are transport endpoints of the
+    same agent, not distinct agents — identity comparison must treat them as the
+    base URL. Shared by :func:`canonical_agent_url` (federation identity) and
+    ``src.core.validation.normalize_agent_url`` (input normalization) so the two
+    can never disagree about which suffixes are transport plumbing.
+    """
+    if not url:
+        return url
+    stripped = url.rstrip("/")
+    for suffix in _TRANSPORT_SUFFIXES:
+        if stripped.endswith(suffix):
+            stripped = stripped[: -len(suffix)].rstrip("/")
+            break  # Only strip one suffix
+    return stripped
+
+
 def canonical_agent_url(agent_url: object) -> str:
     """Canonicalize an agent_url for identity comparison (spec MUST canonicalization).
 
@@ -158,7 +186,10 @@ def canonical_agent_url(agent_url: object) -> str:
     lowercased scheme/host, dropped default ports, normalized percent-encoding, and
     stripped userinfo + fragment (a hand-rolled normalizer such as yarl keeps those,
     diverging from the spec). The SDK preserves a trailing slash, so we additionally
-    strip it to keep ``https://x.org`` and ``https://x.org/`` equal. This is the
+    strip it to keep ``https://x.org`` and ``https://x.org/`` equal. On top of the
+    spec form we also strip transport path suffixes (``/mcp``, ``/a2a``,
+    ``/.well-known/adcp/sales``) — those are endpoints of the same agent, and every
+    comparison site must agree on that (one canonicalization, #1172). This is the
     single canonical form used both to compare two FormatId references for federation
     identity (see ``format_id_identity``) and to key the creative-agent format cache
     (``CreativeAgentRegistry._cache_key``).
@@ -167,11 +198,11 @@ def canonical_agent_url(agent_url: object) -> str:
         agent_url: A URL string or ``AnyUrl`` (FormatId.agent_url, CreativeAgent.agent_url).
 
     Returns:
-        The canonicalized URL string with any trailing slash removed.
+        The canonicalized URL string with trailing slash and transport suffix removed.
     """
     from adcp.signing import canonicalize_target_uri
 
-    return canonicalize_target_uri(str(agent_url)).rstrip("/")
+    return strip_transport_suffixes(canonicalize_target_uri(str(agent_url)).rstrip("/"))
 
 
 def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:

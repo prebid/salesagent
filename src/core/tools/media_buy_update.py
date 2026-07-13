@@ -75,6 +75,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.creative_helpers import format_key, supported_format_keys, supported_formats_display
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
@@ -96,7 +97,6 @@ from src.core.tools.financial_validation import (
 )
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.utils import utc_flight_start
-from src.core.validation import normalize_agent_url
 from src.core.validation_helpers import adcp_validation_boundary, package_field_path
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
@@ -248,13 +248,11 @@ def _validate_creatives_for_assignment(
 
     display_name = product_name or getattr(product, "name", None) or getattr(product, "product_id", "")
 
-    # Build the set of supported (normalized_agent_url, format_id) pairs.
+    # Build the set of supported canonical format keys.
     # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
-    # normalize_agent_url is the shared comparison normalizer (strips trailing
-    # slash and transport suffixes like /mcp), so URL variants compare equal.
-    supported_formats: set[tuple[str | None, str]] = {
-        (normalize_agent_url(str(fmt.agent_url)), fmt.id) for fmt in product.format_ids
-    }
+    # supported_format_keys is the ONE canonical comparison key shared by every
+    # creative-vs-product format check, so URL variants compare equal.
+    supported_formats: set[tuple[str, str]] = supported_format_keys(product.format_ids)
 
     if not supported_formats:
         return  # No usable format restrictions — allow all.
@@ -262,17 +260,14 @@ def _validate_creatives_for_assignment(
     incompatible: list[str] = []
     for creative in creatives_list:
         creative_pair = (
-            normalize_agent_url(creative.agent_url) if creative.agent_url else None,
-            creative.format,
+            format_key(creative.agent_url, creative.format) if creative.agent_url else (None, creative.format)
         )
         if creative_pair not in supported_formats:
             display = f"{creative.agent_url}/{creative.format}" if creative.agent_url else str(creative.format)
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:
-        supported_display = ", ".join(
-            f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in sorted(supported_formats, key=lambda p: p[1])
-        )
+        supported_display = supported_formats_display(supported_formats)
         raise AdCPCreativeRejectedError(
             f"Creative format(s) not supported by product '{display_name}': {', '.join(incompatible)}. "
             f"Supported formats: {supported_display}",

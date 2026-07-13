@@ -10,7 +10,7 @@ The fix ensures dimensions from product config are properly passed to FormatId o
 and merged when request format_ids don't have them.
 """
 
-from src.core.schemas import FormatId, MediaPackage
+from src.core.schemas import FormatId, MediaPackage, format_id_identity
 
 # Default agent URL for creating FormatId objects in tests
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -154,18 +154,19 @@ class TestDimensionMergingLogic:
 
     def test_merge_dimensions_from_product_to_request(self):
         """When request format_id lacks dimensions, merge from product config."""
-        # Product config has dimensions
+        # Product config has dimensions, keyed by the production identity key
         product_format_dimensions = {
-            (DEFAULT_AGENT_URL.rstrip("/"), "display_image"): (300, 250, None),
+            format_id_identity(FormatId(agent_url=DEFAULT_AGENT_URL, id="display_image")): (300, 250, None),
         }
 
         # Request format_id without dimensions
         request_format_id = "display_image"
         request_agent_url = DEFAULT_AGENT_URL
 
-        # Simulate the merging logic
-        normalized_url = request_agent_url.rstrip("/")
-        product_dims = product_format_dimensions.get((normalized_url, request_format_id))
+        # Look up via the same production identity key (media_buy_create.py dimension merge)
+        product_dims = product_format_dimensions.get(
+            format_id_identity(FormatId(agent_url=request_agent_url, id=request_format_id))
+        )
 
         assert product_dims is not None
         assert product_dims[0] == 300  # width
@@ -185,9 +186,9 @@ class TestDimensionMergingLogic:
 
     def test_request_dimensions_take_precedence(self):
         """When request format_id has dimensions, use them instead of product config."""
-        # Product config has dimensions
-        product_format_dimensions = {
-            (DEFAULT_AGENT_URL.rstrip("/"), "display_image"): (300, 250, None),
+        # Product config has dimensions, keyed by the production identity key
+        product_format_dimensions = {  # noqa: F841 — precedence branch never reads it
+            format_id_identity(FormatId(agent_url=DEFAULT_AGENT_URL, id="display_image")): (300, 250, None),
         }
 
         # Request format_id WITH dimensions (different from product)
@@ -210,27 +211,27 @@ class TestDimensionMergingLogic:
         assert format_id.height == 90
 
     def test_url_normalization_for_dimension_lookup(self):
-        """URL normalization should handle trailing slashes for dimension lookup."""
-        # Product config with trailing slash
+        """format_id_identity canonicalizes URL variants to one dimension-lookup key."""
+        # Product config keyed by the production identity key (bare URL)
         product_format_dimensions = {
-            ("https://creative.adcontextprotocol.org", "display_image"): (300, 250, None),
+            format_id_identity(FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_image")): (
+                300,
+                250,
+                None,
+            ),
         }
 
-        # Request with trailing slash
-        request_url_with_slash = "https://creative.adcontextprotocol.org/"
-        normalized = request_url_with_slash.rstrip("/")
-
-        dims = product_format_dimensions.get((normalized, "display_image"))
-        assert dims is not None
-        assert dims[0] == 300
-
-        # Request without trailing slash
-        request_url_no_slash = "https://creative.adcontextprotocol.org"
-        normalized = request_url_no_slash.rstrip("/")
-
-        dims = product_format_dimensions.get((normalized, "display_image"))
-        assert dims is not None
-        assert dims[0] == 300
+        # Trailing-slash, /mcp, /a2a and host-case variants all resolve to the same key
+        for variant in (
+            "https://creative.adcontextprotocol.org/",
+            "https://creative.adcontextprotocol.org",
+            "https://creative.adcontextprotocol.org/mcp",
+            "https://creative.adcontextprotocol.org/a2a",
+            "https://CREATIVE.ADCONTEXTPROTOCOL.ORG",
+        ):
+            dims = product_format_dimensions.get(format_id_identity(FormatId(agent_url=variant, id="display_image")))
+            assert dims is not None, f"dimension lookup missed for variant {variant}"
+            assert dims[0] == 300
 
 
 class TestExecuteApprovedMediaBuyFormatConversion:

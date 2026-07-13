@@ -124,7 +124,10 @@ from src.core.helpers.creative_helpers import (
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
+    format_key_display,
     process_and_upload_package_creatives,
+    supported_format_keys,
+    supported_formats_display,
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
@@ -143,6 +146,7 @@ from src.core.schemas import (
     Principal,
     Product,
     Targeting,
+    canonical_agent_url,
     format_id_identity,
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
@@ -1542,12 +1546,11 @@ async def _validate_and_convert_format_ids(
     validated_format_ids = []
 
     # Get registered agents for this tenant
+    # canonical_agent_url is the single agent-identity form (same one the registry's
+    # own cache key uses): spec-canonical + transport suffixes stripped, so all URL
+    # variations match: "https://EXAMPLE.com/mcp/" -> "https://example.com"
     registered_agents = registry._get_tenant_agents(tenant_id)
-    # Normalize agent URLs for consistent comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-    # This ensures all URL variations match: "https://example.com/mcp/" -> "https://example.com"
-    from src.core.validation import normalize_agent_url
-
-    registered_agent_urls = {normalize_agent_url(agent.agent_url) for agent in registered_agents}
+    registered_agent_urls = {canonical_agent_url(agent.agent_url) for agent in registered_agents}
 
     for idx, fmt_id in enumerate(format_ids):
         # STRICT ENFORCEMENT: Reject plain strings
@@ -1575,10 +1578,8 @@ async def _validate_and_convert_format_ids(
                 f"Both agent_url and id are required. Got: agent_url={agent_url!r}, id={format_id!r}",
             )
 
-        # VALIDATION: Check agent is registered
-        # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-        normalized_agent_url = normalize_agent_url(agent_url)
-        if normalized_agent_url not in registered_agent_urls:
+        # VALIDATION: Check agent is registered (same canonical form as the set above)
+        if canonical_agent_url(agent_url) not in registered_agent_urls:
             raise AdCPAuthorizationError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Creative agent not registered: {agent_url}. "
                 f"Registered agents: {', '.join(sorted(registered_agent_urls))}. "
@@ -3262,43 +3263,16 @@ async def _create_media_buy_impl(
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
                 # Validate that requested formats are supported by product.
-                # Format is composite key: (canonical agent_url, id) per AdCP spec —
-                # format_id_identity is the single canonical comparison key (#1172).
-                product_format_keys: set[tuple[str, str]] = {
-                    format_id_identity(fmt) for fmt in pkg_product.format_ids or []
-                }
+                # supported_format_keys is the ONE canonical comparison key shared by
+                # every creative-vs-product format check (#1172) — spec-canonical
+                # agent_url with transport suffixes stripped.
+                product_format_keys: set[tuple[str, str]] = supported_format_keys(pkg_product.format_ids)
 
                 # Build set of requested format keys for comparison
-                requested_format_keys: set[tuple[str, str]] = {
-                    format_id_identity(fmt) for fmt in matching_package.format_ids
-                }
-
-                def format_display(url: str, fid: str) -> str:
-                    """Format a canonical (url, id) pair for display."""
-                    return f"{url}/{fid}"
-
-                def _has_supported_key(url: str, fid: str, keys: set = product_format_keys) -> bool:
-                    """Check if (url, fid) is supported, allowing an '/mcp' URL variant.
-
-                    This does not mutate any of the underlying key sets; it only checks
-                    for the presence of either the exact key or an alternative where
-                    '/mcp' is appended to the end of the URL path.
-
-                    Args:
-                        url: The canonical format URL to check
-                        fid: The format ID to check
-                        keys: The set of supported (url, fid) tuples (bound at function definition)
-                    """
-                    # Exact match first
-                    if (url, fid) in keys:
-                        return True
-
-                    # Also try with '/mcp' appended (idempotent if already present)
-                    mcp_url = url if url.endswith("/mcp") else f"{url}/mcp"
-                    return (mcp_url, fid) in keys
+                requested_format_keys: set[tuple[str, str]] = supported_format_keys(matching_package.format_ids)
 
                 unsupported_formats = [
-                    format_display(url, fid) for url, fid in requested_format_keys if not _has_supported_key(url, fid)
+                    format_key_display(key) for key in sorted(requested_format_keys - product_format_keys)
                 ]
 
                 if unsupported_formats:
@@ -3310,12 +3284,10 @@ async def _create_media_buy_impl(
                             f"Please configure format_ids on the product or contact the publisher."
                         )
                     else:
-                        supported_formats_str = ", ".join(
-                            [format_display(url, fid) for url, fid in product_format_keys]
-                        )
                         error_msg = (
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
-                            f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
+                            f"{', '.join(unsupported_formats)}. "
+                            f"Supported formats: {supported_formats_display(product_format_keys)}"
                         )
                     raise AdCPValidationError(error_msg)
 
