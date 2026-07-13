@@ -39,15 +39,15 @@ already run that pattern for `.type-ignore-baseline` and `.duplication-baseline`
 ### F1 — Ruff: ratchet pure-complexity; permanently accept low-signal style rules
 
 **Ratchet targets** (follow-up: `.ruff-complexity-baseline`, near-copy of
-`check_type_ignore_count.py` — **not implemented in this PR**):
+`check_type_ignore_count.py` — implemented in [#1613](https://github.com/prebid/salesagent/pull/1613) / [#1610](https://github.com/prebid/salesagent/issues/1610)):
 
 - `C901` — complexity
 - `PLR0912` — too-many-branches
 - `PLR0915` — too-many-statements
 
-These are where new code most needs a mechanical stop. Until the baseline lands,
-comments say **ratchet target (ADR-009)** — not "fix incrementally" and not
-"permanently accepted".
+These are where new code most needs a mechanical stop. Comments say **ratchet
+target (ADR-009)** — not "fix incrementally" and not "permanently accepted".
+Mechanical ceiling: [#1613](https://github.com/prebid/salesagent/pull/1613).
 
 **Permanently accepted** (linter is low-signal at current thresholds):
 
@@ -74,7 +74,7 @@ Keep current defaults **for now** (`check_untyped_defs` / `disallow_incomplete_d
 **Do not** label this permanently deferred. Policy:
 
 - Primary target: a **`check_untyped_defs` error-count ratchet** (same move as
-  `.type-ignore-baseline`), filed as a tracked follow-up.
+  `.type-ignore-baseline`), tracked as [#1611](https://github.com/prebid/salesagent/issues/1611).
 - Caveat: mypy counts drift with tool/plugin versions — scope carefully; not this PR.
 - Until that lands, day-to-day type-safety progress remains
   `.type-ignore-baseline` + current Quality Gate mypy config.
@@ -83,6 +83,8 @@ Comments in `mypy.ini` must say **follow-up ratchet (ADR-009)**, not "permanentl
 deferred" or "enable incrementally" without a ceiling.
 
 ### G2 — Obligation allowlist: document the existing exact-match ratchet
+
+**Companion PR:** [#1612](https://github.com/prebid/salesagent/pull/1612) / [#1609](https://github.com/prebid/salesagent/issues/1609) lands the guard module docstring (this ADR PR stays policy/config only).
 
 **Correction to #1228:** G2 already has a decrement mechanism.
 `tests/unit/test_architecture_obligation_coverage.py` enforces covered-or-allowlisted,
@@ -114,10 +116,10 @@ progress, not silent amnesty. Covered IDs must still leave the list. Same intent
 
 **Tradeoffs:**
 
-- This PR is **policy + comment honesty only** — it does not ship
-  `.ruff-complexity-baseline` or a mypy untyped-defs counter.
-- Until follow-ups land, C901 / PLR0912 / PLR0915 / `check_untyped_defs` debt can still
-  grow (honest gap, same as today).
+- This PR is **policy + comment honesty only**.
+- Mechanical F1 ceiling ships in [#1613](https://github.com/prebid/salesagent/pull/1613);
+  F2 mypy untyped-defs counter remains [#1611](https://github.com/prebid/salesagent/issues/1611);
+  G2 docstring ships in [#1612](https://github.com/prebid/salesagent/pull/1612).
 
 ## Alternatives considered
 
