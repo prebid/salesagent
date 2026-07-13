@@ -1,5 +1,7 @@
 """Unit tests for src/core/adcp_version.py — SDK-derived AdCP version."""
 
+import re
+
 import adcp
 import pytest
 
@@ -49,9 +51,32 @@ def test_major_version_is_current_pinned_major():
 
 
 def test_supported_versions_derived_from_sdk_spec_pin():
-    """supported_versions is the release-precision (MAJOR.MINOR) form of the SDK pin."""
-    major, minor = adcp.get_adcp_spec_version().split(".", 2)[:2]
-    assert supported_adcp_versions() == (f"{major}.{minor}",)
+    """supported_versions is the release-precision form of the SDK pin: PATCH dropped, prerelease preserved.
+
+    core/version-envelope.json (v3.1.0-beta.3) constrains the wire value to
+    ``^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$`` — MAJOR.MINOR with an optional prerelease,
+    never a PATCH. So the full-semver pin "3.1.0-beta.3" normalizes to
+    "3.1-beta.3": the ``.0`` patch is dropped, the ``-beta.3`` prerelease kept.
+    """
+    m = re.fullmatch(r"(\d+)\.(\d+)\.\d+(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", adcp.get_adcp_spec_version())
+    assert m is not None
+    major, minor, prerelease = m.group(1), m.group(2), m.group(3)
+    expected = f"{major}.{minor}" + (f"-{prerelease}" if prerelease else "")
+    assert supported_adcp_versions() == (expected,)
+
+
+def test_supported_versions_normalizes_full_semver_prerelease_not_to_bare_stable():
+    """The pinned 3.1.0-beta.3 build advertises "3.1-beta.3", never a bare "3.1".
+
+    Authoritative: core/version-envelope.json (v3.1.0-beta.3) — "SDKs that read
+    full-semver values from bundle metadata ... MUST normalize to
+    release-precision (\"3.1-beta.1\") before emitting on the wire — meta-field
+    values are NOT valid wire values." Dropping the ``-beta.3`` suffix advertised
+    a stable release this build does not serve and made the seller reject a
+    correct "3.1-beta.3" buyer pin with VERSION_UNSUPPORTED.
+    """
+    assert adcp.get_adcp_spec_version() == "3.1.0-beta.3"  # guards the pin this exact expectation is grounded on
+    assert supported_adcp_versions() == ("3.1-beta.3",)
 
 
 def test_build_version_is_full_sdk_semver():
@@ -144,7 +169,7 @@ def test_malformed_sdk_spec_pin_raises_typed_configuration_error(monkeypatch, ma
     from src.core import adcp_version as av
     from src.core.exceptions import AdCPConfigurationError
 
-    av._spec_major_minor.cache_clear()
+    av._spec_release_components.cache_clear()
     monkeypatch.setattr(adcp, "get_adcp_spec_version", lambda: malformed_pin)
     try:
         # Both siblings degrade the same way, and the request-path entry point does too.
@@ -154,7 +179,7 @@ def test_malformed_sdk_spec_pin_raises_typed_configuration_error(monkeypatch, ma
         with pytest.raises(AdCPConfigurationError):
             av.validate_adcp_version_pins({"adcp_major_version": 99})
     finally:
-        av._spec_major_minor.cache_clear()
+        av._spec_release_components.cache_clear()
 
 
 class TestValidateAdcpVersionPins:
@@ -260,8 +285,14 @@ class TestValidateAdcpVersionPins:
 
         VersionUnsupportedDetails.model_validate(exc.value.details)
 
-    def test_same_major_unknown_release_downshifts_without_error(self):
-        """A stable same-major pin downshifts to the highest supported older release."""
+    def test_same_major_unknown_release_downshifts_without_error(self, monkeypatch):
+        """A stable same-major pin downshifts to the highest supported older stable release."""
+        from src.core import adcp_version as av
+
+        # The SDK build advertises a single prerelease release (3.1-beta.3), and a
+        # stable pin never downshifts onto a prerelease. Pin a stable supported set
+        # to exercise the stable-downshift path itself.
+        monkeypatch.setattr(av, "supported_adcp_versions", lambda: (f"{adcp_major_version()}.1",))
         validate_adcp_version_pins({"adcp_version": f"{adcp_major_version()}.99"})
 
     def test_stable_release_downshifts_across_minor_gap(self, monkeypatch):
@@ -323,8 +354,14 @@ class TestValidateAdcpVersionPins:
         with pytest.raises(AdCPVersionUnsupportedError):
             validate_adcp_version_pins({"adcp_version": "3.1"})
 
-    def test_attacker_sized_numeric_components_resolve_without_bare_value_error(self):
+    def test_attacker_sized_numeric_components_resolve_without_bare_value_error(self, monkeypatch):
         """Schema-valid digit strings must not trip Python's int conversion guard."""
+        from src.core import adcp_version as av
+
+        # Advertise a stable release so the same-major downshift path (which compares
+        # the attacker-sized minor component) is exercised; the SDK default advertises
+        # only a prerelease, onto which a stable pin never downshifts.
+        monkeypatch.setattr(av, "supported_adcp_versions", lambda: ("3.1",))
         huge_digits = "9" * 5000
 
         # Same-major future release safely downshifts to this seller's release.
@@ -592,7 +629,7 @@ class TestA2ADispatchStripsEnvelope:
         # SDK-injected negotiation fields (supported major) + standard envelope
         # framing the GetMediaBuysRequest model does not declare.
         parameters = {
-            "adcp_version": "3.1",
+            "adcp_version": supported_adcp_versions()[0],
             "adcp_major_version": adcp_major_version(),
             "ext": {"vendor": "acme"},
         }
@@ -637,7 +674,7 @@ class TestA2ADispatchStripsEnvelope:
             principal_id="p1", tenant_id="t1", tenant={"tenant_id": "t1"}, protocol="a2a"
         )
         handler = AdCPRequestHandler()
-        parameters = {"adcp_version": "3.1", "adcp_major_version": adcp_major_version()}
+        parameters = {"adcp_version": supported_adcp_versions()[0], "adcp_major_version": adcp_major_version()}
 
         with (
             patch("src.core.tools.media_buy_list._get_media_buys_impl", return_value={"media_buys": []}),

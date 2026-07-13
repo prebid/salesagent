@@ -175,9 +175,15 @@ class TestMiddlewareDropsNegotiationFields:
 
     @pytest.mark.asyncio
     async def test_negotiation_fields_removed_before_dispatch(self, middleware, caplog):
+        from src.core.adcp_version import adcp_major_version, supported_adcp_versions
+
         ctx = _make_context(
             "get_products",
-            {"brief": "ads", "adcp_version": "3.1", "adcp_major_version": 3},
+            {
+                "brief": "ads",
+                "adcp_version": supported_adcp_versions()[0],
+                "adcp_major_version": adcp_major_version(),
+            },
         )
         captured_ctx = None
 

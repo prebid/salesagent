@@ -50,7 +50,7 @@ _RELEASE_PIN_RE = re.compile(r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:-(?P<prer
 _SEMVER_PRERELEASE_IDENTIFIER = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
 _BUILD_VERSION_RE = re.compile(
     rf"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
-    rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
+    rf"(?:-(?P<prerelease>{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*))?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 _TEST_POLICY_LEASE_RE = re.compile(r"^[0-9A-Za-z_-]{16,128}$")
@@ -88,12 +88,14 @@ def _active_testing_policy() -> _TestingVersionPolicy | None:
 
 
 @cache
-def _spec_major_minor() -> tuple[int, int]:
-    """Parse ``(major, minor)`` from the SDK spec pin, typed-erroring on garbage.
+def _spec_release_components() -> tuple[int, int, str | None]:
+    """Parse ``(major, minor, prerelease)`` from the SDK spec pin, typed-erroring on garbage.
 
     Both ``adcp_major_version()`` and ``supported_adcp_versions()`` derive from
     this single parse, while ``adcp_build_version()`` uses the same complete
     semantic-version validator, so all advertised forms fail consistently.
+    The prerelease is retained so the advertised release-precision wire value
+    preserves it (``"3.1.0-beta.3"`` -> ``"3.1-beta.3"``); only PATCH is dropped.
     The pin (``adcp.get_adcp_spec_version()``, e.g. ``"3.1.0-beta.3"``) is a
     deploy-time constant, but this runs on the buyer request path
     (``validate_adcp_version_pins`` -> ``_supported_majors`` ->
@@ -103,23 +105,44 @@ def _spec_major_minor() -> tuple[int, int]:
     other server-side failure honors — rather than letting a bare ``ValueError``
     (int cast or tuple-unpack) escape as an untyped 500.
     """
-    _raw, major, minor = _validate_sdk_build_version(adcp.get_adcp_spec_version())
-    return major, minor
+    _raw, major, minor, prerelease = _validate_sdk_build_version(adcp.get_adcp_spec_version())
+    return major, minor, prerelease
 
 
-def _validate_sdk_build_version(raw: Any) -> tuple[str, int, int]:
-    """Validate the SDK's complete full-semver pin and return its release."""
+def _validate_sdk_build_version(raw: Any) -> tuple[str, int, int, str | None]:
+    """Validate the SDK's complete full-semver pin and return its release.
+
+    Returns ``(raw, major, minor, prerelease)``. The prerelease segment is
+    carried through because the release-precision wire value PRESERVES it
+    (``"3.1.0-beta.3"`` -> ``"3.1-beta.3"``) per ``core/version-envelope.json``:
+    only the PATCH component is dropped for the wire; the prerelease is not.
+    """
     try:
         if not isinstance(raw, str):
             raise TypeError("SDK spec version must be a string")
         match = _BUILD_VERSION_RE.fullmatch(raw)
         if match is None:
             raise ValueError("SDK spec version must be full semantic version")
-        return raw, int(match.group("major")), int(match.group("minor"))
+        return raw, int(match.group("major")), int(match.group("minor")), match.group("prerelease")
     except (TypeError, ValueError) as exc:
         raise AdCPConfigurationError(
             f"AdCP SDK spec version {raw!r} is malformed; expected a full semantic version MAJOR.MINOR.PATCH."
         ) from exc
+
+
+def _release_precision_wire_value(major: int, minor: int, prerelease: str | None) -> str:
+    """Convert a full-semver release to its release-precision wire value.
+
+    Per ``core/version-envelope.json`` (v3.1.0-beta.3): the wire value is
+    ``MAJOR.MINOR`` with the PATCH component dropped but any prerelease segment
+    PRESERVED — ``"3.1.0-beta.3"`` normalizes to ``"3.1-beta.3"``, NOT ``"3.1"``.
+    The spec is explicit that full-semver meta-field values are "NOT valid wire
+    values". This is the single shared conversion behind ``supported_adcp_versions()``,
+    from which advertisement, request validation, capabilities, and the
+    VERSION_UNSUPPORTED error details all derive.
+    """
+    base = f"{major}.{minor}"
+    return f"{base}-{prerelease}" if prerelease else base
 
 
 def adcp_major_version() -> int:
@@ -129,17 +152,20 @@ def adcp_major_version() -> int:
     (e.g. ``"3.1.0-beta.3"`` -> ``3``), so a spec bump is reflected here with
     no code change.
     """
-    return _spec_major_minor()[0]
+    return _spec_release_components()[0]
 
 
 def supported_adcp_versions() -> tuple[str, ...]:
     """Release-precision AdCP versions this build speaks, from the SDK spec pin.
 
-    The wire value is ``MAJOR.MINOR`` (release precision per
-    ``core/version-envelope.json``), derived from the SDK's full-semver spec
-    pin (e.g. ``"3.1.0-beta.3"`` -> ``("3.1",)``). Pre-release/patch segments
-    are spec-text revisions, not separately negotiated releases, so they are
-    not advertised as distinct entries.
+    The wire value is release precision per ``core/version-envelope.json``,
+    derived from the SDK's full-semver spec pin by dropping the PATCH component
+    but PRESERVING any prerelease segment (e.g. ``"3.1.0-beta.3"`` ->
+    ``("3.1-beta.3",)``). The spec is explicit that full-semver meta-field
+    values are "NOT valid wire values", and that the prerelease must be kept —
+    dropping it to a bare ``"3.1"`` made this seller reject a correct
+    ``"3.1-beta.3"`` buyer pin with VERSION_UNSUPPORTED. Only the PATCH digit,
+    which is never negotiated, is discarded.
 
     This is the authoritative re-pin list carried in VERSION_UNSUPPORTED error
     details (``supported_versions`` is REQUIRED there with minItems 1).
@@ -148,8 +174,8 @@ def supported_adcp_versions() -> tuple[str, ...]:
     if testing_policy is not None:
         return testing_policy.supported_versions
 
-    major, minor = _spec_major_minor()
-    return (f"{major}.{minor}",)
+    major, minor, prerelease = _spec_release_components()
+    return (_release_precision_wire_value(major, minor, prerelease),)
 
 
 def adcp_build_version() -> str:
@@ -161,7 +187,7 @@ def adcp_build_version() -> str:
     testing_policy = _active_testing_policy()
     if testing_policy is not None:
         return testing_policy.build_version
-    raw, _major, _minor = _validate_sdk_build_version(adcp.get_adcp_spec_version())
+    raw, _major, _minor, _prerelease = _validate_sdk_build_version(adcp.get_adcp_spec_version())
     return raw
 
 

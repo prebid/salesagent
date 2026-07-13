@@ -351,7 +351,9 @@ class TestRestGetProductsWrapper:
         Guards against a regression that unconditionally applies v2 compat: pinning
         a supported release must NOT inject the v2 is_fixed/rate fields.
         """
-        response = self._post_products({"brief": "ads", "adcp_version": "3.1"})
+        from src.core.adcp_version import supported_adcp_versions
+
+        response = self._post_products({"brief": "ads", "adcp_version": supported_adcp_versions()[0]})
 
         assert response.status_code == 200
         po = response.json()["products"][0]["pricing_options"][0]
