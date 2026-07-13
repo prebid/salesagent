@@ -501,6 +501,40 @@ class TestRevisionBumpsOnStatusTransition:
             holder.close()
             reset_health_state()
 
+    def test_get_by_id_locked_translates_contention_to_transient_conflict(self, tenant_a, principal_a):
+        """Production-path lock coverage: the repository's get_by_id_locked (used by
+        _update_media_buy_impl) must arm its OWN lock_timeout and translate the
+        expected 55P03 contention into a transient AdCPConflictError — NOT rely on
+        a caller-installed timeout. A prior version put the SET LOCAL + SQLSTATE
+        handling in the _impl; deleting it there stayed green because tests
+        installed their own timeout. This drives the real repository seam under a
+        held lock so a regression reddens. #1544.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session as SASession
+
+        from src.core.database.database_session import get_db_session, get_engine, reset_health_state
+        from src.core.database.models import MediaBuy
+        from src.core.exceptions import AdCPConflictError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_prod_path", status="active"))
+
+        # Independent session holds the row lock so the repository waiter times out.
+        holder = SASession(get_engine())
+        try:
+            holder.execute(select(MediaBuy).filter_by(media_buy_id="mb_lock_prod_path").with_for_update()).first()
+
+            with pytest.raises(AdCPConflictError) as exc_info:
+                with get_db_session() as waiter:
+                    MediaBuyRepository(waiter, tenant_a).get_by_id_locked("mb_lock_prod_path")
+            # Buyer-facing recovery is transient (re-read and retry), not terminal.
+            assert exc_info.value.recovery == "transient"
+        finally:
+            holder.rollback()
+            holder.close()
+            reset_health_state()
+
     def test_update_fields_staged_status_stamps_confirmed_at(self, tenant_a, principal_a):
         """A staged status change through update_fields (the update tool's approval
         path) also stamps confirmed_at — the third blessed seam. #1544."""

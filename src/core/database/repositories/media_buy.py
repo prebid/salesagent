@@ -81,6 +81,54 @@ class MediaBuyRepository:
             stmt = stmt.execution_options(populate_existing=True)
         return self._session.scalars(stmt).first()
 
+    def get_by_id_locked(
+        self,
+        media_buy_id: str,
+        *,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> MediaBuy | None:
+        """Acquire the row write-lock, bounded by ``lock_timeout``, translating contention.
+
+        The authoritative pre-mutation lock for the update path. Acquires
+        ``SELECT ... FOR UPDATE`` with ``populate_existing`` (so revision/status
+        reflect the committed row) after arming a transaction-scoped
+        ``lock_timeout``: a second request contending for the SAME row's lock
+        fails fast (PostgreSQL SQLSTATE ``55P03``) instead of blocking to the
+        global ``statement_timeout``. That expected contention is translated to a
+        typed transient :class:`AdCPConflictError` (``recovery="transient"``) —
+        it is NOT a DB outage and must not trip the DB circuit breaker.
+
+        Placing the timeout + SQLSTATE handling here (not in the ``_impl``) keeps
+        transport-agnostic business logic free of raw ``SET LOCAL`` / driver
+        error codes — the lock policy is a repository concern. ``SET LOCAL``
+        scopes the timeout to the caller's open transaction/UoW. This bounds only
+        the WAITER; it does NOT bound the lock HOLDER (an in-flight adapter call
+        below the caller keeps the lock until commit — bounding the holder needs
+        bounded/idempotent adapter execution, tracked separately). #1544.
+        """
+        from sqlalchemy import text
+        from sqlalchemy.exc import OperationalError
+
+        from src.core.database.database_session import LOCK_NOT_AVAILABLE
+
+        try:
+            # lock_timeout is a config setting (not a bindable value); the literal
+            # is server-controlled, never user input.
+            self._session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            return self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
+        except OperationalError as exc:
+            if getattr(getattr(exc, "orig", None), "pgcode", None) != LOCK_NOT_AVAILABLE:
+                raise
+            from src.core.exceptions import AdCPConflictError
+
+            raise AdCPConflictError(
+                f"Media buy '{media_buy_id}' is being modified by another request; retry shortly.",
+                field="media_buy_id",
+                suggestion="Another update holds the row lock. Re-read the media buy and retry.",
+                recovery="transient",
+                context=context,
+            ) from exc
+
     def get_by_id_or_raise(
         self, media_buy_id: str, *, context: ContextObject | dict[str, Any] | None = None
     ) -> MediaBuy:
@@ -591,6 +639,55 @@ class MediaBuyRepository:
 
         return self._locked_mutate_and_bump(media_buy_id, _apply)
 
+    def update_status_computed(
+        self,
+        media_buy_id: str,
+        compute_target: Callable[[MediaBuy], str | None],
+        *,
+        approved_at: datetime.datetime | None = None,
+        approved_by: str | None = None,
+    ) -> MediaBuy | None:
+        """Like :meth:`update_status`, but the destination status is COMPUTED under the lock.
+
+        For approval routes whose target is a window→status decision
+        (``scheduled``/``active``/``completed``) or ``pending_creatives``: the
+        target depends on the buy's own flight window, so it must be derived from
+        the committed row, not a stale pre-lock read (same lost-update race the
+        scheduler hits — see :meth:`apply_computed_status_transition`).
+        :meth:`_locked_mutate_and_bump` loads ``FOR UPDATE`` with
+        ``populate_existing=True`` (every column refreshed to the committed
+        value), so ``compute_target`` runs against the live window. A ``None``
+        return leaves the status unchanged (``approved_at``/``approved_by`` still
+        stamped); the shared skeleton stamps ``confirmed_at`` and bumps revision.
+        Returns None if the buy is not found in this tenant. #1544.
+        """
+
+        def _apply(media_buy: MediaBuy) -> None:
+            target = compute_target(media_buy)
+            if target is not None:
+                media_buy.status = target
+            if approved_at is not None:
+                media_buy.approved_at = approved_at
+            if approved_by is not None:
+                media_buy.approved_by = approved_by
+
+        return self._locked_mutate_and_bump(media_buy_id, _apply)
+
+    def update_status_computed_or_raise(
+        self,
+        media_buy_id: str,
+        compute_target: Callable[[MediaBuy], str | None],
+        *,
+        approved_at: datetime.datetime | None = None,
+        approved_by: str | None = None,
+    ) -> MediaBuy:
+        """``update_status_computed``, raising if the buy vanished mid-request (No Quiet Failures)."""
+        return self._require_mutated(
+            self.update_status_computed(media_buy_id, compute_target, approved_at=approved_at, approved_by=approved_by),
+            media_buy_id,
+            "computed status transition",
+        )
+
     def _require_mutated(self, media_buy: MediaBuy | None, media_buy_id: str, action: str) -> MediaBuy:
         """Shared vanished-row invariant behind the ``*_or_raise`` mutation variants.
 
@@ -801,6 +898,69 @@ class MediaBuyRepository:
         """
         return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
 
+    # Lifecycle inputs refreshed under the row lock before a target status is
+    # (re)computed: the flight window AND the current status/confirmation. A
+    # target derived from any of these on a STALE unlocked read can lose a race
+    # (e.g. a concurrent end_time extension), so the compute must see the
+    # committed values. See :meth:`apply_computed_status_transition` / #1544.
+    _LIFECYCLE_REFRESH_FIELDS: tuple[str, ...] = (
+        "status",
+        "confirmed_at",
+        "start_time",
+        "end_time",
+        "start_date",
+        "end_date",
+    )
+
+    @staticmethod
+    def apply_computed_status_transition(
+        media_buy: MediaBuy,
+        compute_target: Callable[[MediaBuy], str | None],
+    ) -> MediaBuy:
+        """Lock the row, refresh EVERY lifecycle input, THEN compute the target.
+
+        The seam for lifecycle transitions whose target depends on the buy's own
+        state — the flight window (``start``/``end``) and current ``status`` — on
+        paths that loaded the row WITHOUT a lock (the cross-tenant scheduler sweep
+        via :meth:`get_all_by_statuses`, the admin approve/creative-unblock routes
+        that resolve a window→status decision). Computing the target from the
+        unlocked identity-mapped row is a lost-update race: the scheduler can read
+        ``end_time`` in the past, decide ``completed``, and then a concurrent
+        transaction extends ``end_time`` (leaving ``status`` ``active``) and
+        commits — the stale ``completed`` would overwrite the live ``active`` buy.
+
+        So the caller supplies ``compute_target`` as a CALLBACK, evaluated only
+        AFTER the ``FOR UPDATE`` refresh of every lifecycle input, never a
+        precomputed string. ``compute_target`` returning ``None`` is the sole
+        no-op signal — no status write, no ``confirmed_at`` stamp, no revision
+        bump — so a caller that decides "nothing to do" against the committed row
+        returns ``None`` explicitly (the scheduler does). A returned status is
+        applied even when it equals the current one: re-asserting a status IS a
+        mutation for revision purposes (the unlocked seam relies on that — see
+        ``test_two_concurrent_apply_status_transition_yield_distinct_revisions``),
+        and every real caller that would otherwise pass the same value returns
+        ``None`` instead. The transition applies and stamps/bumps via the shared
+        seams, so no committed buy is left without a confirmation instant. The
+        lock is held until the caller commits, serializing concurrent transitions
+        of the same buy. ``revision`` needs no refresh — it bumps via a
+        server-side expression that serializes at the write-lock. Returns the same
+        (mutated) row. See #1544.
+        """
+        session = object_session(media_buy)
+        if session is not None:
+            session.refresh(
+                media_buy,
+                list(MediaBuyRepository._LIFECYCLE_REFRESH_FIELDS),
+                with_for_update=True,
+            )
+        target = compute_target(media_buy)
+        if target is None:
+            return media_buy
+        media_buy.status = target
+        MediaBuyRepository._stamp_confirmation_if_needed(media_buy)
+        MediaBuyRepository._bump_revision(media_buy)
+        return media_buy
+
     @staticmethod
     def apply_status_transition(media_buy: MediaBuy, new_status: str) -> MediaBuy:
         """Transition an already-loaded MediaBuy to ``new_status`` and bump revision.
@@ -842,24 +1002,30 @@ class MediaBuyRepository:
         The ``FOR UPDATE`` lock is held until the caller commits, serializing
         concurrent transitions of the same buy. ``revision`` needs no refresh — it
         bumps via a server-side expression that serializes at the write-lock.
+
+        This is the STATIC-target variant of :meth:`apply_computed_status_transition`:
+        the caller already knows the destination status (it does not depend on the
+        refreshed window), so the only race to guard is a concurrent status change.
+        Expressed as the compute callback below — return the fixed ``new_status``
+        only while the committed status still matches what the caller based it on;
+        otherwise no-op — it reuses the one lock→refresh→stamp→bump tail.
         """
-        session = object_session(media_buy)
-        if session is not None:
-            # The source status the caller based ``new_status`` on, captured before
-            # the locked refresh overwrites it with the committed value.
-            expected_from_status = media_buy.status
-            session.refresh(media_buy, ["status", "confirmed_at"], with_for_update=True)
-            if media_buy.status != expected_from_status:
+        # The source status the caller based ``new_status`` on, captured before the
+        # locked refresh (inside the computed seam) overwrites it with the committed
+        # value.
+        expected_from_status = media_buy.status
+
+        def _compute(refreshed: MediaBuy) -> str | None:
+            if refreshed.status != expected_from_status:
                 logger.info(
                     "apply_status_transition: skipping %s -> %s for media buy %s; "
                     "committed status changed to %s under a stale unlocked read",
                     expected_from_status,
                     new_status,
-                    media_buy.media_buy_id,
-                    media_buy.status,
+                    refreshed.media_buy_id,
+                    refreshed.status,
                 )
-                return media_buy
-        media_buy.status = new_status
-        MediaBuyRepository._stamp_confirmation_if_needed(media_buy)
-        MediaBuyRepository._bump_revision(media_buy)
-        return media_buy
+                return None
+            return new_status
+
+        return MediaBuyRepository.apply_computed_status_transition(media_buy, _compute)

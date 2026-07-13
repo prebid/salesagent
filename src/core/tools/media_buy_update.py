@@ -31,8 +31,7 @@ from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
-from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import select
 
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -40,7 +39,6 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
-    AdCPConflictError,
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPGoneError,
@@ -48,11 +46,6 @@ from src.core.exceptions import (
     AdCPValidationError,
     media_buy_revision_conflict,
 )
-
-# PostgreSQL SQLSTATE for a lock_timeout expiry (lock_not_available). Expected
-# contention, not a database outage — translated to a typed transient error and
-# must not trip the DB circuit breaker. #1544.
-LOCK_NOT_AVAILABLE = "55P03"
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -259,34 +252,11 @@ def _update_media_buy_impl(
             # boundary-revision; no conformance storyboard step — ungraded.)
             # Acquire the authoritative row lock before any workflow or adapter
             # side effect. The lock is held by this UoW until commit, so two
-            # same-token requests cannot both reach the adapter.
-            #
-            # Pessimistic-lock tradeoff: lock_timeout bounds a contended WAITER —
-            # a second same-token request trying to ACQUIRE the lock fails fast
-            # (retryable) after 5s instead of blocking to the global
-            # statement_timeout. SET LOCAL scopes it to this transaction only.
-            # It does NOT bound the lock HOLDER: while the adapter network call
-            # below runs, this backend holds the row lock, and a DB-session
-            # timeout cannot safely cap that — terminating the session mid-call
-            # would release the lock while the external side effect is still in
-            # flight (split-brain). Bounding the holder needs bounded/idempotent
-            # adapter execution (reservation/outbox/CAS), tracked separately. The
-            # expected lock_timeout error (SQLSTATE 55P03) is translated to a
-            # typed transient error below and must NOT trip the DB circuit
-            # breaker. #1544.
-            try:
-                session.execute(text("SET LOCAL lock_timeout = '5s'"))
-                _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use, for_update=True, populate_existing=True)
-            except OperationalError as exc:
-                if getattr(getattr(exc, "orig", None), "pgcode", None) != LOCK_NOT_AVAILABLE:
-                    raise
-                raise AdCPConflictError(
-                    f"Media buy '{req.media_buy_id}' is being modified by another request; retry shortly.",
-                    field="media_buy_id",
-                    suggestion="Another update holds the row lock. Re-read the media buy and retry.",
-                    recovery="transient",
-                    context=req.context,
-                ) from exc
+            # same-token requests cannot both reach the adapter. The timeout-aware
+            # locking and the SQLSTATE 55P03 → transient-CONFLICT translation live
+            # in the repository (get_by_id_locked) — the lock policy is a data-access
+            # concern, kept out of this transport-agnostic _impl. #1544.
+            _current_mb = uow.media_buys.get_by_id_locked(media_buy_id_to_use, context=req.context)
             _current_status = _current_mb.status if _current_mb else ""
             # Precedence: the revision-conflict gate runs BEFORE the terminal-state
             # gate. Two separate things:

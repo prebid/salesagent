@@ -41,31 +41,30 @@ def test_agent_card_scheme(host, xfp, expected):
     assert _scheme(headers) == expected
 
 
-def test_agent_card_emits_release_precision_adcp_version():
-    """The A2A agent card must emit a RELEASE-precision ``adcp_version`` on the wire.
+def test_agent_card_adcp_extension_follows_v2_convention():
+    """The A2A agent card's AdCP extension follows the pinned A2A guide's convention.
 
-    The AdCP version-negotiation contract (``core/version-envelope.json``) says
-    wire ``adcp_version`` values are release-precision — the patch component and
-    build metadata are not valid wire values (only the pre-release tag is kept).
-    Our pin is patch-precision (``3.1.0-beta.3``); the card must normalize it to
-    ``3.1-beta.3``. This pins the CARD output (a revert to emitting the raw pin
-    reddens it) and cross-checks that the value is accepted, unchanged, by the
-    adcp SDK's own resolver — the client that parses the card. #1544.
+    Per ``dist/docs/3.1.0-beta.3/building/by-layer/L0/a2a-guide.mdx`` § "AdCP
+    Extension": the extension URI is the STABLE
+    ``https://adcontextprotocol.org/extensions/adcp`` (the versioned
+    ``adcp-extension.json`` schema was a v2 artifact, removed in v3, so a
+    ``/schemas/<version>/...`` URI addresses nothing), and the card's
+    ``adcp_version`` is a v2 static-metadata CONVENTION emitted at full patch
+    precision (e.g. ``3.1.0-beta.3``). It is explicitly NOT subject to the v3
+    envelope release-precision rule — that rule governs the envelope-root
+    adcp_version on request/response wire, not this card. Release-precision here
+    would also fail the retained deprecated three-component version pattern.
+    Normative v3 discovery is get_adcp_capabilities, not this card. #1544.
     """
     from adcp import get_adcp_spec_version
-    from adcp._version import normalize_to_release_precision, resolve_adcp_version
 
     from src.a2a_server.adcp_a2a_server import create_agent_card
 
+    stable_uri = "https://adcontextprotocol.org/extensions/adcp"
     card = create_agent_card()
-    ext = next(e for e in card.capabilities.extensions if "adcp-extension" in e.uri)
-    wire = ext.params["adcp_version"]
+    ext = next(e for e in card.capabilities.extensions if e.uri == stable_uri)
 
-    raw = get_adcp_spec_version()
-    assert wire == normalize_to_release_precision(raw), (
-        f"card must emit release-precision adcp_version, got {wire!r} for pin {raw!r}"
-    )
-    # The SDK (the client parsing the card) accepts the wire value unchanged.
-    assert resolve_adcp_version(wire) == wire
-    # The extension URI still references the FULL versioned schema path.
-    assert raw in ext.uri
+    # Stable extension URI, never a versioned schema path.
+    assert ext.uri == stable_uri
+    # Patch-precision v2 convention — the raw pin, not release-precision.
+    assert ext.params["adcp_version"] == get_adcp_spec_version()

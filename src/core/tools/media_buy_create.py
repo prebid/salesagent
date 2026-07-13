@@ -3507,14 +3507,22 @@ async def _create_media_buy_impl(
                 valid_actions=valid_actions_for_status(simulated_status),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
-                # Dry-run persists nothing and calls no adapter, so there is no real
-                # confirmation instant and no addressable resource to version. Both
-                # fields are omitted (None) rather than fabricated: the pinned AdCP
-                # 3.1.0-beta.3 create-media-buy-response success branch requires only
-                # media_buy_id + packages (confirmed_at/revision are optional), so a
-                # strict client's oneOf still resolves. Emitting confirmed_at=now /
-                # revision=1 would report a confirmation that never happened and a
-                # token that addresses nothing. See #1544.
+                # X-Dry-Run is proprietary internal tooling, NOT an AdCP concept:
+                # the spec's only sanctioned test mode is the account-level
+                # ``sandbox`` (dist/docs/3.1.0-beta.3/media-buy/advanced-topics/
+                # sandbox.mdx — simulated data, no real spend/side effects). Mark
+                # the simulated response ``sandbox=True`` so it is honestly labelled
+                # as simulated rather than masquerading as a real create.
+                sandbox=True,
+                # confirmed_at/revision are omitted (None), not fabricated: dry-run
+                # persists nothing and calls no adapter, so there is no real
+                # confirmation instant and no addressable resource to version. The
+                # pinned 3.1.0-beta.3 create-media-buy-response success branch
+                # requires only media_buy_id + packages (both optional), so a strict
+                # client's oneOf still resolves. Protocol CONFORMANCE testing uses
+                # account-level sandbox accounts, not this header — so the field
+                # omission here is an internal-tooling detail, never graded as a
+                # protocol MUST. See #1544.
                 confirmed_at=None,
                 revision=None,
             )

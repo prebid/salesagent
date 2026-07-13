@@ -90,16 +90,24 @@ class MediaBuyStatusScheduler:
                 )
 
                 for media_buy in media_buys:
-                    new_status = self._compute_new_status(media_buy, now, session)
-
-                    if new_status and new_status != media_buy.status:
-                        old_status = media_buy.status
-                        # Route through the repository seam so the persisted
-                        # revision bumps on this seller-initiated lifecycle
-                        # transition (AdCP 3.1.0-beta.3 revision) — see #1544.
-                        MediaBuyRepository.apply_status_transition(media_buy, new_status)
+                    old_status = media_buy.status
+                    # Compute the target UNDER the row lock. The rows above were
+                    # loaded WITHOUT a lock, so their flight window / status may be
+                    # stale: apply_computed_status_transition takes FOR UPDATE,
+                    # refreshes every lifecycle input, and only THEN runs this
+                    # callback on the committed row. That closes the lost-update
+                    # race where a concurrent end_time extension (status still
+                    # active) would let a pre-lock "completed" decision win. The
+                    # seam bumps the AdCP 3.1.0-beta.3 revision + stamps
+                    # confirmed_at on any real transition. #1544.
+                    MediaBuyRepository.apply_computed_status_transition(
+                        media_buy, lambda mb: self._compute_new_status(mb, now, session)
+                    )
+                    if media_buy.status != old_status:
                         updated_count += 1
-                        logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
+                        logger.info(
+                            f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {media_buy.status}"
+                        )
 
                 if updated_count > 0:
                     session.commit()

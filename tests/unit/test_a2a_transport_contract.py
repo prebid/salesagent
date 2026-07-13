@@ -520,4 +520,8 @@ class TestAgentCardContract:
         card = response.json()
         extensions = card.get("capabilities", {}).get("extensions", [])
         adcp_uris = [e.get("uri", "") for e in extensions]
-        assert any("adcp-extension" in uri for uri in adcp_uris), "Agent card must have AdCP extension in capabilities"
+        # Stable extension URI per the pinned A2A guide (the versioned
+        # adcp-extension.json schema was removed in v3). #1544.
+        assert "https://adcontextprotocol.org/extensions/adcp" in adcp_uris, (
+            "Agent card must have the stable AdCP extension URI in capabilities"
+        )
