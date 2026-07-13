@@ -975,13 +975,11 @@ class AdCPRequestHandler(RequestHandler):
             # Authentication failures are JSON-RPC errors, not task failures.
             # In particular, never notify an unauthenticated caller's supplied
             # push URL: that would turn the failure path into an SSRF primitive.
-            record_boundary_error(
-                "a2a",
-                "message_processing",
-                e,
-                tenant_id="unknown",
-                principal_id="unknown",
-            )
+            # Route through the identity-aware helper: at an auth failure the
+            # identity is None, so tenant_id degrades to None and the activity-feed
+            # + audit writes are correctly skipped (a fabricated "unknown" tenant
+            # would otherwise drive those sinks for an unauthenticated caller).
+            record_boundary_error_for_identity("a2a", "message_processing", e, identity)
             raise _internal_error_for("message processing", e) from e
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)

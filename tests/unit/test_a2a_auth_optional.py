@@ -173,7 +173,7 @@ class TestAuthOptionalSkills:
         )
 
         with (
-            patch("src.a2a_server.adcp_a2a_server.record_boundary_error") as record_error,
+            patch("src.a2a_server.adcp_a2a_server.record_boundary_error_for_identity") as record_error,
             patch.object(self.handler, "_send_protocol_webhook", new_callable=AsyncMock) as send_webhook,
             pytest.raises(InternalError) as exc_info,
         ):
@@ -181,13 +181,12 @@ class TestAuthOptionalSkills:
 
         assert_envelope_shape(exc_info.value.data, "AUTH_TOKEN_INVALID", recovery="terminal")
         send_webhook.assert_not_awaited()
-        record_error.assert_called_once_with(
-            "a2a",
-            "message_processing",
-            ANY,
-            tenant_id="unknown",
-            principal_id="unknown",
-        )
+        # The auth failure routes through the identity-aware helper with the None
+        # identity resolved at the boundary — so tenant_id degrades to None and the
+        # activity-feed + audit writes are skipped. A regression that hand-rolled a
+        # fabricated "unknown" tenant (truthy) would drive those sinks for an
+        # unauthenticated caller; asserting the identity-aware call with None pins that.
+        record_error.assert_called_once_with("a2a", "message_processing", ANY, None)
         assert self.handler.tasks == {}
         assert self.handler._task_push_configs == {}
 

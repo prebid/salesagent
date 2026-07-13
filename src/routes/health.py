@@ -41,7 +41,7 @@ _TEST_CONTROL_HEADER = "x-adcp-test-control-token"
 
 
 class TestingAdCPVersionPolicy(SalesAgentBaseModel):
-    """Complete immutable version-policy snapshot installed by E2E setup."""
+    """Complete version-policy snapshot installed by E2E setup."""
 
     lease_id: str = Field(min_length=16, max_length=128)
     supported_versions: list[str] = Field(min_length=1)
