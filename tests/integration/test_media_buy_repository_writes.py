@@ -363,13 +363,12 @@ class TestRevisionBumpsOnStatusTransition:
         """Write-once confirmed_at survives a stale unlocked transition.
 
         The cross-tenant sweep / creative-sync seam loads rows WITHOUT ``FOR
-        UPDATE``, so its in-memory ``confirmed_at`` can be a stale ``None`` while a
-        concurrent approval commits the real stamp. The transition must not
-        overwrite that committed instant with this row's ``created_at``. Regression
-        for #1544: apply_status_transition now locks and refreshes ``confirmed_at``
-        (SELECT ... FOR UPDATE) before the write-once check, so the sweeping
-        session sees the committed stamp and skips the write instead of clobbering
-        it with the stale in-memory None.
+        UPDATE``, so its in-memory state can be stale while a concurrent approval
+        commits a real stamp. Here the approval also advances the status
+        (draft→active), so apply_status_transition locks, refreshes, sees the
+        committed status changed under the stale read, and no-ops — which
+        preserves the committed ``confirmed_at`` (the write-once instant) rather
+        than clobbering it with this row's ``created_at``. Regression for #1544.
         """
         from sqlalchemy.orm import Session as SASession
 
@@ -388,19 +387,19 @@ class TestRevisionBumpsOnStatusTransition:
         stale_session = SASession(engine)
         approve_session = SASession(engine)
         try:
-            # Sweep-style unlocked load: in-memory confirmed_at is None here.
+            # Sweep-style unlocked load: in-memory status is 'draft', confirmed_at None.
             stale = MediaBuyRepository(stale_session, tenant_a).get_by_id("mb_confirm_race")
             assert stale is not None
             assert stale.confirmed_at is None
 
-            # A concurrent approval commits confirmed_at=approve_time in its own txn.
+            # A concurrent approval commits status=active + confirmed_at=approve_time.
             MediaBuyRepository(approve_session, tenant_a).update_status(
                 "mb_confirm_race", "active", approved_at=approve_time, approved_by="admin@test.com"
             )
             approve_session.commit()
 
             # The stale session applies its own transition on the row it loaded
-            # BEFORE the approval — its confirmed_at is still None in memory.
+            # BEFORE the approval — its status is still 'draft' in memory.
             MediaBuyRepository.apply_status_transition(stale, "active")
             stale_session.commit()
         finally:
@@ -410,49 +409,97 @@ class TestRevisionBumpsOnStatusTransition:
         with get_db_session() as session:
             persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_confirm_race")
             assert persisted is not None
-            # The stale transition DID write (revision advanced past the approval's
-            # bump), proving the COALESCE path ran rather than no-opping...
-            assert persisted.revision == 3
-            # ...yet it preserved the approval instant instead of clobbering it with
-            # created_at. Pre-fix this read back created_at (write-once violated).
+            # The stale transition no-op'd (committed status advanced draft→active
+            # under it), so revision stayed at the approval's bump (1→2), not 3.
+            assert persisted.revision == 2
+            assert persisted.status == "active"
+            # The committed approval instant is preserved, not clobbered with created_at.
             assert persisted.confirmed_at == approve_time
             assert persisted.confirmed_at != persisted.created_at
 
-    def test_idle_in_transaction_bound_terminates_a_hung_lock_holder(self, tenant_a, principal_a):
-        """A hung lock HOLDER is bounded, not just contended waiters.
+    def test_apply_status_transition_skips_when_status_changed_underneath(self, tenant_a, principal_a):
+        """A stale unlocked transition must not overwrite a concurrent terminal decision.
 
-        update_media_buy holds a FOR UPDATE row lock across the adapter network
-        call, so it sets ``idle_in_transaction_session_timeout`` (alongside
-        ``lock_timeout``) to bound the holder: ``lock_timeout`` only makes a waiter
-        give up, while ``statement_timeout`` does not cover an idle-in-transaction
-        gap (no SQL is executing during the adapter call). This pins the mechanism
-        the fix relies on — a session that holds a row lock and sits idle past the
-        bound is terminated by Postgres, releasing the lock. #1544.
+        Scheduler loads 'active'; an admin commits 'rejected'; the scheduler's stale
+        active→completed transition must NO-OP under lock (the committed status
+        changed), leaving 'rejected' intact instead of writing 'completed'.
+        Regression for #1544: apply_status_transition previously refreshed only
+        confirmed_at, never status, so it blindly applied the caller's stale target.
         """
-        import time
+        from sqlalchemy.orm import Session as SASession
 
+        from src.core.database.database_session import get_engine
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_status_race", status="active"))
+
+        engine = get_engine()
+        stale_session = SASession(engine)
+        admin_session = SASession(engine)
+        try:
+            # Sweep-style unlocked load: in-memory status is the soon-to-be-stale 'active'.
+            stale = MediaBuyRepository(stale_session, tenant_a).get_by_id("mb_status_race")
+            assert stale is not None
+            assert stale.status == "active"
+
+            # An admin rejects the buy in an independent transaction (terminal decision).
+            MediaBuyRepository(admin_session, tenant_a).update_status("mb_status_race", "rejected")
+            admin_session.commit()
+
+            # The scheduler's stale active→completed transition must no-op under lock.
+            MediaBuyRepository.apply_status_transition(stale, "completed")
+            stale_session.commit()
+        finally:
+            stale_session.close()
+            admin_session.close()
+
+        with get_db_session() as session:
+            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_status_race")
+            assert persisted is not None
+            # The terminal decision is preserved — NOT overwritten with 'completed'.
+            assert persisted.status == "rejected"
+            # Admin's write bumped 1→2; the skipped stale transition did NOT bump.
+            assert persisted.revision == 2
+
+    def test_lock_timeout_does_not_trip_the_db_circuit_breaker(self, tenant_a, principal_a):
+        """Expected lock contention must not poison the process-wide DB circuit
+        breaker. A lock_timeout raises OperationalError (SQLSTATE 55P03); a prior
+        version marked that as a DB outage in get_db_session, failing-fast every
+        unrelated request for 10s. It must re-raise WITHOUT flipping _is_healthy,
+        so a subsequent get_db_session still works. #1544.
+        """
+        import src.core.database.database_session as dbs
         from sqlalchemy import select, text
         from sqlalchemy.exc import OperationalError
         from sqlalchemy.orm import Session as SASession
 
-        from src.core.database.database_session import get_engine
+        from src.core.database.database_session import get_db_session, get_engine, reset_health_state
         from src.core.database.models import MediaBuy
 
         with MediaBuyUoW(tenant_a) as uow:
-            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_idle_bound", status="active"))
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_contended", status="active"))
 
-        # Raw independent session, NOT get_db_session: the deliberate OperationalError
-        # here must not trip the app's session circuit breaker for sibling tests.
+        # Independent session holds the row lock so the waiter below times out.
         holder = SASession(get_engine())
         try:
-            holder.execute(text("SET LOCAL idle_in_transaction_session_timeout = '1s'"))
-            # Acquire the row write-lock, then sit idle-in-transaction past the bound.
-            holder.execute(select(MediaBuy).filter_by(media_buy_id="mb_idle_bound").with_for_update()).first()
-            time.sleep(2)
-            with pytest.raises(OperationalError):
-                holder.execute(text("SELECT 1"))  # backend already terminated → raises
+            holder.execute(select(MediaBuy).filter_by(media_buy_id="mb_lock_contended").with_for_update()).first()
+
+            with pytest.raises(OperationalError) as exc_info:
+                with get_db_session() as waiter:
+                    waiter.execute(text("SET LOCAL lock_timeout = '1s'"))
+                    waiter.execute(
+                        select(MediaBuy).filter_by(media_buy_id="mb_lock_contended").with_for_update()
+                    ).first()
+            assert getattr(exc_info.value.orig, "pgcode", None) == "55P03"  # lock_not_available
+
+            # The breaker stayed closed: health intact and a fresh session works.
+            assert dbs._is_healthy is True
+            with get_db_session() as ok:
+                assert ok.execute(text("SELECT 1")).scalar() == 1
         finally:
+            holder.rollback()
             holder.close()
+            reset_health_state()
 
     def test_update_fields_staged_status_stamps_confirmed_at(self, tenant_a, principal_a):
         """A staged status change through update_fields (the update tool's approval
@@ -925,8 +972,12 @@ class TestConcurrentRevisionBump:
         """
         import threading
 
+        # Start already 'active' so both threads transition active→active: the
+        # source status is unchanged under lock, so both legitimately proceed and
+        # bump. (A stale transition against a CHANGED status now no-ops — covered
+        # by test_apply_status_transition_skips_when_status_changed_underneath.)
         with MediaBuyUoW(tenant_a) as uow:
-            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_ast_concurrent"))
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_ast_concurrent", status="active"))
 
         both_loaded = threading.Barrier(2, timeout=30)
         errors: list[BaseException] = []

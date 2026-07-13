@@ -1589,6 +1589,12 @@ class TestCreateMediaBuyAdapterInteraction:
             assert status == "completed"
             assert response.media_buy_id is not None
             assert response.media_buy_id.startswith("dry_run_")
+            # Dry-run persists nothing and calls no adapter, so it must NOT fabricate
+            # a confirmation instant or a revision for a resource that never existed.
+            # The pinned beta.3 success branch requires only media_buy_id + packages
+            # (both optional), so oneOf still resolves. #1544.
+            assert response.confirmed_at is None
+            assert response.revision is None
 
 
 # ===========================================================================

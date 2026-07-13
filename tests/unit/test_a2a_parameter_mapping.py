@@ -10,7 +10,7 @@ CRITICAL: These tests catch protocol mismatches like 'updates' vs 'packages'
 before they reach production.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
@@ -100,25 +100,40 @@ class TestA2AParameterMapping:
         Regression for the transport-parity divergence (#1544): the skill handler
         used to validate ``revision`` inside ``adcp_validation_boundary`` (→
         VALIDATION_ERROR); it now defers the raw value to the shared translator
-        (``invalid_update_request_error`` → INVALID_REQUEST). ``AdCPInvalidRequestError``
-        subclasses ``AdCPValidationError``, so the assertion is on the wire
-        ``error_code``, not the exception type. Validation fails before any DB
-        access, so no adapter/session mock is needed.
+        (``invalid_update_request_error`` → INVALID_REQUEST).
+
+        Drives the REAL boundary — ``on_message_send`` → skill dispatch → failed
+        Task — and asserts on the wire error envelope in the Task's artifact
+        DataPart, not a reconstructed Python exception. This is what pins the
+        dispatcher + envelope-builder against regression (per tests/CLAUDE.md error
+        policy); a probe of the private skill handler would miss those layers.
+        Validation fails before any DB access, so no adapter/session mock is needed.
         """
         import asyncio
 
+        from a2a.types import SendMessageRequest
+
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.exceptions import AdCPInvalidRequestError
+        from tests.a2a_helpers import make_a2a_context
+        from tests.helpers import assert_envelope_shape
+        from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
         handler = AdCPRequestHandler()
+        handler._get_auth_token = MagicMock(return_value="test-token")
+        ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
+        message = create_a2a_message_with_skill(
+            "update_media_buy",
+            {"media_buy_id": "mb_123", "revision": 0},  # below schema minimum of 1
+        )
+        params = SendMessageRequest(message=message)
+
         with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
-            parameters = {"media_buy_id": "mb_123", "revision": 0}  # below schema minimum of 1
-            with pytest.raises(AdCPInvalidRequestError) as exc_info:
-                asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
-            assert exc_info.value.error_code == "INVALID_REQUEST", (
-                f"A2A must emit INVALID_REQUEST for a schema-invalid revision "
-                f"(matching MCP/REST), got {exc_info.value.error_code}"
-            )
+            result = asyncio.run(handler.on_message_send(params, context=ctx))
+
+        assert result.artifacts, "failed skill must still return a Task with an artifact"
+        envelope = extract_data_from_artifact(result.artifacts[0])
+        # Assert on the actual wire envelope the buyer receives, not exc.error_code.
+        assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
 
     def test_update_media_buy_backward_compatibility_with_updates(self):
         """

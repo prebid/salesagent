@@ -1933,3 +1933,15 @@ def then_no_db_records(ctx: dict) -> None:
     env._session.expire_all()
     persisted = _media_buy_repo(ctx).list_all()
     assert persisted == [], f"dry-run must not persist any media buy, found {[b.media_buy_id for b in persisted]}"
+
+
+@then("the simulated response should omit confirmed_at and revision")
+def then_dry_run_omits_confirmation_and_version(ctx: dict) -> None:
+    """Dry-run persists nothing and calls no adapter, so it must NOT fabricate a
+    confirmation instant or a revision for a resource that never existed. Both are
+    optional in the pinned beta.3 create-response success branch (which requires
+    only media_buy_id + packages), so a strict client's oneOf still resolves. #1544.
+    """
+    resp = _require_success_response(ctx)
+    assert _get_response_field(resp, "confirmed_at") is None, "dry-run must not fabricate confirmed_at"
+    assert _get_response_field(resp, "revision") is None, "dry-run must not fabricate revision"

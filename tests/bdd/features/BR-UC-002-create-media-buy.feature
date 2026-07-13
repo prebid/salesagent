@@ -826,11 +826,11 @@ Feature: BR-UC-002 Create Media Buy
     Then the ad server adapter should never be invoked
     And a simulated success should be returned
     And no database records should be created
-    And the response should include "confirmed_at" as an ISO 8601 timestamp
-    And the response should include "revision" with an integer value of 1
-    And the serialized wire body should carry "revision" as an integer
+    And the simulated response should omit confirmed_at and revision
     # BR-RULE-020 INV-5 (v3.1): dry-run validates fully but never calls the adapter or persists
-    # v3.1 dry-run parity (#1544): the simulated success arm still carries confirmed_at + revision=1
+    # #1544: dry-run persists nothing and addresses no resource, so it does NOT fabricate
+    # confirmed_at/revision. Both are optional in the pinned beta.3 create-response success
+    # branch (requires only media_buy_id + packages), so the client's oneOf still resolves.
     # --- BR-RULE-026: Creative Assignment Validation ---
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 

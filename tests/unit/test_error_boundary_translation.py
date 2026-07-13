@@ -86,7 +86,7 @@ class TestExtractErrorInfoAdCPError:
         assert recovery == "transient"
 
     def test_adcp_conflict_error_extracts_code_and_message(self):
-        """AdCPConflictError → ('CONFLICT', 'duplicate key', 'correctable')."""
+        """AdCPConflictError → ('CONFLICT', 'duplicate key', 'transient')."""
         from src.core.exceptions import AdCPConflictError
         from src.core.tool_error_logging import extract_error_info
 
@@ -94,7 +94,7 @@ class TestExtractErrorInfoAdCPError:
         code, message, recovery = extract_error_info(exc)
         assert code == "CONFLICT"
         assert message == "duplicate key"
-        assert recovery == "correctable"
+        assert recovery == "transient"  # pinned beta.3 error-code.json: CONFLICT → transient. #1544
 
     def test_adcp_gone_error_extracts_code_and_message(self):
         """AdCPGoneError → ('INVALID_STATE', 'proposal expired', 'correctable').
@@ -617,7 +617,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
     def test_adcp_conflict_from_impl_returns_409(self):
-        """AdCPConflictError raised in _impl → REST returns 409 with correctable recovery."""
+        """AdCPConflictError raised in _impl → REST returns 409 with transient recovery."""
         from starlette.testclient import TestClient
 
         from src.app import app
@@ -630,7 +630,8 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 409
-            assert_envelope_shape(response.json(), "CONFLICT", recovery="correctable")
+            # Pinned beta.3 error-code.json enumMetadata: CONFLICT → transient. #1544.
+            assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_adcp_service_unavailable_from_impl_returns_503(self):
         """AdCPServiceUnavailableError raised in _impl → REST returns 503 with transient recovery."""
@@ -896,7 +897,7 @@ class TestToDictRecoveryField:
             (AdCPAuthenticationError("bad token"), "terminal"),
             (AdCPAuthorizationError("forbidden"), "terminal"),
             (AdCPNotFoundError("missing"), "terminal"),
-            (AdCPConflictError("duplicate"), "correctable"),
+            (AdCPConflictError("duplicate"), "transient"),
             (AdCPGoneError("expired"), "correctable"),
             (AdCPBudgetExhaustedError("no budget"), "correctable"),
             (AdCPRateLimitError("slow down"), "transient"),
@@ -1057,7 +1058,7 @@ class TestRecoveryRoundtrip:
             (AdCPAuthenticationError, "unauth", "AUTH_TOKEN_INVALID", "terminal"),
             (AdCPAuthorizationError, "forbidden", "AUTH_REQUIRED", "terminal"),
             (AdCPNotFoundError, "missing", "INVALID_REQUEST", "terminal"),
-            (AdCPConflictError, "dup", "CONFLICT", "correctable"),
+            (AdCPConflictError, "dup", "CONFLICT", "transient"),
             (AdCPGoneError, "expired", "INVALID_STATE", "correctable"),
             (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "correctable"),
             (AdCPRateLimitError, "slow", "RATE_LIMITED", "transient"),
@@ -1120,7 +1121,7 @@ class TestRecoveryRoundtrip:
             (AdCPAuthenticationError, "unauth", "terminal"),
             (AdCPAuthorizationError, "forbidden", "terminal"),
             (AdCPNotFoundError, "missing", "terminal"),
-            (AdCPConflictError, "dup", "correctable"),
+            (AdCPConflictError, "dup", "transient"),
             (AdCPGoneError, "expired", "correctable"),
             (AdCPBudgetExhaustedError, "broke", "correctable"),
             (AdCPRateLimitError, "slow", "transient"),
@@ -1168,7 +1169,7 @@ class TestRecoveryRoundtrip:
             (AdCPAuthenticationError, "unauth", 401, "AUTH_TOKEN_INVALID", "terminal"),
             (AdCPAuthorizationError, "forbidden", 403, "AUTH_REQUIRED", "terminal"),
             (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "terminal"),
-            (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),
+            (AdCPConflictError, "dup", 409, "CONFLICT", "transient"),
             (AdCPGoneError, "expired", 410, "INVALID_STATE", "correctable"),
             (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "correctable"),
             (AdCPRateLimitError, "slow", 429, "RATE_LIMITED", "transient"),

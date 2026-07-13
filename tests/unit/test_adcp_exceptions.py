@@ -284,12 +284,16 @@ class TestRecoveryClassification:
         exc = AdCPAdapterError("GAM unavailable")
         assert exc.recovery == "transient"
 
-    def test_conflict_error_defaults_to_correctable(self):
-        """AdCPConflictError defaults to recovery='correctable'."""
+    def test_conflict_error_defaults_to_transient(self):
+        """AdCPConflictError defaults to recovery='transient'.
+
+        Pinned AdCP 3.1.0-beta.3 error-code.json enumMetadata: CONFLICT → transient
+        ("re-read the resource and retry with current state"). #1544.
+        """
         from src.core.exceptions import AdCPConflictError
 
         exc = AdCPConflictError("duplicate idempotency key")
-        assert exc.recovery == "correctable"
+        assert exc.recovery == "transient"
 
     def test_idempotency_conflict_defaults_to_correctable(self):
         """AdCPIdempotencyConflictError is recovery='correctable'.
@@ -580,7 +584,8 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        assert_envelope_shape(response.json(), "CONFLICT", recovery="correctable")
+        # Pinned beta.3 error-code.json enumMetadata: CONFLICT → transient. #1544.
+        assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_gone_error_returns_410(self, exc_handler_test_app):
         """AdCPGoneError raised in a route must return 410."""

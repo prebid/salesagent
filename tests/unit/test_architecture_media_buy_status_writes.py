@@ -141,9 +141,32 @@ def _rhs_is_media_buy_iterable(rhs: ast.expr) -> bool:
     return isinstance(func, ast.Attribute) and func.attr in MEDIA_BUY_COLLECTION_METHODS
 
 
+def _media_buy_collection_aliases(tree: ast.AST) -> set[str]:
+    """Names bound to an ITERABLE of MediaBuy via assignment (``rows = get_all_by_statuses(...)``).
+
+    Tracked separately from single-row bindings so that a later ``for row in rows:``
+    over the alias binds ``row`` to one MediaBuy — the two-step form of the inline
+    ``for row in get_all_by_statuses(...):`` sweep. Without this, the scheduler
+    idiom (assign the list, then iterate) evades the guard.
+    """
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _rhs_is_media_buy_iterable(node.value):
+            aliases.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and _rhs_is_media_buy_iterable(node.value)
+            and isinstance(node.target, ast.Name)
+        ):
+            aliases.add(node.target.id)
+    return aliases
+
+
 def _media_buy_typed_locals(tree: ast.AST) -> set[str]:
     """Local names bound (anywhere in the file) from a MediaBuy source."""
     names: set[str] = set()
+    collection_aliases = _media_buy_collection_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and _rhs_is_media_buy(node.value):
             names.update(t.id for t in node.targets if isinstance(t, ast.Name))
@@ -155,12 +178,16 @@ def _media_buy_typed_locals(tree: ast.AST) -> set[str]:
         ):
             names.add(node.target.id)
         # ``for <name> in <media_buy source>:`` and the comprehension form bind
-        # <name> to each MediaBuy the iterable yields (e.g. the scheduler sweep
-        # ``for mb in uow.media_buys.get_active()``). A status write through the
-        # loop variable bypasses the seam exactly like a direct assignment, so
-        # the target is MediaBuy-typed here too.
+        # <name> to each MediaBuy the iterable yields. The source is caught three
+        # ways: an inline single-row call (``for mb in uow.media_buys.get_active()``),
+        # an inline collection call (``for row in get_all_by_statuses(...)``), or a
+        # Name previously bound to a collection (``rows = get_all_by_statuses(...)``
+        # then ``for row in rows``). A status write through the loop variable
+        # bypasses the seam exactly like a direct assignment.
         elif isinstance(node, (ast.For, ast.comprehension)) and (
-            _rhs_is_media_buy(node.iter) or _rhs_is_media_buy_iterable(node.iter)
+            _rhs_is_media_buy(node.iter)
+            or _rhs_is_media_buy_iterable(node.iter)
+            or (isinstance(node.iter, ast.Name) and node.iter.id in collection_aliases)
         ):
             if isinstance(node.target, ast.Name):
                 names.add(node.target.id)
@@ -286,6 +313,21 @@ def test_detector_flags_cross_tenant_sweep_loop_binding():
     src = (
         "def sweep(session):\n"
         "    for row in MediaBuyRepository.get_all_by_statuses(session, ['active']):\n"
+        "        row.status = 'completed'\n"
+    )
+    assert ("row", "status") in _detect(ast.parse(src))
+
+
+def test_detector_flags_cross_tenant_sweep_via_intermediate_alias():
+    """The guard must also flag the TWO-STEP form: assign the collection to a name,
+    then iterate the alias. ``rows = get_all_by_statuses(...); for row in rows:
+    row.status = ...`` bypasses the seam identically to the inline sweep, but the
+    alias hid it from the guard. Regression for #1544 review follow-up.
+    """
+    src = (
+        "def sweep(session):\n"
+        "    rows = MediaBuyRepository.get_all_by_statuses(session, ['active'])\n"
+        "    for row in rows:\n"
         "        row.status = 'completed'\n"
     )
     assert ("row", "status") in _detect(ast.parse(src))

@@ -13,6 +13,7 @@ beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (ad
 from __future__ import annotations
 
 import datetime
+import logging
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,8 @@ from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
+
+logger = logging.getLogger(__name__)
 
 
 class MediaBuyRepository:
@@ -821,20 +824,41 @@ class MediaBuyRepository:
 
         Unlike the tenant-scoped mutators, callers here loaded the row WITHOUT a
         row lock (the scheduler sweep via :meth:`get_all_by_statuses`, creative-
-        sync inside ``CreativeUoW``), so the identity-mapped ``confirmed_at`` may
-        be a stale ``None`` while a concurrent approval has already committed the
-        real stamp. Lock and refresh ``confirmed_at`` here before stamping so the
-        write-once check in :meth:`_stamp_confirmation_if_needed` sees the
-        committed value and cannot clobber it with this row's ``created_at``. The
-        ``FOR UPDATE`` lock is held until the caller commits, serializing
+        sync inside ``CreativeUoW``), so BOTH the identity-mapped ``status`` and
+        ``confirmed_at`` may be stale while a concurrent transaction has committed
+        a newer decision. Lock and refresh ``status`` + ``confirmed_at`` before
+        applying the transition:
+
+        * If ``status`` changed under the stale read — e.g. an admin committed
+          ``rejected`` while the scheduler still held ``active`` — the caller's
+          target was computed from the stale value, so applying it would overwrite
+          the newer decision (``rejected`` → ``completed``). No-op instead: leave
+          the committed state and skip the bump. The scheduler re-evaluates next
+          cycle; creative-sync's stamp is best-effort.
+        * Otherwise the refreshed ``confirmed_at`` feeds the write-once check in
+          :meth:`_stamp_confirmation_if_needed`, so a stale ``None`` cannot clobber
+          a concurrently committed stamp.
+
+        The ``FOR UPDATE`` lock is held until the caller commits, serializing
         concurrent transitions of the same buy. ``revision`` needs no refresh — it
         bumps via a server-side expression that serializes at the write-lock.
         """
         session = object_session(media_buy)
         if session is not None:
-            # Lock the row and re-read the committed confirmed_at before the
-            # write-once decision (no-op columns otherwise; status is set after).
-            session.refresh(media_buy, ["confirmed_at"], with_for_update=True)
+            # The source status the caller based ``new_status`` on, captured before
+            # the locked refresh overwrites it with the committed value.
+            expected_from_status = media_buy.status
+            session.refresh(media_buy, ["status", "confirmed_at"], with_for_update=True)
+            if media_buy.status != expected_from_status:
+                logger.info(
+                    "apply_status_transition: skipping %s -> %s for media buy %s; "
+                    "committed status changed to %s under a stale unlocked read",
+                    expected_from_status,
+                    new_status,
+                    media_buy.media_buy_id,
+                    media_buy.status,
+                )
+                return media_buy
         media_buy.status = new_status
         MediaBuyRepository._stamp_confirmation_if_needed(media_buy)
         MediaBuyRepository._bump_revision(media_buy)

@@ -99,9 +99,11 @@ def _get_media_buys_impl(
         req: Validated GetMediaBuysRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
         include_snapshot: When True, include near-real-time delivery stats per package.
-            Exposed to callers via the MCP tool parameter and the REST request
-            body, but deliberately NOT a field of the AdCP ``GetMediaBuysRequest``
-            schema — the transport wrappers pass it alongside ``req``.
+            ``include_snapshot`` IS a field of the pinned AdCP 3.1.0-beta.3
+            get-media-buys-request schema, but the installed ``adcp`` library's
+            ``GetMediaBuysRequest`` type does not surface it. As an implementation
+            decision (not a spec fact), the transport wrappers thread it as a
+            separate parameter alongside ``req`` rather than as a ``req`` field. #1544.
 
     Returns:
         GetMediaBuysResponse with matching media buys

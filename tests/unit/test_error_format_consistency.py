@@ -558,7 +558,7 @@ class TestMCPRecoveryInErrorResponses:
             ("AdCPAuthenticationError", "bad token", "AUTH_TOKEN_INVALID", "terminal"),
             ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
-            ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
+            ("AdCPConflictError", "duplicate", "CONFLICT", "transient"),
             ("AdCPGoneError", "expired", "INVALID_STATE", "correctable"),
             ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
@@ -623,7 +623,7 @@ class TestA2ARecoveryInErrorResponses:
             ("AdCPAuthenticationError", "unauth", "terminal"),
             ("AdCPAuthorizationError", "forbidden", "terminal"),
             ("AdCPNotFoundError", "missing", "terminal"),
-            ("AdCPConflictError", "dup", "correctable"),
+            ("AdCPConflictError", "dup", "transient"),
             ("AdCPGoneError", "expired", "correctable"),
             ("AdCPBudgetExhaustedError", "broke", "correctable"),
             ("AdCPRateLimitError", "slow", "transient"),
@@ -683,9 +683,9 @@ class TestRecoveryOverrideInSerialization:
         """to_dict() reflects custom recovery, not class default."""
         from src.core.exceptions import AdCPConflictError
 
-        # Default recovery is "correctable"
+        # Default recovery is "transient" (pinned beta.3 error-code.json: CONFLICT). #1544
         default = AdCPConflictError("dup")
-        assert default.to_dict()["recovery"] == "correctable"
+        assert default.to_dict()["recovery"] == "transient"
 
         # Override to "terminal" (e.g., non-retryable conflict)
         overridden = AdCPConflictError("permanent conflict", recovery="terminal")

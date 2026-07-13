@@ -108,7 +108,7 @@ from src.core.auth import (
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, is_media_buy_seller_confirmed
+from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
@@ -3507,15 +3507,16 @@ async def _create_media_buy_impl(
                 valid_actions=valid_actions_for_status(simulated_status),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
-                # Dry-run persists nothing, but the success arm still carries the
-                # AdCP 3.1.0-beta.3 confirmed_at/revision fields so a strict
-                # client's oneOf resolves: a simulated commit timestamp and the
-                # initial revision (1). confirmed_at is gated by the SAME shared
-                # classifier the real arm and get_media_buys use, keyed on the
-                # simulated status — so dry-run cannot silently diverge from the
-                # real path if that status ever changes. See #1544.
-                confirmed_at=datetime.now(UTC) if is_media_buy_seller_confirmed(simulated_status) else None,
-                revision=1,
+                # Dry-run persists nothing and calls no adapter, so there is no real
+                # confirmation instant and no addressable resource to version. Both
+                # fields are omitted (None) rather than fabricated: the pinned AdCP
+                # 3.1.0-beta.3 create-media-buy-response success branch requires only
+                # media_buy_id + packages (confirmed_at/revision are optional), so a
+                # strict client's oneOf still resolves. Emitting confirmed_at=now /
+                # revision=1 would report a confirmation that never happened and a
+                # token that addresses nothing. See #1544.
+                confirmed_at=None,
+                revision=None,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
