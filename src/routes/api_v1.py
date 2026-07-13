@@ -120,7 +120,7 @@ def _effective_compat_version(pins: Mapping[str, Any]) -> str | None:
     return None
 
 
-async def _validate_version_pins(request: Request) -> None:
+async def _validate_version_pins(request: Request) -> str | None:
     """AdCP version negotiation on the REST boundary (parity with MCP/A2A).
 
     Checks the buyer's raw pin (``adcp_version`` / ``adcp_major_version``) in
@@ -131,9 +131,11 @@ async def _validate_version_pins(request: Request) -> None:
     as the two-layer VERSION_UNSUPPORTED envelope. Starlette caches the body,
     so the endpoint's own body parsing is unaffected.
 
-    Also stashes the effective negotiated release on ``request.state`` so the
-    handler can gate response compatibility on the release the buyer actually
-    pinned (via any channel), not just the body model default.
+    Returns the effective negotiated release so a handler injecting the version
+    dependency can gate response compatibility on the release the buyer actually
+    pinned (via any channel), not just the body model default. Route handlers must
+    NOT take a raw ``Request`` (structural guard), so the value is threaded via the
+    dependency return, not ``request.state``.
     """
     query_pins = _coerce_rest_query_version_pins(request.query_params)
     pins: Mapping[str, Any] = query_pins
@@ -145,10 +147,10 @@ async def _validate_version_pins(request: Request) -> None:
         if isinstance(body, dict):
             pins = _merge_rest_version_pins(query_pins, body)
     validate_adcp_version_pins(pins)
-    request.state.adcp_compat_version = _effective_compat_version(pins)
+    return _effective_compat_version(pins)
 
 
-async def _version_after_resolve(request: Request, _identity=resolve_auth) -> None:
+async def _version_after_resolve(request: Request, _identity=resolve_auth) -> str | None:
     """Version negotiation AFTER auth resolution (discovery / auth-optional routes).
 
     ``resolve_auth`` is a sub-dependency here, so FastAPI resolves identity
@@ -157,11 +159,15 @@ async def _version_after_resolve(request: Request, _identity=resolve_auth) -> No
     variant makes the version gate uniform across every route. ``_identity`` is
     unused (the sub-dependency is the point) and intentionally unannotated so it
     does not depend on the TYPE_CHECKING-only ResolvedIdentity import.
+
+    Returns the effective negotiated release; routes that only need validation
+    use it as a bare ``dependencies=[...]`` entry and ignore the return, while
+    get_products injects it to gate response compatibility.
     """
-    await _validate_version_pins(request)
+    return await _validate_version_pins(request)
 
 
-async def _version_after_require(request: Request, _identity=require_auth) -> None:
+async def _version_after_require(request: Request, _identity=require_auth) -> str | None:
     """Version negotiation AFTER auth ENFORCEMENT (auth-required routes).
 
     AUTH before VERSION (#1546): ``require_auth`` is a sub-dependency, so an
@@ -171,7 +177,7 @@ async def _version_after_require(request: Request, _identity=require_auth) -> No
     middleware and the A2A ``on_message_send`` auth gate, which enforce the same
     order at their boundaries.
     """
-    await _validate_version_pins(request)
+    return await _validate_version_pins(request)
 
 
 # Version negotiation now runs per-route AFTER auth (below) rather than as a
@@ -312,8 +318,12 @@ class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (
 # ---------------------------------------------------------------------------
 
 
-@router.post("/products", dependencies=[Depends(_version_after_resolve)])
-async def get_products(request: Request, body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
+@router.post("/products")
+async def get_products(
+    body: GetProductsBody,
+    identity: ResolvedIdentity | None = resolve_auth,
+    negotiated_version: str | None = Depends(_version_after_resolve),
+):
     """Get available products matching the brief (auth-optional discovery skill).
 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
@@ -326,12 +336,15 @@ async def get_products(request: Request, body: GetProductsBody, identity: Resolv
     )
     response = await products_module._get_products_impl(req, identity)
     # Gate response compatibility on the release the buyer actually negotiated
-    # (query or body, adcp_version or adcp_major_version), stashed by
-    # _validate_version_pins. Falling back to body.adcp_version alone (default
-    # "1.0.0") made a v3 query pin or a major-only pin silently serve the legacy
-    # v2 shape (is_fixed / rate), while an unpinned client still gets the v2
-    # default via the fallback (#1512/#1546 review).
-    served_version = getattr(request.state, "adcp_compat_version", None) or body.adcp_version
+    # (query or body, adcp_version or adcp_major_version), returned by the
+    # _version_after_resolve dependency. Falling back to body.adcp_version alone
+    # (default "1.0.0") made a v3 query pin or a major-only pin silently serve the
+    # legacy v2 shape (is_fixed / rate), while an unpinned client still gets the v2
+    # default via the fallback (#1512/#1546 review). Injecting the dependency runs
+    # the same VERSION_UNSUPPORTED validation the sibling routes' bare
+    # dependencies=[...] form does; route handlers must not take a raw Request
+    # (structural guard), so the value is threaded via the dependency return.
+    served_version = negotiated_version or body.adcp_version
     # Pass the MODEL, not a pre-dumped dict: apply_version_compat short-circuits
     # on a dict (the legacy pass-through) and would never derive the v2-compat
     # pricing fields (is_fixed / rate / price_guidance.floor) from the
