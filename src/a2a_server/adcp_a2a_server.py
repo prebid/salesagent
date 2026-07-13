@@ -1556,14 +1556,12 @@ class AdCPRequestHandler(RequestHandler):
         # Normalize explicit brand through the shared coercion funnel (#1324).
         # Keep params JSON-serializable: raw_wire_payload falls back to params for
         # direct handler callers, and idempotency hashes RFC 8785 over that dict.
+        # to_brand_reference returns None only for None input (excluded above); every
+        # other input returns BrandReference or raises typed AdCPValidationError.
         if params.get("brand") is not None:
-            coerced_brand = to_brand_reference(params["brand"])
-            if coerced_brand is None:
-                raise AdCPValidationError(
-                    "Invalid brand: could not coerce brand shorthand to BrandReference",
-                    field="brand",
-                )
-            params["brand"] = coerced_brand.model_dump(mode="json")
+            brand_ref = to_brand_reference(params["brand"])
+            assert brand_ref is not None  # None only for None input; excluded by guard
+            params["brand"] = brand_ref.model_dump(mode="json")
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).
         # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch

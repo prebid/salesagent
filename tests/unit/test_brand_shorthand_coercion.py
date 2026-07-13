@@ -130,6 +130,22 @@ def test_to_brand_reference_unexpected_type_raises_typed_error() -> None:
     assert exc_info.value.field == "brand"
 
 
+@pytest.mark.parametrize(
+    "invalid_brand",
+    [
+        {},
+        {"domain": 123},
+        {"brand_id": "x"},
+        {"domain": "acme.com", "industries": "not-a-list"},
+    ],
+)
+def test_to_brand_reference_dict_rejects_raise_typed_error(invalid_brand: dict) -> None:
+    """Dict-branch rejects (missing/non-string domain; malformed governance fields)."""
+    with pytest.raises(AdCPValidationError) as exc_info:
+        to_brand_reference(invalid_brand)
+    assert exc_info.value.field == "brand"
+
+
 def _minimal_create_media_buy_kwargs() -> dict:
     from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 

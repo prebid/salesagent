@@ -38,11 +38,13 @@ Feature: Brand string shorthand coercion on _BRAND_TOOLS
     Then the request is rejected with VALIDATION_ERROR naming field "brand"
 
     Examples:
-      | brand                |
-      | "https://["          |
-      | "acme.com/products"  |
-      | "my_brand.com"       |
-      | "https://münchen.de" |
+      | brand                                              |
+      | "https://["                                        |
+      | "acme.com/products"                                |
+      | "my_brand.com"                                     |
+      | "https://münchen.de"                               |
+      | {"domain": 123}                                    |
+      | {"domain": "acme.com", "industries": "not-a-list"} |
 
   @brand_shorthand @create_media_buy @requires_db
   Scenario Outline: create_media_buy accepts valid brand shorthand
@@ -68,8 +70,10 @@ Feature: Brand string shorthand coercion on _BRAND_TOOLS
     Then the request is rejected with VALIDATION_ERROR naming field "brand"
 
     Examples:
-      | brand                |
-      | "https://["          |
-      | "acme.com/products"  |
-      | "my_brand.com"       |
-      | "https://münchen.de" |
+      | brand                                              |
+      | "https://["                                        |
+      | "acme.com/products"                                |
+      | "my_brand.com"                                     |
+      | "https://münchen.de"                               |
+      | {"domain": 123}                                    |
+      | {"domain": "acme.com", "industries": "not-a-list"} |
