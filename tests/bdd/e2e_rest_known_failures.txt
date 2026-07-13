@@ -92,11 +92,13 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partiti
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
 
-# --- uc004 roas/cpa aggregated_totals — RETIRED from the ledger (#1430 item 4) ---
-# The three Then steps are now defined (uc004_delivery.py) and the scenario is a
-# tag-declared production gap on ALL transports: T-UC-004-aggregated-roas-and-cpa in
-# conftest _UC004_XFAIL_ADDITIONAL (production computes neither roas nor
-# cost_per_acquisition nor conversion_value; src/ feature work).
+# --- uc004 roas/cpa aggregated_totals — RETIRED from the ledger (#1430 item 4),
+# --- then GRADUATED outright ---
+# The three Then steps are defined (uc004_delivery.py) and production now computes
+# conversions/conversion_value/roas/cost_per_acquisition in aggregated_totals
+# (media_buy_delivery.py DeliveryTotals aggregation, omit-on-zero quotients).
+# T-UC-004-aggregated-roas-and-cpa is marked Graduated in conftest (no longer in
+# _UC004_XFAIL_ADDITIONAL); the innet full-suite gate runs it green on all transports.
 
 # --- uc002 creative extension scenarios, newly wired by #1417 — GRADUATED ---
 # Imported from PR #1417's ledger at the media-buy-validation merge. ext-o/ext-p
