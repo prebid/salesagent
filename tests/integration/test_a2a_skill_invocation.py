@@ -1038,8 +1038,8 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
-        """Test approve_creative skill raises UnsupportedOperationError."""
-        from a2a.utils.errors import A2AError
+        """Test approve_creative skill returns a failed Task with UNSUPPORTED_FEATURE (not JSON-RPC)."""
+        from tests.utils.a2a_helpers import extract_data_from_artifact
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -1052,13 +1052,19 @@ class TestA2ASkillInvocation:
             message = create_a2a_message_with_skill("approve_creative", skill_params)
             params = SendMessageRequest(message=message)
 
-            with pytest.raises(A2AError):
-                await handler.on_message_send(params, context=ctx)
+            result = await handler.on_message_send(params, context=ctx)
+
+            # Application-layer failure → failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
+            assert isinstance(result, Task)
+            assert result.status.state == TaskState.TASK_STATE_FAILED
+            envelope = extract_data_from_artifact(result.artifacts[0])
+            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE"
+            assert envelope["adcp_error"]["recovery"] == "correctable"
 
     @pytest.mark.asyncio
     async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
-        """Test get_media_buy_status skill raises UnsupportedOperationError."""
-        from a2a.utils.errors import A2AError
+        """Test get_media_buy_status skill returns a failed Task with UNSUPPORTED_FEATURE (not JSON-RPC)."""
+        from tests.utils.a2a_helpers import extract_data_from_artifact
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -1071,13 +1077,19 @@ class TestA2ASkillInvocation:
             message = create_a2a_message_with_skill("get_media_buy_status", skill_params)
             params = SendMessageRequest(message=message)
 
-            with pytest.raises(A2AError):
-                await handler.on_message_send(params, context=ctx)
+            result = await handler.on_message_send(params, context=ctx)
+
+            # Application-layer failure → failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
+            assert isinstance(result, Task)
+            assert result.status.state == TaskState.TASK_STATE_FAILED
+            envelope = extract_data_from_artifact(result.artifacts[0])
+            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE"
+            assert envelope["adcp_error"]["recovery"] == "correctable"
 
     @pytest.mark.asyncio
     async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
-        """Test optimize_media_buy skill raises UnsupportedOperationError."""
-        from a2a.utils.errors import A2AError
+        """Test optimize_media_buy skill returns a failed Task with UNSUPPORTED_FEATURE (not JSON-RPC)."""
+        from tests.utils.a2a_helpers import extract_data_from_artifact
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -1090,8 +1102,14 @@ class TestA2ASkillInvocation:
             message = create_a2a_message_with_skill("optimize_media_buy", skill_params)
             params = SendMessageRequest(message=message)
 
-            with pytest.raises(A2AError):
-                await handler.on_message_send(params, context=ctx)
+            result = await handler.on_message_send(params, context=ctx)
+
+            # Application-layer failure → failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
+            assert isinstance(result, Task)
+            assert result.status.state == TaskState.TASK_STATE_FAILED
+            envelope = extract_data_from_artifact(result.artifacts[0])
+            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE"
+            assert envelope["adcp_error"]["recovery"] == "correctable"
 
 
 if __name__ == "__main__":

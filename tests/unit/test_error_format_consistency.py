@@ -18,7 +18,12 @@ from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPCapabilityNotSupportedError,
+    AdCPError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -159,23 +164,28 @@ class TestA2AErrorShapes:
         assert "Authentication required" in str(error)
 
     @pytest.mark.asyncio
-    async def test_unknown_skill_raises_server_error(self):
-        """A2A raises A2AError for unknown skill names."""
+    async def test_unknown_skill_raises_capability_not_supported(self):
+        """A2A raises a typed AdCP error for unknown skills (application-layer, not JSON-RPC).
+
+        The message/send method is valid; routing failed inside skill dispatch, so
+        per AdCP "Layer Separation" this is an application error surfaced as a failed
+        Task with UNSUPPORTED_FEATURE — never a JSON-RPC ``A2AError``.
+        """
         from src.core.resolved_identity import ResolvedIdentity
 
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
-        with pytest.raises(A2AError) as exc_info:
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="nonexistent_skill",
                 parameters={},
                 identity=mock_identity,
             )
 
-        error = exc_info.value
-        assert isinstance(error, A2AError)
-        assert "Unknown skill" in str(error)
+        assert not isinstance(exc_info.value, A2AError)
+        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
+        assert "Unknown skill" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_invalid_auth_identity_raises_server_error(self):
@@ -492,7 +502,11 @@ class TestCrossTransportErrorConsistency:
         """Unknown skill errors only apply to A2A (MCP validates tool names separately).
 
         MCP uses FastMCP's tool registry which rejects unknown tools at the protocol level.
-        A2A uses _handle_explicit_skill which maps skill names to handlers.
+        A2A uses _handle_explicit_skill which maps skill names to handlers. An unknown
+        skill is an APPLICATION-layer failure (the message/send method is valid; routing
+        failed inside skill dispatch), so per AdCP "Layer Separation" the dispatcher
+        raises a typed ``AdCPCapabilityNotSupportedError`` (UNSUPPORTED_FEATURE), which
+        the outer handler surfaces as a failed Task — NOT a JSON-RPC ``A2AError``.
         """
         handler = AdCPRequestHandler()
 
@@ -501,15 +515,15 @@ class TestCrossTransportErrorConsistency:
         mock_identity = ResolvedIdentity(
             principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
-        with pytest.raises(A2AError) as exc_info:
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             await handler._handle_explicit_skill(
                 skill_name="totally_fake_skill",
                 parameters={},
                 identity=mock_identity,
             )
 
-        error_str = str(exc_info.value)
-        assert "Unknown skill" in error_str or "totally_fake_skill" in error_str
+        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
+        assert "totally_fake_skill" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_serialize_for_a2a_error_response_structure(self):

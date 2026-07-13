@@ -20,9 +20,12 @@ Two invariants:
 import pathlib
 import sys
 
+import yaml
+
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 FEATURES_DIR = pathlib.Path(__file__).parent.parent / "bdd" / "features"
+TRACEABILITY_PATH = pathlib.Path(__file__).parent.parent.parent / "docs" / "test-obligations" / "bdd-traceability.yaml"
 
 # (feature file, scenario id tag) pairs that are hand-maintained pending an
 # upstream adcp-req id. Add new hand-edited scenarios here when introduced.
@@ -40,6 +43,28 @@ def _load_compiler():
     import compile_bdd
 
     return compile_bdd
+
+
+def _handmaintained_candidates_from_traceability():
+    """Hand-maintained scenarios enumerated from the *independent* traceability
+    inventory (``bdd-traceability.yaml``), keyed ``(feature file, @T- id tag)``.
+
+    A candidate is a scenario grounded in AdCP spec PROSE — its ``upstream_refs``
+    point at a spec document (``*.mdx``) rather than an adcp-req business rule
+    (``BR-*``) or system requirement (``SR-*``). Such a scenario has no adcp-req
+    render, so ``compile_bdd.py --merge`` classifies it ``LEGACY-DELETE`` and
+    drops it unless it carries a hand-edit marker. Deriving the inventory here —
+    NOT from the on-disk markers — is what lets the guard see a scenario that is
+    missing BOTH a marker and a registry entry (invisible to a marker-only scan).
+    """
+    data = yaml.safe_load(TRACEABILITY_PATH.read_text()) or {}
+    candidates = []
+    for rows in (data.get("mappings") or {}).values():
+        for row in rows:
+            refs = row.get("upstream_refs") or []
+            if any(".mdx" in str(ref) for ref in refs):
+                candidates.append((row["adcp_feature"], f"@{row['adcp_scenario_id']}"))
+    return candidates
 
 
 def _marked_scenarios_on_disk(compile_bdd):
@@ -92,5 +117,34 @@ def test_registry_is_bijection_with_marked_scenarios():
             "A hand-edited scenario (an @hand-edited tag or # HAND-EDITED comment under "
             "tests/bdd/features/) must appear in HAND_MAINTAINED_SCENARIOS, and every registry "
             "entry must still exist and carry its marker. Add new ones; drop or re-mark stale ones."
+        ),
+    )
+
+
+def test_traceability_candidates_are_marked_and_registered():
+    """Independent-source completeness — hand-maintained candidates enumerated
+    from ``bdd-traceability.yaml`` must each be registered (and, via the
+    bijection above, marked).
+
+    The two checks above are marker-derived: they cannot see a scenario missing
+    BOTH a marker and a registry entry, because it is in neither the ``marked``
+    nor the ``registered`` set. This check derives candidates from the
+    *independent* traceability inventory (scenarios grounded in spec prose,
+    ``upstream_refs → *.mdx``, which have no adcp-req render and would be
+    LEGACY-DELETE'd unmarked), so a spec-grounded scenario that forgot its
+    ``@hand-edited`` marker surfaces here as an unregistered candidate.
+
+    ``candidates == registered`` here plus ``marked == registered`` above
+    transitively pin ``candidates == marked == registered``: a candidate missing
+    only its marker is registered-but-unmarked (caught by the bijection); a
+    candidate missing its registry entry is a new violation here.
+    """
+    assert_violations_match_allowlist(
+        found=set(_handmaintained_candidates_from_traceability()),
+        allowlist=set(HAND_MAINTAINED_SCENARIOS),
+        fix_hint=(
+            "A traceability scenario grounded in spec prose (upstream_refs → *.mdx) has no "
+            "adcp-req source, so compile_bdd.py --merge would LEGACY-DELETE it unless it carries an "
+            "@hand-edited / # HAND-EDITED marker AND is registered in HAND_MAINTAINED_SCENARIOS."
         ),
     )

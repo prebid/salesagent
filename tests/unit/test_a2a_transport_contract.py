@@ -217,24 +217,29 @@ class TestA2AJsonRpcProtocol:
         assert "error" in body, "Unknown method should return JSON-RPC error"
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
-    def test_unknown_skill_returns_error(self, mock_resolve, client, auth_headers):
-        """Unknown skill name should return a JSON-RPC error (not crash).
+    def test_unknown_skill_returns_failed_task_not_transport_error(self, mock_resolve, client, auth_headers):
+        """Unknown skill name returns a failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
 
-        An unroutable skill is a transport-protocol fault (MethodNotFoundError,
-        an A2AError) — per AdCP 3.1.x transport-errors.mdx "Layer Separation"
-        it belongs on the JSON-RPC error layer, unlike application failures
-        which return failed Tasks. Identity is mocked so the request reaches
-        skill dispatch; pre-fix this test passed for the wrong reason (the
-        unmocked DB crashed identity resolution first, and the old outer
-        handler converted that crash to a JSON-RPC InternalError).
+        The JSON-RPC method (message/send) is valid; routing failed *inside*
+        skill dispatch, which is an application-layer failure. Per AdCP
+        3.1.0-beta.3 transport-errors.mdx "Layer Separation" it belongs in the
+        task body as a failed Task carrying a two-layer envelope — JSON-RPC
+        MethodNotFoundError is reserved for unknown JSON-RPC *methods*
+        (see test_invalid_method_returns_error). Identity is mocked so the
+        request reaches skill dispatch.
         """
         payload = _build_jsonrpc("nonexistent_skill", {})
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
-        assert "error" in body, "Unknown skill should return JSON-RPC error"
-        assert "nonexistent_skill" in body["error"].get("message", ""), (
-            f"MethodNotFound error should name the unknown skill: {body['error']}"
+
+        assert "error" not in body, f"unknown skill must not be a JSON-RPC error: {body.get('error')}"
+        assert "result" in body, f"expected a failed-Task result, got: {json.dumps(body)[:400]}"
+        data = _extract_artifact_data(body["result"])
+        assert data.get("adcp_error", {}).get("code") == "UNSUPPORTED_FEATURE", (
+            f"unknown skill must surface UNSUPPORTED_FEATURE in the task body: {data}"
         )
+        assert data.get("adcp_error", {}).get("recovery") == "correctable", data
+        assert "nonexistent_skill" in data["errors"][0]["message"], data
 
     def test_response_echoes_request_id(self, client, auth_headers):
         """JSON-RPC response must echo the request id."""
@@ -449,19 +454,38 @@ class TestA2AResponseShape:
 
 
 class TestA2AStubHandlers:
-    """Verify stub handlers return JSON-RPC responses (not crashes)."""
+    """Unimplemented-but-registered skills surface UNSUPPORTED_FEATURE in the task body.
 
-    STUB_SKILLS = ["approve_creative", "get_media_buy_status", "optimize_media_buy"]
+    Table-driven wire assertions across the dispatch registry: a recognized-but-
+    unimplemented skill is an application-layer failure, so it must return a
+    failed Task carrying a two-layer ``UNSUPPORTED_FEATURE``/``correctable``
+    envelope — NOT a JSON-RPC ``UnsupportedOperationError`` (-32004). Reserving
+    JSON-RPC for transport faults is the AdCP 3.1.0-beta.3 "Layer Separation"
+    contract; these stubs are advertised on the agent card, so a buyer must get
+    a structured, recoverable AdCP error rather than a transport exception.
+    """
 
-    @pytest.mark.parametrize("skill", STUB_SKILLS)
-    def test_stub_handler_returns_jsonrpc_response(self, client, auth_headers, skill):
-        """Stub handlers must return valid JSON-RPC (result or error), not crash."""
+    # Skills registered in the dispatch map whose handler raises
+    # AdCPCapabilityNotSupportedError unconditionally (no required-param gate;
+    # e.g. create_creative/assign_creative validate params first and surface
+    # VALIDATION_ERROR, a different but equally application-layer failed Task).
+    UNSUPPORTED_SKILLS = ["approve_creative", "get_media_buy_status", "optimize_media_buy"]
+
+    @pytest.mark.parametrize("skill", UNSUPPORTED_SKILLS)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
+    def test_unsupported_skill_returns_failed_task_not_transport_error(self, mock_resolve, client, auth_headers, skill):
+        """Each unimplemented skill returns a failed Task with UNSUPPORTED_FEATURE, not JSON-RPC."""
         payload = _build_jsonrpc(skill, {})
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
 
-        assert "result" in body or "error" in body, f"Stub skill '{skill}' must return JSON-RPC result or error"
-        assert body.get("jsonrpc") == "2.0"
+        assert "error" not in body, f"'{skill}' must not be a JSON-RPC error: {body.get('error')}"
+        assert "result" in body, f"'{skill}' expected a failed-Task result, got: {json.dumps(body)[:400]}"
+        data = _extract_artifact_data(body["result"])
+        assert data.get("adcp_error", {}).get("code") == "UNSUPPORTED_FEATURE", (
+            f"'{skill}' must surface UNSUPPORTED_FEATURE in the task body: {data}"
+        )
+        assert data.get("adcp_error", {}).get("recovery") == "correctable", f"'{skill}': {data}"
 
 
 # ---------------------------------------------------------------------------

@@ -148,12 +148,10 @@ class TestA2AErrorPropagation:
             recovery="correctable",
         )
 
-        # All-skills-failed branch forwards the joined per-skill reason as the
-        # webhook error= via _fail_task_with_webhook (single skill here, so the
-        # joined reason equals the wire envelope's first error message).
-        handler._send_protocol_webhook.assert_awaited_once_with(
-            result, status="failed", error=artifact_data["errors"][0]["message"]
-        )
+        # Immediate terminal failure returned synchronously → no protocol webhook
+        # (AdCP 3.1.0-beta.3 a2a-guide.mdx terminal-state rule); the failure rides
+        # in the Task body as the two-layer envelope asserted above.
+        handler._send_protocol_webhook.assert_not_awaited()
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Principal-not-found surfaces AUTH_TOKEN_INVALID as a two-layer envelope on the A2A wire."""

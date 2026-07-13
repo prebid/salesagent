@@ -36,7 +36,6 @@ from a2a.types import (
     ListTasksRequest,
     ListTasksResponse,
     Message,
-    MethodNotFoundError,
     Part,
     SendMessageRequest,
     SubscribeToTaskRequest,
@@ -225,10 +224,28 @@ class AdCPRequestHandler(RequestHandler):
             "success": False,
         }
 
-    async def _fail_task_with_webhook(self, task: Task, error: str) -> None:
-        """Mark a task failed and notify protocol webhooks with a required reason."""
+    def _mark_task_failed(self, task: Task) -> None:
+        """Mark a task FAILED. No webhook — the caller returns this terminal Task
+        synchronously in the response, and AdCP 3.1.0-beta.3 a2a-guide.mdx
+        ("Webhook Trigger Rules for Terminal States") says a push notification is
+        NOT sent when the initial response is already terminal (the buyer already
+        has the result). Webhooks fire only for genuinely async transitions
+        (initial response ``working``/``submitted`` → later terminal); those must
+        carry the Task's structured artifacts (see ``_send_protocol_webhook``)."""
         task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-        await self._send_protocol_webhook(task, status="failed", error=error)
+
+    @staticmethod
+    def _first_artifact_data(task: Task) -> dict[str, Any]:
+        """Structured data of the task's first artifact DataPart, or ``{}``.
+
+        For a failed Task this is the two-layer AdCP error envelope; the async
+        failure webhook forwards it verbatim so the payload preserves the
+        structured artifact instead of flattening it to an error string."""
+        for artifact in task.artifacts:
+            for part in artifact.parts:
+                if part.HasField("data"):
+                    return json.loads(json_format.MessageToJson(part.data))
+        return {}
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
@@ -372,7 +389,6 @@ class AdCPRequestHandler(RequestHandler):
         task: Task,
         status: str,
         result: dict[str, Any] | None = None,
-        error: str | None = None,
     ):
         """Send protocol-level push notification if configured.
 
@@ -381,6 +397,12 @@ class AdCPRequestHandler(RequestHandler):
         - Intermediate states (working, input-required, submitted): Send TaskStatusUpdateEvent
 
         Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
+
+        Failure payloads carry the Task's structured artifacts (the two-layer AdCP
+        envelope), never a flattened ``{"error": "..."}`` — for a ``failed`` final
+        state the library extracts from ``.artifacts``. Only meaningful for async
+        transitions: immediate terminal responses are returned synchronously and
+        do not notify (see ``_mark_task_failed``).
         """
         try:
             # Check if task has push notification config stored
@@ -419,11 +441,13 @@ class AdCPRequestHandler(RequestHandler):
                 logger.warning("Unknown status '%s', defaulting to 'working'", status)
                 status_enum = GeneratedTaskStatus.working
 
-            # Build result data for the webhook payload
-            # Include error information in result if status is failed
-            result_data: dict[str, Any] = result or {}
-            if error and status == "failed":
-                result_data["error"] = error
+            # Build result data for the webhook payload. ``create_a2a_webhook_payload``
+            # renders its artifact FROM this dict, so for final states we pass the
+            # Task's own structured artifact data (the two-layer AdCP envelope on a
+            # ``failed`` task) — never a lossy ``{"error": "..."}`` and never an empty
+            # dict that would drop the envelope. Callers may still pass an explicit
+            # ``result``; otherwise we read it off the task's artifacts.
+            result_data: dict[str, Any] = result if result is not None else self._first_artifact_data(task)
 
             # Use create_a2a_webhook_payload to get the correct payload type:
             # - Task for final states (completed, failed, canceled)
@@ -744,10 +768,12 @@ class AdCPRequestHandler(RequestHandler):
                 successful_skills = [res["skill"] for res in results if res["success"]]
 
                 if failed_skills and not successful_skills:
-                    error_messages = [
-                        res["error_envelope"]["errors"][0]["message"] for res in results if not res["success"]
-                    ]
-                    await self._fail_task_with_webhook(task, "; ".join(error_messages))
+                    # Immediate terminal failure returned synchronously — mark FAILED
+                    # and return. Each failed skill already contributed its own
+                    # ``error_result`` artifact (two-layer envelope) above, so the
+                    # per-skill reasons ride in the Task body; no webhook is sent for
+                    # an immediate terminal response (a2a-guide.mdx terminal-state rule).
+                    self._mark_task_failed(task)
 
                     return task
                 elif successful_skills:
@@ -984,7 +1010,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             )
 
-            await self._fail_task_with_webhook(task, str(e))
+            self._mark_task_failed(task)
 
             # Per AdCP 3.1.x transport rules (spec prose:
             # building/operating/transport-errors.mdx "Layer Separation" and the
@@ -996,11 +1022,12 @@ class AdCPRequestHandler(RequestHandler):
             # transport layer and the two-layer rule is SHOULD-level — routing
             # them to the failed-Task body as well is a deliberate choice here
             # (uniform envelope for storyboard runners; observability preserved
-            # via record_boundary_error above), not a spec mandate. So we fall
-            # through to the shared store-and-return below — never raise
-            # InternalError here. Cross-transport execution of the same BDD
-            # scenario is tracked in #1574 once the transport-aware harness
-            # from #1430 is available.
+            # via record_boundary_error above), not a spec mandate. This is an
+            # immediate terminal response returned synchronously below, so no
+            # webhook is emitted (a2a-guide.mdx terminal-state rule); we fall
+            # through to the shared store-and-return — never raise InternalError
+            # here. Cross-transport execution of the same BDD scenario is tracked
+            # in #1574 once the transport-aware harness from #1430 is available.
 
         self.tasks[task_id] = task
         return task
@@ -1455,7 +1482,16 @@ class AdCPRequestHandler(RequestHandler):
 
         if skill_name not in skill_handlers:
             available_skills = list(skill_handlers.keys())
-            raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
+            # An unknown SKILL is an application-layer failure — the JSON-RPC method
+            # (message/send) is valid; routing failed inside skill dispatch. Per AdCP
+            # 3.1.0-beta.3 transport-errors.mdx "Layer Separation", it belongs in the
+            # task body as a failed Task with a two-layer envelope, NOT a JSON-RPC
+            # MethodNotFoundError (reserved for unknown JSON-RPC methods). The outer
+            # dispatcher's `except AdCPError` branch wraps this into a failed-skill
+            # result, so accumulated results from earlier skills are preserved.
+            raise AdCPCapabilityNotSupportedError(
+                message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}"
+            )
 
         try:
             handler = skill_handlers[skill_name]
@@ -1718,7 +1754,7 @@ class AdCPRequestHandler(RequestHandler):
         # TODO: Implement create_creative tool
         # Call core function with individual parameters
         # response = core_create_creative_tool(...)
-        raise UnsupportedOperationError(message="create_creative skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="create_creative skill not yet implemented")
 
     async def _handle_get_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_creatives skill invocation."""
@@ -1734,7 +1770,7 @@ class AdCPRequestHandler(RequestHandler):
         #     include_assignments=parameters.get("include_assignments", False),
         #     identity=identity,
         # )
-        raise UnsupportedOperationError(message="get_creatives skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="get_creatives skill not yet implemented")
 
     async def _handle_assign_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit assign_creative skill invocation."""
@@ -1763,21 +1799,21 @@ class AdCPRequestHandler(RequestHandler):
         #     override_click_url=parameters.get("override_click_url"),
         #     identity=identity,
         # )
-        raise UnsupportedOperationError(message="assign_creative skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="assign_creative skill not yet implemented")
 
     async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
-        raise UnsupportedOperationError(message="approve_creative skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="approve_creative skill not yet implemented")
 
     # Signals skill handlers removed - should come from dedicated signals agents
 
     async def _handle_get_media_buy_status_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_status skill invocation."""
-        raise UnsupportedOperationError(message="get_media_buy_status skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="get_media_buy_status skill not yet implemented")
 
     async def _handle_optimize_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit optimize_media_buy skill invocation."""
-        raise UnsupportedOperationError(message="optimize_media_buy skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="optimize_media_buy skill not yet implemented")
 
     async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).

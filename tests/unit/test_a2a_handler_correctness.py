@@ -10,6 +10,8 @@ beads: salesagent-yu73
 import pytest
 from a2a.utils.errors import A2AError
 
+from src.core.exceptions import AdCPCapabilityNotSupportedError
+
 
 class TestTaskIdCollisionFree:
     """task_id generation must be collision-free under concurrent access."""
@@ -78,11 +80,19 @@ class TestNoDebugLogs:
 
 
 class TestStubSkillsRaiseErrors:
-    """Unimplemented skills must raise A2AError, not return success:False dicts."""
+    """Unimplemented skills must raise a typed AdCP error (application-layer), not
+    a JSON-RPC ``A2AError`` and not a ``success:False`` dict.
+
+    A recognized-but-unimplemented skill is an application failure — the outer
+    dispatcher surfaces it as a failed Task with an ``UNSUPPORTED_FEATURE``
+    two-layer envelope, per AdCP 3.1.0-beta.3 "Layer Separation". Raising an
+    ``A2AError`` (UnsupportedOperationError) would leak it onto the JSON-RPC
+    transport layer, discarding any accumulated results in a multi-skill message.
+    """
 
     @pytest.mark.asyncio
-    async def test_approve_creative_raises_error(self):
-        """approve_creative must raise UnsupportedOperationError (A2AError subclass)."""
+    async def test_approve_creative_raises_capability_not_supported(self):
+        """approve_creative must raise AdCPCapabilityNotSupportedError, not A2AError."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.factories.principal import PrincipalFactory
 
@@ -90,12 +100,14 @@ class TestStubSkillsRaiseErrors:
         identity = PrincipalFactory.make_identity(
             principal_id="test", tenant_id="test", tenant={"tenant_id": "test"}, protocol="a2a"
         )
-        with pytest.raises(A2AError):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             await handler._handle_approve_creative_skill({}, identity)
+        assert not isinstance(exc_info.value, A2AError)
+        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
 
     @pytest.mark.asyncio
-    async def test_get_media_buy_status_raises_error(self):
-        """get_media_buy_status must raise UnsupportedOperationError (A2AError subclass)."""
+    async def test_get_media_buy_status_raises_capability_not_supported(self):
+        """get_media_buy_status must raise AdCPCapabilityNotSupportedError, not A2AError."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.factories.principal import PrincipalFactory
 
@@ -103,12 +115,14 @@ class TestStubSkillsRaiseErrors:
         identity = PrincipalFactory.make_identity(
             principal_id="test", tenant_id="test", tenant={"tenant_id": "test"}, protocol="a2a"
         )
-        with pytest.raises(A2AError):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             await handler._handle_get_media_buy_status_skill({}, identity)
+        assert not isinstance(exc_info.value, A2AError)
+        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
 
     @pytest.mark.asyncio
-    async def test_optimize_media_buy_raises_error(self):
-        """optimize_media_buy must raise UnsupportedOperationError (A2AError subclass)."""
+    async def test_optimize_media_buy_raises_capability_not_supported(self):
+        """optimize_media_buy must raise AdCPCapabilityNotSupportedError, not A2AError."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.factories.principal import PrincipalFactory
 
@@ -116,5 +130,7 @@ class TestStubSkillsRaiseErrors:
         identity = PrincipalFactory.make_identity(
             principal_id="test", tenant_id="test", tenant={"tenant_id": "test"}, protocol="a2a"
         )
-        with pytest.raises(A2AError):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             await handler._handle_optimize_media_buy_skill({}, identity)
+        assert not isinstance(exc_info.value, A2AError)
+        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
