@@ -752,7 +752,7 @@ class TestErrorCodeVocabularyConsistency:
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
         "PRODUCT_NOT_FOUND",  # SDK standard: AdCPProductNotFoundError
         "SESSION_NOT_FOUND",  # SDK standard: AdCPContextNotFoundError (unresolvable context_id)
-        "CREATIVE_NOT_FOUND",  # Internal: AdCPCreativeNotFoundError (wire → INVALID_REQUEST)
+        "CREATIVE_NOT_FOUND",  # Spec supplement: AdCPCreativeNotFoundError (wire passthrough via WIRE_STANDARD_CODES)
         "FORMAT_NOT_FOUND",  # Internal: AdCPFormatNotFoundError (wire → INVALID_REQUEST)
         "TASK_NOT_FOUND",  # Internal: AdCPTaskNotFoundError (wire → INVALID_REQUEST)
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError

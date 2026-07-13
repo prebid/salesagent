@@ -153,8 +153,9 @@ def translate_error_code(code: str) -> str:
 def to_wire_error_code(code: str) -> str:
     """Normalize a hand-built advisory code to a guaranteed-standard wire code.
 
-    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in the
-    spec's ``STANDARD_ERROR_CODES``: an internal-only code that has no mapping
+    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in
+    ``WIRE_STANDARD_CODES`` (the SDK's ``STANDARD_ERROR_CODES`` plus the
+    pinned-spec supplement): an internal-only code that has no mapping
     entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would otherwise pass through
     ``translate_error_code`` verbatim and leak. Use this for ``errors[]``
     advisories, which serialize verbatim and never pass through the boundary
@@ -376,7 +377,7 @@ class AdCPError(Exception):
         """Serialize to AdCP spec-compliant ``{"errors": [...]}`` format.
 
         Uses ``adcp_error()`` from the SDK to produce the canonical error
-        envelope. Translation to ``STANDARD_ERROR_CODES`` happens at transport
+        envelope. Translation to ``WIRE_STANDARD_CODES`` happens at transport
         boundaries via ``translate_error_code()`` — this method preserves the
         raw ``error_code`` so internal callers retain the source classification.
 
@@ -620,7 +621,8 @@ class AdCPServiceUnavailableError(AdCPError):
 # ---------------------------------------------------------------------------
 # Typed subclasses for spec-compliant error codes.
 # ---------------------------------------------------------------------------
-# Each subclass pins its wire error_code to a STANDARD_ERROR_CODES entry, so
+# Each subclass pins its wire error_code to a WIRE_STANDARD_CODES entry (SDK
+# STANDARD_ERROR_CODES plus the pinned-spec supplement), so
 # raise sites can use semantic names (AdCPMediaBuyNotFoundError) instead of
 # constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary
 # translator runs build_two_layer_error_envelope() on the raised exception.
@@ -958,7 +960,9 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
             }
 
     Both codes pass through ``ERROR_CODE_MAPPING`` via ``exc.wire_error_code``
-    so they always land in ``STANDARD_ERROR_CODES``.
+    so they always land in ``WIRE_STANDARD_CODES`` (the SDK's
+    ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement, e.g.
+    ``CREATIVE_NOT_FOUND``).
     """
     payload = adcp_error(
         exc.wire_error_code,
