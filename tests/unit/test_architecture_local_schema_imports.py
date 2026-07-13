@@ -51,8 +51,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # FIXME(#1388): xandr adapter imports SDK types directly
     ("src/adapters/xandr.py", "DeliveryMeasurement"),
     ("src/adapters/xandr.py", "DeliveryType"),
-    # FIXME(#1388): admin blueprints import SDK types directly
-    ("src/admin/blueprints/operations.py", "Package"),
     # FIXME(#1388): core modules import SDK types directly
     ("src/core/creative_agent_registry.py", "ListCreativeFormatsRequest"),
     ("src/core/schema_helpers.py", "GetProductsResponse"),

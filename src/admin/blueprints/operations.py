@@ -3,21 +3,14 @@
 import asyncio
 import logging
 
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-
-# FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
+from src.admin.services.media_buy_completion import emit_media_buy_completion
 from src.admin.utils import require_auth, require_tenant_access
-from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
-from src.core.schemas import CreateMediaBuySuccess
-from src.core.webhook_validator import validate_webhook_task_type
-from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
@@ -342,16 +335,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             media_buy_repo = MediaBuyRepository(db_session, tenant_id)
             media_buy = media_buy_repo.get_by_id(media_buy_id)
 
-            # Extract media_buy data to dict to avoid detached instance errors after commit
-            media_buy_data = None
-            if media_buy:
-                # Get push_notification_config from workflow step request_data (same pattern as sync_creatives)
-                push_config = step.request_data.get("push_notification_config") or {} if step.request_data else {}
-                media_buy_data = {
-                    "principal_id": media_buy.principal_id,
-                    "push_notification_url": push_config.get("url"),
-                }
-
             if action == "approve":
                 step.status = "approved"
                 step.updated_at = datetime.now(UTC)
@@ -442,77 +425,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                     logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
 
-                    # Send webhook notification to buyer
-                    webhook_config = None
-                    if media_buy_data and media_buy_data["push_notification_url"]:
-                        stmt_webhook = (
-                            select(PushNotificationConfig)
-                            .filter_by(
-                                tenant_id=tenant_id,
-                                principal_id=media_buy_data["principal_id"],
-                                url=media_buy_data["push_notification_url"],
-                                is_active=True,
-                            )
-                            .order_by(PushNotificationConfig.created_at.desc())
-                        )
-                        webhook_config = db_session.scalars(stmt_webhook).first()
-
-                    if webhook_config and media_buy_data:
-                        # media_buy_repo from the top of the route — same session/tenant scope.
-                        all_packages = media_buy_repo.get_packages(media_buy_id)
-                        approved_buy = media_buy_repo.get_by_id(media_buy_id)
-                        if approved_buy is None:
-                            raise RuntimeError(f"Media buy {media_buy_id!r} disappeared before completion webhook")
-
-                        create_media_buy_approved_result = CreateMediaBuySuccess(
-                            media_buy_id=media_buy_id,
-                            packages=[Package(package_id=x.package_id) for x in all_packages],
-                            context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
-                            confirmed_at=approved_buy.confirmed_at,
-                            revision=approved_buy.revision,
-                        )
-                        metadata = {
-                            "task_type": step_data["tool_name"],
-                            # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                            # TODO: @yusuf - check if we want to make metadata typed
-                        }
-
-                        # Determine protocol type from workflow step request_data
-                        protocol = step_data["request_data"].get(
-                            "protocol", "mcp"
-                        )  # Default to MCP for backward compatibility
-
-                        # Create appropriate webhook payload based on protocol
-                        if protocol == "a2a":
-                            create_media_buy_approved_payload = create_a2a_webhook_payload(
-                                task_id=step_data["step_id"],
-                                status=AdcpTaskStatus.completed,
-                                result=create_media_buy_approved_result,
-                                context_id=step_data["context_id"],
-                            )
-                        else:
-                            # tool_name is untrusted (workflow_steps DB column).
-                            # Validate a COPY for the SDK payload; metadata keeps
-                            # the original label (salesagent-yi3s, salesagent-yk7o).
-                            create_media_buy_approved_payload = create_mcp_webhook_payload(
-                                task_id=step_data["step_id"],
-                                task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
-                                result=create_media_buy_approved_result,
-                                status=AdcpTaskStatus.completed,
-                            )
-
-                        try:
-                            service = get_protocol_webhook_service()
-                            asyncio.run(
-                                service.send_notification(
-                                    push_notification_config=webhook_config,
-                                    payload=create_media_buy_approved_payload,
-                                    metadata=metadata,
-                                )
-                            )
-                            logger.info(f"Sent webhook notification for approved media buy {media_buy_id}")
-                        except Exception as webhook_err:
-                            logger.warning(f"Failed to send webhook notification: {webhook_err}")
+                    # Emit the completion artifact to the buyer (shared helper — the
+                    # workflow and creative-unblock routes reuse the same lookup +
+                    # emission). No-op when the buy has no push config. See #1544.
+                    emit_media_buy_completion(
+                        db_session,
+                        tenant_id,
+                        media_buy_repo.get_by_id(media_buy_id),
+                        media_buy_repo.get_packages(media_buy_id),
+                        step_data,
+                        AdcpTaskStatus.completed,
+                    )
 
                     flash("Media buy approved and order created successfully", "success")
                 else:
@@ -542,85 +465,19 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                 db_session.commit()
 
-                # Send webhook notification to buyer
-                webhook_config = None
-                if media_buy_data and media_buy_data["push_notification_url"]:
-                    stmt_webhook = (
-                        select(PushNotificationConfig)
-                        .filter_by(
-                            tenant_id=tenant_id,
-                            principal_id=media_buy_data["principal_id"],
-                            url=media_buy_data["push_notification_url"],
-                            is_active=True,
-                        )
-                        .order_by(PushNotificationConfig.created_at.desc())
-                    )
-                    webhook_config = db_session.scalars(stmt_webhook).first()
-
-                if webhook_config and media_buy_data:
-                    # media_buy_repo from the top of the route — same session/tenant scope.
-                    all_packages = media_buy_repo.get_packages(media_buy_id)
-                    rejected_buy = media_buy_repo.get_by_id(media_buy_id)
-                    if rejected_buy is None:
-                        raise RuntimeError(f"Media buy {media_buy_id!r} disappeared before rejection webhook")
-
-                    # Mirror the approve arm: send the internal CreateMediaBuySuccess so the
-                    # rejection notification carries the persisted ``revision`` (the reject
-                    # transition bumped it). confirmed_at stays None for a rejected buy.
-                    # rejection_reason is a spec MUST on the seller rejection webhook
-                    # (pinned beta.3 specification.mdx) — carry the same reason recorded on
-                    # the workflow step (default when the admin left it blank). #1544.
-                    create_media_buy_rejected_result = CreateMediaBuySuccess(
-                        media_buy_id=media_buy_id,
-                        packages=[Package(package_id=x.package_id) for x in all_packages],
-                        context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
-                        confirmed_at=rejected_buy.confirmed_at,
-                        revision=rejected_buy.revision,
-                        rejection_reason=reason or "Rejected by administrator",
-                    )
-                    metadata = {
-                        "task_type": step_data["tool_name"],
-                        # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                        # TODO: @yusuf - check if we want to make metadata typed
-                    }
-
-                    # Determine protocol type from workflow step request_data
-                    protocol = step_data["request_data"].get(
-                        "protocol", "mcp"
-                    )  # Default to MCP for backward compatibility
-
-                    # Create appropriate webhook payload based on protocol
-                    if protocol == "a2a":
-                        create_media_buy_rejected_payload = create_a2a_webhook_payload(
-                            task_id=step_data["step_id"],
-                            status=AdcpTaskStatus.rejected,
-                            result=create_media_buy_rejected_result,
-                            context_id=step_data["context_id"],
-                        )
-                    else:
-                        # tool_name is untrusted (workflow_steps DB column).
-                        # Validate a COPY for the SDK payload; metadata keeps the
-                        # original label (salesagent-yi3s, salesagent-yk7o).
-                        create_media_buy_rejected_payload = create_mcp_webhook_payload(
-                            task_id=step_data["step_id"],
-                            task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
-                            result=create_media_buy_rejected_result,
-                            status=AdcpTaskStatus.rejected,
-                        )
-
-                    try:
-                        service = get_protocol_webhook_service()
-                        asyncio.run(
-                            service.send_notification(
-                                push_notification_config=webhook_config,
-                                payload=create_media_buy_rejected_payload,
-                                metadata=metadata,
-                            )
-                        )
-                        logger.info(f"Sent webhook notification for rejected media buy {media_buy_id}")
-
-                    except Exception as webhook_err:
-                        logger.warning(f"Failed to send webhook notification: {webhook_err}")
+                # Emit the rejection notification to the buyer. rejection_reason is a
+                # spec MUST on the seller rejection webhook (pinned beta.3
+                # specification.mdx) — carry the reason recorded on the workflow step
+                # (default when the admin left it blank). No-op without push config. #1544.
+                emit_media_buy_completion(
+                    db_session,
+                    tenant_id,
+                    media_buy_repo.get_by_id(media_buy_id),
+                    media_buy_repo.get_packages(media_buy_id),
+                    step_data,
+                    AdcpTaskStatus.rejected,
+                    rejection_reason=reason or "Rejected by administrator",
+                )
 
                 flash("Media buy rejected", "info")
 

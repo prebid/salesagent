@@ -4,9 +4,11 @@ import json
 import logging
 from datetime import UTC, datetime
 
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
+from src.admin.services.media_buy_completion import emit_media_buy_completion
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -171,6 +173,15 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             if not step:
                 return jsonify({"error": "Workflow step not found"}), 404
 
+            # Snapshot step fields to a dict before commit (the ORM instance may
+            # expire after commit/nested sessions). Used for the completion webhook.
+            step_data = {
+                "step_id": step.step_id,
+                "context_id": step.context_id,
+                "tool_name": step.tool_name,
+                "request_data": step.request_data or {},
+            }
+
             db.commit()
 
             # Check if this is a media buy creation workflow step
@@ -265,6 +276,18 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         approved_by=user_email,
                     )
                     db.commit()
+
+                    # Emit the completion artifact so async buyers receive the final
+                    # revision/confirmed_at — previously only the operations route did.
+                    # Re-fetch post-commit for the persisted confirmed_at/revision. #1544.
+                    emit_media_buy_completion(
+                        db,
+                        tenant_id,
+                        media_buy_repo.get_by_id(media_buy_id),
+                        media_buy_repo.get_packages(media_buy_id),
+                        step_data,
+                        AdcpTaskStatus.completed,
+                    )
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
