@@ -327,6 +327,60 @@ class TestRevisionBumpsOnStatusTransition:
         assert after.confirmed_at != after.created_at
         assert after.revision == 2
 
+    def test_apply_status_transition_stamps_confirmed_at(self, tenant_a, principal_a):
+        """draft → pending_creatives through the creative-sync/scheduler seam stamps
+        the write-once confirmed_at, so get_media_buys reports it on the wire.
+
+        Regression for #1544: apply_status_transition bumped revision but never
+        stamped confirmed_at, so a buy that reached a seller-confirmed status via
+        creative-sync reported confirmed_at=None forever. All three status seams now
+        route through MediaBuyRepository._stamp_confirmation_if_needed.
+        """
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from tests.factories.principal import PrincipalFactory
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_transition_confirm", status="draft"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            buy = uow.media_buys.get_by_id("mb_transition_confirm")
+            assert buy is not None
+            MediaBuyRepository.apply_status_transition(buy, "pending_creatives")
+
+        identity = PrincipalFactory.make_identity(
+            tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
+        )
+        after = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=["mb_transition_confirm"]), identity=identity, include_snapshot=False
+        ).media_buys[0]
+        # No manual approval, so confirmed_at falls back to the create instant — but
+        # it IS set, which the pre-fix seam failed to do.
+        assert after.confirmed_at is not None
+        assert after.confirmed_at == after.created_at
+
+    def test_update_fields_staged_status_stamps_confirmed_at(self, tenant_a, principal_a):
+        """A staged status change through update_fields (the update tool's approval
+        path) also stamps confirmed_at — the third blessed seam. #1544."""
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from tests.factories.principal import PrincipalFactory
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_fields_confirm", status="draft"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_fields("mb_fields_confirm", status="pending_creatives")
+
+        identity = PrincipalFactory.make_identity(
+            tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
+        )
+        after = _get_media_buys_impl(
+            req=GetMediaBuysRequest(media_buy_ids=["mb_fields_confirm"]), identity=identity, include_snapshot=False
+        ).media_buys[0]
+        assert after.confirmed_at is not None
+        assert after.confirmed_at == after.created_at
+
 
 # ---------------------------------------------------------------------------
 # MediaBuy.update_fields — generic field update
@@ -826,13 +880,15 @@ class TestPersistedRevisionBump:
 
 class TestExpectedRevisionUnderLock:
     """The optimistic-concurrency token is enforced UNDER the row lock at the
-    mutation seam — not only by the update tool's unlocked pre-adapter gate.
+    mutation seam — the authoritative backstop, independent of the update tool's
+    pre-adapter gate (which holds the same lock in the same UoW).
 
     AdCP 3.1.0-beta.3 update-media-buy-request.json properties.revision MUST.
     The discriminating case: the mutating session already holds a STALE
     in-memory instance (identity map), another session bumps the row, and the
-    seam must still CONFLICT — the locked check refreshes the counter under
-    the held lock instead of trusting the stale attribute (#1544 round-7).
+    seam must still CONFLICT — the locked SELECT re-populates the counter under
+    the held lock (populate_existing) instead of trusting the stale attribute
+    (#1544 round-7).
     """
 
     def test_stale_identity_map_instance_still_conflicts(self, tenant_a, principal_a):

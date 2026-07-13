@@ -419,9 +419,8 @@ class MediaBuyRepository:
 
         media_buy = MediaBuy(**kwargs)
         self._session.add(media_buy)
-        self._session.flush()
-        if is_media_buy_seller_confirmed(status):
-            media_buy.confirmed_at = media_buy.created_at
+        self._session.flush()  # materialize server-default created_at before stamping
+        if self._stamp_confirmation_if_needed(media_buy):
             self._session.flush()
         return media_buy
 
@@ -465,6 +464,32 @@ class MediaBuyRepository:
         """
         media_buy.revision = func.coalesce(MediaBuy.revision, 0) + 1
 
+    @staticmethod
+    def _stamp_confirmation_if_needed(media_buy: MediaBuy) -> bool:
+        """Write-once seller-confirmation stamp, shared by every mutation seam.
+
+        The AdCP 3.1.0-beta.3 ``confirmed_at`` field records the instant the
+        seller committed to running the buy: it is set exactly once — the first
+        time the buy enters a seller-confirmed status
+        (:func:`is_media_buy_seller_confirmed`) — and stays stable across later
+        creative/status transitions. Keyed on the buy's status at the call, so
+        every seam that lands a seller-confirmed status stamps identically: the
+        create path, :meth:`update_status`, :meth:`update_fields` (staged
+        ``status``), and :meth:`apply_status_transition` (scheduler sweep,
+        creative-sync). Keeping it in one place is what stops the create and get
+        paths from drifting — a buy that reached a committed state on any seam
+        carries ``confirmed_at`` on the wire. See #1544.
+
+        Returns True when the buy first entered a seller-confirmed status here,
+        so a caller that must persist the stamp immediately (the create path,
+        before the row leaves the repository) knows to flush; the mutation seams
+        ignore it because they flush the whole mutation afterwards regardless.
+        """
+        if media_buy.confirmed_at is None and is_media_buy_seller_confirmed(media_buy.status):
+            media_buy.confirmed_at = media_buy.approved_at or media_buy.created_at
+            return True
+        return False
+
     def _locked_mutate_and_bump(
         self,
         media_buy_id: str,
@@ -474,18 +499,21 @@ class MediaBuyRepository:
     ) -> MediaBuy | None:
         """Shared single-row mutation skeleton: load-under-lock → mutate → bump → flush.
 
-        Loads the buy with a row write-lock, applies ``mutate`` in place, bumps
-        the persisted revision counter, and flushes. Returns the mutated row, or
+        Loads the buy with a row write-lock, applies ``mutate`` in place, stamps
+        the write-once ``confirmed_at`` if the new status warrants it, bumps the
+        persisted revision counter, and flushes. Returns the mutated row, or
         None if the buy is not found in this tenant (no bump/flush). Every
         single-row mutator (``bump_revision``, ``update_status``,
-        ``update_fields``) routes through here so the load-guard, the bump, and
-        the flush live in exactly one place.
+        ``update_fields``) routes through here so the load-guard, the confirm
+        stamp, the bump, and the flush live in exactly one place.
 
         ``expected_revision`` is the buyer's optimistic-concurrency token
         (AdCP 3.1.0-beta.3 update-media-buy-request ``revision``): when
-        provided, the check happens HERE, under the held row lock — the fast
-        pre-adapter gate in the update tool reads an unlocked snapshot, so a
-        concurrent writer could bump between that gate and this mutation.
+        provided, the check happens HERE, under the held row lock. The update
+        tool also gates on the token before dispatching to the adapter, but that
+        gate and this mutation run in the same UoW under the same lock; this
+        check is the authoritative backstop for callers that reach the
+        repository directly (admin routes, ``bump_revision`` callers, tests).
         Raises the shared CONFLICT on mismatch, before any mutation.
         """
         media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
@@ -494,15 +522,13 @@ class MediaBuyRepository:
         if expected_revision is not None:
             from src.core.exceptions import media_buy_revision_conflict
 
-            # The locked SELECT returns the in-memory instance when the row is
-            # already in the session identity map (no populate_existing), so
-            # explicitly refresh the counter under the held lock before
-            # comparing — the committed value can no longer move.
-            self._session.refresh(media_buy, attribute_names=["revision"])
-            current = media_buy.revision or 1
-            if current != expected_revision:
-                raise media_buy_revision_conflict(media_buy_id, expected=expected_revision, current=current)
+            # populate_existing=True on the locked SELECT above already overwrote
+            # the identity-mapped revision with the committed value, so compare
+            # directly — no second SELECT needed.
+            if media_buy.revision != expected_revision:
+                raise media_buy_revision_conflict(media_buy_id, expected=expected_revision, current=media_buy.revision)
         mutate(media_buy)
+        self._stamp_confirmation_if_needed(media_buy)
         self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
@@ -539,8 +565,6 @@ class MediaBuyRepository:
                 media_buy.approved_at = approved_at
             if approved_by is not None:
                 media_buy.approved_by = approved_by
-            if media_buy.confirmed_at is None and is_media_buy_seller_confirmed(status):
-                media_buy.confirmed_at = approved_at or media_buy.approved_at or media_buy.created_at
 
         return self._locked_mutate_and_bump(media_buy_id, _apply)
 
@@ -749,11 +773,15 @@ class MediaBuyRepository:
         ``revision`` counter so seller-initiated lifecycle transitions
         (``pending_start`` → ``active``, ``active`` → ``completed``,
         ``draft`` → ``pending_creatives``) advance the optimistic-concurrency
-        token like any other state change. Returns the same (mutated) row so the
-        seam matches the ``MediaBuy | None`` shape of every sibling mutator — the
-        return is never None here because the caller supplies a loaded row. See
-        #1544.
+        token like any other state change, and stamps the write-once
+        ``confirmed_at`` when the transition enters a seller-confirmed status —
+        via the same :meth:`_stamp_confirmation_if_needed` seam the tenant-scoped
+        mutators use, so no path can leave a committed buy without a confirmation
+        instant. Returns the same (mutated) row so the seam matches the
+        ``MediaBuy | None`` shape of every sibling mutator — the return is never
+        None here because the caller supplies a loaded row. See #1544.
         """
         media_buy.status = new_status
+        MediaBuyRepository._stamp_confirmation_if_needed(media_buy)
         MediaBuyRepository._bump_revision(media_buy)
         return media_buy

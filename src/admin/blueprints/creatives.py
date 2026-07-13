@@ -18,6 +18,7 @@ from adcp.types import (
 )
 from adcp.webhooks import GeneratedTaskStatus
 
+from src.core.database.models import MediaBuy
 from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
@@ -81,7 +82,7 @@ def _cleanup_completed_tasks():
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
 
 
-def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
+def _compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
     """Lifecycle status from the buy's flight window.
 
     Delegates to the shared business-layer decision (media_buy_flight) rather

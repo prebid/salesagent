@@ -2129,7 +2129,8 @@ Feature: BR-UC-003 Update Media Buy
       | below_min      | 0             | error "INVALID_REQUEST" with suggestion |
       # A non-numeric string (not a coercible numeral like "7", which pydantic
       # lax-coerces to a valid int on the JSON transports) so the wrong-TYPE is
-      # rejected consistently on every transport, not just A2A.
+      # rejected consistently on every transport, not just A2A. The numeric-string
+      # divergence itself is deferred and tracked in #1582.
       | wrong_type     | "not-an-int"  | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-003-boundary-revision @boundary @revision @schema-v3.1

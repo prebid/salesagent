@@ -1761,9 +1761,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         if not isinstance(values, dict):
             return values
 
-        # JSON Schema ``type: integer`` must be enforced before Pydantic's
-        # default coercion. This keeps numeric strings and booleans from
-        # becoming valid optimistic-concurrency tokens at any boundary.
+        # JSON Schema ``type: integer`` enforced before Pydantic's default
+        # coercion. This bites at the raw-dict (A2A) boundary, where the payload
+        # reaches this model before any typed coercion, rejecting numeric strings
+        # and booleans as optimistic-concurrency tokens. On MCP/REST the typed
+        # ``revision: int | None`` param lax-coerces "7" -> 7 before this runs, so
+        # a numeric string is honored there — a known cross-transport divergence,
+        # deferred and tracked in #1582.
         if "revision" in values and values["revision"] is not None:
             revision = values["revision"]
             if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:

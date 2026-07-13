@@ -885,6 +885,44 @@ class TestUC003MainObligations:
             assert call_kwargs["package_id"] == "pkg_x"
             assert call_kwargs["budget"] == 5000
 
+    def test_pre_adapter_gate_acquires_row_lock(self):
+        """The optimistic-concurrency gate loads the buy FOR UPDATE before any
+        adapter dispatch, so two same-token requests serialize on the row lock
+        and cannot both reach the ad server.
+
+        Reverting the gate (media_buy_update.py) to an unlocked read leaves the
+        repository CONFLICT backstop green but lets both requests hit the adapter
+        — this pins the lock acquisition the repository-level backstop tests
+        cannot observe. #1544.
+        """
+        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
+            mock_session = env.mock["uow"].return_value.session
+            get_by_id = env.mock["uow"].return_value.media_buys.get_by_id
+            mock_mb = _make_mock_media_buy("mb_lock_gate")
+            mock_mb.revision = 3
+            get_by_id.return_value = mock_mb
+            mock_session.scalars.return_value.first.return_value = _make_mock_currency_limit(max_daily=100000)
+
+            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
+                media_buy_id="mb_lock_gate", affected_packages=[]
+            )
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_lock_gate",
+                packages=[{"package_id": "pkg_lock", "budget": 5000.0}],
+            )
+            _update_media_buy_impl(req=req, identity=env.identity)
+
+            # The flow reached the adapter (ran end to end)...
+            assert env.mock["adapter"].return_value.update_media_buy.called
+            # ...and the pre-adapter gate loaded the buy under a row write-lock.
+            locked_calls = [c for c in get_by_id.call_args_list if c.kwargs.get("for_update")]
+            assert locked_calls, (
+                "pre-adapter gate must load the buy with for_update=True; "
+                f"get_by_id calls were {get_by_id.call_args_list}"
+            )
+            assert locked_calls[0].kwargs.get("populate_existing") is True
+
     def test_database_persisted_after_adapter_success(self):
         """After adapter returns success, affected_packages tracked in response.
 

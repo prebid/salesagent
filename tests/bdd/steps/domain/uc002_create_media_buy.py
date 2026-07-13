@@ -1885,19 +1885,22 @@ def given_dry_run_mode(ctx: dict) -> None:
 def then_adapter_never_invoked(ctx: dict) -> None:
     """The dry-run arm returns a simulated success before any ad-server booking.
 
-    In-process only: the assertion observes the pytest-process adapter mock.
-    Over an e2e_* transport the create runs in the live server, whose adapter
-    this mock can never see — the assertion would pass vacuously whether or
-    not the server honored x-dry-run. Loud guard instead of silence,
-    mirroring _serialized_success_body's wire_response guard.
+    In-process: assert the pytest-process adapter mock's ``create_media_buy`` was
+    never called. Over an e2e_* transport the create runs in the live server,
+    whose adapter this mock can never see, so assert the wire-level proxy for the
+    same invariant — the response's simulated ``dry_run_`` media_buy_id. A live
+    server that ignored x-dry-run and actually booked the buy would return a real
+    persisted id, failing this; a vacuous ``response is not None`` would not.
     """
     from tests.bdd.steps._outcome_helpers import is_e2e
 
     if is_e2e(ctx):
-        # The live server's adapter is intentionally not observable from the
-        # pytest process. The following persistence assertion is the wire-level
-        # dry-run invariant for e2e transports.
-        assert ctx.get("response") is not None, "dry-run must return a response over e2e transport"
+        resp = _require_success_response(ctx)
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+        assert isinstance(media_buy_id, str) and media_buy_id.startswith("dry_run_"), (
+            f"dry-run over e2e must return a simulated dry_run_ media_buy_id (proof the adapter "
+            f"was not invoked), got {media_buy_id!r}"
+        )
         return
     env = ctx["env"]
     adapter = env.mock["adapter"].return_value

@@ -765,47 +765,67 @@ class TestGetMediaBuysRequestRejectsInternalFlags:
             GetMediaBuysRequest(include_snapshot=False)
 
 
-class TestConfirmedAtGating:
-    """get_media_buys must only report confirmed_at once the seller has
-    committed to the buy. The AdCP field means "when the seller committed to
-    this media buy", so a still-pending_approval buy (which create_media_buy
-    returns via the submitted arm WITHOUT confirmed_at) must report None here —
-    otherwise get contradicts create for the same buy."""
+class TestConfirmedAtStamping:
+    """The write-once confirmed_at stamp must fire exactly once the seller has
+    committed to the buy. ``MediaBuyRepository._stamp_confirmation_if_needed`` is
+    the single seam every status-mutation path routes through (update_status,
+    update_fields, apply_status_transition), so the persisted column
+    get_media_buys reads back cannot drift from what create_media_buy emitted for
+    the same buy. A still-pending_approval buy carries no confirmed_at; a buy that
+    reached a committed status on any seam carries one. See #1544."""
 
-    def test_unconfirmed_statuses_report_no_confirmed_at(self):
+    def test_unconfirmed_statuses_are_not_stamped(self):
         from datetime import UTC, datetime
-        from types import SimpleNamespace
 
-        from src.core.tools.media_buy_list import _seller_confirmed_at
+        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
         for status in ("draft", "pending", "pending_approval", "rejected", "failed"):
-            buy = SimpleNamespace(status=status, created_at=created, approved_at=None)
-            assert _seller_confirmed_at(buy) is None, f"{status} must not report confirmed_at"
+            buy = MediaBuy(status=status, created_at=created, approved_at=None, confirmed_at=None)
+            MediaBuyRepository._stamp_confirmation_if_needed(buy)
+            assert buy.confirmed_at is None, f"{status} must not be stamped"
 
-    def test_confirmed_statuses_without_approval_report_created_at(self):
+    def test_confirmed_statuses_without_approval_stamp_created_at(self):
         """Synchronous confirmation: no approved_at, so confirmed_at is created_at
         (a successful create_media_buy response constitutes order confirmation)."""
         from datetime import UTC, datetime
-        from types import SimpleNamespace
 
-        from src.core.tools.media_buy_list import _seller_confirmed_at
+        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
         for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved", "canceled"):
-            buy = SimpleNamespace(status=status, created_at=created, approved_at=None)
-            assert _seller_confirmed_at(buy) == created, f"{status} must report confirmed_at=created_at"
+            buy = MediaBuy(status=status, created_at=created, approved_at=None, confirmed_at=None)
+            MediaBuyRepository._stamp_confirmation_if_needed(buy)
+            assert buy.confirmed_at == created, f"{status} must stamp confirmed_at=created_at"
 
     def test_confirmed_statuses_prefer_approval_instant(self):
         """Manual-approval path: confirmed_at is approved_at (the moment the seller
         committed), NOT the buyer's create time — see #1544."""
         from datetime import UTC, datetime
-        from types import SimpleNamespace
 
-        from src.core.tools.media_buy_list import _seller_confirmed_at
+        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
         approved = datetime(2026, 1, 5, tzinfo=UTC)
         for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved"):
-            buy = SimpleNamespace(status=status, created_at=created, approved_at=approved)
-            assert _seller_confirmed_at(buy) == approved, f"{status} must report confirmed_at=approved_at"
+            buy = MediaBuy(status=status, created_at=created, approved_at=approved, confirmed_at=None)
+            MediaBuyRepository._stamp_confirmation_if_needed(buy)
+            assert buy.confirmed_at == approved, f"{status} must stamp confirmed_at=approved_at"
+
+    def test_stamp_is_write_once(self):
+        """Already-stamped buys keep their original instant across later transitions —
+        confirmed_at is stable even when a subsequent status change would compute a
+        different candidate instant."""
+        from datetime import UTC, datetime
+
+        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        original = datetime(2026, 1, 1, tzinfo=UTC)
+        later = datetime(2026, 2, 1, tzinfo=UTC)
+        buy = MediaBuy(status="active", created_at=later, approved_at=later, confirmed_at=original)
+        MediaBuyRepository._stamp_confirmation_if_needed(buy)
+        assert buy.confirmed_at == original, "confirmed_at must be write-once"

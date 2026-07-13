@@ -102,20 +102,21 @@ from src.services.targeting_capabilities import (
 )
 
 
-def _current_revision(mb: MediaBuy | None) -> int:
-    """Persisted revision to echo on an update response.
+def _require_current_buy(mb: MediaBuy | None) -> MediaBuy:
+    """The post-mutation buy re-read from the DB, guaranteed present.
 
-    ``mb`` is the post-mutation buy re-read from the DB. It is always present:
-    every response site here runs after ``_verify_principal`` has already raised
-    MEDIA_BUY_NOT_FOUND for a missing buy. A ``None`` here is an internal
-    invariant violation, so we raise rather than fabricate a fallback — a
-    defaulted ``1`` could report a token *regression* (a later read returning a
-    lower value than an earlier one), which an optimistic-concurrency counter
-    must never do.
+    Every update response site runs after ``_verify_principal`` has already
+    raised MEDIA_BUY_NOT_FOUND for a missing buy, so a ``None`` here is an
+    internal invariant violation — we raise rather than fabricate a fallback.
+    Callers read ``revision`` and ``status`` off the returned (non-optional)
+    row: a defaulted revision could report a token *regression* (a later read
+    returning a lower value than an earlier one), which an optimistic-concurrency
+    counter must never do, and a defaulted ``""`` status would advertise a
+    graceful path that does not exist.
     """
     if mb is None:
-        raise RuntimeError("_current_revision called with no media buy — the buy must exist post-mutation")
-    return mb.revision
+        raise RuntimeError("update response built with no media buy — the buy must exist post-mutation")
+    return mb
 
 
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
@@ -264,7 +265,7 @@ def _update_media_buy_impl(
                     ),
                 )
             if req.revision is not None and _current_mb is not None:
-                _persisted_revision = _current_mb.revision or 1
+                _persisted_revision = _current_mb.revision
                 if req.revision != _persisted_revision:
                     raise media_buy_revision_conflict(
                         req.media_buy_id, expected=req.revision, current=_persisted_revision, context=req.context
@@ -386,16 +387,15 @@ def _update_media_buy_impl(
                         )
 
                 # Look up current status for valid_actions
-                _dry_run_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                _dry_run_status = _dry_run_mb.status if _dry_run_mb else ""
+                _dry_run_mb = _require_current_buy(uow.media_buys.get_by_id(req.media_buy_id))
 
                 # Build simulated response
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
                     # dry-run: nothing persisted — echo the current revision
-                    revision=_current_revision(_dry_run_mb),
+                    revision=_dry_run_mb.revision,
                     affected_packages=simulated_affected,
-                    valid_actions=valid_actions_for_status(_dry_run_status),
+                    valid_actions=valid_actions_for_status(_dry_run_mb.status),
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
@@ -414,14 +414,13 @@ def _update_media_buy_impl(
                 # Store the original request alongside the response so the approval
                 # execution path can re-execute the update after human approval.
                 # This mirrors create_media_buy's raw_request pattern.
-                _approval_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                _approval_status = _approval_mb.status if _approval_mb else ""
+                _approval_mb = _require_current_buy(uow.media_buys.get_by_id(req.media_buy_id))
                 approval_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
                     # Nothing applied yet (pending approval) — current persisted revision.
-                    revision=_current_revision(_approval_mb),
+                    revision=_approval_mb.revision,
                     affected_packages=[],  # Not yet applied — pending approval
-                    valid_actions=valid_actions_for_status(_approval_status),
+                    valid_actions=valid_actions_for_status(_approval_mb.status),
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
@@ -568,13 +567,13 @@ def _update_media_buy_impl(
                     _post_action_mb = uow.media_buys.bump_revision_or_raise(
                         req.media_buy_id, expected_revision=req.revision
                     )
-                    _post_action_status = _post_action_mb.status
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        # Current persisted revision for this buy.
-                        revision=_current_revision(_post_action_mb),
+                        # Current persisted revision for this buy. bump_revision_or_raise
+                        # returns the non-optional locked row, so read it directly.
+                        revision=_post_action_mb.revision,
                         affected_packages=affected_pkgs,
-                        valid_actions=valid_actions_for_status(_post_action_status),
+                        valid_actions=valid_actions_for_status(_post_action_mb.status),
                         errors=property_list_unsupported_advisories(req.packages, adapter),
                     )
                     # Log successful update_media_buy (pause/resume)
@@ -1295,15 +1294,14 @@ def _update_media_buy_impl(
             # - AdCP-required fields (package_id) for spec compliance
             # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
-            _final_mb = uow.media_buys.get_by_id(req.media_buy_id)
-            _final_status = _final_mb.status if _final_mb else ""
+            _final_mb = _require_current_buy(uow.media_buys.get_by_id(req.media_buy_id))
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
                 # Persisted revision after this update's mutations (bumped by
                 # update_fields / bump_revision above).
-                revision=_current_revision(_final_mb),
+                revision=_final_mb.revision,
                 affected_packages=affected_packages_list,
-                valid_actions=valid_actions_for_status(_final_status),
+                valid_actions=valid_actions_for_status(_final_mb.status),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
@@ -1339,9 +1337,8 @@ def invalid_update_request_error(e: ValidationError) -> AdCPInvalidRequestError:
     AdCP 3.1.0-beta.3 update-media-buy-request schema (e.g. ``revision``
     below its ``minimum: 1``): INVALID_REQUEST, matching the REST boundary's
     RequestValidationError handler (src/app.py) so every transport emits one
-    code for the same violation. The suggestion is duplicated into ``details``
-    because in-process callers see the typed error directly, while wire
-    callers see it via the envelope.
+    code for the same violation. The corrective ``suggestion`` rides its own
+    top-level envelope key; in-process callers read it off the typed error.
     """
     return AdCPInvalidRequestError(
         format_validation_error(e, context="update_media_buy request"),

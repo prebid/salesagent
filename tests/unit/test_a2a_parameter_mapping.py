@@ -55,6 +55,11 @@ class TestA2AParameterMapping:
                 "media_buy_id": "mb_123",
                 "paused": False,  # adcp 2.12.0+: paused=False means resume
                 "packages": [{"package_id": "pkg_1", "paused": False}],  # AdCP v2.12.0+ field name
+                # Budget/pacing fields the skill handler must forward to the core tool
+                # (#1544 parity fix — previously silently dropped on the A2A path).
+                "currency": "USD",
+                "pacing": "even",
+                "daily_budget": 500.0,
             }
 
             # Call the skill handler (synchronous wrapper for async method)
@@ -80,6 +85,13 @@ class TestA2AParameterMapping:
             # Verify other AdCP v2.12.0+ parameters are passed
             assert call_kwargs["media_buy_id"] == "mb_123"
             assert call_kwargs["paused"] is False  # adcp 2.12.0+: paused=False means resume
+
+            # Budget/pacing parity (#1544): these three must reach the core tool.
+            # Removing any of the handler's params.get(...) forwards makes the key
+            # absent here, so this pins the plumbing that otherwise reverts green.
+            assert call_kwargs["currency"] == "USD"
+            assert call_kwargs["pacing"] == "even"
+            assert call_kwargs["daily_budget"] == 500.0
 
     def test_update_media_buy_backward_compatibility_with_updates(self):
         """

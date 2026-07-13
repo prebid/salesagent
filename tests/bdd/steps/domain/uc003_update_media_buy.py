@@ -2159,17 +2159,25 @@ def given_last_read_version(ctx: dict, label: str, version: int) -> None:
 
 @then(parsers.parse('the error "details" object should include "{key}" with value {value}'))
 def then_error_details_include(ctx: dict, key: str, value: str) -> None:
-    """The error's details carry the spec's recommended CONFLICT shape.
+    """The error's details carry the spec's recommended shape for the raised code.
 
-    Authority: static/schemas/source/error-details/conflict.json —
-    resource_id / expected_version / current_version. A quoted cell is a
-    string (media-buy labels resolve to the real factory id); a bare number
-    compares as an integer.
+    Authority: static/schemas/source/error-details/*.json (e.g. conflict.json —
+    resource_id / expected_version / current_version). The error CODE is pinned by
+    the dedicated ``the error code should be`` step that runs before this one, so
+    this step must NOT hardcode one — it serves every error family (CONFLICT,
+    BUDGET_TOO_LOW, IDEMPOTENCY_CONFLICT, ...). It asserts the two-layer wire
+    envelope is well-formed and its layers agree on the code (the two-layer
+    invariant), then checks the details payload. A quoted cell is a string
+    (media-buy labels resolve to the real factory id); a bare number compares as
+    an integer.
     """
-    from tests.helpers.envelope_assertions import assert_envelope_shape
-
     envelope = ctx.get("wire_error_envelope")
-    assert_envelope_shape(envelope, "CONFLICT", recovery="correctable")
+    assert envelope is not None, "expected a wire error envelope, got none (did the operation fail?)"
+    assert "adcp_error" in envelope and envelope.get("errors"), f"malformed two-layer error envelope: {envelope!r}"
+    assert envelope["adcp_error"]["code"] == envelope["errors"][0]["code"], (
+        f"two-layer envelope code mismatch: adcp_error={envelope['adcp_error']['code']!r} "
+        f"errors[0]={envelope['errors'][0]['code']!r}"
+    )
     details = envelope["errors"][0].get("details") or envelope["adcp_error"].get("details") or {}
     assert key in details, f"wire error details missing {key!r}: {details!r}"
     stripped = value.strip()

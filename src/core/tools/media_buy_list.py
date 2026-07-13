@@ -66,7 +66,7 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object, require_identity, require_tenant
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy, is_media_buy_seller_confirmed
+from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
@@ -469,22 +469,6 @@ def _resolve_status_filter(
             field="status_filter",
             suggestion="status_filter values must be valid media-buy statuses",
         ) from e
-
-
-def _seller_confirmed_at(buy: _MediaBuyData) -> datetime | None:
-    """Compatibility helper for callers of the pre-persistence list seam.
-
-    Production rows always carry ``confirmed_at``; the fallback only supports
-    legacy unit-test snapshots that predate the column.
-    """
-    persisted = getattr(buy, "confirmed_at", None)
-    if persisted is not None:
-        return persisted
-    if not hasattr(buy, "approved_at"):
-        return None
-    if not is_media_buy_seller_confirmed(buy.status):
-        return None
-    return buy.approved_at or buy.created_at
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:

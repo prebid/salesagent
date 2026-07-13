@@ -898,9 +898,11 @@ class AgentAccountAccess(Base):
 # AdCP 3.1.0-beta.3 `confirmed_at` field ("when the seller committed to this
 # media buy") MUST be absent for these. This is the SINGLE source of truth for
 # "seller committed", consulted by both create_media_buy (which omits
-# confirmed_at on its not-yet-committed arms) and get_media_buys
-# (_seller_confirmed_at) so the create and get paths cannot drift: adding a new
-# not-yet-committed status here fixes both at once. See #1544.
+# confirmed_at on its not-yet-committed arms) and the repository's write-once
+# confirmation stamp (MediaBuyRepository._stamp_confirmation_if_needed, applied
+# on every status-mutation seam) — so the create path and the persisted column
+# get_media_buys reads back cannot drift: adding a new not-yet-committed status
+# here fixes both at once. See #1544.
 MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
     {"draft", "pending", "pending_approval", "rejected", "failed"}
 )
