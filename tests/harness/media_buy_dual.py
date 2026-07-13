@@ -158,7 +158,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # A SUBMITTED update never carries an artifact body: on_message_send early-returns
         # a Task (state=SUBMITTED, no artifacts) and the base handler synthesizes the
         # submitted wire from the Task (tests/harness/_base.py) — production has no A2A
-        # submitted reconstruction (salesagent-pscj). Completed/error results DO carry an
+        # submitted reconstruction (PR #1567 round-2 follow-up). Completed/error results DO carry an
         # artifact, stashed as wire_response and reconstructed via _parse_update_rest_response.
         return self._run_a2a_handler(
             "update_media_buy",
@@ -224,7 +224,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # not be mis-reconstructed as Success, whose status is Literal completed), then
         # success (has media_buy_id), else error. The submitted arm serves the REST wire and
         # the harness-synthesized A2A submitted dict — production A2A has NO submitted
-        # reconstruction (Task early-return; salesagent-pscj).
+        # reconstruction (Task early-return; PR #1567 round-2 follow-up).
         if data.get("status") == "submitted":
             return UpdateMediaBuySubmitted(**data)
         if "media_buy_id" in data:

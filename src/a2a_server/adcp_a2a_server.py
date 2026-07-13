@@ -475,7 +475,7 @@ class AdCPRequestHandler(RequestHandler):
                 # take the status=="submitted" early-return in on_message_send
                 # (Task state=SUBMITTED, no artifacts) BEFORE artifact/text
                 # reconstruction, so a submitted body can never reach here —
-                # same control-flow fact as update_media_buy (salesagent-pscj).
+                # same control-flow fact as update_media_buy (PR #1567 round-2 follow-up).
                 if "media_buy_id" in data:
                     return CreateMediaBuySuccess(**data)
                 else:
@@ -486,7 +486,7 @@ class AdCPRequestHandler(RequestHandler):
                 # take the status=="submitted" early-return in on_message_send
                 # (Task state=SUBMITTED, no artifacts) BEFORE artifact/text
                 # reconstruction, so a submitted body can never reach here
-                # (salesagent-pscj; same rationale as create_media_buy above).
+                # (PR #1567 round-2 follow-up; same rationale as create_media_buy above).
                 # Guarded by test_a2a_update_media_buy_submitted_guard.py.
                 if "media_buy_id" in data:
                     return UpdateMediaBuySuccess(**data)

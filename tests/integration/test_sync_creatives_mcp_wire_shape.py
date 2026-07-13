@@ -1,6 +1,6 @@
 """MCP wire shape for sync_creatives: changes/warnings must be arrays, never null.
 
-Regression for salesagent-274u (PR #1567, adcp 5.7->6.6 bump, round-2 review
+Regression for PR #1567 round-2 blocker 3 (adcp bump — adcp 5.7->6.6 bump, round-2 review
 blocker 3). adcp 6.6 re-added ``changes``/``warnings`` to the library
 SyncCreativeResult parent with ``None`` defaults, and the bump switched our
 subclass from local declarations (which emitted ``[]`` under 5.7) to
@@ -74,7 +74,7 @@ def test_mcp_wire_validates_against_pinned_response_schema(integration_db):
     Nulls are treated as ABSENT before validation: the PRE-EXISTING MCP
     None-serialization question (inherited spec ``status``/version-envelope
     fields serialize as null via the same structured_content bypass) was
-    explicitly out-of-scoped from salesagent-274u by the reviewer and is
+    explicitly out-of-scoped from PR #1567 round-2 blocker 3 by the reviewer and is
     tracked separately. Null-stripping hides only that known issue — a
     wrong-TYPE value (e.g. ``changes`` as a string or object) still fails the
     schema, and present-as-null for the array-typed fields is pinned by

@@ -1,6 +1,6 @@
 """A pending-approval create_media_buy emits the SUBMITTED envelope, not a confirmed Success.
 
-Regression for salesagent-2t4m (PR #1567, adcp 5.7->6.6 bump, round-2 review
+Regression for PR #1567 round-2 blocker 2 (adcp bump — adcp 5.7->6.6 bump, round-2 review
 blocker 2). adcp 6.6 (spec 3.1.1) made status/confirmed_at/revision required on
 the raw CreateMediaBuySuccess envelope, and our subclass defaults them
 (status="completed", confirmed_at=<now>, revision=1) via sync_success(). Both

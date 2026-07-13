@@ -353,7 +353,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
     changes and warnings to the library parent, so all six are now INHERITED (they were
-    locally redeclared under SDK 5.7 which had dropped them). See salesagent-qj0p.
+    locally redeclared under SDK 5.7 which had dropped them). See PR #1567.
 
     Internal-only (not in AdCP spec, excluded from responses):
     - internal_status: review-routing state (renamed off the inherited spec `status`)
@@ -367,7 +367,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # a valid CreativeAction, and StrEnum coerces the strings, so no override or normalizer is needed.
 
     # adcp 6.6 (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
-    # warnings to the library parent (salesagent-qj0p, shrinking the schema-inheritance
+    # warnings to the library parent (PR #1567, shrinking the schema-inheritance
     # allowlist). Our former local `status` held internal review-routing state, not the spec's
     # advisory CreativeStatus, so it is renamed to `internal_status` (excluded from the wire)
     # rather than shadowing the inherited spec field. Per owner decision we inherit but do NOT
@@ -380,7 +380,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # changes/warnings/errors are REDECLARED (sanctioned redeclaration, CLAUDE.md pattern 1)
     # with default_factory=list rather than inheriting the parent's None default: spec 3.1.1
     # sync-creatives-response.json types all three as `array`, and the MCP structured_content
-    # path above serializes a None default as the spec-invalid `null` (salesagent-274u).
+    # path above serializes a None default as the spec-invalid `null` (PR #1567 round-2 item 3).
     # Wire outcome per transport — both spec-valid: MCP emits [] (array); A2A/REST OMIT empty
     # lists via the model_dump strip below (byte-identical to the pre-6.6 wire).
     # Writers still use the _append_warning guard in _sync.py.

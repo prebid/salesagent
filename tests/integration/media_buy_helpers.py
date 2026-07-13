@@ -69,7 +69,7 @@ def resolve_media_buy_id_from_task(task_id: str) -> str:
     Spec 3.1.1: a pending-approval create returns the CreateMediaBuySubmitted
     envelope (task_id only, no media_buy_id) — the buy is located via the
     ObjectWorkflowMapping the create path links to the workflow step
-    (salesagent-2t4m). Fails loud when no mapping exists.
+    (PR #1567 round-2 item 2). Fails loud when no mapping exists.
     """
     from src.core.database.models import ObjectWorkflowMapping
 

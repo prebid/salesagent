@@ -461,7 +461,7 @@ def when_send_create_media_buy(ctx: dict) -> None:
         return
 
     if ctx.get("uc002_full_create"):
-        # Manual-approval wiring (salesagent-2t4m): dispatch a FULL create
+        # Manual-approval wiring (PR #1567 round-2 item 2): dispatch a FULL create
         # through the parametrized transport against the harness-seeded
         # product, carrying the Given-step account reference so boundary
         # account resolution runs too.
@@ -1726,7 +1726,7 @@ def then_webhook_notification(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# THEN steps — seller notification (manual-approval wiring, salesagent-2t4m)
+# THEN steps — seller notification (manual-approval wiring, PR #1567 round-2 item 2)
 # ═══════════════════════════════════════════════════════════════════════
 # Moved from steps/generic/then_media_buy.py (a module NOT in pytest_plugins,
 # so the step was unregistered/dead there): registering that whole module

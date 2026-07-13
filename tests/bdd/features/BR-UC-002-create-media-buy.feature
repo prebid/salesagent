@@ -68,7 +68,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response status should be "submitted"
-    # Reconciled to spec 3.1.1 (salesagent-2t4m): create-media-buy-response.json
+    # Reconciled to spec 3.1.1 (PR #1567 round-2 item 2): create-media-buy-response.json
     # oneOf CreateMediaBuySubmitted requires status="submitted" + task_id and has
     # NO media_buy_id/confirmed_at/revision — they land on the task's completion
     # artifact. The pre-3.1.1 assertions (media_buy_id + workflow_step_id) claimed

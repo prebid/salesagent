@@ -1658,7 +1658,7 @@ def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | N
         # A cached pending-approval create is the CreateMediaBuySubmitted variant
         # (no media_buy_id/packages) — validating it as Success would fail and
         # degrade to a cache miss, re-executing the create and minting a SECOND
-        # workflow step for the same idempotency_key (salesagent-2t4m).
+        # workflow step for the same idempotency_key (PR #1567 round-2 item 2).
         response: CreateMediaBuySuccess | CreateMediaBuySubmitted
         if protocol_status == AdcpTaskStatus.submitted.value:
             response = CreateMediaBuySubmitted.model_validate(envelope["response"])
@@ -3020,7 +3020,7 @@ async def _create_media_buy_impl(
             # approval is the CreateMediaBuySubmitted variant — status="submitted"
             # + task_id only. media_buy_id/packages land on the task's completion
             # artifact; confirmed_at/revision would falsely assert seller
-            # commitment (salesagent-2t4m; mirrors the update-path fix b8b7e751b).
+            # commitment (PR #1567 round-2 item 2; mirrors the update-path fix b8b7e751b).
             _buy_result = CreateMediaBuyResult(
                 response=CreateMediaBuySubmitted(
                     task_id=step.step_id,  # Client tracks approval via this ID
@@ -3158,7 +3158,7 @@ async def _create_media_buy_impl(
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
             # Spec 3.1.1 create-media-buy-response.json: same CreateMediaBuySubmitted
-            # shape as the manual-approval branch above (salesagent-2t4m) — the buy
+            # shape as the manual-approval branch above (PR #1567 round-2 item 2) — the buy
             # is queued for a human decision, so no media_buy_id/packages/
             # confirmed_at/revision on this envelope.
             _buy_result = CreateMediaBuyResult(
@@ -3497,13 +3497,13 @@ async def _create_media_buy_impl(
                 for pkg in packages
             ]
             # The adcp-6.6 CreateMediaBuySuccess default status="completed" is KEPT for
-            # dry_run and is spec-correct (salesagent-6tc3): spec 3.1.1
+            # dry_run and is spec-correct (PR #1567): spec 3.1.1
             # create-media-buy-response.json has exactly three variants
             # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
             # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the spec
             # is SILENT on a dry_run response status -> production authoritative. A dry_run
             # buyer asked to SIMULATE the would-be outcome, which IS completion, so
-            # "completed" is a truthful preview (unlike salesagent-5dxc/-88e2, where the op
+            # "completed" is a truthful preview (unlike the pending-approval and reject paths, where the op
             # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
             simulated_response = CreateMediaBuySuccess.sync_success(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
@@ -4404,7 +4404,7 @@ async def create_media_buy_raw(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None,
-    paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (salesagent-84k4)
+    paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (PR #1567 follow-up)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,

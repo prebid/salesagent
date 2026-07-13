@@ -1038,7 +1038,7 @@ class TestManualApprovalObligations:
             result = env.call_impl(req=req)
 
         # Spec 3.1.1: pending approval is the Submitted task envelope, not a
-        # confirmed Success (salesagent-2t4m).
+        # confirmed Success (PR #1567 round-2 item 2).
         assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"  # Not "completed"
 
@@ -1149,7 +1149,7 @@ class TestManualApprovalObligations:
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-10
 
         Note: Polling is via tasks/get with the task_id (spec 3.1.1
-        CreateMediaBuySubmitted.required; salesagent-2t4m).
+        CreateMediaBuySubmitted.required; PR #1567 round-2 item 2).
         """
         req = _make_request()
 

@@ -305,7 +305,7 @@ class TestCreateMediaBuyManualApproval:
 
         # Spec 3.1.1: the submitted response carries task_id (the workflow step id),
         # not media_buy_id — resolve the persisted buy via the workflow mapping,
-        # exactly as the approval flow does (salesagent-2t4m).
+        # exactly as the approval flow does (PR #1567 round-2 item 2).
         media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()

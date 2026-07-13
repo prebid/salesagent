@@ -233,7 +233,7 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
         assert result.response is not None
 
         # Spec 3.1.1: the submitted response carries task_id, not media_buy_id —
-        # resolve the persisted buy via the workflow mapping (salesagent-2t4m).
+        # resolve the persisted buy via the workflow mapping (PR #1567 round-2 item 2).
         media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
 
         # Verify creative_assignment rows have principal_id populated

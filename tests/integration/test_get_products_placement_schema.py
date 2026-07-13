@@ -100,7 +100,7 @@ def nameless_legacy_placement_product_env(integration_db):
     seller_inline default assumed legacy rows carry it. This fixture covers the
     other legacy shape: the conversion's defined fallback derives ``name`` from
     ``placement_id`` rather than silently emitting a schema-invalid placement
-    (salesagent-jyvl).
+    (PR #1567 round-2 cleanup).
     """
     with ProductEnv(tenant_id="placement-noname-test", principal_id="test_principal") as env:
         tenant = TenantFactory(tenant_id="placement-noname-test")

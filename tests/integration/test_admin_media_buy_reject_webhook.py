@@ -176,7 +176,7 @@ class TestAdminMediaBuyRejectWebhook:
             push_notification_config=ANY,
             payload=ANY,
             # Metadata carries the audit identifiers the webhook service logs
-            # (task_type/tenant_id/principal_id/media_buy_id — salesagent-hje2).
+            # (task_type/tenant_id/principal_id/media_buy_id — PR #1567 round-2 cleanup).
             metadata={
                 "task_type": "create_media_buy",
                 "tenant_id": tenant_id,
@@ -241,7 +241,7 @@ class TestAdminMediaBuyRejectWebhook:
     ):
         """The rejected webhook body carries the WIRE error code POLICY_VIOLATION.
 
-        Regression for salesagent-qyu9 (PR #1567 round-2 blocker 1): the reject
+        Regression for PR #1567 round-2 blocker 1: the reject
         branch hand-picked the INTERNAL code MEDIA_BUY_REJECTED for the embedded
         Error. src/core/exceptions.py maps MEDIA_BUY_REJECTED -> POLICY_VIOLATION
         and lists it in INTERNAL_CODES ("Seller declined the buy; wire emits
@@ -290,13 +290,13 @@ class TestAdminMediaBuyRejectWebhook:
     ):
         """The APPROVED media buy webhook embeds a confirmed completed Success.
 
-        Pin for salesagent-hje2 (approve site routed through the sync_success()
+        Pin for PR #1567 round-2 cleanup (approve site routed through the sync_success()
         factory): the buy IS committed at approval time, so the embedded result
         must keep asserting completion — status="completed", confirmed_at and
         revision from the subclass defaults, the media_buy_id, and NO leaked
         internal fields. Guards the factory switch against any wire drift and
         pins that approve stays a Success (never the Submitted variant the
-        pending-approval CREATE path now emits — salesagent-2t4m).
+        pending-approval CREATE path now emits — PR #1567 round-2 item 2).
         """
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]

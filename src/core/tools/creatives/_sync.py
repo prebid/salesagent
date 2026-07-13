@@ -28,7 +28,7 @@ def _append_warning(result: SyncCreativeResult, warning: str) -> None:
     """Append a non-fatal warning to a sync result.
 
     ``warnings`` is inherited from the adcp 6.6 parent with a ``None`` default (it was
-    formerly a local ``[]``-default override, salesagent-qj0p), so materialize the list
+    formerly a local ``[]``-default override, PR #1567), so materialize the list
     before appending rather than assuming a list is present.
     """
     result.warnings = (result.warnings or []) + [warning]

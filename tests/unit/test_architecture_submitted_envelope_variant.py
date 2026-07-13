@@ -1,6 +1,6 @@
 """Guard: a submitted protocol envelope must carry a Submitted response variant.
 
-Disease pattern (salesagent-2t4m, PR #1567 round-2 blocker 2): wrapping a
+Disease pattern (PR #1567 round-2 blocker 2): wrapping a
 *Success* response body in a protocol envelope whose status is "submitted".
 Spec 3.1.1 models the pending case as the mutually exclusive *Submitted*
 task-envelope variant (status="submitted" + task_id, NO media_buy_id/
@@ -92,5 +92,5 @@ class TestSubmittedEnvelopeVariant:
         violations = _scan_violations()
         assert not violations, (
             "Success/Error response body wrapped in a status='submitted' envelope — "
-            "use CreateMediaBuySubmitted (spec 3.1.1; salesagent-2t4m):\n  " + "\n  ".join(violations)
+            "use CreateMediaBuySubmitted (spec 3.1.1; PR #1567):\n  " + "\n  ".join(violations)
         )
