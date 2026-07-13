@@ -82,7 +82,7 @@ class JSONType(TypeDecorator):
         When ``model`` is configured, raw dicts are validated through it BEFORE
         storage. The typed column validates on every read, so an invalid value
         that reaches storage makes the row unreadable — the write boundary must
-        reject what the read path cannot load (salesagent-5mu0: a non-URL
+        reject what the read path cannot load (#1172 review: a non-URL
         agent_url persisted from a form; the plpgsql CHECK validates shape,
         not URL syntax). Raises ``pydantic.ValidationError`` (surfaced by
         SQLAlchemy as ``StatementError``) on invalid input.

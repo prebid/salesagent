@@ -1,4 +1,4 @@
-"""Steps for UC-009 update_performance_index — salesagent-8wf2/cmjm.
+"""Steps for UC-009 update_performance_index — #1594.
 
 The five @T-UC-009-main-* scenarios run a real update_performance_index
 through the parametrized wire transport (a2a/mcp/rest) on PerformanceEnv.

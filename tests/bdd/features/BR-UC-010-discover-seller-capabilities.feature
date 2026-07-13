@@ -54,7 +54,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities MCP tool
     Then the response should include adcp.major_versions containing 3
     And the response should include supported_protocols containing "media_buy"
-    # RECONCILED with pinned spec v3.1.1 (salesagent-f2p3, mirror upstream in adcp-req):
+    # RECONCILED with pinned spec v3.1.1 (#1442, mirror upstream in adcp-req):
     # core/media-buy-features.json declares exactly 4 properties — ALL OPTIONAL
     # ("Optional media-buy protocol features", no required array), so a seller omits
     # flags it does not declare. 'all 7 flags' came from the older v3.1-04f59d2d5 ref;
@@ -65,13 +65,13 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com"
     And the response should include media_buy.portfolio with primary_channels "display", "social", "ctv"
     And the response should include last_updated as a valid timestamp
-    # RECONCILED ORDER (salesagent-f2p3, local edit — mirror upstream in adcp-req):
+    # RECONCILED ORDER (#1442, local edit — mirror upstream in adcp-req):
     # the three production-gap asserts are grouped LAST so the eight asserts above
     # run green today (pytest-bdd stops at the first failing step). All three are
     # the strict-xfail graduation triggers: supported_pricing_models and
     # reporting_delivery_methods are spec-optional sections production does not
     # emit yet (first executions of these asserts caught this — they were dormant
-    # behind the account gap); account is the salesagent-oj0 gap.
+    # behind the account gap); account is the #1592 gap.
     And the response should include media_buy.supported_pricing_models
     And the response should include media_buy.reporting_delivery_methods section
     And the response should include account section with sandbox flag and billing models
@@ -98,7 +98,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent sends a get_adcp_capabilities skill request
     Then the response should include adcp.major_versions containing 3
     And the response should include supported_protocols containing "media_buy"
-    # RECONCILED with pinned spec v3.1.1 (salesagent-f2p3, mirror upstream in adcp-req):
+    # RECONCILED with pinned spec v3.1.1 (#1442, mirror upstream in adcp-req):
     # core/media-buy-features.json declares exactly 4 properties — ALL OPTIONAL
     # ("Optional media-buy protocol features", no required array), so a seller omits
     # flags it does not declare. 'all 7 flags' came from the older v3.1-04f59d2d5 ref;
@@ -109,13 +109,13 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com"
     And the response should include media_buy.portfolio with primary_channels "display", "social", "ctv"
     And the response should include last_updated as a valid timestamp
-    # RECONCILED ORDER (salesagent-f2p3, local edit — mirror upstream in adcp-req):
+    # RECONCILED ORDER (#1442, local edit — mirror upstream in adcp-req):
     # the three production-gap asserts are grouped LAST so the eight asserts above
     # run green today (pytest-bdd stops at the first failing step). All three are
     # the strict-xfail graduation triggers: supported_pricing_models and
     # reporting_delivery_methods are spec-optional sections production does not
     # emit yet (first executions of these asserts caught this — they were dormant
-    # behind the account gap); account is the salesagent-oj0 gap.
+    # behind the account gap); account is the #1592 gap.
     And the response should include media_buy.supported_pricing_models
     And the response should include media_buy.reporting_delivery_methods section
     And the response should include account section with sandbox flag and billing models

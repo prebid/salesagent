@@ -170,33 +170,33 @@ def pytest_configure(config: pytest.Config) -> None:
 # demanded field/behavior, the run xpasses and forces graduation — see the
 # xpass-graduation workflow). One row per gap; per-UC context lives on the row.
 _SPEC_GAP_XFAILS: list[tuple[frozenset[str], str]] = [
-    # UC-001 (salesagent-8wf2 wiring): T-UC-001-main is env-wired and its steps
+    # UC-001 (#1594 wiring): T-UC-001-main is env-wired and its steps
     # run for real, but the wire never carries brief_relevance (a pinned v3.1.1
     # product field) — the impl sorts internally when AI ranking is enabled and
-    # never serializes it. (The former relevance_score ordering leg was
+    # never serializes it (#1595). (The former relevance_score ordering leg was
     # RECONCILED away — not a pinned 3.1.1 field; see BR-UC-001 feature comment.)
     # T-UC-001-alt-anonymous: the spec expects
     # success with pricing suppressed when brand_manifest_policy is public, but
     # every _impl runs the require_identity gate (src/core/auth.py) — a
     # token-less wire request gets AUTH_REQUIRED on all transports. Production
-    # gap owned by the #1088 boundary work (salesagent-8xi7).
+    # gap owned by the #1088 boundary work (#1591).
     (
         frozenset({"T-UC-001-main", "T-UC-001-alt-anonymous"}),
         "UC-001 spec-production gap — see _SPEC_GAP_XFAILS comments",
     ),
-    # UC-010 (salesagent-8wf2 wiring): both rich main scenarios end with three
+    # UC-010 (#1594 wiring): both rich main scenarios end with three
     # production-gap asserts (grouped last so the other eight run green):
     # media_buy.supported_pricing_models and media_buy.reporting_delivery_methods
     # are spec-optional sections production does not emit yet, and the `account`
     # section (POST-S3: sandbox flag + billing models) stays None pending the
-    # account management epic (salesagent-oj0).
+    # account management epic (#1592).
     (
         frozenset({"T-UC-010-main-mcp", "T-UC-010-main-rest"}),
-        "UC-010 spec-production gap — pricing_models/reporting_delivery_methods/account not populated (salesagent-oj0)",
+        "UC-010 spec-production gap — pricing_models/reporting_delivery_methods/account not populated (#1592)",
     ),
-    # UC-008 (salesagent-8wf2 wiring): main-mcp demands value_type on every
+    # UC-008 (#1594 wiring): main-mcp demands value_type on every
     # signal; the production catalog (src/core/tools/signals.py) never sets it
-    # (schema default None).
+    # (schema default None; #1593).
     (
         frozenset({"T-UC-008-main-mcp"}),
         "UC-008 spec-production gap — signal catalog carries no value_type",
@@ -3224,7 +3224,7 @@ def _wire_simple_env(
     """
     marker_names = {m.name for m in request.node.iter_markers()}
     if not (marker_names & wired_tags):
-        pytest.xfail(f"{uc_label} harness not yet wired for this scenario (salesagent-8wf2)")
+        pytest.xfail(f"{uc_label} harness not yet wired for this scenario (#1594)")
     with _db_scope_for(request, e2e_config), env_cls(e2e_config=e2e_config) as env:
         tenant, principal = env.setup_default_data()
         ctx["env"] = env
@@ -3324,7 +3324,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # Its Given forces dispatch_mode=create_raw so the unknown key reaches
             # the production transport boundary unfiltered; REST/A2A grade the
             # INVALID_REQUEST envelope, MCP grades the FastMCP signature-level
-            # rejection (owner decision 2026-07-11, salesagent-cyz0).
+            # rejection (owner decision 2026-07-11).
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
             with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
@@ -3560,11 +3560,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     elif uc == "UC-008":
-        # get_signals discovery (salesagent-8wf2/d0l4; surface exposed by
-        # salesagent-2rls). SignalsEnv is zero-mock — the static catalog is
+        # get_signals discovery (#1594; surface exposed by
+        # the get_signals registration work (#1593 tracks activate_signal)). SignalsEnv is zero-mock — the static catalog is
         # production code. main-mcp is wired but strict-xfailed (no value_type
         # in the catalog, _SPEC_GAP_XFAILS). activate_signal scenarios stay
-        # dormant here: the tool is deliberately unregistered (salesagent-42ap).
+        # dormant here: the tool is deliberately unregistered (#1593).
         from tests.harness.signals import SignalsEnv
 
         yield from _wire_simple_env(
@@ -3576,7 +3576,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             uc_label="UC-008",
         )
     elif uc == "UC-010":
-        # get_adcp_capabilities (salesagent-8wf2/fxot). The main-flow scenarios
+        # get_adcp_capabilities (#1594). The main-flow scenarios
         # run a real get_adcp_capabilities through the wire transports on
         # CapabilitiesEnv (REST dispatches as GET via REST_METHOD). Everything
         # else stays dormant here.
@@ -3596,7 +3596,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             uc_label="UC-010",
         )
     elif uc == "UC-009":
-        # update_performance_index (salesagent-8wf2/cmjm). The five main-flow
+        # update_performance_index (#1594). The five main-flow
         # scenarios run a real update_performance_index through every
         # transport on PerformanceEnv (adapter + audit logger mocked, all
         # else real). Everything else stays dormant here.
@@ -3617,7 +3617,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             uc_label="UC-009",
         )
     elif uc == "UC-001":
-        # get_products discovery (salesagent-8wf2/pli8). The wired set runs a
+        # get_products discovery (#1594). The wired set runs a
         # real get_products through every transport on ProductEnv; the seeded
         # catalog (open US/guaranteed, open GB/non_guaranteed, and one product
         # restricted to another principal) makes the visibility and filter

@@ -41,7 +41,7 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the response status should be "completed"
     And the response should contain "products" array
     And each product should have product_id, name, format_ids, publisher_properties, pricing_options, and reporting_capabilities
-    # RECONCILED with pinned spec v3.1.1 (salesagent-ljaa, local edit — mirror upstream
+    # RECONCILED with pinned spec v3.1.1 (#1442, local edit — mirror upstream
     # in adcp-req): relevance_score has ZERO occurrences in the 3.1.1 schemas
     # (core/product.json has brief_relevance only), so relevance ORDERING is
     # unobservable on the wire — the ordering assert demanded an off-schema field

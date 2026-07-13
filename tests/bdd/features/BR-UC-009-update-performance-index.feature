@@ -21,7 +21,7 @@ Feature: BR-UC-009 Update Performance Index
     And the Buyer is authenticated with a valid principal_id
 
 
-  # RECONCILED (salesagent-1ek1, local edit — mirror upstream in adcp-req): transport
+  # RECONCILED (#1442, local edit — mirror upstream in adcp-req): transport
   # tag dropped so this success scenario parametrizes across ALL wire transports
   # (impl/a2a/mcp/rest); no Then step here is transport-shaped. The storyboard
   # narrates MCP, but the graded contract is transport-uniform.
@@ -67,7 +67,7 @@ Feature: BR-UC-009 Update Performance Index
     | avg_performance | 0.85        |
     # POST-S4: Operation audit-logged with principal, media buy, count, avg
 
-  # RECONCILED (salesagent-1ek1, local edit — mirror upstream in adcp-req): transport
+  # RECONCILED (#1442, local edit — mirror upstream in adcp-req): transport
   # tags dropped so this success scenario parametrizes across ALL wire transports —
   # previously @rest @a2a suppressed parametrization and the step pinned A2A, so
   # Transport.REST executed for ZERO UC-009 scenarios.

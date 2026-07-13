@@ -1,4 +1,4 @@
-"""_send_report_for_media_buy reuses the caller's session (salesagent-c37g).
+"""_send_report_for_media_buy reuses the caller's session (#1088).
 
 The scheduler passes a live ``session`` into ``_send_report_for_media_buy``;
 the #1088 principal load must use it. Opening a nested ``get_db_session()``

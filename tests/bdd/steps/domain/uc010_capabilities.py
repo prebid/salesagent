@@ -1,4 +1,4 @@
-"""Steps for UC-010 discover seller capabilities — salesagent-8wf2/fxot.
+"""Steps for UC-010 discover seller capabilities — #1594.
 
 The @T-UC-010-main-* scenarios run a real get_adcp_capabilities through the
 wire transports on CapabilitiesEnv. Only the adapter is mocked (channels +

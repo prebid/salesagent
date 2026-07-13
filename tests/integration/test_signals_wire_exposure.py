@@ -1,6 +1,6 @@
 """get_signals wire exposure — MCP tool, A2A skill, REST route.
 
-TDD red for salesagent-2rls (owner decision 2026-07-12: get_signals ONLY;
+TDD red for the get_signals exposure work (#1593 tracks the descoped activate_signal) (owner decision 2026-07-12: get_signals ONLY;
 activate_signal descoped to its follow-up bead and must stay unregistered).
 
 The full implementation stack already exists in src/core/tools/signals.py
@@ -62,7 +62,7 @@ class TestGetSignalsImplBaseline:
 
 
 class TestGetSignalsWireExposure:
-    """get_signals must be reachable on every wire transport (salesagent-2rls)."""
+    """get_signals must be reachable on every wire transport (#1593)."""
 
     def test_get_signals_listed_by_mcp_tools_list(self, integration_db):
         """tools/list (the MCP discovery wire) must advertise get_signals."""
@@ -129,7 +129,7 @@ class TestGetSignalsWireExposure:
 class TestGetSignalsBodyDeclaresAllSpecFields:
     """REST boundary ACCEPTS every declared v3.1.1 get-signals-request property.
 
-    salesagent-6065: GetSignalsBody omitted ext / push_notification_config /
+    #1442: GetSignalsBody omitted ext / push_notification_config /
     if_pricing_version / if_wholesale_feed_version — on the dev/CI arm
     (extra="forbid", Pattern #7) a spec-valid request carrying any of them was
     rejected with INVALID_REQUEST; in production they were silently dropped.

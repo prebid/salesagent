@@ -210,7 +210,7 @@ class DeliveryWebhookScheduler:
             # background construction site (#1088): the principal comes from
             # the media_buy row via PrincipalRepository, not from a token.
             # Reuses the caller's session — same transaction as the media_buy
-            # row, no second pool connection per report (salesagent-c37g).
+            # row, no second pool connection per report (#1088).
             from src.core.database.repositories import PrincipalRepository
             from src.core.resolved_identity import ResolvedIdentity
 

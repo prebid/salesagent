@@ -1,8 +1,8 @@
-"""Steps for UC-008 get_signals discovery — salesagent-8wf2/d0l4.
+"""Steps for UC-008 get_signals discovery — #1594.
 
 Wired scenarios run a real get_signals through the wire transports on
 SignalsEnv (zero mocks — the static signal catalog IS production code; the
-wrappers registered by salesagent-2rls are the surface under test).
+wrappers registered by the get_signals exposure work (#1593 context) are the surface under test).
 Assertions read the REAL serialized wire body via ``wire_field``.
 
 Transport-tagged storyboard scenarios (@mcp / @rest @a2a) suppress

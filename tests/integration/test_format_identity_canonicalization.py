@@ -7,7 +7,7 @@ default ports) AND transport-suffix tolerance (/mcp, /a2a,
 /.well-known/adcp/sales). The same buyer input must never be accepted by one
 entry tool and rejected by another.
 
-Reproduction for review finding S1 (salesagent-hk21): create-time keys on
+Reproduction for review finding S1 (#1172 review round): create-time keys on
 ``format_id_identity`` (canonical, NOT suffix-tolerant, one-directional /mcp
 append) while the three sibling sites key on ``normalize_agent_url``
 (suffix-tolerant, NOT canonical).

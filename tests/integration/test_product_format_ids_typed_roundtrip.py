@@ -311,7 +311,7 @@ class TestMockAdServerFormatWritePath:
                 )
             # The SUBMITTED ids must round-trip — a pin that re-reads the seeded
             # row passes with the write path present, absent, or dead
-            # (salesagent-jrb5: the `if validation_errors:` tuple-truthiness bug
+            # (#1172 review: the `if validation_errors:` tuple-truthiness bug
             # made the commit branch unreachable and this pin vacuous).
             assert sorted(fid.id for fid in loaded) == sorted(submitted_ids), (
                 f"config POST must persist the submitted format ids {submitted_ids}, got {[fid.id for fid in loaded]}"
@@ -320,7 +320,7 @@ class TestMockAdServerFormatWritePath:
 
 @pytest.mark.requires_db
 class TestBindTimeValidationRejectsBadAgentUrl:
-    """JSONType(model=...) validates raw dicts at the write boundary (salesagent-5mu0).
+    """JSONType(model=...) validates raw dicts at the write boundary (#1172).
 
     The typed column validates on every READ (FormatId.agent_url is AnyUrl), so a
     non-URL agent_url that reaches storage makes the row unreadable. The plpgsql

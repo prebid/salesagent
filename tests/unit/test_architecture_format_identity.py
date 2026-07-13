@@ -1,4 +1,4 @@
-"""Guard: one canonical format/agent-URL identity comparison (#1172, salesagent-hk21).
+"""Guard: one canonical format/agent-URL identity comparison (#1172).
 
 The format-identity bug class was two divergent canonicalizers for the same
 logical comparison: ``normalize_agent_url`` (suffix-tolerant, not canonical)

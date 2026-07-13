@@ -1,4 +1,4 @@
-"""Steps for UC-001 discover available inventory (get_products) — salesagent-8wf2.
+"""Steps for UC-001 discover available inventory (get_products) — #1594.
 
 Wired scenarios dispatch a real get_products through the parametrized wire
 transport (a2a/mcp/rest) via ProductEnv. The catalog is seeded by the UC-001
@@ -27,7 +27,7 @@ def _datatable_to_kwargs(datatable: list) -> dict[str, Any]:
     JSON-looking values (objects, arrays) are parsed; everything else stays a
     string. ``buying_mode`` is dropped: production defaults it to brief
     (BR-RULE-079 pre-v3 fallback) and GetProductsBody does not declare it yet
-    (spec-gap tracked in salesagent-ilbv) — sending it would trip the Pattern
+    (spec-gap tracked in #1596) — sending it would trip the Pattern
     #7 dev-forbid gate on REST rather than exercise discovery.
     """
     headers = [str(h).strip() for h in datatable[0]]

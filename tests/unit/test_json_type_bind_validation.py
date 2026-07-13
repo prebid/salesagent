@@ -1,4 +1,4 @@
-"""JSONType(model=) validates raw dicts at the write boundary (salesagent-5mu0).
+"""JSONType(model=) validates raw dicts at the write boundary (#1172).
 
 The typed column validates on every read, so the bind param must reject what
 the read path cannot load — otherwise a bad write makes the row unreadable.

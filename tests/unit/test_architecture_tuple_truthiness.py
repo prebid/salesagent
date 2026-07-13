@@ -1,7 +1,7 @@
 """Guard: tuple[bool, ...]-returning validators must be unpacked, never truth-tested.
 
 A ``tuple[bool, str | None]`` result is ALWAYS truthy, so ``if result:`` takes
-the error branch unconditionally (salesagent-jrb5: the mock-adapter config
+the error branch unconditionally (#1172 review: the mock-adapter config
 write path was dead code behind exactly this). This guard scans src/ for the
 two shapes that produced it:
 
