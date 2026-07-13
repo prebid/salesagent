@@ -31,7 +31,7 @@ tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_ids
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_tags_infers_selection_type_by_tag[e2e_rest]
 tests/bdd/test_get_products_inventory_profile.py::test_profile_with_selection_type_already_present_passes_through[e2e_rest]
 
-# --- uc004_deliver_media_buy_metrics (122) ---
+# --- uc004_deliver_media_buy_metrics (120) ---
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-both windows with model=last_touch-{"post_click": {"interval": 14, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}, "model": "last_touch"}-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-empty object {}-{}-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-interval=1 (minimum boundary)-{"post_click": {"interval": 1, "unit": "days"}}-valid]
@@ -53,9 +53,7 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_unsupport
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_boundary__boundary_point[e2e_rest-omitted (no account field)-(field absent)-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-omitted-(field absent)-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-dates omitted (full range)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date after end_date-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date before end_date-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date equals end_date-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-dates_omitted-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_before_end-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_identification_mode_resolution__mode[e2e_rest-media_buy_ids only-media_buy_ids=["mb-001"]-INV-1: resolves by publisher IDs]

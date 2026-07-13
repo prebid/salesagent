@@ -1690,15 +1690,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # FIXME(#1270): e2e_rest: Docker doesn't validate date range params —
-            # invalid cases (equals, after) succeed instead of failing.
-            if is_e2e_rest and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date")):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: Docker does not validate date range — invalid cases succeed",
-                        strict=True,
-                    )
-                )
+            # GRADUATED (#1417 round-8 follow-up): the #1417 validation refactor
+            # made the live server reject invalid date ranges, so the former
+            # strict "Docker does not validate date range" tripwire XPASSed on
+            # the first in-network bdd_e2e run — the invalid cases (equals,
+            # after) now pass on e2e_rest and their ledger entries are removed.
 
         # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
         # in-process — when only end_date is given, production defaults start to
@@ -2794,11 +2790,15 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
     # the A2A + MCP wire transports only — including a REST variant would 404.
-    if any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names):
+    # This exclusion covers e2e_rest too: it is the SAME REST surface over live
+    # HTTP, so every e2e_rest variant of these UCs 404s against the server
+    # (the whole uc019 red cluster in the first in-network bdd_e2e run).
+    no_rest_route = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
+    if no_rest_route:
         transports = [Transport.A2A, Transport.MCP]
         ids = ["a2a", "mcp"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true":
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_route:
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 

@@ -113,7 +113,7 @@ class TestTimestamptzMigration:
         """Downgrade should revert TIMESTAMPTZ columns back to TIMESTAMP."""
         engine, db_url = migration_db
 
-        # Self-contained setup (salesagent-q2vj): migration_db is module-scoped,
+        # Self-contained setup (#1572 fallout): migration_db is module-scoped,
         # but xdist --dist load can put this test on a different worker than the
         # upgrade test — a fresh, empty DB. Detect that and replay the upgrade
         # test's setup instead of assuming its state.
