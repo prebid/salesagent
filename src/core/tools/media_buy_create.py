@@ -131,6 +131,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     FormatId,
@@ -1653,12 +1654,20 @@ def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | N
     callers treat that as a cache miss so the retry re-executes instead of erroring.
     """
     try:
-        success = CreateMediaBuySuccess.model_validate(envelope["response"])
         protocol_status = envelope["status"]
+        # A cached pending-approval create is the CreateMediaBuySubmitted variant
+        # (no media_buy_id/packages) — validating it as Success would fail and
+        # degrade to a cache miss, re-executing the create and minting a SECOND
+        # workflow step for the same idempotency_key (salesagent-2t4m).
+        response: CreateMediaBuySuccess | CreateMediaBuySubmitted
+        if protocol_status == AdcpTaskStatus.submitted.value:
+            response = CreateMediaBuySubmitted.model_validate(envelope["response"])
+        else:
+            response = CreateMediaBuySuccess.model_validate(envelope["response"])
     except (KeyError, TypeError, ValidationError):
         logger.warning("Cached idempotency envelope failed validation — treating as a miss", exc_info=True)
         return None
-    return CreateMediaBuyResult(response=success, status=protocol_status, replayed=True)
+    return CreateMediaBuyResult(response=response, status=protocol_status, replayed=True)
 
 
 def _lookup_cached_replay(
@@ -1755,11 +1764,13 @@ def _cache_and_return(
     # Errors are never cached (AdCP 3.0.1 security.mdx#idempotency rule 3). The
     # real enforcement of that invariant is the error paths' early returns —
     # they return before reaching this helper, so every caller hands us a
-    # success. The TestErrorsAreNeverCached suite pins it. This precondition is a
-    # fail-loud contract guard: if a future refactor ever routes a non-success
-    # here it raises, instead of silently skipping the cache write.
-    assert isinstance(result.response, CreateMediaBuySuccess), (
-        "_cache_and_return must be called only with a successful result"
+    # success or a submitted task envelope (a pending-approval create is a
+    # non-error outcome whose verbatim replay must return the SAME task_id, not
+    # mint a second workflow step). The TestErrorsAreNeverCached suite pins it.
+    # This precondition is a fail-loud contract guard: if a future refactor ever
+    # routes an error here it raises, instead of silently skipping the cache write.
+    assert isinstance(result.response, CreateMediaBuySuccess | CreateMediaBuySubmitted), (
+        "_cache_and_return must be called only with a successful or submitted result"
     )
 
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
@@ -3005,15 +3016,14 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Return success response with packages awaiting approval
-            # The workflow_step_id in packages indicates approval is required
+            # Spec 3.1.1 create-media-buy-response.json: a buy awaiting human
+            # approval is the CreateMediaBuySubmitted variant — status="submitted"
+            # + task_id only. media_buy_id/packages land on the task's completion
+            # artifact; confirmed_at/revision would falsely assert seller
+            # commitment (salesagent-2t4m; mirrors the update-path fix b8b7e751b).
             _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess.sync_success(
-                    media_buy_id=media_buy_id,
-                    creative_deadline=None,
-                    packages=pending_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
-                    workflow_step_id=step.step_id,  # Client can track approval via this ID
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,  # Client tracks approval via this ID
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 ),
@@ -3106,21 +3116,6 @@ async def _create_media_buy_impl(
             response_msg = f"Media buy requires approval due to {reason.lower()}. Workflow Step ID: {step.step_id}. Context ID: {persistent_ctx.context_id}"
             ctx_manager.add_message(persistent_ctx.context_id, "assistant", response_msg)
 
-            # Generate permanent package IDs and prepare response packages
-            response_packages = []
-            assert req.packages is not None, "packages required - validated earlier"
-            for idx, pkg in enumerate(req.packages, 1):
-                # Generate permanent package ID
-                package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
-
-                # Per AdCP spec, create-media-buy-response Package only includes:
-                # - package_id (required): Publisher's unique identifier
-                response_packages.append(
-                    Package(
-                        package_id=package_id,
-                    )
-                )
-
             # Send Slack notification for configuration-based approval requirement
             try:
                 # Get principal name for notification
@@ -3162,12 +3157,13 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
+            # Spec 3.1.1 create-media-buy-response.json: same CreateMediaBuySubmitted
+            # shape as the manual-approval branch above (salesagent-2t4m) — the buy
+            # is queued for a human decision, so no media_buy_id/packages/
+            # confirmed_at/revision on this envelope.
             _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess.sync_success(
-                    media_buy_id=media_buy_id,
-                    packages=response_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
-                    workflow_step_id=step.step_id,
+                response=CreateMediaBuySubmitted(
+                    task_id=step.step_id,
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 ),

@@ -43,6 +43,9 @@ from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
 from adcp.types.aliases import (
+    CreateMediaBuySubmittedResponse as AdCPCreateMediaBuySubmitted,
+)
+from adcp.types.aliases import (
     CreateMediaBuySuccessResponse as AdCPCreateMediaBuySuccess,
 )
 from adcp.types.aliases import Package as AdCPPackage
@@ -377,7 +380,33 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
             return "Media buy creation failed."
 
 
-# Union type for create_media_buy operation
+class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
+    """Async/pending create_media_buy response extending adcp v3.1.1 type.
+
+    Spec 3.1.1 ``create-media-buy-response.json`` models a buy that cannot be
+    confirmed before the response is emitted (e.g. one pending human approval)
+    as the ``CreateMediaBuySubmitted`` variant of the response ``oneOf``:
+    protocol-envelope ``status="submitted"`` (const) plus a required ``task_id``
+    the buyer polls for the outcome. ``media_buy_id`` and ``packages`` land on
+    the task's COMPLETION artifact, not this envelope. This is distinct from
+    ``CreateMediaBuySuccess``, whose adcp-6.6 defaults (``status="completed"``,
+    ``confirmed_at=<now>``, ``revision=1``) would falsely assert the seller
+    confirmed a buy that is not yet committed. Mirrors ``UpdateMediaBuySubmitted``.
+
+    ``status`` defaults to ``"submitted"`` on the library base; ``task_id`` is
+    required (the workflow step id the admin approval flow acts on).
+    """
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for the protocol envelope."""
+        return f"Media buy submitted for approval (task {self.task_id})."
+
+
+# Union type for the SYNCHRONOUS create_media_buy contract (adapter returns,
+# replay bodies of completed buys). Deliberately excludes CreateMediaBuySubmitted:
+# adapters execute synchronously and can only confirm or fail; the submitted
+# task envelope is produced by the tool's approval branches and lives on
+# CreateMediaBuyResult.response (Success | Error | Submitted).
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
@@ -392,7 +421,7 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     """
 
     status: str
-    response: CreateMediaBuySuccess | CreateMediaBuyError
+    response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
     # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
     # envelope / top of the structured result). Set True ONLY when this response

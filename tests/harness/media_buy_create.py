@@ -16,7 +16,12 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.schemas._base import CreateMediaBuyError, CreateMediaBuyResult, CreateMediaBuySuccess
+from src.core.schemas._base import (
+    CreateMediaBuyError,
+    CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
+    CreateMediaBuySuccess,
+)
 from tests.harness._base import IntegrationEnv
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -381,16 +386,21 @@ class MediaBuyCreateEnv(IntegrationEnv):
         top-level protocol ``status`` and, on a cached idempotency replay, the
         spec's top-level ``replayed: true`` marker — both are popped back onto
         the wrapper so wire tests can assert ``result.payload.replayed``. The
-        CreateMediaBuySuccess|CreateMediaBuyError union discriminates on
-        ``media_buy_id`` (present only on success) — not on ``errors``, since a
-        *successful* buy may also carry non-fatal advisory ``errors``. An error
-        body has ``errors`` and no ``media_buy_id``, so it reconstructs as a
-        CreateMediaBuyError.
+        CreateMediaBuySuccess|CreateMediaBuyError|CreateMediaBuySubmitted union
+        mirrors the production A2A discrimination (adcp_a2a_server.py): submitted
+        first (status="submitted" + task_id, no media_buy_id — a submitted
+        envelope must not reconstruct as Success/Error), then ``media_buy_id``
+        (present only on success) — not ``errors``, since a *successful* buy may
+        also carry non-fatal advisory ``errors``. An error body has ``errors``
+        and no ``media_buy_id``, so it reconstructs as a CreateMediaBuyError.
         """
         status = data.pop("status", "completed")
         replayed = data.pop("replayed", False)
-        if data.get("media_buy_id") is not None:
-            response: CreateMediaBuySuccess | CreateMediaBuyError = CreateMediaBuySuccess(**data)
+        response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
+        if status == "submitted":
+            response = CreateMediaBuySubmitted(status=status, **data)
+        elif data.get("media_buy_id") is not None:
+            response = CreateMediaBuySuccess(**data)
         else:
             response = CreateMediaBuyError(**data)
         return CreateMediaBuyResult(response=response, status=status, replayed=replayed)

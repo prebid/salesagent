@@ -641,18 +641,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
                 break  # One xfail per scenario is sufficient
 
-        # workflow_step_id is an internal field (exclude=True in schema).
-        # impl/a2a return raw Python objects where the attribute is accessible
-        # via hasattr/getattr even with exclude=True. mcp/rest/e2e_rest serialize
-        # via model_dump() which drops exclude=True fields — xfail only those.
-        if "T-UC-002-alt-manual" in marker_names and (is_mcp or is_rest or is_e2e_rest):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="workflow_step_id is internal (exclude=True), dropped during serialization",
-                    strict=True,
-                )
-            )
-
         # --- UC-005: disclosure/asset scenarios with partial impl ---
         # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
         # partially implemented — some transport variants pass, others fail.
@@ -2608,6 +2596,15 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-missing",
 }
 
+# UC-002 manual-approval scenario wired to MediaBuyCreateEnv (salesagent-2t4m):
+# grades the spec-3.1.1 CreateMediaBuySubmitted envelope (status="submitted" +
+# task_id, no media_buy_id/confirmed_at/revision) across all 4 transports —
+# the create mirror of the BR-UC-003 wiring (1b2f03bc9). Other @alt-manual
+# scenarios (reject/approve flows) stay dormant until their steps are wired.
+_UC002_MANUAL_APPROVAL_WIRED: set[str] = {
+    "T-UC-002-alt-manual",
+}
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -2892,7 +2889,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
-        elif marker_names & _UC002_IDEMPOTENCY_WIRED:
+        elif marker_names & (_UC002_IDEMPOTENCY_WIRED | _UC002_MANUAL_APPROVAL_WIRED):
+            if marker_names & _UC002_MANUAL_APPROVAL_WIRED:
+                # Tells the shared When step to dispatch a FULL create through
+                # the parametrized transport (not account resolution).
+                ctx["uc002_full_create"] = True
             # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
             # real create_media_buy through every transport (the replay scenario
             # creates once, then sends the same key again to exercise the

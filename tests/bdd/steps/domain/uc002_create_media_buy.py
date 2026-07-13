@@ -10,6 +10,9 @@ beads: salesagent-2rq
 
 from __future__ import annotations
 
+import uuid
+from unittest.mock import ANY
+
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
@@ -455,6 +458,21 @@ def when_send_create_media_buy(ctx: dict) -> None:
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         dispatch_request(ctx, **ctx["request_kwargs"])
+        return
+
+    if ctx.get("uc002_full_create"):
+        # Manual-approval wiring (salesagent-2t4m): dispatch a FULL create
+        # through the parametrized transport against the harness-seeded
+        # product, carrying the Given-step account reference so boundary
+        # account resolution runs too.
+        from tests.bdd.steps.generic._dispatch import dispatch_request
+
+        kwargs = _build_idempotency_request_kwargs(ctx)
+        kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
+        account_ref = ctx.get("account_ref")
+        if account_ref is not None:
+            kwargs["account"] = account_ref.model_dump(mode="json", exclude_none=True)
+        dispatch_request(ctx, **kwargs)
         return
 
     from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
@@ -1705,3 +1723,105 @@ def then_webhook_notification(ctx: dict) -> None:
             f"step.request_data push_notification_config URL mismatch: "
             f"expected '{expected_url}', got '{step_push_cfg.get('url')}'"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — seller notification (manual-approval wiring, salesagent-2t4m)
+# ═══════════════════════════════════════════════════════════════════════
+# Moved from steps/generic/then_media_buy.py (a module NOT in pytest_plugins,
+# so the step was unregistered/dead there): registering that whole module
+# would shadow three step texts already registered by domain modules.
+
+
+class _Matches:
+    """Equality matcher for assert_called_once_with: accepts values satisfying *predicate*."""
+
+    def __init__(self, predicate, description: str) -> None:
+        self._predicate = predicate
+        self._description = description
+
+    def __eq__(self, other: object) -> bool:
+        return bool(self._predicate(other))
+
+    def __repr__(self) -> str:
+        return f"<{self._description}>"
+
+
+@then("a Slack notification should be sent to the Seller")
+def then_slack_notification_sent(ctx: dict) -> None:
+    """Assert Slack notifier was called with seller-facing event details.
+
+    In E2E, mocks live in the test process while the server runs in Docker,
+    so mock.call_count is always 0. Verify the media buy reached a status that
+    triggers seller notification (the notification is a side-effect of status
+    transitions in production code).
+    """
+    from tests.bdd.steps._outcome_helpers import _get_response_field, assert_media_buy_created, is_e2e
+
+    if is_e2e(ctx):
+        # E2E: cannot observe Slack mock calls — verify:
+        # 1. The media buy was created successfully
+        # 2. It reached a status that triggers Slack notification to the Seller
+        #
+        # A SUBMITTED (pending-approval) response carries no media_buy_id on the
+        # wire (spec 3.1.1 CreateMediaBuySubmitted) — locate the persisted row
+        # via the workflow mapping's tenant instead of the response body.
+        resp = ctx.get("response")
+        if resp is not None and _get_response_field(resp, "media_buy_id") is None:
+            from src.core.database.models import MediaBuy as DBMediaBuy
+
+            env = ctx["env"]
+            tenant = ctx.get("tenant")
+            assert tenant is not None, "submitted-path Slack check needs ctx['tenant'] to locate the persisted buy"
+            rows = env.query(DBMediaBuy, tenant_id=tenant.tenant_id)
+            assert rows, "submitted create must persist a media buy row that triggered the Seller notification"
+            mb = rows[-1]
+        else:
+            mb = assert_media_buy_created(ctx)
+        # Seller notifications fire on creation/approval-needed status transitions
+        notification_trigger_statuses = (
+            "pending_approval",
+            "active",
+            "completed",
+            "submitted",
+        )
+        assert mb.status in notification_trigger_statuses, (
+            f"E2E media buy has status '{mb.status}' which does not trigger "
+            f"Seller Slack notification. Expected one of {notification_trigger_statuses}."
+        )
+        return
+
+    # In-process: full mock verification. One assert_called_once_with with
+    # value-constraining matchers (no split call_args inspection — the
+    # weak-mock-assertions guard). Production always passes these as kwargs;
+    # a positional call is a signature divergence and fails the match.
+    env = ctx["env"]
+    mock_slack = env.mock["slack"].return_value
+
+    # Buyer-facing events (rejected, approved, status_changed) must never be
+    # sent to the Seller's Slack channel.
+    seller_event_types = ("approval_required", "created", "config_approval_required")
+    resp = ctx.get("response")
+    expected_mb_id = _get_response_field(resp, "media_buy_id") if resp is not None else None
+    tenant = ctx.get("tenant")
+    expected_tenant_name = getattr(tenant, "name", None) if tenant is not None else None
+
+    mock_slack.notify_media_buy_event.assert_called_once_with(
+        event_type=_Matches(lambda v: v in seller_event_types, f"seller-facing event_type in {seller_event_types}"),
+        # A submitted (pending-approval) response carries no media_buy_id on
+        # the wire (spec 3.1.1) — then any non-empty id from production is fine.
+        media_buy_id=(
+            expected_mb_id
+            if expected_mb_id
+            else _Matches(lambda v: isinstance(v, str) and v != "", "non-empty media_buy_id")
+        ),
+        principal_name=ANY,
+        details=ANY,
+        tenant_name=(
+            expected_tenant_name
+            if expected_tenant_name
+            else _Matches(lambda v: isinstance(v, str) and v != "", "non-empty tenant_name (targets the Seller)")
+        ),
+        tenant_id=ANY,
+        success=True,
+    )
