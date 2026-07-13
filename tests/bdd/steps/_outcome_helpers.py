@@ -40,6 +40,21 @@ def wire_field(ctx: dict, field: str) -> Any:
     return _require_response(ctx).model_dump(mode="json")[field]
 
 
+def wire_path(ctx: dict, dotted: str) -> Any:
+    """Read a dotted path (e.g. ``"media_buy.features"``) from the wire body.
+
+    The nested analogue of :func:`wire_field` — resolves the first segment via
+    ``wire_field`` (inheriting its loud missing-wire guard), then walks the
+    remaining segments asserting each parent is an object.
+    """
+    parts = dotted.split(".")
+    value = wire_field(ctx, parts[0])
+    for part in parts[1:]:
+        assert isinstance(value, dict), f"{dotted}: {part!r} parent is {type(value).__name__}, not an object"
+        value = value.get(part)
+    return value
+
+
 def wire_dict(ctx: dict) -> dict:
     """Return the full success-path wire body as the buyer sees it on the wire.
 

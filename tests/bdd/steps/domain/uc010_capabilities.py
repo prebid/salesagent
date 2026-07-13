@@ -5,7 +5,7 @@ wire transports on CapabilitiesEnv. Only the adapter is mocked (channels +
 targeting capabilities are adapter facts); publisher partners are real DB
 rows, and the wrappers (MCP tool / A2A skill / REST GET) are production code.
 
-Assertions read the REAL serialized wire body via ``wire_field``. The
+Assertions read the REAL serialized wire body via ``wire_path``. The
 "all 4 flags" features assert is reconciled with the pinned spec v3.1.1
 (core/media-buy-features.json declares exactly 4 properties) — see the
 feature-file comment.
@@ -18,7 +18,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import wire_field, wire_path
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 # Pinned spec v3.1.1 core/media-buy-features.json — exactly these properties.
@@ -129,30 +129,20 @@ def when_get_capabilities_skill(ctx: dict) -> None:
 # ── Then steps ──────────────────────────────────────────────────────
 
 
-def _wire(ctx: dict, dotted: str) -> Any:
-    """Read a dotted path from the serialized wire response."""
-    parts = dotted.split(".")
-    value = wire_field(ctx, parts[0])
-    for part in parts[1:]:
-        assert isinstance(value, dict), f"{dotted}: {part!r} parent is {type(value).__name__}, not an object"
-        value = value.get(part)
-    return value
-
-
 @then("the response should include adcp.major_versions containing 3")
 def then_major_versions(ctx: dict) -> None:
     assert ctx.get("error") is None, f"Request failed: {ctx.get('error')}"
-    assert 3 in _wire(ctx, "adcp.major_versions")
+    assert 3 in wire_path(ctx, "adcp.major_versions")
 
 
 @then('the response should include supported_protocols containing "media_buy"')
 def then_supported_protocols(ctx: dict) -> None:
-    assert "media_buy" in _wire(ctx, "supported_protocols")
+    assert "media_buy" in wire_path(ctx, "supported_protocols")
 
 
 @then("the response should include account section with sandbox flag and billing models")
 def then_account_section(ctx: dict) -> None:
-    account = _wire(ctx, "account")
+    account = wire_path(ctx, "account")
     assert isinstance(account, dict), f"account section missing: {account!r}"
     assert isinstance(account.get("sandbox"), bool), f"account.sandbox not a bool: {account.get('sandbox')!r}"
     assert account.get("supported_billing"), f"account.supported_billing empty: {account.get('supported_billing')!r}"
@@ -160,7 +150,7 @@ def then_account_section(ctx: dict) -> None:
 
 @then("the response should include media_buy.features section with all 4 flags")
 def then_features_section(ctx: dict) -> None:
-    features = _wire(ctx, "media_buy.features")
+    features = wire_path(ctx, "media_buy.features")
     assert isinstance(features, dict), f"media_buy.features missing: {features!r}"
     for flag in _FEATURE_FLAGS:
         assert isinstance(features.get(flag), bool), f"features.{flag} not a bool: {features.get(flag)!r}"
@@ -168,24 +158,24 @@ def then_features_section(ctx: dict) -> None:
 
 @then("the response should include media_buy.supported_pricing_models")
 def then_pricing_models(ctx: dict) -> None:
-    assert _wire(ctx, "media_buy.supported_pricing_models"), "supported_pricing_models empty"
+    assert wire_path(ctx, "media_buy.supported_pricing_models"), "supported_pricing_models empty"
 
 
 @then("the response should include media_buy.reporting_delivery_methods section")
 def then_reporting_delivery_methods(ctx: dict) -> None:
-    assert _wire(ctx, "media_buy.reporting_delivery_methods"), "reporting_delivery_methods empty"
+    assert wire_path(ctx, "media_buy.reporting_delivery_methods"), "reporting_delivery_methods empty"
 
 
 @then("the response should include media_buy.execution section with targeting")
 def then_execution_targeting(ctx: dict) -> None:
-    targeting = _wire(ctx, "media_buy.execution.targeting")
+    targeting = wire_path(ctx, "media_buy.execution.targeting")
     assert isinstance(targeting, dict), f"execution.targeting missing: {targeting!r}"
     assert targeting.get("geo_countries") is True, f"geo_countries not reported: {targeting.get('geo_countries')!r}"
 
 
 @then(parsers.parse("the response should include media_buy.portfolio with publisher_domains {domains}"))
 def then_portfolio_domains(ctx: dict, domains: str) -> None:
-    portfolio = _wire(ctx, "media_buy.portfolio")
+    portfolio = wire_path(ctx, "media_buy.portfolio")
     assert isinstance(portfolio, dict), f"portfolio missing: {portfolio!r}"
     actual = set(portfolio.get("publisher_domains") or [])
     expected = set(_split_quoted(domains))
@@ -194,7 +184,7 @@ def then_portfolio_domains(ctx: dict, domains: str) -> None:
 
 @then(parsers.parse("the response should include media_buy.portfolio with primary_channels {channels}"))
 def then_portfolio_channels(ctx: dict, channels: str) -> None:
-    portfolio = _wire(ctx, "media_buy.portfolio")
+    portfolio = wire_path(ctx, "media_buy.portfolio")
     actual = set(portfolio.get("primary_channels") or [])
     expected = set(_split_quoted(channels))
     assert expected <= actual, f"primary_channels {actual} missing {expected - actual}"
