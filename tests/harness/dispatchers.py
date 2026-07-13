@@ -293,11 +293,16 @@ class RestE2EDispatcher:
             )
 
         try:
-            payload = env.parse_rest_response(response.json())
+            wire_body = response.json()
+            payload = env.parse_rest_response(dict(wire_body))
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
 
-        return TransportResult(payload=payload, envelope=envelope, error=None, raw_response=response)
+        # Real HTTP wire body — the e2e analogue of the in-process RestDispatcher's
+        # wire_response, so success-path wire-shape steps grade the live server too.
+        return TransportResult(
+            payload=payload, envelope=envelope, error=None, raw_response=response, wire_response=wire_body
+        )
 
 
 class McpE2EDispatcher:
