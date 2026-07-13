@@ -18,6 +18,7 @@ Two invariants:
 """
 
 import pathlib
+import re
 import sys
 
 import yaml
@@ -45,24 +46,42 @@ def _load_compiler():
     return compile_bdd
 
 
+def _is_spec_artifact_ref(ref: str) -> bool:
+    """True if ``ref`` points at an AdCP spec ARTIFACT (a file or URL) rather than
+    an adcp-req requirement id.
+
+    Hand-authored scenarios ground themselves in the spec — prose (``*.mdx``),
+    compliance storyboards (``*.yaml``/``*.yml``), or schemas (``*.json``), by
+    path or URL. adcp-req-sourced scenarios reference bare requirement ids
+    (``BR-*``, ``SR-*``). This is extension-agnostic across spec doc types so a
+    ``.yaml``/``.json``-grounded scenario is recognized, not just ``.mdx``.
+    """
+    ref = str(ref)
+    if "://" in ref:
+        return True
+    return bool(re.search(r"\.(mdx|ya?ml|json)(\b|#|$)", ref, re.IGNORECASE))
+
+
 def _handmaintained_candidates_from_traceability():
     """Hand-maintained scenarios enumerated from the *independent* traceability
     inventory (``bdd-traceability.yaml``), keyed ``(feature file, @T- id tag)``.
 
-    A candidate is a scenario grounded in AdCP spec PROSE — its ``upstream_refs``
-    point at a spec document (``*.mdx``) rather than an adcp-req business rule
-    (``BR-*``) or system requirement (``SR-*``). Such a scenario has no adcp-req
-    render, so ``compile_bdd.py --merge`` classifies it ``LEGACY-DELETE`` and
-    drops it unless it carries a hand-edit marker. Deriving the inventory here —
-    NOT from the on-disk markers — is what lets the guard see a scenario that is
-    missing BOTH a marker and a registry entry (invisible to a marker-only scan).
+    A candidate is a scenario grounded in an AdCP spec ARTIFACT — its
+    ``upstream_refs`` point at a spec file/URL (``*.mdx`` prose, ``*.yaml``
+    storyboard, ``*.json`` schema) rather than an adcp-req requirement id
+    (``BR-*``/``SR-*``). Such a scenario has no adcp-req render, so
+    ``compile_bdd.py --merge`` classifies it ``LEGACY-DELETE`` and drops it unless
+    it carries a hand-edit marker. Deriving the inventory here — NOT from the
+    on-disk markers — is what lets the guard see a scenario missing BOTH a marker
+    and a registry entry (invisible to a marker-only scan), independent of which
+    spec-doc extension grounds it.
     """
     data = yaml.safe_load(TRACEABILITY_PATH.read_text()) or {}
     candidates = []
     for rows in (data.get("mappings") or {}).values():
         for row in rows:
             refs = row.get("upstream_refs") or []
-            if any(".mdx" in str(ref) for ref in refs):
+            if any(_is_spec_artifact_ref(ref) for ref in refs):
                 candidates.append((row["adcp_feature"], f"@{row['adcp_scenario_id']}"))
     return candidates
 

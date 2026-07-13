@@ -17,6 +17,7 @@ away by raising ``InternalError`` (a JSON-RPC error) instead of returning the
 Task. These tests pin the returned-failed-Task contract on the wire artifact.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,7 +33,7 @@ from a2a.types import (
 )
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _dict_to_value
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
 from tests.a2a_helpers import make_a2a_context
 from tests.helpers import assert_envelope_shape
 from tests.utils.a2a_helpers import (
@@ -104,6 +105,30 @@ async def test_untyped_processing_failure_returns_failed_task_with_internal_erro
     )
     # The failed Task is also the stored lifecycle record.
     assert handler.tasks[result.id].status.state == TaskState.TASK_STATE_FAILED
+
+
+@pytest.mark.asyncio
+async def test_unknown_skill_records_boundary_error_exactly_once():
+    """An unknown skill emits exactly one boundary-observability record.
+
+    Regression for the observability gap: the unknown-skill check used to raise
+    BEFORE the logged try, so `record_boundary_error` never fired for it while the
+    outer catch assumed the inner boundary had already logged. The check now lives
+    inside the logged boundary, so an unknown skill records exactly once — not zero,
+    not twice.
+    """
+    handler = AdCPRequestHandler()
+    with patch("src.a2a_server.adcp_a2a_server.record_boundary_error") as mock_record:
+        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
+            await handler._handle_explicit_skill("nonexistent_skill", {}, _TEST_IDENTITY)
+    # Exactly one boundary record, for this skill, carrying the re-raised error.
+    mock_record.assert_called_once_with(
+        "a2a",
+        "nonexistent_skill",
+        exc_info.value,
+        tenant_id=_TEST_IDENTITY.tenant_id,
+        principal_id=_TEST_IDENTITY.principal_id or "anonymous",
+    )
 
 
 @pytest.mark.asyncio
@@ -204,59 +229,120 @@ async def test_all_skills_failed_returns_failed_task_with_per_skill_artifacts_no
 
 
 @pytest.mark.asyncio
-async def test_async_failure_webhook_preserves_structured_envelope():
-    """When a failure webhook IS emitted (async transition), it carries the Task's
-    structured artifacts, not a flattened ``{"error": "..."}``.
+async def test_immediate_completed_task_sends_no_webhook():
+    """An immediately-completed task returns synchronously and sends no webhook.
+
+    a2a-guide.mdx "Webhook Trigger Rules for Terminal States": no push is sent
+    when the initial response is already terminal — the buyer has the result in
+    the response. Only non-terminal (submitted) initial responses notify.
+    """
+    handler, ctx = _make_handler()
+    handler._send_protocol_webhook = AsyncMock()
+    # A plain completed result (no "status": "submitted") → task completes immediately.
+    handler._handle_explicit_skill = AsyncMock(return_value={"products": [{"id": "p1"}]})
+    message = create_a2a_message_with_skill("get_products", {})
+    params = SendMessageRequest(message=message)
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
+        result = await handler.on_message_send(params, context=ctx)
+
+    assert result.status.state == TaskState.TASK_STATE_COMPLETED
+    handler._send_protocol_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order", ["submitted_first", "failed_first"])
+async def test_mixed_submitted_and_failed_preserves_failure_envelope(order):
+    """A mixed submitted+failed batch is terminal-failed with EVERY artifact preserved.
+
+    Regression for the early-return bug: the submitted scan used to short-circuit
+    before artifacts were built, returning SUBMITTED with zero artifacts and
+    silently dropping the failed skill's UNSUPPORTED_FEATURE envelope. Now status
+    is decided by precedence (failed > submitted > completed) AFTER all artifacts
+    are built, so both invocation orders preserve the failure and the pending
+    result. Immediate terminal failure → no webhook.
+    """
+    handler, ctx = _make_handler()
+    handler._send_protocol_webhook = AsyncMock()
+    submitted = {"media_buy_id": "mb-1", "status": "submitted"}
+    failure = AdCPCapabilityNotSupportedError(message="approve_creative skill not yet implemented")
+
+    if order == "submitted_first":
+        skills = [("create_media_buy", {}), ("approve_creative", {})]
+        handler._handle_explicit_skill = AsyncMock(side_effect=[submitted, failure])
+    else:
+        skills = [("approve_creative", {}), ("create_media_buy", {})]
+        handler._handle_explicit_skill = AsyncMock(side_effect=[failure, submitted])
+
+    message = create_a2a_message_with_skill(*skills[0])
+    message.parts.append(create_a2a_message_with_skill(*skills[1]).parts[0])
+    params = SendMessageRequest(message=message)
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
+        result = await handler.on_message_send(params, context=ctx)
+
+    # Failure precedence → terminal FAILED, but every result is preserved as an artifact.
+    assert result.status.state == TaskState.TASK_STATE_FAILED
+    assert len(result.artifacts) == 2, f"both results must be preserved, got {len(result.artifacts)} artifacts"
+    all_data = [extract_data_from_artifact(a) for a in result.artifacts]
+    codes = [d.get("adcp_error", {}).get("code") for d in all_data]
+    assert "UNSUPPORTED_FEATURE" in codes, f"failure envelope dropped: {all_data}"
+    assert any(d.get("status") == "submitted" for d in all_data), f"submitted result dropped: {all_data}"
+    handler._send_protocol_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_failure_webhook_preserves_all_artifacts_on_the_wire():
+    """A failure webhook (async transition) serializes ALL of the Task's artifacts.
 
     Immediate terminal failures do not notify, but a task that fails after being
-    returned async (``working``/``submitted``) must push the full Task per
-    a2a-guide.mdx ("FINAL STATES: Extract from .artifacts"). This pins the
-    payload construction in ``_send_protocol_webhook``: the outbound result must
-    not collapse the two-layer envelope to a bare error string.
+    returned async must push the full Task per a2a-guide.mdx ("FINAL STATES:
+    Extract from .artifacts"). This tests the REAL serializer output (the wire
+    payload emitted to the push service), not the mocked builder: a two-DataPart
+    Task must not be reduced to a single stale value, and the envelope must never
+    flatten to a bare ``{"error": str}``.
     """
+    from google.protobuf import json_format
+
     handler = AdCPRequestHandler()
 
-    # A failed Task carrying the two-layer envelope as its processing_error artifact.
     envelope = AdCPRequestHandler._build_error_envelope(AdCPValidationError("brief must not be empty"))
     task = Task(
         id="task_async_fail",
         context_id="ctx_async_fail",
         status=TaskStatus(state=TaskState.TASK_STATE_FAILED),
     )
+    # Two distinct DataParts — the second must survive (the old first-only decoder dropped it).
+    task.artifacts.append(
+        Artifact(artifact_id="error_1", name="processing_error", parts=[Part(data=_dict_to_value(envelope))])
+    )
     task.artifacts.append(
         Artifact(
-            artifact_id="error_1",
-            name="processing_error",
-            parts=[Part(data=_dict_to_value(envelope))],
+            artifact_id="ctx_1",
+            name="get_products_result",
+            parts=[Part(data=_dict_to_value({"products": [{"id": "p-sibling"}]}))],
         )
     )
-    # Register a push config so the webhook is actually attempted (not early-returned).
     handler._task_push_configs[task.id] = TaskPushNotificationConfig(id="pnc_1", url="https://buyer.example/webhook")
 
     captured: dict = {}
 
-    def _capture_payload(**kwargs):
-        captured.update(kwargs)
-        return MagicMock()  # opaque payload; we assert on the result dict fed to it
+    async def _capture(*, push_notification_config, payload, metadata):
+        captured["payload"] = payload
 
     service = MagicMock()
-    service.send_notification = AsyncMock()
+    service.send_notification = AsyncMock(side_effect=_capture)
 
-    with (
-        patch("src.a2a_server.adcp_a2a_server.get_protocol_webhook_service", return_value=service),
-        patch("src.a2a_server.adcp_a2a_server.create_a2a_webhook_payload", side_effect=_capture_payload),
-    ):
+    # NOTE: create_a2a_webhook_payload is NOT mocked — we verify the real emitted wire Task.
+    with patch("src.a2a_server.adcp_a2a_server.get_protocol_webhook_service", return_value=service):
         await handler._send_protocol_webhook(task, status="failed")
 
     service.send_notification.assert_awaited_once()
-    # The result fed into the payload must be the structured two-layer envelope
-    # (extracted from the Task's artifact), NOT a flattened {"error": str} or {}.
-    result = captured["result"]
-    assert result.get("adcp_error", {}).get("code") == "VALIDATION_ERROR", (
-        f"structured envelope not forwarded: {result}"
-    )
-    assert result["errors"][0]["message"] == "brief must not be empty", result
-    assert result != {"error": "brief must not be empty"}, "payload flattened to a bare error string"
+    wire = json.dumps(json_format.MessageToDict(captured["payload"]))
+    # Both artifacts' structured data survive serialization; envelope not flattened.
+    assert "VALIDATION_ERROR" in wire, f"envelope code missing from wire payload: {wire}"
+    assert "brief must not be empty" in wire
+    assert "p-sibling" in wire, f"second DataPart dropped from wire payload (first-only regression): {wire}"
 
 
 def test_read_failed_a2a_task_strict_asserts_on_artifactless_task():

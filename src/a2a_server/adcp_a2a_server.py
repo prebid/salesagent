@@ -235,17 +235,20 @@ class AdCPRequestHandler(RequestHandler):
         task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
 
     @staticmethod
-    def _first_artifact_data(task: Task) -> dict[str, Any]:
-        """Structured data of the task's first artifact DataPart, or ``{}``.
+    def _task_artifacts_data(task: Task) -> dict[str, Any]:
+        """All artifact DataParts of a task, keyed by artifact name, or ``{}``.
 
-        For a failed Task this is the two-layer AdCP error envelope; the async
-        failure webhook forwards it verbatim so the payload preserves the
-        structured artifact instead of flattening it to an error string."""
+        Single decoder for A2A DataPart → dict (protobuf ``Value`` → JSON), shared
+        by completed-status detection and the webhook payload builder so a
+        multi-artifact Task is never reduced to a single stale DataPart. A failed
+        Task's error envelope, a sync_creatives result, and every sibling result
+        are all preserved."""
+        data: dict[str, Any] = {}
         for artifact in task.artifacts:
             for part in artifact.parts:
                 if part.HasField("data"):
-                    return json.loads(json_format.MessageToJson(part.data))
-        return {}
+                    data[artifact.name] = json.loads(json_format.MessageToJson(part.data))
+        return data
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
@@ -442,12 +445,13 @@ class AdCPRequestHandler(RequestHandler):
                 status_enum = GeneratedTaskStatus.working
 
             # Build result data for the webhook payload. ``create_a2a_webhook_payload``
-            # renders its artifact FROM this dict, so for final states we pass the
-            # Task's own structured artifact data (the two-layer AdCP envelope on a
-            # ``failed`` task) — never a lossy ``{"error": "..."}`` and never an empty
-            # dict that would drop the envelope. Callers may still pass an explicit
-            # ``result``; otherwise we read it off the task's artifacts.
-            result_data: dict[str, Any] = result if result is not None else self._first_artifact_data(task)
+            # renders its artifact FROM this dict, so we pass the Task's own structured
+            # artifact data — ALL artifacts keyed by name (the two-layer AdCP envelope
+            # on a ``failed`` task, the full sync_creatives result, every sibling) —
+            # never a lossy ``{"error": "..."}``, a single stale DataPart, or an empty
+            # dict. Callers may still pass an explicit ``result``; otherwise we read it
+            # off the task's artifacts.
+            result_data: dict[str, Any] = result if result is not None else self._task_artifacts_data(task)
 
             # Use create_a2a_webhook_payload to get the correct payload type:
             # - Task for final states (completed, failed, canceled)
@@ -704,22 +708,9 @@ class AdCPRequestHandler(RequestHandler):
                         )
                         results.append(self._build_failed_skill_result(skill_name, e))
 
-                # Check for submitted status (manual approval required) - return early without artifacts
-                # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
-                for res in results:
-                    if res["success"] and isinstance(res["result"], dict):
-                        result_status = res["result"].get("status")
-                        if result_status == "submitted":
-                            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
-                            del task.artifacts[:]  # No artifacts for pending tasks
-                            logger.info(
-                                f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
-                            )
-                            # Send protocol-level webhook notification
-                            await self._send_protocol_webhook(task, status="submitted")
-                            self.tasks[task_id] = task
-                            return task
-
+                # Create artifacts for ALL skill results FIRST, before any status
+                # decision. A mixed submitted+failed batch must never lose a failure
+                # envelope to an early return — status is decided below by precedence.
                 # Create artifacts for all skill results with human-readable text
                 for i, res in enumerate(results):
                     if res["success"]:
@@ -763,20 +754,39 @@ class AdCPRequestHandler(RequestHandler):
                         )
                     )
 
-                # Check if any skills failed and determine task status
+                # Determine task status by precedence: failed > submitted > completed.
+                # Every result's artifact was built above and is preserved regardless
+                # of the chosen status, so a mixed batch never silently drops a result.
                 failed_skills = [res["skill"] for res in results if not res["success"]]
+                submitted_skills = [
+                    res["skill"]
+                    for res in results
+                    if res["success"] and isinstance(res["result"], dict) and res["result"].get("status") == "submitted"
+                ]
                 successful_skills = [res["skill"] for res in results if res["success"]]
 
-                if failed_skills and not successful_skills:
-                    # Immediate terminal failure returned synchronously — mark FAILED
-                    # and return. Each failed skill already contributed its own
-                    # ``error_result`` artifact (two-layer envelope) above, so the
-                    # per-skill reasons ride in the Task body; no webhook is sent for
-                    # an immediate terminal response (a2a-guide.mdx terminal-state rule).
+                if failed_skills:
+                    # Any failure makes the batch terminal-failed; all artifacts (each
+                    # failed skill's two-layer envelope AND any sibling successes or
+                    # pending results) ride in the Task body. Immediate terminal
+                    # response returned synchronously → no webhook (a2a-guide.mdx
+                    # terminal-state rule).
                     self._mark_task_failed(task)
-
                     return task
-                elif successful_skills:
+
+                if submitted_skills:
+                    # A pending-approval skill is present with no outright failures →
+                    # non-terminal SUBMITTED. A single-skill async op keeps the "no
+                    # artifacts until approved" convention; a mixed batch preserves
+                    # every sibling result. Non-terminal initial response → notify.
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+                    if len(results) == 1:
+                        del task.artifacts[:]
+                    await self._send_protocol_webhook(task, status="submitted")
+                    self.tasks[task_id] = task
+                    return task
+
+                if successful_skills:
                     # Log successful skill invocations with rich context
                     try:
                         tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
@@ -945,38 +955,38 @@ class AdCPRequestHandler(RequestHandler):
             task_state = TaskState.TASK_STATE_COMPLETED
             task_status_str = "completed"
 
-            result_data = {}
-            if task.artifacts:
-                # Extract result from artifacts — part.data is a protobuf Value
-                for artifact in task.artifacts:
-                    if artifact.parts:
-                        for part in artifact.parts:
-                            if part.HasField("data"):
-                                data_dict = json.loads(json_format.MessageToJson(part.data))
-                                result_data[artifact.name] = data_dict
+            # Single DataPart decode via the shared helper (Finding: consolidate decoders).
+            result_data = self._task_artifacts_data(task)
+            for artifact_name, data_dict in result_data.items():
+                # sync_creatives returns a "result" artifact whose creatives may be
+                # pending review → the task is non-terminal (submitted), not completed.
+                if artifact_name == "result" and isinstance(data_dict, dict):
+                    creatives = data_dict.get("creatives", [])
+                    if any(
+                        c.get("status") == CreativeStatusEnum.pending_review.value
+                        for c in creatives
+                        if isinstance(c, dict)
+                    ):
+                        task_state = TaskState.TASK_STATE_SUBMITTED
+                        task_status_str = "submitted"
 
-                                # Check if this is a sync_creatives response with pending creatives
-                                if artifact.name == "result" and isinstance(data_dict, dict):
-                                    creatives = data_dict.get("creatives", [])
-                                    if any(
-                                        c.get("status") == CreativeStatusEnum.pending_review.value
-                                        for c in creatives
-                                        if isinstance(c, dict)
-                                    ):
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
-                                        task_status_str = "submitted"
-
-                                    # Check for explicit status field (e.g., create_media_buy returns this)
-                                    result_status = data_dict.get("status")
-                                    if result_status == "submitted":
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
-                                        task_status_str = "submitted"
+                    # Explicit status field (e.g. create_media_buy returns this).
+                    if data_dict.get("status") == "submitted":
+                        task_state = TaskState.TASK_STATE_SUBMITTED
+                        task_status_str = "submitted"
 
             # Mark task with appropriate status
             task.status.CopyFrom(TaskStatus(state=task_state))
 
-            # Send protocol-level webhook notification if configured
-            await self._send_protocol_webhook(task, status=task_status_str)
+            # Notify ONLY for a non-terminal (submitted) initial response. An
+            # immediately-completed task is returned synchronously in this response,
+            # and AdCP 3.1.0-beta.3 a2a-guide.mdx ("Webhook Trigger Rules for
+            # Terminal States") says no webhook is sent when the initial response is
+            # already terminal — the buyer already has the result. Only the
+            # sync_creatives-pending → submitted transition reaches here as
+            # non-terminal (create_media_buy submitted returns earlier).
+            if task_status_str == "submitted":
+                await self._send_protocol_webhook(task, status="submitted")
 
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
@@ -1393,6 +1403,43 @@ class AdCPRequestHandler(RequestHandler):
 
         return response_data
 
+    def _skill_handler_map(self) -> dict[str, Callable[..., Awaitable[Any]]]:
+        """Explicit-skill dispatch registry: skill name → bound handler.
+
+        The single source of truth for which skills A2A dispatches. Exposed as a
+        method so the transport-contract suite can assert a registry↔test bijection
+        (every registered skill is exercised on the wire). Handler signatures are
+        heterogeneous (discovery skills accept ``identity: ResolvedIdentity | None``;
+        the rest require non-None), so dispatch is typed dynamically — the
+        non-discovery guard in ``_handle_explicit_skill`` enforces identity first.
+        """
+        return {
+            # Core AdCP Discovery Skills
+            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
+            # Core AdCP Media Buy Skills
+            "get_products": self._handle_get_products_skill,
+            "create_media_buy": self._handle_create_media_buy_skill,
+            # Discovery Skills
+            "list_creative_formats": self._handle_list_creative_formats_skill,
+            "list_accounts": self._handle_list_accounts_skill,
+            "sync_accounts": self._handle_sync_accounts_skill,
+            "list_authorized_properties": self._handle_list_authorized_properties_skill,
+            # Media Buy Management Skills
+            "update_media_buy": self._handle_update_media_buy_skill,
+            "get_media_buys": self._handle_get_media_buys_skill,
+            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
+            "update_performance_index": self._handle_update_performance_index_skill,
+            # AdCP Spec Creative Management (centralized library approach)
+            "sync_creatives": self._handle_sync_creatives_skill,
+            "list_creatives": self._handle_list_creatives_skill,
+            "create_creative": self._handle_create_creative_skill,
+            "assign_creative": self._handle_assign_creative_skill,
+            # Creative Management & Approval
+            "approve_creative": self._handle_approve_creative_skill,
+            "get_media_buy_status": self._handle_get_media_buy_status_skill,
+            "optimize_media_buy": self._handle_optimize_media_buy_skill,
+        }
+
     async def _handle_explicit_skill(
         self,
         skill_name: str,
@@ -1447,53 +1494,24 @@ class AdCPRequestHandler(RequestHandler):
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(message="Authentication required for skill invocation")
 
-        # Map skill names to handlers. Handler signatures are heterogeneous
-        # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
-        # require non-None), so the dispatch is typed dynamically — the non-discovery
-        # guard above enforces a non-None identity before the call.
-        skill_handlers: dict[str, Callable[..., Awaitable[Any]]] = {
-            # Core AdCP Discovery Skills
-            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
-            # Core AdCP Media Buy Skills
-            "get_products": self._handle_get_products_skill,
-            "create_media_buy": self._handle_create_media_buy_skill,
-            # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
-            "list_creative_formats": self._handle_list_creative_formats_skill,
-            "list_accounts": self._handle_list_accounts_skill,
-            "sync_accounts": self._handle_sync_accounts_skill,
-            "list_authorized_properties": self._handle_list_authorized_properties_skill,
-            # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
-            "update_media_buy": self._handle_update_media_buy_skill,
-            "get_media_buys": self._handle_get_media_buys_skill,
-            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
-            "update_performance_index": self._handle_update_performance_index_skill,
-            # AdCP Spec Creative Management (centralized library approach)
-            "sync_creatives": self._handle_sync_creatives_skill,
-            "list_creatives": self._handle_list_creatives_skill,
-            "create_creative": self._handle_create_creative_skill,
-            "assign_creative": self._handle_assign_creative_skill,
-            # Creative Management & Approval
-            "approve_creative": self._handle_approve_creative_skill,
-            "get_media_buy_status": self._handle_get_media_buy_status_skill,
-            "optimize_media_buy": self._handle_optimize_media_buy_skill,
-            # Note: signals skills removed - should come from dedicated signals agents
-            # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
-        }
+        skill_handlers = self._skill_handler_map()
 
-        if skill_name not in skill_handlers:
-            available_skills = list(skill_handlers.keys())
+        try:
             # An unknown SKILL is an application-layer failure — the JSON-RPC method
             # (message/send) is valid; routing failed inside skill dispatch. Per AdCP
             # 3.1.0-beta.3 transport-errors.mdx "Layer Separation", it belongs in the
             # task body as a failed Task with a two-layer envelope, NOT a JSON-RPC
-            # MethodNotFoundError (reserved for unknown JSON-RPC methods). The outer
-            # dispatcher's `except AdCPError` branch wraps this into a failed-skill
-            # result, so accumulated results from earlier skills are preserved.
-            raise AdCPCapabilityNotSupportedError(
-                message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}"
-            )
+            # MethodNotFoundError (reserved for unknown JSON-RPC methods). Raised
+            # INSIDE this try so the boundary observability below records it exactly
+            # once (Finding: unknown skills bypassed record_boundary_error); the outer
+            # dispatcher's `except AdCPError` re-wraps it into a failed-skill result,
+            # preserving accumulated results from earlier skills.
+            if skill_name not in skill_handlers:
+                available_skills = list(skill_handlers.keys())
+                raise AdCPCapabilityNotSupportedError(
+                    message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}"
+                )
 
-        try:
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
