@@ -463,16 +463,14 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Since the error variant is never constructed (ToolError handles failures),
     we subclass the success variant directly.
 
-    SDK 5.7 collapsed the success envelope — dry_run, sandbox, context, ext
-    removed from parent. Declared locally where needed.
+    adcp 6.6 restored the fields SDK 5.7 had collapsed off the success envelope:
+    dry_run, context (ContextObject|None) and ext (ExtensionObject|None) are all
+    INHERITED from the parent again (identical definitions; production may assign
+    raw dicts to context/ext, which Pydantic coerces on validation). Only
+    ``creatives`` remains overridden — see below.
 
     Design decision (salesagent-g3c): error variant never constructed.
     """
-
-    # SDK 5.7 removed dry_run from the parent — declare locally. context (ContextObject|None) and
-    # ext (ExtensionObject|None) were re-added by adcp 6.6 and are now inherited: production may
-    # assign raw dicts, which Pydantic coerces to the typed models on validation.
-    dry_run: bool | None = None
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
