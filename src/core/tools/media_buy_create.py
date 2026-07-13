@@ -1164,13 +1164,13 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return False, error_msg
 
-        # Update media buy status to 'active' after successful adapter execution
-        # (UC-002:437 — "updates the media buy status to active")
-        with MediaBuyUoW(tenant_id) as uow3:
-            assert uow3.media_buys is not None
-            uow3.media_buys.update_status_or_raise(media_buy_id, "active")
-            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
-
+        # Adapter execution succeeded. Status finalization is the CALLER's job, not
+        # this function's: the approval routes stamp approved_at/approved_by and set
+        # the FLIGHT-DERIVED status (scheduled/active/completed) in one write, so the
+        # write-once confirmed_at records the approval instant. This function used to
+        # force status="active" here — which overwrote the caller's flight-derived
+        # status, double-bumped revision, and (when it ran before approved_at was
+        # stamped) recorded confirmed_at=created_at. See #1544.
         return True, None
 
     except Exception as e:

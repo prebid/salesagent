@@ -14,6 +14,7 @@ from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
 
@@ -245,12 +246,21 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
 
-                    # Update media buy status through the repository seam so the
-                    # persisted revision bumps and approved_at/approved_by stamp
-                    # in one place (AdCP 3.1.0-beta.3 revision + confirmed_at) — see #1544.
+                    # Finalize the approved buy in ONE write: the flight-derived
+                    # lifecycle status (scheduled/active/completed) — not a hardcoded
+                    # "scheduled" — stamped alongside approved_at/approved_by so the
+                    # persisted revision bumps once and the write-once confirmed_at
+                    # records the approval instant. execute_approved_media_buy no
+                    # longer sets status (it did adapter work only). See #1544.
+                    finalized_buy = media_buy_repo.get_by_id(media_buy_id)
+                    final_status = (
+                        lifecycle_status_for_window(datetime.now(UTC), *resolve_flight_window_utc(finalized_buy))
+                        if finalized_buy is not None
+                        else "active"
+                    )
                     media_buy_repo.update_status_or_raise(
                         media_buy_id,
-                        "scheduled",
+                        final_status,
                         approved_at=datetime.now(UTC),
                         approved_by=user_email,
                     )

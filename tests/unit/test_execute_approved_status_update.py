@@ -1,8 +1,12 @@
-"""Unit test: execute_approved_media_buy must update status to 'active' after adapter success.
+"""Unit test: execute_approved_media_buy does ADAPTER work only — never writes status.
 
-Bug: salesagent-mckm
-Root cause: execute_approved_media_buy returns (True, None) after successful adapter
-execution but never sets media_buy.status = 'active' in the database.
+Status finalization moved to the approval routes (#1544): the routes stamp
+approved_at/approved_by and set the FLIGHT-DERIVED status in one write, so the
+write-once confirmed_at records the approval instant. execute_approved_media_buy
+previously force-wrote status='active' here, which overwrote the caller's
+flight-derived status, double-bumped revision, and (on the routes that called it
+before stamping approved_at) recorded confirmed_at=created_at. This test pins that
+the function no longer performs any status transition.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -77,13 +81,13 @@ def _make_mock_product():
 
 
 class TestExecuteApprovedStatusUpdate:
-    """execute_approved_media_buy must set status='active' after adapter success."""
+    """execute_approved_media_buy performs adapter work only — no status transition."""
 
-    def test_status_updated_to_active_after_adapter_success(self):
-        """After successful adapter execution, media_buy.status must be 'active'.
-
-        This is the regression test for salesagent-mckm: the function returns
-        (True, None) but never updates the status field.
+    def test_execute_does_not_write_status(self):
+        """After successful adapter execution the function returns (True, None) and
+        must NOT perform any media-buy status transition — finalization is the
+        approval route's job (flight-derived status + approved_at in one write).
+        Regression for #1544: it used to force status='active' here.
         """
         # -- Arrange --
         tenant = _make_mock_tenant()
@@ -180,6 +184,9 @@ class TestExecuteApprovedStatusUpdate:
         assert success is True, f"Expected success but got error: {error}"
         assert error is None
 
-        # THE KEY ASSERTION: the activation transition must go through the
-        # raising seam variant (a vanished buy must not silently skip the write)
-        mock_repo_3.update_status_or_raise.assert_called_once_with("mb_test_001", "active")
+        # THE KEY ASSERTION: execute_approved_media_buy performs NO status
+        # transition — not on the dedicated status UoW, nor on any other repo it
+        # touches. The approval route finalizes the flight-derived status. #1544.
+        for repo in (mock_uow_1.media_buys, mock_repo_plids, mock_uow_2.media_buys, mock_repo_3):
+            repo.update_status.assert_not_called()
+            repo.update_status_or_raise.assert_not_called()
