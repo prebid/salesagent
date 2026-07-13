@@ -223,6 +223,60 @@ class TestURLNormalization:
         assert agent_url.startswith(CREATIVE_AGENT_URL.rstrip("/"))
 
 
+class TestPreviewCreativeIdentityForm:
+    """Pinned-agent tolerance regression for the format_id federation identity (salesagent-ehdq).
+
+    preview_creative sends format_id as the identity OBJECT {agent_url, id}.
+    Production is switching that dict to the canonical FormatId serialization
+    (model_dump(mode="json")), whose Pydantic AnyUrl emits the trailing-slash
+    form for path-less URLs. These tests pin that the pinned reference agent
+    accepts BOTH wire forms of the identity's agent_url — so the serialization
+    switch cannot regress preview against the authoritative gate agent.
+    """
+
+    @staticmethod
+    def _manifest() -> dict:
+        return {
+            "creative_id": "ehdq-identity-form",
+            "name": "Identity Form Probe",
+            "format_id": "display_300x250",
+            "assets": {
+                "image": {
+                    "asset_type": "image",
+                    "url": "https://example.com/banner.png",
+                    "width": 300,
+                    "height": 250,
+                },
+            },
+        }
+
+    @staticmethod
+    def _assert_preview_succeeded(result: dict) -> None:
+        assert isinstance(result, dict) and result, f"Expected preview response dict, got {result!r}"
+        previews = result.get("previews")
+        assert previews, f"Expected non-empty previews, got response: {result!r}"
+        renders = previews[0].get("renders")
+        assert renders, f"Expected renders in first preview, got: {previews[0]!r}"
+        assert renders[0].get("preview_url"), f"Expected preview_url in first render, got: {renders[0]!r}"
+
+    @pytest.mark.asyncio
+    async def test_preview_creative_identity_without_trailing_slash(self, registry):
+        """preview succeeds with the no-slash identity form (current raw-dict bytes)."""
+        result = await registry.preview_creative(CREATIVE_AGENT_URL, "display_300x250", self._manifest())
+        self._assert_preview_succeeded(result)
+
+    @pytest.mark.asyncio
+    async def test_preview_creative_identity_with_trailing_slash(self, registry):
+        """preview succeeds with the trailing-slash identity form (FormatId serialization).
+
+        FormatId.model_dump(mode="json") emits the trailing-slash agent_url for
+        path-less URLs; calling through the slash URL variant sends exactly that
+        identity form on the wire, pinning the agent's tolerance of it.
+        """
+        result = await registry.preview_creative(CREATIVE_AGENT_URL_WITH_SLASH, "display_300x250", self._manifest())
+        self._assert_preview_succeeded(result)
+
+
 class TestCacheConsistency:
     """Test cache behavior with URL variations."""
 
