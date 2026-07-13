@@ -152,12 +152,15 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
     dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
     surface those as a two-layer envelope on a failed Task's DataPart —
-    including the top-level ``on_message_send`` fallthrough, which per AdCP
-    3.1.x transport rules (building/operating/transport-errors.mdx "Layer
-    Separation") RETURNS a failed Task carrying the envelope artifact rather
-    than raising this helper. JSON-RPC errors are reserved for genuine
-    transport faults (``A2AError``) and methods with no Task to carry the
-    envelope.
+    including the top-level ``on_message_send`` fallthrough, which RETURNS a
+    failed Task carrying the envelope artifact rather than raising this helper.
+    For typed application failures that routing is what AdCP 3.1.x transport
+    rules (building/operating/transport-errors.mdx "Layer Separation") mandate;
+    untyped internal crashes are only SHOULD-level there (the table lists them
+    under the transport layer), so routing their normalized envelope to the
+    failed-Task body too is a deliberate choice (see the outer handler). JSON-RPC
+    errors are reserved for genuine transport faults (``A2AError``) and methods
+    with no Task to carry the envelope.
 
     Use this helper only at ``InternalError(...)`` raise sites that have no
     async Task to attach an envelope artifact to. The canonical prefix is

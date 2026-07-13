@@ -67,6 +67,9 @@ async def test_untyped_processing_failure_returns_failed_task_with_internal_erro
     envelope = extract_processing_error_envelope(result)
     # Untyped exceptions normalize to base AdCPError (INTERNAL_ERROR / terminal);
     # on the wire the code lands in STANDARD_ERROR_CODES as SERVICE_UNAVAILABLE.
+    # `terminal` is the deliberate base-class divergence from that code's canonical
+    # `transient` recovery (a genuine bug won't heal on retry) — see the
+    # `_default_recovery` note in src/core/exceptions.py.
     assert_envelope_shape(
         envelope,
         "SERVICE_UNAVAILABLE",
