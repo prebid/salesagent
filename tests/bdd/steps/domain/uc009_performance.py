@@ -19,15 +19,9 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._datatable import datatable_to_dicts
 from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
-
-
-def _rows_as_dicts(datatable: list) -> list[dict[str, str]]:
-    """Convert a headered datatable into one dict per row."""
-    headers = [str(h).strip() for h in datatable[0]]
-    return [{h: str(v).strip() for h, v in zip(headers, row, strict=True)} for row in datatable[1:]]
-
 
 # ── Given steps ─────────────────────────────────────────────────────
 
@@ -59,7 +53,7 @@ def given_media_buy_products(ctx: dict, product_ids: str) -> None:
 
 
 def _dispatch_performance_feedback(ctx: dict, datatable: list) -> None:
-    row = _rows_as_dicts(datatable)[0]
+    row = datatable_to_dicts(datatable)[0]
     dispatch_request(
         ctx,
         media_buy_id=row["media_buy_id"],
@@ -112,7 +106,7 @@ def then_adapter_receives_package_performance(ctx: dict, datatable: list) -> Non
     (media_buy_id, package_performance), _kwargs = calls[-1]
     assert media_buy_id == ctx["media_buy"].media_buy_id
     actual = {(p.package_id, p.performance_index) for p in package_performance}
-    expected = {(row["package_id"], float(row["performance_index"])) for row in _rows_as_dicts(datatable)}
+    expected = {(row["package_id"], float(row["performance_index"])) for row in datatable_to_dicts(datatable)}
     assert actual == expected, f"adapter received {actual}, expected {expected}"
 
 
@@ -120,7 +114,7 @@ def then_adapter_receives_package_performance(ctx: dict, datatable: list) -> Non
 def then_audit_log_entry(ctx: dict, datatable: list) -> None:
     """Assert the audit logger recorded the operation with the exact details."""
     env = ctx["env"]
-    expected = {row["field"]: row["value"] for row in _rows_as_dicts(datatable)}
+    expected = {row["field"]: row["value"] for row in datatable_to_dicts(datatable)}
     log_calls = env.mock["audit"].return_value.log_operation.call_args_list
     operations = [c.kwargs.get("operation") for c in log_calls]
     assert "update_performance_index" in operations, f"no update_performance_index audit entry; got: {operations}"
