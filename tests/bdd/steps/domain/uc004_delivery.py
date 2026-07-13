@@ -1725,18 +1725,23 @@ def then_scheduler_sequence_number(ctx: dict, n: int) -> None:
 
 @then("the response omits notification_type, sequence_number, and next_expected_at")
 def then_poll_omits_webhook_only_fields(ctx: dict) -> None:
-    """Assert the synchronous poll response carries none of the webhook-only fields.
+    """Assert the synchronous poll's WIRE body carries none of the webhook-only fields.
 
     #1570: notification_type / sequence_number / next_expected_at are "only
     present in webhook deliveries" (get-media-buy-delivery-response.json @
-    v3.1-04f59d2d5). Serializing the payload the buyer received and checking the
-    three keys are absent grades that no transport injects them on the poll path.
+    v3.1-04f59d2d5). This asserts on the real serialized wire body per transport
+    (``wire_response``), not the reconstructed payload: parsing coerces an
+    explicit MCP wire null to None, and re-serializing the model would omit it —
+    so a model_dump() oracle would pass even against the MCP null-leak this fix
+    exists to prevent. Falls back to the production serializer only when no wire
+    was stashed (IMPL / legacy env; see tests/CLAUDE.md § wire_response).
     """
-    response = ctx["response"]
-    dumped = response.model_dump(mode="json")
+    wire = ctx.get("wire_response")
+    if wire is None:
+        wire = ctx["response"].model_dump(mode="json")
     for field in ("notification_type", "sequence_number", "next_expected_at"):
-        assert field not in dumped, (
-            f"synchronous poll must omit webhook-only {field!r}, got {dumped.get(field)!r} (keys={list(dumped.keys())})"
+        assert field not in wire, (
+            f"synchronous poll must omit webhook-only {field!r}, got {wire.get(field)!r} (keys={list(wire.keys())})"
         )
 
 
