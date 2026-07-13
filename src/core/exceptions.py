@@ -14,10 +14,10 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
     from adcp.types import ContextObject
 
@@ -1026,6 +1026,39 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     return envelope
 
 
+VALIDATION_ERROR_SUGGESTION = "check request parameters and fix"
+
+
+def first_validation_error_field(validation_error: ValidationError) -> str | None:
+    """Return the bracket-notation path of the first Pydantic error."""
+    errors = validation_error.errors()
+    if not errors:
+        return None
+    parts: list[str] = []
+    for loc in errors[0]["loc"]:
+        if isinstance(loc, int):
+            parts.append(f"[{loc}]")
+        elif parts:
+            parts.append(f".{loc}")
+        else:
+            parts.append(str(loc))
+    return "".join(parts)
+
+
+def build_validation_error_details(errors: Sequence[Any]) -> dict[str, Any]:
+    """Project Pydantic errors into the buyer-safe structured detail shape."""
+    return {
+        "validation_errors": [
+            {
+                "loc": list(error.get("loc", ())),
+                "msg": error.get("msg"),
+                "type": error.get("type"),
+            }
+            for error in errors
+        ]
+    }
+
+
 def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
@@ -1038,26 +1071,13 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """
     if isinstance(exc, AdCPError):
         return exc
-    from pydantic import ValidationError
-
     if isinstance(exc, ValidationError):
-        from src.core.validation_helpers import first_validation_error_field
-
         errors = exc.errors()
         return AdCPValidationError(
             errors[0].get("msg") if errors else "Request failed schema validation",
             field=first_validation_error_field(exc),
-            suggestion="check request parameters and fix",
-            details={
-                "validation_errors": [
-                    {
-                        "loc": list(error.get("loc", ())),
-                        "msg": error.get("msg"),
-                        "type": error.get("type"),
-                    }
-                    for error in errors
-                ]
-            },
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+            details=build_validation_error_details(errors),
         )
     if isinstance(exc, ValueError):
         return AdCPValidationError(str(exc))

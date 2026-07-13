@@ -283,6 +283,8 @@ class TestA2AErrorPropagation:
             recovery="correctable",
             message_substr="Field required",
         )
+        assert "input_value" not in artifact_data["errors"][0]["message"]
+        assert "errors.pydantic.dev" not in artifact_data["errors"][0]["message"]
         assert "account" in (artifact_data["errors"][0].get("field") or "")
 
     async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
@@ -336,6 +338,8 @@ class TestA2AErrorPropagation:
             message_substr="greater than or equal to 0",
             recovery="correctable",
         )
+        assert "input_value" not in artifact_data["errors"][0]["message"]
+        assert "errors.pydantic.dev" not in artifact_data["errors"][0]["message"]
         # The structured field path is propagated from the Pydantic error (drift-proof
         # vs the rendered message substring) — both envelope layers carry it.
         wire_field = artifact_data["errors"][0].get("field") or ""

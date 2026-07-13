@@ -35,7 +35,7 @@ def test_pydantic_validation_error_normalization_is_structured_and_sanitized():
     assert "errors.pydantic.dev" not in normalized.message
 
 
-def test_a2a_validation_boundary_uses_shared_sanitized_normalization():
+def test_a2a_validation_boundary_preserves_contextual_error_format():
     error = ValidationError.from_exception_data(
         title="CreateMediaBuyRequest",
         line_errors=[
@@ -51,8 +51,10 @@ def test_a2a_validation_boundary_uses_shared_sanitized_normalization():
         with adcp_validation_boundary():
             raise error
 
-    assert exc_info.value.message == "Field required"
+    assert "Invalid parameters:" in exc_info.value.message
+    assert "packages.0.product_id: Required field is missing" in exc_info.value.message
     assert exc_info.value.field == "packages[0].product_id"
-    assert exc_info.value.details == normalize_to_adcp_error(error).details
+    assert exc_info.value.suggestion == ("Provide the required 'packages.0.product_id' field and resend the request.")
+    assert exc_info.value.details is None
     assert "buyer-input" not in exc_info.value.message
     assert "errors.pydantic.dev" not in exc_info.value.message

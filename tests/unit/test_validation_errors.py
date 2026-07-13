@@ -3,6 +3,7 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.validation_helpers import first_validation_error_field, format_validation_error
 
@@ -26,6 +27,34 @@ def test_first_validation_error_field_uses_bracket_notation():
         _Req(packages=[{"budget": "not-a-number"}])
 
     assert first_validation_error_field(exc_info.value) == "packages[0].budget"
+
+
+def test_first_validation_error_field_is_owned_by_exception_leaf_module():
+    """The field-path helper must not recreate an exceptions/helpers import cycle."""
+    assert first_validation_error_field.__module__ == "src.core.exceptions"
+
+
+def test_create_media_buy_boundary_validation_preserves_field_suggestion():
+    """Boundary request construction keeps the current field-specific hint."""
+    from src.core.tools.media_buy_create import _build_create_media_buy_request
+
+    with pytest.raises(AdCPValidationError) as exc_info:
+        _build_create_media_buy_request(
+            brand={"domain": "wiretest.example"},
+            packages=None,
+            start_time=None,
+            end_time=None,
+            po_number=None,
+            reporting_webhook=None,
+            context=None,
+            ext=None,
+            account=None,
+            idempotency_key=None,
+        )
+
+    error = exc_info.value
+    assert error.field == "idempotency_key"
+    assert error.suggestion == ("Provide the required 'idempotency_key' field and resend the request.")
 
 
 def test_brand_target_audience_must_be_string():

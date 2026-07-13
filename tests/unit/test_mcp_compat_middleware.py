@@ -221,9 +221,9 @@ class TestTypeAdapterValidationEnvelope:
             check_mcp_tool_error=True,
         )
         assert exc_info.value.envelope["errors"][0]["field"] == field
-        message = exc_info.value.envelope["errors"][0]["message"]
-        assert "input_value" not in message
-        assert "errors.pydantic.dev" not in message
+        wire_message = exc_info.value.envelope["errors"][0]["message"]
+        assert "input_value" not in wire_message
+        assert "errors.pydantic.dev" not in wire_message
 
     @pytest.mark.asyncio
     async def test_typeadapter_validation_errors_are_recorded_at_mcp_boundary(self, middleware):

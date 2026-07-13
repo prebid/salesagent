@@ -13,7 +13,12 @@ from contextlib import contextmanager
 
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import (
+    AdCPValidationError,
+)
+from src.core.exceptions import (
+    first_validation_error_field as first_validation_error_field,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,29 +142,6 @@ def safe_parse_json_field(field_value, field_name="field", default=None):
     else:
         logger.warning(f"Unexpected type for {field_name}: {type(field_value)}")
         return default if default is not None else {}
-
-
-def first_validation_error_field(validation_error: ValidationError) -> str | None:
-    """Return the bracket-notation field path of the first Pydantic error, or ``None``.
-
-    Lets a transport boundary attach a structured ``field`` to the
-    ``AdCPValidationError`` it raises, so the wire envelope carries the offending
-    field path (e.g. ``packages[0].budget``) instead of only the rendered message.
-    List indices render as ``[i]`` so the boundary-derived path matches the
-    hand-rolled ``field=`` strings raised inside the _impl layer (``packages[].budget``).
-    """
-    errors = validation_error.errors()
-    if not errors:
-        return None
-    parts: list[str] = []
-    for loc in errors[0]["loc"]:
-        if isinstance(loc, int):
-            parts.append(f"[{loc}]")
-        elif parts:
-            parts.append(f".{loc}")
-        else:
-            parts.append(str(loc))
-    return "".join(parts)
 
 
 def package_field_path(attr: str) -> str:

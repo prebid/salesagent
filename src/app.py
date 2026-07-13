@@ -35,10 +35,12 @@ from src.core.auth_middleware import UnifiedAuthMiddleware
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.exceptions import (
+    VALIDATION_ERROR_SUGGESTION,
     AdCPError,
     AdCPInvalidRequestError,
     AdCPValidationError,
     build_two_layer_error_envelope,
+    build_validation_error_details,
     normalize_to_adcp_error,
 )
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
@@ -246,10 +248,8 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     adcp_exc = exc_cls(
         message,
         field=field,
-        suggestion="check request parameters and fix",
-        details={
-            "validation_errors": [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")} for e in errors]
-        },
+        suggestion=VALIDATION_ERROR_SUGGESTION,
+        details=build_validation_error_details(errors),
     )
     return _envelope_response(request, adcp_exc)
 
