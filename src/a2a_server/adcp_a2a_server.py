@@ -7,6 +7,7 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 import copy
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
@@ -2099,6 +2100,35 @@ class AdCPRequestHandler(RequestHandler):
         )
 
 
+# AdCP version-negotiation contract (core/version-envelope.json): the wire
+# ``adcp_version`` value MUST be release-precision — the patch component and any
+# build metadata are NOT valid wire values; only the pre-release tag is kept.
+# Our pin ``get_adcp_spec_version()`` is patch-precision ("3.1.0-beta.3"), so it
+# is normalized before emission: "3.1.0-beta.3" -> "3.1-beta.3". A local
+# transform (rather than the SDK's private ``_version`` helper) keeps agent-card
+# generation resilient to SDK internals; ``test_a2a_agent_card_version`` cross-
+# checks that the result is accepted by the SDK's own version resolver. #1544.
+_ADCP_RELEASE_PRECISION_RE = re.compile(
+    r"^(?P<major>\d+)\.(?P<minor>\d+)(?:\.\d+)?(?P<pre>-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?$"
+)
+
+
+def adcp_wire_version() -> str:
+    """Release-precision AdCP version for the wire ``adcp_version`` field.
+
+    Strips the patch component and any build metadata from the pinned spec
+    version, preserving the pre-release tag. Fails open (returns the raw pin) if
+    the version shape is unexpected, so a card is always producible.
+    """
+    from adcp import get_adcp_spec_version
+
+    raw = get_adcp_spec_version()
+    match = _ADCP_RELEASE_PRECISION_RE.match(raw)
+    if match is None:
+        return raw
+    return f"{match['major']}.{match['minor']}{match['pre'] or ''}"
+
+
 def create_agent_card() -> AgentCard:
     """Create the agent card describing capabilities.
 
@@ -2118,14 +2148,17 @@ def create_agent_card() -> AgentCard:
 
     # Create AdCP extension (AdCP 2.5 spec)
     # As of adcp 2.12.1, get_adcp_spec_version() returns the protocol version (e.g., "2.5.0")
-    # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream
+    # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream.
+    # The extension URI references the FULL pinned version (the versioned schema
+    # path on disk), but the wire ``adcp_version`` value is release-precision per
+    # the version-negotiation contract — see ``adcp_wire_version`` above. #1544.
     protocol_version = get_adcp_spec_version()
     adcp_extension = AgentExtension(
         uri=f"https://adcontextprotocol.org/schemas/{protocol_version}/protocols/adcp-extension.json",
         description="AdCP protocol version and supported domains",
         params=_dict_to_struct(
             {
-                "adcp_version": protocol_version,
+                "adcp_version": adcp_wire_version(),
                 "protocols_supported": ["media_buy"],  # Only media_buy protocol is currently supported
             }
         ),
