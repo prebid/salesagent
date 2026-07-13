@@ -3673,7 +3673,8 @@ async def _create_media_buy_impl(
                 # fallback here, because package_ids are adapter-assigned and
                 # cannot be invented from the request. Package lookups on the
                 # update path tolerate this via the raw_request fallback in
-                # MediaBuyRepository.package_exists_or_raise.
+                # MediaBuyRepository (package_exists_or_raise / get_package_config
+                # read-only; materialize_package on write paths).
                 packages_to_save = response.packages if response.packages else []
                 logger.info(f"[DEBUG] Saving {len(packages_to_save)} packages to media_packages table")
 

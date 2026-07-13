@@ -20,6 +20,17 @@ that contract end to end:
   on_raw_request_only_buy`` fail with AdCPPackageNotFoundError at the guard.
 - regression net: if create's dual-write ever stops writing rows, the
   real-flow test fails loudly instead of the gap going unnoticed.
+- dry_run purity: the guard runs before the dry_run early return, so it must
+  be READ-ONLY — ``test_dry_run_on_raw_request_only_buy_persists_no_row``
+  pins the buyer-observable contract (a dry_run request leaves no
+  media_packages row). NOTE: this end-to-end pin alone cannot prove the guard
+  never writes — a write flushed before the nested ``get_db_session()`` in
+  ``get_adapter`` (media_buy_update.py) is rolled back as a side effect of
+  the scoped-session registry, masking the leak. The true no-write oracles
+  are the unit tests in ``test_repository_or_raise_helpers.py``
+  (``test_get_package_is_a_pure_read``,
+  ``test_package_exists_or_raise_tolerates_raw_only_without_writing``),
+  which assert ``session.add``/``flush`` are never called.
 """
 
 from __future__ import annotations
@@ -186,9 +197,11 @@ class TestPackageGuardRawRequestFallback:
 
     def test_targeting_overlay_update_succeeds_on_raw_request_only_buy(self, _seeded):
         """The ROW-NEEDING path (targeting_overlay mutates package_config) also
-        works on a raw_request-only buy: get_package materializes the canonical
-        row lazily, so the same lookup that used to raise a spurious
-        PACKAGE_NOT_FOUND after the guard passed now yields a mutable row."""
+        works on a raw_request-only buy: get_package_or_raise materializes the
+        canonical row (via materialize_package), so the same lookup that used
+        to raise a spurious PACKAGE_NOT_FOUND after the guard passed now
+        yields a mutable row. This path runs past the dry_run gate, where
+        writing is allowed."""
         from sqlalchemy import select
 
         from src.core.database.models import MediaBuy, MediaPackage
@@ -226,3 +239,46 @@ class TestPackageGuardRawRequestFallback:
             ).first()
             assert row is not None, "expected the raw_request package materialized as a canonical row"
             assert row.package_config.get("targeting_overlay") is not None
+
+    def test_dry_run_on_raw_request_only_buy_persists_no_row(self, _seeded):
+        """dry_run must not write: a dry_run update referencing a
+        raw_request-only package succeeds (read-only guard tolerates it) and
+        leaves NO media_packages row behind. This pins the buyer-observable
+        contract end to end; the module docstring explains why the no-write
+        property itself is oracled at the unit level, not here."""
+        from src.core.database.models import MediaPackage
+        from src.core.testing_hooks import AdCPTestContext
+
+        identity = _seeded["identity"].model_copy(update={"testing_context": AdCPTestContext(dry_run=True)})
+
+        now = datetime.now(UTC)
+        media_buy = MediaBuyFactory(
+            tenant=_seeded["tenant"],
+            principal=_seeded["principal"],
+            media_buy_id="mb_raw_only_dry_run",
+            status="active",
+            start_date=now.date(),
+            end_date=(now + timedelta(days=30)).date(),
+            start_time=now,
+            end_time=now + timedelta(days=30),
+            raw_request={"packages": [{"package_id": "pkg_legacy_d", "impressions": 75000}]},
+        )
+
+        update_req = UpdateMediaBuyRequest(
+            media_buy_id=media_buy.media_buy_id,
+            packages=[{"package_id": "pkg_legacy_d", "creative_ids": ["c_dry_run_1"]}],
+        )
+        result = _update_media_buy_impl(req=update_req, identity=identity)
+        assert not isinstance(result, UpdateMediaBuyError), f"dry_run update failed: {result}"
+
+        with get_db_session() as session:
+            row = session.scalars(
+                select(MediaPackage).where(
+                    MediaPackage.media_buy_id == media_buy.media_buy_id,
+                    MediaPackage.package_id == "pkg_legacy_d",
+                )
+            ).first()
+            assert row is None, (
+                "dry_run persisted a materialized media_packages row — the "
+                "pre-dry_run guard wrote to the session and the UoW committed it"
+            )

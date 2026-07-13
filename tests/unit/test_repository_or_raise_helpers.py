@@ -7,6 +7,7 @@ that the helper returns the entity when present and raises the correct typed
 ``AdCPNotFoundError`` subclass (with the id in the message) when absent.
 """
 
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
@@ -70,12 +71,68 @@ class TestMediaBuyOrRaise:
         assert exc.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg-missing" in str(exc.value)
 
-    def test_get_package_materializes_row_from_raw_request(self):
+    def test_get_package_is_a_pure_read(self):
+        """``get_package`` must never write: a raw_request-only package returns
+        ``None`` (no lazy materialization). This is the no-write oracle for
+        the pre-dry_run guard family — the end-to-end dry_run pin in
+        test_update_media_buy_package_guard.py cannot catch a writing reader
+        by itself (see its module docstring), this assertion can."""
+        media_buy = MagicMock()
+        media_buy.raw_request = {"packages": [{"package_id": "pkg-raw-only"}]}
+        session = MagicMock()
+        session.scalars.return_value.first.side_effect = [None, media_buy]
+        repo = MediaBuyRepository(session, "tenant-1")
+
+        assert repo.get_package("mb-1", "pkg-raw-only") is None
+        session.add.assert_not_called()
+        session.flush.assert_not_called()
+
+    def test_package_exists_or_raise_tolerates_raw_only_without_writing(self):
+        """The pre-dry_run existence guard: raw_request-only package passes
+        (no raise) AND nothing is written to the session."""
+        media_buy = MagicMock()
+        media_buy.raw_request = {"packages": [{"package_id": "pkg-raw-only"}]}
+        session = MagicMock()
+        session.scalars.return_value.first.side_effect = [None, media_buy]
+        repo = MediaBuyRepository(session, "tenant-1")
+
+        repo.package_exists_or_raise("mb-1", "pkg-raw-only")  # no raise
+
+        session.add.assert_not_called()
+        session.flush.assert_not_called()
+
+    def test_package_exists_or_raise_raises_when_absent_everywhere(self):
+        media_buy = MagicMock()
+        media_buy.raw_request = {"packages": [{"package_id": "pkg-other"}]}
+        session = MagicMock()
+        session.scalars.return_value.first.side_effect = [None, media_buy]
+        repo = MediaBuyRepository(session, "tenant-1")
+        with pytest.raises(AdCPPackageNotFoundError) as exc:
+            repo.package_exists_or_raise("mb-1", "pkg-missing", context={"context_id": "ctx-3"})
+        assert exc.value.error_code == "PACKAGE_NOT_FOUND"
+        assert exc.value.context == {"context_id": "ctx-3"}
+
+    def test_get_package_config_reads_raw_request_without_writing(self):
+        raw_pkg = {"package_id": "pkg-raw-only", "product_id": "prod-7"}
+        media_buy = MagicMock()
+        media_buy.raw_request = {"packages": [raw_pkg]}
+        session = MagicMock()
+        session.scalars.return_value.first.side_effect = [None, media_buy]
+        repo = MediaBuyRepository(session, "tenant-1")
+
+        assert repo.get_package_config("mb-1", "pkg-raw-only") == raw_pkg
+        session.add.assert_not_called()
+
+    def test_materialize_package_creates_row_from_raw_request(self):
         """A package recorded only in MediaBuy.raw_request (pre-dual-write buy,
         or an adapter that returned empty response.packages) is materialized
-        into a canonical row so EVERY caller — existence guard, creative
-        assignment, targeting mutation — behaves identically on legacy buys."""
-        raw_pkg = {"package_id": "pkg-raw-only", "impressions": 100000}
+        into a canonical row — including the dedicated columns the create
+        path's dual-write populates, not just package_config."""
+        raw_pkg = {
+            "package_id": "pkg-raw-only",
+            "budget": {"total": 5000, "pacing": "even"},
+            "bid_price": 12.5,
+        }
         media_buy = MagicMock()
         media_buy.raw_request = {"packages": [raw_pkg]}
         session = MagicMock()
@@ -83,22 +140,26 @@ class TestMediaBuyOrRaise:
         session.scalars.return_value.first.side_effect = [None, media_buy]
         repo = MediaBuyRepository(session, "tenant-1")
 
-        package = repo.get_package("mb-1", "pkg-raw-only")
+        package = repo.materialize_package("mb-1", "pkg-raw-only")
 
         assert package is not None
         assert package.package_id == "pkg-raw-only"
         assert package.package_config == raw_pkg
+        assert package.budget == Decimal("5000")
+        assert package.bid_price == Decimal("12.5")
+        assert package.pacing == "even"
         # Added to the session (UoW owns the commit), flushed for immediate use
         session.add.assert_called_once_with(package)
         session.flush.assert_called_once_with()
 
-    def test_get_package_or_raise_inherits_raw_request_fallback(self):
+    def test_get_package_or_raise_materializes_raw_request_fallback(self):
         media_buy = MagicMock()
         media_buy.raw_request = {"packages": [{"package_id": "pkg-raw-only"}]}
         session = MagicMock()
         session.scalars.return_value.first.side_effect = [None, media_buy]
         repo = MediaBuyRepository(session, "tenant-1")
         assert repo.get_package_or_raise("mb-1", "pkg-raw-only") is not None  # no raise
+        session.add.assert_called_once()
 
     def test_get_package_or_raise_raises_when_absent_everywhere(self):
         from adcp import ErrorCode

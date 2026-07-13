@@ -451,17 +451,18 @@ def _update_media_buy_impl(
             # BR-UC-003-update-media-buy.feature (@source v3.1-04f59d2d5).
             #
             # The media_packages/raw_request duality (pre-dual-write buys;
-            # adapters returning empty response.packages) is resolved once
-            # inside MediaBuyRepository.get_package via lazy materialization,
-            # so this guard AND the later row-needing lookups (creative
-            # assignment, targeting mutation) behave identically on legacy
-            # buys — none of them can raise a spurious not-found for a
-            # package that exists only in raw_request. (Ungraded: no
-            # storyboard covers pre-dual-write data.)
+            # adapters returning empty response.packages) is tolerated here
+            # via the READ-ONLY package_exists_or_raise: this guard runs
+            # before the dry_run early return, so it must not write — a
+            # dry_run request that materialized a row here would commit it on
+            # the UoW's clean exit. Row-needing lookups past the dry_run gate
+            # use the materializing get_package_or_raise instead; both share
+            # one raise site, so legacy buys never get a spurious not-found.
+            # (Ungraded: no storyboard covers pre-dual-write data.)
             if req.packages:
                 for _pkg_update in req.packages:
                     if _pkg_update.package_id:
-                        uow.media_buys.get_package_or_raise(
+                        uow.media_buys.package_exists_or_raise(
                             media_buy_id_to_use, _pkg_update.package_id, context=req.context
                         )
 
@@ -543,10 +544,12 @@ def _update_media_buy_impl(
                         or not pkg_update.package_id
                     ):
                         continue
-                    media_package = uow.media_buys.get_package(req.media_buy_id, pkg_update.package_id)
-                    if media_package is None:
+                    # Read-only config access (row or raw_request) — this
+                    # validator runs before the dry_run gate, so no writes.
+                    package_config = uow.media_buys.get_package_config(req.media_buy_id, pkg_update.package_id)
+                    if package_config is None:
                         continue
-                    package_product_id = (media_package.package_config or {}).get("product_id")
+                    package_product_id = package_config.get("product_id")
                     if not package_product_id:
                         continue
                     product = uow.products.get_by_id(package_product_id)
@@ -917,12 +920,12 @@ def _update_media_buy_impl(
 
                         # Validate creatives (existence, status, format) via the
                         # shared helper so the rules match the creative_assignments path.
-                        db_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-                        product_id = (
-                            db_package.package_config.get("product_id")
-                            if db_package and db_package.package_config
-                            else None
+                        # Config-only read (row or raw_request) — raw_request-only
+                        # legacy buys keep format validation instead of skipping it
+                        db_package_config = uow.media_buys.get_package_config(
+                            actual_media_buy_id, pkg_update.package_id
                         )
+                        product_id = db_package_config.get("product_id") if db_package_config else None
                         assert uow.products is not None
                         product = uow.products.get_by_id(product_id) if product_id else None
                         _validate_creatives_for_assignment(
