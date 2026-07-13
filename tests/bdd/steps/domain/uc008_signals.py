@@ -30,10 +30,7 @@ _SIGNAL_TYPES = {"marketplace", "custom", "owned"}
 @given("at least one signals agent is registered for the tenant")
 def given_signals_agent_registered(ctx: dict) -> None:
     """Background: the sales agent itself serves the signal catalog."""
-    env = ctx["env"]
-    tenant, principal = env.setup_default_data()
-    ctx.setdefault("tenant", tenant)
-    ctx.setdefault("principal", principal)
+    assert ctx.get("tenant") is not None, "harness wiring did not populate ctx['tenant']"
 
 
 @given(parsers.parse('the Buyer provides a valid signal_spec "{spec}"'))

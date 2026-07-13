@@ -51,10 +51,7 @@ def _datatable_to_kwargs(datatable: list) -> dict[str, Any]:
 @given("a tenant exists with at least one product in the catalog")
 def given_tenant_with_catalog(ctx: dict) -> None:
     """Background step: the UC-001 conftest branch seeded tenant + catalog."""
-    env = ctx["env"]
-    tenant, principal = env.setup_default_data()
-    ctx.setdefault("tenant", tenant)
-    ctx.setdefault("principal", principal)
+    assert ctx.get("tenant") is not None, "harness wiring did not populate ctx['tenant']"
     assert ctx.get("seeded_products"), "UC-001 conftest branch did not seed the catalog"
 
 
@@ -62,9 +59,7 @@ def given_tenant_with_catalog(ctx: dict) -> None:
 def given_brand_manifest_policy(ctx: dict, policy: str) -> None:
     """Set the tenant's brand manifest policy column (products.py:194 reads it)."""
     env = ctx["env"]
-    tenant, principal = env.setup_default_data()
-    ctx.setdefault("tenant", tenant)
-    ctx.setdefault("principal", principal)
+    tenant = ctx["tenant"]
     tenant.brand_manifest_policy = policy
     env.get_session().commit()
 
@@ -73,7 +68,7 @@ def given_brand_manifest_policy(ctx: dict, policy: str) -> None:
 def given_advertising_policy(ctx: dict) -> None:
     """Give the tenant a non-empty advertising policy."""
     env = ctx["env"]
-    tenant, _ = env.setup_default_data()
+    tenant = ctx["tenant"]
     tenant.advertising_policy = {"prohibited_categories": ["weapons"]}
     env.get_session().commit()
 

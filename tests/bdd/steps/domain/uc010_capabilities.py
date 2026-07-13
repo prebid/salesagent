@@ -41,7 +41,6 @@ def _split_quoted(values: str) -> list[str]:
 @given(parsers.parse('the tenant has an adapter with channels "{channels}"'))
 def given_adapter_channels(ctx: dict, channels: str) -> None:
     env = ctx["env"]
-    env.setup_default_data()
     channel_list = [c.strip() for c in channels.split(",")]
     env.set_adapter_channels(channel_list)
     ctx["expected_channels"] = channel_list
@@ -51,11 +50,9 @@ def given_adapter_channels(ctx: dict, channels: str) -> None:
 def given_publisher_partnerships(ctx: dict, domains: str) -> None:
     from tests.factories import PublisherPartnerFactory
 
-    env = ctx["env"]
-    tenant, _ = env.setup_default_data()
     domain_list = _split_quoted(domains)
     for domain in domain_list:
-        PublisherPartnerFactory(tenant=tenant, publisher_domain=domain)
+        PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain=domain)
     ctx["expected_publisher_domains"] = domain_list
 
 
@@ -77,7 +74,6 @@ def given_targeting_capabilities(ctx: dict) -> None:
 def given_known_state(ctx: dict) -> None:
     """Snapshot mutable-domain row counts for the read-only invariant."""
     env = ctx["env"]
-    env.setup_default_data()
     ctx["state_snapshot"] = _state_snapshot(env)
 
 
@@ -86,7 +82,6 @@ def given_full_capabilities(ctx: dict) -> None:
     from src.adapters.base import TargetingCapabilities
 
     env = ctx["env"]
-    env.setup_default_data()
     env.set_adapter_channels(["display", "video"])
     env.set_targeting_capabilities(TargetingCapabilities(geo_countries=True))
 

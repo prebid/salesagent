@@ -31,11 +31,7 @@ def given_buyer_owns_media_buy(ctx: dict, media_buy_id: str) -> None:
     """Create a media buy owned by the authenticated principal."""
     from tests.factories import MediaBuyFactory
 
-    env = ctx["env"]
-    tenant, principal = env.setup_default_data()
-    ctx.setdefault("tenant", tenant)
-    ctx.setdefault("principal", principal)
-    ctx["media_buy"] = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id=media_buy_id)
+    ctx["media_buy"] = MediaBuyFactory(tenant=ctx["tenant"], principal=ctx["principal"], media_buy_id=media_buy_id)
 
 
 @given(parsers.parse("the media buy has products {product_ids}"))
