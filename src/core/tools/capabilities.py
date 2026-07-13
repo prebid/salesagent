@@ -9,7 +9,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from datetime import UTC, datetime
 
-from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
@@ -114,12 +114,19 @@ def _get_adcp_capabilities_impl(
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
 
+    # Echo the buyer's request context unchanged on the response (#1512). The
+    # version-negotiation storyboard grades ``field_present: context`` with an
+    # unchanged value; the error path (_version_unsupported_error) already echoes
+    # it, so the success path must too or context silently vanishes.
+    request_context = req.context if req else None
+
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
             adcp=_build_adcp_block(),
             supported_protocols=list(_DEFAULT_PROTOCOLS),
             specialisms=list(_DEFAULT_SPECIALISMS),
+            context=request_context,
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -291,6 +298,7 @@ def _get_adcp_capabilities_impl(
         specialisms=list(_DEFAULT_SPECIALISMS),
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
+        context=request_context,
     )
 
     return response
@@ -298,6 +306,7 @@ def _get_adcp_capabilities_impl(
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -306,6 +315,9 @@ async def get_adcp_capabilities(
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
+        context: AdCP request context echoed unchanged on the response. Declared
+            here so the envelope-tolerance middleware does not strip it before it
+            reaches the request (#1512).
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -313,8 +325,8 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object (currently minimal)
-    req = GetAdcpCapabilitiesRequest()
+    # Build request object, forwarding the buyer's context so it is echoed back.
+    req = GetAdcpCapabilitiesRequest(context=context)
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -342,6 +354,7 @@ async def get_adcp_capabilities(
 
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetAdcpCapabilitiesResponse:
@@ -351,6 +364,7 @@ async def get_adcp_capabilities_raw(
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
+        context: AdCP request context echoed unchanged on the response (#1512).
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -361,5 +375,5 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest()
+    req = GetAdcpCapabilitiesRequest(context=context)
     return _get_adcp_capabilities_impl(req, identity)

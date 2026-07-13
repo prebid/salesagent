@@ -198,6 +198,24 @@ class TestGetAdcpCapabilitiesImpl:
         assert "specialisms" in data
         assert data["specialisms"] == ["sales-non-guaranteed"]
 
+    def test_impl_echoes_request_context_minimal_path(self):
+        """Capabilities echoes the buyer's request context unchanged (#1512).
+
+        Even called directly, the minimal (no-tenant) response must carry the
+        request context back — the version-negotiation storyboard grades an
+        unchanged context echo, which previously vanished because the impl never
+        set ``context`` on the response.
+        """
+        from adcp.types import ContextObject, GetAdcpCapabilitiesRequest
+
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        current_tenant.set(None)
+        request_ctx = ContextObject(context_id="ctx-echo-minimal")
+        response = _get_adcp_capabilities_impl(GetAdcpCapabilitiesRequest(context=request_ctx), None)
+        assert response.context == request_ctx
+
 
 class TestGetAdcpCapabilitiesWithTenant:
     """Test get_adcp_capabilities with mocked tenant context."""
@@ -234,7 +252,13 @@ class TestGetAdcpCapabilitiesWithTenant:
                     tenant=mock_tenant,
                     protocol="mcp",
                 )
-                response = _get_adcp_capabilities_impl(None, identity)
+                from adcp.types import ContextObject, GetAdcpCapabilitiesRequest
+
+                request_ctx = ContextObject(context_id="ctx-full-echo")
+                response = _get_adcp_capabilities_impl(GetAdcpCapabilitiesRequest(context=request_ctx), identity)
+
+                # Full (tenant) path must echo the buyer's request context unchanged (#1512).
+                assert response.context == request_ctx
 
                 # Verify full response structure
                 assert response.adcp is not None

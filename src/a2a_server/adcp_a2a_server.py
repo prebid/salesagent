@@ -1882,9 +1882,12 @@ class AdCPRequestHandler(RequestHandler):
         # Import and call the core implementation
         from src.core.tools.capabilities import get_adcp_capabilities_raw
 
-        # Call core function with identity
+        # Call core function with identity, forwarding the buyer's request
+        # context so it is echoed unchanged on the response (#1512). The A2A path
+        # strips only negotiation fields, so context survives in `parameters`.
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
+            context=parameters.get("context"),
             identity=identity,
         )
 
