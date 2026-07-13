@@ -19,20 +19,26 @@ Spec grounding (v3.1.0-beta.3):
       may carry the deprecated ``supported_majors[]`` plus the advisory
       ``build_version`` (which buyers MUST NOT use for negotiation).
 
-A pin is validated by MEMBERSHIP in the supported major set (per
-``get_adcp_capabilities.mdx``: "the seller validates against its
-``major_versions`` and returns ``VERSION_UNSUPPORTED`` if not in range") —
-majors below the native major are rejected exactly like majors above it,
-because this build serves 3.x-shaped responses only: the legacy
-``src/core/version_compat`` layer covers a single tool on a subset of
-transports and is not a genuine cross-protocol 2.x contract, so advertising
-``major_versions: [3]`` while accepting a 2-pin would be self-inconsistent.
-Unpinned legacy clients are unaffected (no pin → nothing to validate).
+Release pins follow ``docs/reference/versioning.mdx`` exactly: exact matches
+win; a stable same-major pin may downshift to the highest stable supported
+release not newer than the buyer's pin; sub-min and cross-major pins reject;
+and prerelease pins match exactly rather than range-resolving. The deprecated
+integer major pin remains a membership check through 3.x. Unpinned legacy
+clients are unaffected (no pin → nothing to validate).
+
+The pinned 3.1 migration table grades response ``adcp_version`` echo only as
+advisory. This module resolves request pins but does not claim that every
+response transport currently emits the selected release; universal response
+echo remains an explicit residual for a later protocol-wide response change.
 """
 
 from __future__ import annotations
 
+import os
+import re
+import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
@@ -40,13 +46,54 @@ import adcp
 
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError, AdCPVersionUnsupportedError
 
+_RELEASE_PIN_RE = re.compile(r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:-(?P<prerelease>[a-zA-Z0-9.-]+))?$")
+_SEMVER_PRERELEASE_IDENTIFIER = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+_BUILD_VERSION_RE = re.compile(
+    rf"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
+    rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+_TEST_POLICY_LEASE_RE = re.compile(r"^[0-9A-Za-z_-]{16,128}$")
+
+
+@dataclass(frozen=True)
+class _ReleasePin:
+    """Parsed release-precision AdCP wire value."""
+
+    raw: str
+    major: str
+    minor: str
+    prerelease: str | None
+
+
+@dataclass(frozen=True)
+class _TestingVersionPolicy:
+    """Atomic live-server policy used only by secret-gated E2E setup."""
+
+    lease_id: str
+    supported_versions: tuple[str, ...]
+    build_version: str
+
+
+_testing_policy_lock = threading.Lock()
+_testing_policy: _TestingVersionPolicy | None = None
+
+
+def _active_testing_policy() -> _TestingVersionPolicy | None:
+    """Return the immutable test policy snapshot, never outside test mode."""
+    if os.environ.get("ADCP_TESTING") != "true":
+        return None
+    with _testing_policy_lock:
+        return _testing_policy
+
 
 @cache
 def _spec_major_minor() -> tuple[int, int]:
     """Parse ``(major, minor)`` from the SDK spec pin, typed-erroring on garbage.
 
     Both ``adcp_major_version()`` and ``supported_adcp_versions()`` derive from
-    this single parse so they agree on the SDK version and fail the same way.
+    this single parse, while ``adcp_build_version()`` uses the same complete
+    semantic-version validator, so all advertised forms fail consistently.
     The pin (``adcp.get_adcp_spec_version()``, e.g. ``"3.1.0-beta.3"``) is a
     deploy-time constant, but this runs on the buyer request path
     (``validate_adcp_version_pins`` -> ``_supported_majors`` ->
@@ -56,13 +103,22 @@ def _spec_major_minor() -> tuple[int, int]:
     other server-side failure honors — rather than letting a bare ``ValueError``
     (int cast or tuple-unpack) escape as an untyped 500.
     """
-    raw = adcp.get_adcp_spec_version()
-    parts = raw.split(".")
+    _raw, major, minor = _validate_sdk_build_version(adcp.get_adcp_spec_version())
+    return major, minor
+
+
+def _validate_sdk_build_version(raw: Any) -> tuple[str, int, int]:
+    """Validate the SDK's complete full-semver pin and return its release."""
     try:
-        return int(parts[0]), int(parts[1])
-    except (IndexError, ValueError) as exc:
+        if not isinstance(raw, str):
+            raise TypeError("SDK spec version must be a string")
+        match = _BUILD_VERSION_RE.fullmatch(raw)
+        if match is None:
+            raise ValueError("SDK spec version must be full semantic version")
+        return raw, int(match.group("major")), int(match.group("minor"))
+    except (TypeError, ValueError) as exc:
         raise AdCPConfigurationError(
-            f"AdCP SDK spec version {raw!r} is malformed; expected MAJOR.MINOR(.PATCH...)."
+            f"AdCP SDK spec version {raw!r} is malformed; expected a full semantic version MAJOR.MINOR.PATCH."
         ) from exc
 
 
@@ -88,6 +144,10 @@ def supported_adcp_versions() -> tuple[str, ...]:
     This is the authoritative re-pin list carried in VERSION_UNSUPPORTED error
     details (``supported_versions`` is REQUIRED there with minItems 1).
     """
+    testing_policy = _active_testing_policy()
+    if testing_policy is not None:
+        return testing_policy.supported_versions
+
     major, minor = _spec_major_minor()
     return (f"{major}.{minor}",)
 
@@ -98,24 +158,138 @@ def adcp_build_version() -> str:
     Advisory only (incident triage) — buyers MUST NOT use it for negotiation,
     per ``error-details/version-unsupported.json``.
     """
-    return adcp.get_adcp_spec_version()
+    testing_policy = _active_testing_policy()
+    if testing_policy is not None:
+        return testing_policy.build_version
+    raw, _major, _minor = _validate_sdk_build_version(adcp.get_adcp_spec_version())
+    return raw
 
 
-def _supported_majors() -> list[int]:
+def _parse_release_pin(value: Any) -> _ReleasePin | None:
+    """Parse a schema-valid release-precision wire value."""
+    if not isinstance(value, str):
+        return None
+    match = _RELEASE_PIN_RE.fullmatch(value)
+    if match is None:
+        return None
+    return _ReleasePin(
+        raw=value,
+        major=_canonical_numeric_component(match.group("major")),
+        minor=_canonical_numeric_component(match.group("minor")),
+        prerelease=match.group("prerelease"),
+    )
+
+
+def _canonical_numeric_component(value: str) -> str:
+    """Normalize digits without converting attacker-sized input to ``int``."""
+    return value.lstrip("0") or "0"
+
+
+def _numeric_component_key(value: str) -> tuple[int, str]:
+    """Comparison key for an arbitrarily large canonical decimal component."""
+    return len(value), value
+
+
+def _parse_supported_releases(raw_supported: tuple[Any, ...]) -> tuple[_ReleasePin, ...]:
+    """Validate one complete seller release snapshot."""
+    if not raw_supported:
+        raise AdCPConfigurationError(
+            "The seller advertises no supported AdCP releases; supported_versions must contain at least one value."
+        )
+
+    parsed: list[_ReleasePin] = []
+    for value in raw_supported:
+        release = _parse_release_pin(value)
+        if release is None:
+            raise AdCPConfigurationError(
+                f"Seller-supported AdCP release {value!r} is malformed; expected release precision MAJOR.MINOR."
+            )
+        parsed.append(release)
+    return tuple(parsed)
+
+
+def _supported_releases() -> tuple[_ReleasePin, ...]:
+    """Return validated seller releases or raise a typed configuration error."""
+    return _parse_supported_releases(supported_adcp_versions())
+
+
+def _supported_majors(releases: tuple[_ReleasePin, ...] | None = None) -> list[int]:
     """Major versions covered by ``supported_adcp_versions()``, ascending."""
-    return sorted({int(v.split(".", 1)[0]) for v in supported_adcp_versions()})
+    releases = releases if releases is not None else _supported_releases()
+    try:
+        majors = {int(release.major) for release in releases}
+    except ValueError as exc:
+        raise AdCPConfigurationError(
+            "A seller-supported AdCP major is too large to emit as the deprecated supported_majors integer."
+        ) from exc
+    if any(major < 1 for major in majors):
+        raise AdCPConfigurationError("Seller-supported AdCP majors must be positive integers.")
+    return sorted(majors)
 
 
-# Cap on the echoed pin value: it is buyer-controlled and unbounded on the
-# wire, and it is reflected into the error details and boundary logs.
+def _install_testing_version_policy(
+    *,
+    lease_id: str,
+    supported_versions: tuple[Any, ...],
+    build_version: Any,
+) -> bool:
+    """Atomically install a validated E2E policy snapshot for one lease.
+
+    This is a server-side setup seam for the separate-process ``e2e_rest``
+    harness, not a buyer-controlled protocol input. The HTTP control route
+    independently requires a per-run secret, and this defense-in-depth guard
+    prevents direct use outside ``ADCP_TESTING=true``. A different active lease
+    is never overwritten, so a stale scenario cannot corrupt another one.
+
+    Returns ``False`` on lease conflict. Invalid candidate snapshots raise
+    :class:`AdCPConfigurationError` before the current snapshot is touched.
+    """
+    if os.environ.get("ADCP_TESTING") != "true":
+        raise PermissionError("AdCP version-policy controls are available only in testing mode")
+    if not isinstance(lease_id, str) or _TEST_POLICY_LEASE_RE.fullmatch(lease_id) is None:
+        raise AdCPConfigurationError("The testing version-policy lease_id is malformed.")
+
+    releases = _parse_supported_releases(supported_versions)
+    _supported_majors(releases)
+    if not isinstance(build_version, str) or _BUILD_VERSION_RE.fullmatch(build_version) is None:
+        raise AdCPConfigurationError("The testing version-policy build_version must be a full semantic version.")
+
+    candidate = _TestingVersionPolicy(
+        lease_id=lease_id,
+        supported_versions=tuple(release.raw for release in releases),
+        build_version=build_version,
+    )
+    global _testing_policy
+    with _testing_policy_lock:
+        if _testing_policy is not None and _testing_policy.lease_id != lease_id:
+            return False
+        _testing_policy = candidate
+    return True
+
+
+def _reset_testing_version_policy(*, lease_id: str) -> bool:
+    """Clear the active E2E snapshot only when the caller owns its lease."""
+    if os.environ.get("ADCP_TESTING") != "true":
+        raise PermissionError("AdCP version-policy controls are available only in testing mode")
+    global _testing_policy
+    with _testing_policy_lock:
+        if _testing_policy is None:
+            return True
+        if _testing_policy.lease_id != lease_id:
+            return False
+        _testing_policy = None
+    return True
+
+
+# Cap for human-readable rendering of a buyer-controlled, unbounded wire pin.
+# Protocol details retain the complete schema-valid value (see below).
 _ECHO_MAX_LEN = 64
 
 
 def _version_unsupported_error(
-    echo_field: str,
-    echo_value: Any,
-    claimed_major: int,
+    params: Mapping[str, Any],
     *,
+    supported_releases: tuple[_ReleasePin, ...] | None = None,
     context: Any = None,
 ) -> AdCPVersionUnsupportedError:
     """Build the VERSION_UNSUPPORTED error with the spec-required details payload.
@@ -123,21 +297,27 @@ def _version_unsupported_error(
     ``details`` follows ``error-details/version-unsupported.json``:
     ``supported_versions`` (REQUIRED), the deprecated ``supported_majors``
     (servers SHOULD emit both through 3.x per the schema), the advisory
-    ``build_version``, and the buyer's echoed pin (truncated — the raw value is
-    attacker-sized). The request's ``context`` object rides on the error so the
-    envelope echoes it back (error-compliance storyboard grades
+    ``build_version``, and the buyer's complete schema-valid pin. Only the
+    human-readable message bounds that attacker-controlled value. The request's
+    ``context`` object rides on the error so the envelope echoes it back
+    (error-compliance storyboard grades
     ``field_present: context`` and an unchanged ``correlation_id`` on error
     responses).
     """
-    supported = supported_adcp_versions()
-    echo_value = _truncate_echo(echo_value)
+    releases = supported_releases if supported_releases is not None else _supported_releases()
+    supported = [release.raw for release in releases]
+    # Preserve schema-valid pin values in the protocol details. The wire schema
+    # does not impose a maxLength, and truncating a long release at an arbitrary
+    # character can remove its required dot and make our own error payload
+    # invalid. Only the human-readable message/log rendering is bounded.
+    echoed_pins = {field: params[field] for field in ("adcp_version", "adcp_major_version") if field in params}
+    rendered_pins = ", ".join(f"{field}={_truncate_echo(value)!r}" for field, value in echoed_pins.items())
     return AdCPVersionUnsupportedError(
-        f"AdCP major version {claimed_major} is not supported; "
-        f"this agent speaks major(s) {', '.join(str(m) for m in _supported_majors())}.",
+        f"AdCP version pin {rendered_pins} cannot be served; this agent supports release(s) {', '.join(supported)}.",
         details={
-            echo_field: echo_value,
-            "supported_versions": list(supported),
-            "supported_majors": _supported_majors(),
+            **echoed_pins,
+            "supported_versions": supported,
+            "supported_majors": _supported_majors(releases),
             "build_version": adcp_build_version(),
         },
         suggestion="Re-pin adcp_version to a supported_versions entry and retry the request.",
@@ -146,7 +326,7 @@ def _version_unsupported_error(
 
 
 def _truncate_echo(value: Any) -> Any:
-    """Cap a buyer-controlled pin value before it is reflected into an error/log."""
+    """Cap a buyer-controlled pin only for human-readable error/log rendering."""
     if isinstance(value, str) and len(value) > _ECHO_MAX_LEN:
         return value[:_ECHO_MAX_LEN]
     return value
@@ -170,56 +350,80 @@ def _version_malformed_error(field: str, echo_value: Any, *, context: Any = None
     )
 
 
-def _claimed_major(value: Any) -> int | None:
-    """Parse the major component from a version pin (int or release string).
+def _parse_major_pin(value: Any) -> int | None:
+    """Parse the deprecated integer pin with its schema bounds."""
+    if type(value) is not int or not 1 <= value <= 99:
+        return None
+    return value
 
-    Returns None when the value carries no parseable major (a malformed pin —
-    e.g. ``"banana"`` — that violates the ``version-envelope.json`` release
-    pattern). The caller rejects that as a VALIDATION_ERROR; it is not a version
-    mismatch (VERSION_UNSUPPORTED), which is reserved for a well-formed pin whose
-    major this build does not speak.
-    """
-    if isinstance(value, bool):
+
+def _resolve_release_pin(
+    claimed: _ReleasePin,
+    supported: tuple[_ReleasePin, ...],
+) -> _ReleasePin | None:
+    """Resolve a release pin to the exact or highest eligible seller release."""
+    exact = next((release for release in supported if release.raw == claimed.raw), None)
+    if exact is not None:
+        return exact
+    if claimed.prerelease is not None:
         return None
-    if isinstance(value, str):
-        value = value.split(".", 1)[0]
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+
+    downshift_candidates = (
+        release
+        for release in supported
+        if release.prerelease is None
+        and release.major == claimed.major
+        and _numeric_component_key(release.minor) <= _numeric_component_key(claimed.minor)
+    )
+    return max(
+        downshift_candidates,
+        key=lambda release: _numeric_component_key(release.minor),
+        default=None,
+    )
 
 
 def validate_adcp_version_pins(params: Mapping[str, Any]) -> None:
-    """Reject a request that pins an AdCP major version this build does not speak.
+    """Validate release- and major-precision AdCP request pins.
 
-    AdCP version negotiation (``core/version-envelope.json``): SDK clients pin
-    ``adcp_version`` (release string, e.g. ``"4.0"``) and/or the deprecated
-    ``adcp_major_version`` (int) on every request. A pin whose major is NOT IN
-    the supported major set — above or below — is a protocol this build does
-    not serve: raise :class:`AdCPVersionUnsupportedError` (wire code
-    ``VERSION_UNSUPPORTED``) carrying the spec-required ``supported_versions``
-    details and echoing the request's ``context``. Absent means no version
-    claim, so there is nothing to reject.
-
-    Same-major pins downshift to the release this build serves (no error) —
-    see the module docstring for the spec grounding.
-
-    A pin that is present but malformed (does not parse to a major — e.g.
-    ``adcp_version: "banana"``, violating ``version-envelope.json``'s
-    ``^\\d+\\.\\d+(-...)?$`` pattern, or a non-integer ``adcp_major_version``) is
-    rejected with :class:`AdCPValidationError` (``VALIDATION_ERROR``, correctable).
-    The spec defines a fallback only for an OMITTED pin, so a garbage value is a
-    malformed request, not an absent one — silently stripping it would erase a
-    protocol-version claim the client explicitly (if incorrectly) made.
+    AdCP version negotiation (``core/version-envelope.json``): stable release
+    pins resolve by exact match or same-major downshift.
+    Prerelease pins require an exact match. Sub-min, unmatched prerelease, and
+    cross-major claims raise ``VERSION_UNSUPPORTED`` with authoritative seller
+    releases. Schema-invalid values raise ``VALIDATION_ERROR``. When both fields
+    are present their major components must agree. Only omission activates the
+    seller default; an explicit null is malformed.
     """
-    supported_majors = set(_supported_majors())
+    has_release_pin = "adcp_version" in params
+    has_major_pin = "adcp_major_version" in params
+    if not has_release_pin and not has_major_pin:
+        return
+
     request_context = params.get("context")
-    for field in ("adcp_version", "adcp_major_version"):
-        claimed = params.get(field)
-        if claimed is None:
-            continue
-        claimed_major = _claimed_major(claimed)
-        if claimed_major is None:
-            raise _version_malformed_error(field, claimed, context=request_context)
-        if claimed_major not in supported_majors:
-            raise _version_unsupported_error(field, claimed, claimed_major, context=request_context)
+    claimed_release = _parse_release_pin(params.get("adcp_version")) if has_release_pin else None
+    if has_release_pin and claimed_release is None:
+        raise _version_malformed_error("adcp_version", params.get("adcp_version"), context=request_context)
+
+    claimed_major = _parse_major_pin(params.get("adcp_major_version")) if has_major_pin else None
+    if has_major_pin and claimed_major is None:
+        raise _version_malformed_error("adcp_major_version", params.get("adcp_major_version"), context=request_context)
+
+    supported = _supported_releases()
+    supported_majors = set(_supported_majors(supported))
+    if claimed_release is not None and claimed_major is not None and claimed_release.major != str(claimed_major):
+        raise _version_unsupported_error(
+            params,
+            supported_releases=supported,
+            context=request_context,
+        )
+    if claimed_release is not None and _resolve_release_pin(claimed_release, supported) is None:
+        raise _version_unsupported_error(
+            params,
+            supported_releases=supported,
+            context=request_context,
+        )
+    if claimed_major is not None and claimed_major not in supported_majors:
+        raise _version_unsupported_error(
+            params,
+            supported_releases=supported,
+            context=request_context,
+        )

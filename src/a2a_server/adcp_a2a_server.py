@@ -7,6 +7,7 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 import copy
 import json
 import logging
+import math
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
@@ -30,7 +31,6 @@ from a2a.types import (
     GetTaskRequest,
     InternalError,
     InvalidParamsError,
-    InvalidRequestError,
     ListTaskPushNotificationConfigsRequest,
     ListTaskPushNotificationConfigsResponse,
     ListTasksRequest,
@@ -66,7 +66,7 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
-from src.core.request_compat import strip_undeclared_envelope_fields
+from src.core.request_compat import _log_dropped_fields, strip_undeclared_envelope_fields
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.schemas import CreativeStatusEnum
@@ -112,6 +112,23 @@ from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_a2a_integer_version_pin(params: dict[str, Any]) -> dict[str, Any]:
+    """Restore an integral major pin after protobuf ``Struct`` decoding.
+
+    A2A ``DataPart.data`` is backed by protobuf ``Struct``, whose only numeric
+    representation is ``double``. Consequently a JSON integer such as
+    ``adcp_major_version: 3`` reaches the handler as Python ``3.0``. Rebuild
+    that integer at this transport boundary so the protocol core can remain
+    strict about accepting only integer major pins. Fractional, non-finite,
+    boolean, and all other values are left untouched for the core validator to
+    reject. Preserve the original mapping when no repair is needed.
+    """
+    major = params.get("adcp_major_version")
+    if type(major) is not float or not math.isfinite(major) or not major.is_integer():
+        return params
+    return {**params, "adcp_major_version": int(major)}
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -179,7 +196,7 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
 
 
 def _validate_envelope_tolerant[RequestModelT: BaseModel](
-    params: dict[str, Any], model: type[RequestModelT]
+    params: dict[str, Any], model: type[RequestModelT], *, operation: str
 ) -> RequestModelT:
     """``model.model_validate`` after stripping AdCP envelope fields the model doesn't declare.
 
@@ -193,11 +210,7 @@ def _validate_envelope_tolerant[RequestModelT: BaseModel](
     fields are handled earlier in ``_handle_explicit_skill``. See #1512.
     """
     cleaned, dropped_env = strip_undeclared_envelope_fields(params, set(model.model_fields))
-    if dropped_env:
-        # Parity with the MCP RequestCompatMiddleware's DEBUG log for the same
-        # drop — the audit trail for stripped envelope framing exists on every
-        # transport, not just MCP (#1546).
-        logger.debug("Dropped undeclared AdCP envelope fields for %s: %s", model.__name__, ", ".join(dropped_env))
+    _log_dropped_fields(operation, "undeclared AdCP envelope", dropped_env)
     return model.model_validate(cleaned)
 
 
@@ -269,14 +282,14 @@ class AdCPRequestHandler(RequestHandler):
 
         Args:
             auth_token: Bearer token from Authorization header (None for unauthenticated)
-            require_valid_token: If True, auth failures raise A2AError
+            require_valid_token: If True, auth failures raise AdCPAuthenticationError
             context: ServerCallContext from SDK (None when called directly in tests).
 
         Returns:
             ResolvedIdentity with tenant and (optionally) principal info
 
         Raises:
-            A2AError: If require_valid_token=True and authentication fails
+            AdCPAuthenticationError: If require_valid_token=True and authentication fails
         """
         from src.core.resolved_identity import resolve_identity
         from src.core.testing_hooks import AdCPTestContext
@@ -285,29 +298,26 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise AdCPAuthenticationError("Missing authentication token")
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
 
-        try:
-            identity = resolve_identity(
-                headers=headers,
-                auth_token=auth_token,
-                require_valid_token=require_valid_token,
-                protocol="a2a",
-                testing_context=testing_context,
-            )
-        except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+        identity = resolve_identity(
+            headers=headers,
+            auth_token=auth_token,
+            require_valid_token=require_valid_token,
+            protocol="a2a",
+            testing_context=testing_context,
+        )
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                raise AdCPAuthenticationError("Authentication token is invalid or expired.")
 
             if not identity.tenant:
-                raise InvalidRequestError(
-                    message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
+                raise AdCPAuthenticationError(
+                    f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
                 )
 
             tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
@@ -582,10 +592,6 @@ class AdCPRequestHandler(RequestHandler):
         push_notification_config: TaskPushNotificationConfig | None = None
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config
-            if push_notification_config.url:
-                logger.info(
-                    f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
-                )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)
         task_metadata: dict[str, Any] = {
@@ -601,11 +607,8 @@ class AdCPRequestHandler(RequestHandler):
             status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
             metadata=_dict_to_struct(task_metadata),
         )
-        # Store push notification config outside protobuf metadata (not JSON-serializable)
-        if push_notification_config:
-            self._task_push_configs[task_id] = push_notification_config
-        self.tasks[task_id] = task
 
+        identity: ResolvedIdentity | None = None
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
@@ -620,21 +623,29 @@ class AdCPRequestHandler(RequestHandler):
                 if non_discovery_skills:
                     requires_auth = True
 
-            # Require authentication for non-public skills
-            if requires_auth and not auth_token:
-                raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header"
-                )
-
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
             # to all downstream handlers. No handler should call resolve_identity().
-            identity: ResolvedIdentity | None = None
-            if auth_token:
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
-            elif not requires_auth:
+            if requires_auth:
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
+            elif auth_token:
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=False, context=context)
+            else:
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
+
+            # Persist task/callback state only after authentication has resolved.
+            # Otherwise an unauthenticated request could retain attacker-owned
+            # callback state or reach the generic failure-webhook path.
+            if push_notification_config:
+                self._task_push_configs[task_id] = push_notification_config
+                if push_notification_config.url:
+                    logger.info(
+                        "Protocol-level push notification config provided for task %s: %s",
+                        task_id,
+                        push_notification_config.url,
+                    )
+            self.tasks[task_id] = task
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
@@ -960,6 +971,18 @@ class AdCPRequestHandler(RequestHandler):
             # Send protocol-level webhook notification if configured
             await self._send_protocol_webhook(task, status=task_status_str)
 
+        except AdCPAuthenticationError as e:
+            # Authentication failures are JSON-RPC errors, not task failures.
+            # In particular, never notify an unauthenticated caller's supplied
+            # push URL: that would turn the failure path into an SSRF primitive.
+            record_boundary_error(
+                "a2a",
+                "message_processing",
+                e,
+                tenant_id="unknown",
+                principal_id="unknown",
+            )
+            raise _internal_error_for("message processing", e) from e
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
@@ -1088,8 +1111,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
@@ -1151,8 +1172,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
@@ -1225,8 +1244,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
@@ -1283,8 +1300,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
@@ -1382,11 +1397,22 @@ class AdCPRequestHandler(RequestHandler):
             Dictionary containing the skill result
 
         Raises:
-            ValueError: For unknown skills or invalid parameters
+            AdCPAuthenticationError: A protected skill has no authenticated identity.
+            AdCPError: Version negotiation or skill-domain validation fails.
+            A2AError: The skill name or A2A protocol request is invalid.
         """
+        # Pin AUTH-before-VERSION at the explicit-skill boundary as well as the
+        # top-level transport resolver. This guard is defensive (normal A2A
+        # requests arrive with a pre-resolved identity), but direct dispatcher
+        # callers must not be able to disclose supported_versions before auth.
+        if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
+            auth_exc = AdCPAuthenticationError("Authentication required for skill invocation")
+            record_boundary_error_for_identity("a2a", skill_name, auth_exc, identity)
+            raise auth_exc
+
         # Version-negotiation parity with the MCP RequestCompatMiddleware
-        # (Step 2): reject an AdCP major pin outside the supported set. Runs
-        # FIRST, before the idempotency payload is captured and before any
+        # (Step 2): reject an unsupported AdCP pin after the authentication
+        # guard, but before the idempotency payload is captured and before any
         # handler's strict ``model_validate``. Raises
         # AdCPVersionUnsupportedError, which the dispatch's ``except AdCPError``
         # handler renders as a VERSION_UNSUPPORTED failed-Task envelope; it is
@@ -1395,6 +1421,12 @@ class AdCPRequestHandler(RequestHandler):
         # surface as every other boundary error. See #1512.
         from src.core.adcp_version import validate_adcp_version_pins
         from src.core.request_compat import strip_negotiation_fields
+
+        # protobuf Struct decodes every JSON number as float. Reconstruct an
+        # integral legacy major pin before both validation and raw-payload
+        # capture; semantically the buyer sent an integer, and the normalized
+        # value keeps idempotency hashing aligned with MCP/REST.
+        parameters = _restore_a2a_integer_version_pin(parameters)
 
         try:
             validate_adcp_version_pins(parameters)
@@ -1420,11 +1452,7 @@ class AdCPRequestHandler(RequestHandler):
         # raise extra_forbidden and make the agent uncallable by conformant
         # SDK clients (#1512).
         parameters, dropped_negotiation = strip_negotiation_fields(parameters)
-        if dropped_negotiation:
-            # Parity with the MCP RequestCompatMiddleware, which logs the same
-            # drop at DEBUG — the audit trail for a stripped negotiation field
-            # must exist on every transport, not just MCP (#1546).
-            logger.debug("Dropped AdCP negotiation fields from %s: %s", skill_name, ", ".join(dropped_negotiation))
+        _log_dropped_fields(skill_name, "AdCP negotiation", dropped_negotiation)
 
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
@@ -1445,10 +1473,6 @@ class AdCPRequestHandler(RequestHandler):
         parameters = compat_result.params
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
-
-        # Validate identity for non-discovery skills
-        if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
 
         # Map skill names to handlers. Handler signatures are heterogeneous
         # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
@@ -1542,8 +1566,8 @@ class AdCPRequestHandler(RequestHandler):
         )
 
         # A2A serializes v3 responses only. The negotiation envelope is
-        # validated and stripped at dispatch (majors outside the supported set
-        # are rejected there), so no per-request pin reaches this handler to
+        # validated and stripped at dispatch (unsupported pins are rejected
+        # there), so no per-request pin reaches this handler to
         # gate the legacy v2-compat serialization on — and apply_version_compat
         # is a no-op for dict payloads regardless.
         if isinstance(response, dict):
@@ -1620,7 +1644,7 @@ class AdCPRequestHandler(RequestHandler):
             )
 
         with adcp_validation_boundary():
-            req = _validate_envelope_tolerant(params, CreateMediaBuyRequest)
+            req = _validate_envelope_tolerant(params, CreateMediaBuyRequest, operation="create_media_buy")
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1968,7 +1992,7 @@ class AdCPRequestHandler(RequestHandler):
 
         params = {**parameters}
         include_snapshot = params.pop("include_snapshot", False)
-        req = _validate_envelope_tolerant(params, GetMediaBuysRequest)
+        req = _validate_envelope_tolerant(params, GetMediaBuysRequest, operation="get_media_buys")
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
         return response
@@ -1996,7 +2020,11 @@ class AdCPRequestHandler(RequestHandler):
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
         with adcp_validation_boundary():
-            req = _validate_envelope_tolerant(params, GetMediaBuyDeliveryRequest)
+            req = _validate_envelope_tolerant(
+                params,
+                GetMediaBuyDeliveryRequest,
+                operation="get_media_buy_delivery",
+            )
 
         # Call core function with validated fields (all optional per AdCP spec).
         # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
@@ -2029,7 +2057,11 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas import UpdatePerformanceIndexRequest
 
         with adcp_validation_boundary():
-            req = _validate_envelope_tolerant(parameters, UpdatePerformanceIndexRequest)
+            req = _validate_envelope_tolerant(
+                parameters,
+                UpdatePerformanceIndexRequest,
+                operation="update_performance_index",
+            )
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(

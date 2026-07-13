@@ -54,19 +54,19 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
 
 
 def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
-    """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
+    """Return only the REAL wire envelope stashed by the harness.
 
     When the A2A pipeline reconstructs an AdCPError from a failed Task's
     artifact DataPart, ``tests.harness._base._envelope_to_adcp_error``
     attaches the captured envelope to the exception as
-    ``_wire_error_envelope``. This helper returns that real wire envelope
-    if present; otherwise falls back to ``_envelope_from_adcp_error``
-    (synthesized — same helper production calls).
+    ``_wire_error_envelope``. A missing stash must remain visible as ``None``;
+    regenerating an envelope from the reconstructed exception would fabricate
+    wire evidence and let a dead A2A translator pass its tests.
     """
     real_wire = getattr(exc, "_wire_error_envelope", None)
     if isinstance(real_wire, dict):
         return real_wire
-    return _envelope_from_adcp_error(exc)
+    return None
 
 
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
@@ -225,6 +225,8 @@ class RestE2EDispatcher:
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         import httpx
 
+        from tests.harness.transport import WireAuth
+
         if not env.e2e_config:
             return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
@@ -236,7 +238,9 @@ class RestE2EDispatcher:
         # but auth_token is None (principal_id=None boundary tests), omit the header
         # so the server rejects gracefully instead of httpx raising on a None header.
         headers: dict[str, str] = {"Content-Type": "application/json"}
-        if identity is not None:
+        if isinstance(identity, WireAuth):
+            headers.update(identity.headers)
+        elif identity is not None:
             if identity.auth_token is not None:
                 headers["x-adcp-auth"] = identity.auth_token
             tenant = getattr(identity, "tenant", None)
@@ -253,7 +257,12 @@ class RestE2EDispatcher:
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
             method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+            request_kwargs: dict[str, Any] = {"headers": headers}
+            if method == "get":
+                request_kwargs["params"] = body
+            else:
+                request_kwargs["json"] = body
+            response = getattr(client, method)(endpoint, **request_kwargs)
 
         envelope = {
             "transport": "e2e_rest",
@@ -293,11 +302,22 @@ class RestE2EDispatcher:
             )
 
         try:
-            payload = env.parse_rest_response(response.json())
+            body = response.json()
+            payload = env.parse_rest_response(body)
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
 
-        return TransportResult(payload=payload, envelope=envelope, error=None, raw_response=response)
+        # Real E2E REST wire: preserve the JSON document returned by the live
+        # server, just as RestDispatcher does for the in-process REST boundary.
+        # Success-path BDD assertions must inspect this buyer-visible response,
+        # never a model_dump reconstructed from the parsed payload.
+        return TransportResult(
+            payload=payload,
+            envelope=envelope,
+            error=None,
+            raw_response=response,
+            wire_response=body,
+        )
 
 
 class McpE2EDispatcher:

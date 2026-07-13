@@ -18,14 +18,30 @@ missing-vs-invalid token. It is now uniform:
 
 from __future__ import annotations
 
+import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.integration.test_bearer_across_transports import _build_jsonrpc_skill, _is_auth_rejection
+from tests.helpers import assert_envelope_shape
+from tests.integration.test_bearer_across_transports import _build_jsonrpc_skill
 
 # An auth-required op that also carries an unsupported version pin — the compound error.
 _UNSUPPORTED_PIN = "4.0"
+
+
+def _assert_no_version_disclosure(target: Any) -> None:
+    serialized = json.dumps(target, sort_keys=True)
+    assert "VERSION_UNSUPPORTED" not in serialized
+    assert "supported_versions" not in serialized
+
+
+def _assert_auth_without_version_disclosure(target: Any) -> None:
+    """Assert canonical AUTH rejection without leaking negotiation metadata."""
+    assert_envelope_shape(target, "AUTH_TOKEN_INVALID", recovery="terminal")
+    envelope = target.envelope if hasattr(target, "envelope") else target
+    _assert_no_version_disclosure(envelope)
 
 
 @pytest.mark.requires_db
@@ -55,8 +71,7 @@ class TestAuthBeforeVersionOnRestWire:
             )
 
             assert response.status_code == 401, f"Expected AUTH (401), got {response.status_code}: {response.text}"
-            code = response.json()["adcp_error"]["code"]
-            assert code == "AUTH_TOKEN_INVALID", f"AUTH must win over VERSION on the compound error, got {code}"
+            _assert_auth_without_version_disclosure(response.json())
 
 
 @pytest.mark.requires_db
@@ -86,11 +101,10 @@ class TestAuthBeforeVersionOnA2AWire:
             )
 
             body = response.json()
-            assert _is_auth_rejection(body), f"AUTH must win over VERSION on the compound error, got {body}"
-            # And it must NOT be the VERSION_UNSUPPORTED disclosure.
-            assert "VERSION_UNSUPPORTED" not in str(body), (
-                f"Leaked supported_versions to unauthenticated caller: {body}"
-            )
+            assert "error" in body, f"AUTH must win over VERSION on the compound error, got {body}"
+            assert "data" in body["error"], f"A2A auth error omitted its AdCP envelope: {body}"
+            _assert_auth_without_version_disclosure(body["error"]["data"])
+            _assert_no_version_disclosure(body)
 
 
 class TestAuthBeforeVersionOnMcpMiddleware:
@@ -133,5 +147,5 @@ class TestAuthBeforeVersionOnMcpMiddleware:
                 await MCPAuthMiddleware().on_call_tool(ctx, call_next)
 
         # AUTH won (not VERSION) and the version gate downstream was never reached.
-        assert exc.value.envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
+        _assert_auth_without_version_disclosure(exc.value)
         call_next.assert_not_awaited()

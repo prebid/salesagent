@@ -533,9 +533,11 @@ class BaseTestEnv:
         exercises: message parsing → skill routing → normalize_request_params →
         handler dispatch → _serialize_for_a2a → Task/Artifact framing.
 
-        Identity is injected by monkey-patching ``_resolve_a2a_identity`` and
-        ``_get_auth_token`` on the handler instance — single mock point, same
-        as the MCP Client approach patches resolve_identity_from_context.
+        A ``ResolvedIdentity`` override is injected by monkey-patching
+        ``_resolve_a2a_identity`` and ``_get_auth_token`` on the handler
+        instance. A ``WireAuth`` override instead injects only the transport's
+        ``AuthContext`` and leaves token extraction and identity resolution to
+        production code.
 
         Args:
             skill_name: A2A skill name (e.g., "get_products").
@@ -549,7 +551,7 @@ class BaseTestEnv:
         from a2a.types import SendMessageRequest, Task
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from tests.harness.transport import Transport
+        from tests.harness.transport import Transport, WireAuth
         from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
         self._commit_factory_data()
@@ -562,7 +564,7 @@ class BaseTestEnv:
         # The real A2A handler writes audit logs which require the tenant to exist
         # in the DB. Ensure the tenant record exists (idempotent) so audit logging
         # doesn't fail with FK violations on discovery endpoints.
-        if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
+        if self.use_real_db and a2a_identity and not isinstance(a2a_identity, WireAuth) and a2a_identity.tenant_id:
             self._ensure_tenant_for_audit(a2a_identity.tenant_id)
 
         # Unpack req object into flat parameters if present.
@@ -584,17 +586,24 @@ class BaseTestEnv:
         # (the in-process equivalent of MCP's get_http_headers seam) — the auth
         # chain itself is real. When no real token exists (unit mode), inject the
         # identity directly via the single mock point (unchanged behavior).
-        auth_token = a2a_identity.auth_token if a2a_identity else None
+        if isinstance(a2a_identity, WireAuth):
+            from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+            from src.core.http_utils import extract_auth_token
 
-        if auth_token:
+            headers = dict(a2a_identity.headers)
+            auth_token, _source = extract_auth_token(headers)
+            server_context = ServerCallContext(
+                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
+            )
+        elif a2a_identity and a2a_identity.auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
             headers = {
-                "x-adcp-auth": auth_token,
+                "x-adcp-auth": a2a_identity.auth_token,
                 "x-adcp-tenant": a2a_identity.tenant_id or "",
             }
             server_context = ServerCallContext(
-                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
+                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=a2a_identity.auth_token, headers=headers)}
             )
         else:
             # _get_auth_token must return a non-None value when identity exists,
@@ -607,7 +616,7 @@ class BaseTestEnv:
             server_context = ServerCallContext()
 
         # Set tenant ContextVar so production code can read it
-        if a2a_identity and a2a_identity.tenant:
+        if a2a_identity and not isinstance(a2a_identity, WireAuth) and a2a_identity.tenant:
             from src.core.config_loader import set_current_tenant
 
             set_current_tenant(a2a_identity.tenant)
@@ -692,7 +701,7 @@ class BaseTestEnv:
         from fastmcp import Client
 
         from src.core.main import mcp
-        from tests.harness.transport import Transport
+        from tests.harness.transport import Transport, WireAuth
 
         self._commit_factory_data()
 
@@ -711,19 +720,23 @@ class BaseTestEnv:
         else:
             arguments = dict(kwargs)
 
-        # Choose auth strategy based on whether we have a real DB token.
-        auth_token = mcp_identity.auth_token if mcp_identity else None
-
-        if auth_token:
+        # Choose auth strategy based on whether production should resolve the
+        # request from raw headers or the unit harness must inject an identity.
+        headers: dict[str, str] | None = None
+        if isinstance(mcp_identity, WireAuth):
+            headers = dict(mcp_identity.headers)
+        elif mcp_identity and mcp_identity.auth_token:
             # Real auth chain: header → token → DB lookup → identity.
-            # Patch get_http_headers in BOTH modules that import it:
-            # transport_helpers (called by resolve_identity_from_context) and
-            # mcp_auth_middleware (called for context_id extraction).
             headers = {
-                "x-adcp-auth": auth_token,
+                "x-adcp-auth": mcp_identity.auth_token,
                 "x-adcp-tenant": mcp_identity.tenant_id or "",
             }
 
+        if headers is not None:
+            # Patch get_http_headers in BOTH modules that import it:
+            # transport_helpers (called by resolve_identity_from_context) and
+            # mcp_auth_middleware (called for context_id extraction). WireAuth
+            # deliberately supplies the raw Authorization header unchanged.
             async def _call():
                 mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
                 mock_mw = patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers)
@@ -814,7 +827,7 @@ class BaseTestEnv:
         """
         from src.app import app
         from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
-        from tests.harness.transport import Transport
+        from tests.harness.transport import Transport, WireAuth
 
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
@@ -827,8 +840,23 @@ class BaseTestEnv:
         # then override per-request auth AFTER.
         client = self.get_rest_client()
 
-        # Configure per-request auth (must be after get_rest_client)
-        if identity is None:
+        # Configure per-request auth (must be after get_rest_client). WireAuth
+        # removes the harness's dependency overrides for exactly this request,
+        # so UnifiedAuthMiddleware and the real auth dependencies consume the
+        # raw headers. Restore the previous overrides even when the request
+        # raises, since ``app`` is process-global across tests.
+        auth_dependencies = (_require_auth_dep, _resolve_auth_dep)
+        missing_override = object()
+        previous_overrides = {
+            dependency: app.dependency_overrides.get(dependency, missing_override) for dependency in auth_dependencies
+        }
+
+        request_headers: dict[str, str] | None = None
+        if isinstance(identity, WireAuth):
+            request_headers = dict(identity.headers)
+            for dependency in auth_dependencies:
+                app.dependency_overrides.pop(dependency, None)
+        elif identity is None:
             from src.core.exceptions import AdCPAuthenticationError
 
             def _no_auth() -> None:
@@ -840,12 +868,19 @@ class BaseTestEnv:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
-        body = self.build_rest_body(**kwargs)
-        if self.REST_METHOD == "get":
-            # Query-param endpoint (e.g. GET /capabilities): the body dict
-            # becomes the query string.
-            return client.get(endpoint, params=body)
-        return client.post(endpoint, json=body)
+        try:
+            body = self.build_rest_body(**kwargs)
+            if self.REST_METHOD == "get":
+                # Query-param endpoint (e.g. GET /capabilities): the body dict
+                # becomes the query string.
+                return client.get(endpoint, params=body, headers=request_headers)
+            return client.post(endpoint, json=body, headers=request_headers)
+        finally:
+            for dependency, previous in previous_overrides.items():
+                if previous is missing_override:
+                    app.dependency_overrides.pop(dependency, None)
+                else:
+                    app.dependency_overrides[dependency] = previous
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.
@@ -866,9 +901,10 @@ class BaseTestEnv:
         """Convert call_impl kwargs to the REST endpoint body shape.
 
         Default: if ``req`` is a Pydantic model, delegates serialization to it
-        via ``model_dump(mode="json", exclude_none=True)``.  Enums, nested
-        models, and optional fields are handled by Pydantic — no manual
-        field-by-field extraction needed.
+        via ``model_dump(mode="json", exclude_none=True)`` and overlays any
+        explicit boundary kwargs. Enums, nested models, optional fields, and
+        negotiation pins supplied beside the request are preserved without
+        manual field-by-field extraction.
 
         If no ``req`` is present, returns empty dict (valid for endpoints
         where all parameters are optional).
@@ -878,9 +914,13 @@ class BaseTestEnv:
         """
         from pydantic import BaseModel as PydanticBaseModel
 
-        req = kwargs.get("req")
+        req = kwargs.pop("req", None)
         if req is not None and isinstance(req, PydanticBaseModel):
-            return req.model_dump(mode="json", exclude_none=True)
+            req_fields = req.model_dump(mode="json", exclude_none=True)
+            # Explicit boundary fields override model defaults. In particular,
+            # callers may supply an AdCP negotiation pin alongside a typed
+            # request so every transport grades the same raw envelope.
+            return {**req_fields, **kwargs}
         if req is None:
             return {}
         raise NotImplementedError(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -24,6 +25,8 @@ from pydantic import BaseModel
 
 from src.core.adcp_version import validate_adcp_version_pins
 from src.core.auth_context import require_auth, resolve_auth
+from src.core.exceptions import AdCPValidationError
+from src.core.request_compat import ADCP_NEGOTIATION_FIELDS
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
@@ -41,6 +44,59 @@ from src.core.version_compat import apply_version_compat
 logger = logging.getLogger(__name__)
 
 
+def _coerce_rest_query_version_pins(query_params: Mapping[str, str]) -> dict[str, Any]:
+    """Convert the textual REST query representation of the legacy integer pin.
+
+    URL query parameters are strings even when their OpenAPI/schema type is an
+    integer. Keep the core negotiator strict (MCP/A2A/JSON bodies must supply an
+    actual int), and perform only this transport-required coercion at REST
+    ingress. Non-integer spellings remain strings so the core emits the proper
+    ``VALIDATION_ERROR`` instead of silently normalizing malformed input.
+    """
+    pins: dict[str, Any] = dict(query_params)
+    raw_major = pins.get("adcp_major_version")
+    if isinstance(raw_major, str):
+        digits = raw_major[1:] if raw_major.startswith("-") else raw_major
+        if digits and digits.isascii() and digits.isdigit():
+            try:
+                pins["adcp_major_version"] = int(raw_major)
+            except ValueError:
+                # Extremely long digit strings can exceed Python's protected
+                # conversion limit. Leave them textual so validation rejects
+                # them without an untyped exception.
+                pass
+    return pins
+
+
+def _merge_rest_version_pins(
+    query_pins: Mapping[str, Any],
+    body: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build one negotiation snapshot across REST query and JSON locations."""
+    merged = {field: query_pins[field] for field in ADCP_NEGOTIATION_FIELDS if field in query_pins}
+    context = body.get("context")
+    if isinstance(context, dict):
+        merged["context"] = context
+
+    for field in ADCP_NEGOTIATION_FIELDS:
+        if field not in body:
+            continue
+        body_value = body[field]
+        if field in merged and merged[field] != body_value:
+            raise AdCPValidationError(
+                f"Conflicting {field} values were supplied in the REST query and JSON body.",
+                field=field,
+                details={
+                    "query_value": merged[field],
+                    "body_value": body_value,
+                },
+                suggestion=f"Send {field} in one location, or send the same value in both.",
+                context=context if isinstance(context, dict) else None,
+            )
+        merged[field] = body_value
+    return merged
+
+
 async def _validate_version_pins(request: Request) -> None:
     """AdCP version negotiation on the REST boundary (parity with MCP/A2A).
 
@@ -52,14 +108,17 @@ async def _validate_version_pins(request: Request) -> None:
     as the two-layer VERSION_UNSUPPORTED envelope. Starlette caches the body,
     so the endpoint's own body parsing is unaffected.
     """
-    validate_adcp_version_pins(request.query_params)
+    query_pins = _coerce_rest_query_version_pins(request.query_params)
     if request.method in ("POST", "PUT", "PATCH"):
         try:
             body = await request.json()
         except ValueError:
+            validate_adcp_version_pins(query_pins)
             return  # malformed/empty JSON is reported by the endpoint's body parsing
         if isinstance(body, dict):
-            validate_adcp_version_pins(body)
+            validate_adcp_version_pins(_merge_rest_version_pins(query_pins, body))
+            return
+    validate_adcp_version_pins(query_pins)
 
 
 async def _version_after_resolve(request: Request, _identity=resolve_auth) -> None:

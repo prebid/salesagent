@@ -7,8 +7,12 @@ The normalizer translates known deprecated AdCP field names to their current
 equivalents, mirroring the JS adcp-client's normalizeRequestParams() logic.
 """
 
+import logging
+
 from src.core.request_compat import (
     ADCP_NEGOTIATION_FIELDS,
+    _log_dropped_fields,
+    _strip_fields,
     normalize_request_params,
     strip_negotiation_fields,
     strip_undeclared_envelope_fields,
@@ -310,11 +314,9 @@ class TestStripUnknownParams:
     """strip_unknown_params removes fields not in the known set."""
 
     def test_all_known_fields_pass_through(self):
-        cleaned, stripped = strip_unknown_params(
-            {"brief": "ads", "brand": {"domain": "acme.com"}},
-            {"brief", "brand"},
-        )
-        assert cleaned == {"brief": "ads", "brand": {"domain": "acme.com"}}
+        params = {"brief": "ads", "brand": {"domain": "acme.com"}}
+        cleaned, stripped = strip_unknown_params(params, {"brief", "brand"})
+        assert cleaned is params
         assert stripped == []
 
     def test_unknown_fields_removed(self):
@@ -345,6 +347,46 @@ class TestStripUnknownParams:
         )
         assert cleaned == {"brief": None}
         assert stripped == ["unknown"]
+
+
+class TestSharedStripFields:
+    """The shared strip primitive preserves ordering and object identity."""
+
+    def test_removes_requested_fields_and_sorts_names(self):
+        cleaned, stripped = _strip_fields(
+            {"keep": 1, "z_field": 2, "a_field": 3},
+            {"z_field", "a_field"},
+        )
+        assert cleaned == {"keep": 1}
+        assert stripped == ["a_field", "z_field"]
+
+    def test_no_match_returns_original_object(self):
+        params = {"keep": 1}
+        cleaned, stripped = _strip_fields(params, {"missing"})
+        assert cleaned is params
+        assert stripped == []
+
+
+class TestDroppedFieldLogging:
+    """All transports share the same dropped-field audit message."""
+
+    def test_logs_canonical_message(self, caplog):
+        with caplog.at_level(logging.DEBUG, logger="src.core.request_compat"):
+            _log_dropped_fields(
+                "get_products",
+                "AdCP negotiation",
+                ["adcp_major_version", "adcp_version"],
+            )
+
+        assert caplog.messages == [
+            "Dropped AdCP negotiation fields from get_products: adcp_major_version, adcp_version"
+        ]
+
+    def test_empty_drop_does_not_log(self, caplog):
+        with caplog.at_level(logging.DEBUG, logger="src.core.request_compat"):
+            _log_dropped_fields("get_products", "AdCP negotiation", [])
+
+        assert caplog.messages == []
 
 
 # ---------------------------------------------------------------------------

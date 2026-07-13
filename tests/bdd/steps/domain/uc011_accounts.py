@@ -12,6 +12,7 @@ ctx["error"] is any exception raised.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -175,6 +176,21 @@ def given_expired_token(ctx: dict) -> None:
     """Set up A2A connection with an expired/invalid token."""
     ctx["has_auth"] = False
     ctx["force_identity"] = None
+
+
+@given("the Buyer Agent presents an invalid bearer token")
+def given_invalid_wire_bearer(ctx: dict) -> None:
+    """Supply raw headers so every transport runs its real auth resolver."""
+    tenant, _principal = _setup_tenant_and_principal(ctx)
+
+    from tests.harness.transport import WireAuth
+
+    ctx["wire_auth"] = WireAuth(
+        headers={
+            "Authorization": "Bearer definitely-not-a-real-token",
+            "x-adcp-tenant": tenant.tenant_id,
+        }
+    )
 
 
 @given("the sync_accounts response schema uses oneOf")
@@ -2779,6 +2795,51 @@ def when_sync_brandless_entry(ctx: dict) -> None:
 
     req = SyncAccountsRequest(accounts=[{"account": {"account_id": "ref-001"}, "operator": "example.com"}])
     dispatch_request(ctx, req=req)
+
+
+@when(parsers.parse('the Buyer Agent sends a sync_accounts request with unsupported {pin_field} "{pin_value}"'))
+def when_sync_with_invalid_auth_and_version_pin(ctx: dict, pin_field: str, pin_value: str) -> None:
+    """Send one valid operation with both an invalid token and unsupported pin."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    assert pin_field in {"adcp_version", "adcp_major_version"}, f"unexpected version pin field: {pin_field}"
+    parsed_pin: str | int = int(pin_value) if pin_field == "adcp_major_version" else pin_value
+    req = SyncAccountsRequest(
+        accounts=[
+            {
+                "brand": {"domain": "auth-precedence.example"},
+                "operator": "auth-precedence.example",
+                "billing": "operator",
+            }
+        ]
+    )
+    dispatch_request(
+        ctx,
+        req=req,
+        identity=ctx["wire_auth"],
+        **{pin_field: parsed_pin},
+    )
+
+
+@then("the real wire response is a terminal AUTH_TOKEN_INVALID envelope")
+def then_real_wire_auth_token_invalid(ctx: dict) -> None:
+    """Assert the buyer-visible envelope, never a harness reconstruction."""
+    assert ctx.get("response") is None, f"compound-invalid request unexpectedly succeeded: {ctx.get('response')!r}"
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, (
+        "expected a real transport error envelope; synthesized harness output is not wire evidence"
+    )
+    assert_envelope_shape(envelope, "AUTH_TOKEN_INVALID", recovery="terminal")
+
+
+@then("the authentication rejection does not disclose supported_versions")
+def then_auth_rejection_hides_supported_versions(ctx: dict) -> None:
+    """AUTH wins without leaking version-negotiation recovery metadata."""
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, "expected the preceding AUTH_TOKEN_INVALID wire envelope"
+    serialized = json.dumps(envelope, sort_keys=True)
+    assert "VERSION_UNSUPPORTED" not in serialized, f"VERSION won over AUTH: {serialized}"
+    assert "supported_versions" not in serialized, f"auth rejection disclosed seller versions: {serialized}"
 
 
 @then("the brandless entry is rejected with a correctable VALIDATION_ERROR")

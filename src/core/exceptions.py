@@ -52,7 +52,7 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
     # AUTH_TOKEN_INVALID is not mapped — it passes through directly as the
-    # spec error code for invalid/missing tokens (per AdCP BDD feature files).
+    # project's BDD-grounded code for invalid/missing tokens.
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
     "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
@@ -124,16 +124,18 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     }
 )
 
-# Spec-required wire codes the SDK's STANDARD_ERROR_CODES does not yet include.
-# These are mandated by the AdCP spec / BDD feature files but absent from the
-# SDK constant (spec is authoritative — see docs/adcp-spec-version.md). They
-# pass through translate_error_code() unchanged and are the single source of
-# truth for the error-code compliance guards.
+# Buyer-visible wire codes allowed beyond the SDK's STANDARD_ERROR_CODES.
+# VERSION_UNSUPPORTED and BILLING_NOT_SUPPORTED are pinned-spec codes missing
+# from the SDK constant (the spec is authoritative; see adcp-spec-version.md).
+# AUTH_TOKEN_INVALID is instead a project-specific code grounded in BR-UC-011,
+# not the AdCP 3.1 error-code enum. The historical SPEC_CODES name is retained
+# as the public input to the error-code compliance guards. All three pass
+# through translate_error_code() unchanged.
 SPEC_CODES: frozenset[str] = frozenset(
     {
-        "AUTH_TOKEN_INVALID",  # BR-UC-011: invalid/missing auth token
-        "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
-        "VERSION_UNSUPPORTED",  # version negotiation: caller pins an unsupported AdCP major
+        "AUTH_TOKEN_INVALID",  # Project/BR-UC-011: invalid or missing auth token
+        "BILLING_NOT_SUPPORTED",  # Pinned spec, BR-UC-011 BR-RULE-059
+        "VERSION_UNSUPPORTED",  # Pinned spec: seller cannot honor the caller's release pin
     }
 )
 
@@ -419,16 +421,16 @@ class AdCPValidationError(AdCPError):
 
 
 class AdCPVersionUnsupportedError(AdCPError):
-    """Caller pinned an AdCP major version this build does not speak (400).
+    """Caller pinned an AdCP release or major this seller cannot serve (400).
 
-    AdCP version negotiation: the SDK client sends ``adcp_major_version``; a
-    seller that cannot speak it MUST reject with ``VERSION_UNSUPPORTED`` and name
-    its supported set (spec: error-compliance storyboard, unsupported-major
-    probe). ``VERSION_UNSUPPORTED`` is a spec code not yet in the SDK's
-    ``STANDARD_ERROR_CODES`` — see ``SPEC_CODES``. Recovery is ``correctable``
-    per the spec's ``enums/error-code.json`` enumMetadata ("re-pin to a
-    release in supported_versions and retry"): the buyer fixes the pin and
-    resends — it does not escalate to a human.
+    Release-precision ``adcp_version`` follows the exact/downshift rules in the
+    pinned Versioning & Governance prose; the deprecated integer
+    ``adcp_major_version`` remains supported through 3.x. The error-compliance
+    storyboard grades the unsupported-major probe as required and the release
+    sibling as advisory at 3.1. ``VERSION_UNSUPPORTED`` is a pinned-spec code
+    not yet in the SDK's ``STANDARD_ERROR_CODES`` — see ``SPEC_CODES``.
+    Recovery is ``correctable``: the buyer re-pins to an entry from the
+    authoritative ``supported_versions`` list and retries.
     """
 
     _default_status_code: ClassVar[int] = 400

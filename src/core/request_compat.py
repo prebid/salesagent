@@ -24,7 +24,7 @@ _BRAND_TOOLS: frozenset[str] = frozenset({"get_products", "create_media_buy"})
 # on each request (Stripe-style API-version pinning); they are protocol envelope,
 # not tool parameters, so no tool wrapper declares them. Consumed for
 # negotiation first (src/core/adcp_version.validate_adcp_version_pins raises
-# VERSION_UNSUPPORTED on an unsupported major), then stripped before MCP
+# VERSION_UNSUPPORTED when a well-formed pin cannot be served), then stripped before MCP
 # arg-validation so strict per-tool validation does not reject conformant SDK
 # clients. See https://github.com/prebid/salesagent/issues/1512.
 ADCP_NEGOTIATION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
@@ -192,6 +192,34 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
 )
 
 
+def _strip_fields(
+    params: dict[str, Any],
+    fields_to_strip: set[str] | frozenset[str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Remove selected fields while preserving no-op object identity.
+
+    Returns the original ``params`` object when none of ``fields_to_strip``
+    are present. Keeping that invariant in one helper prevents the three
+    public strip operations from drifting in their copy/no-copy behavior.
+    """
+    present = params.keys() & fields_to_strip
+    if not present:
+        return params, []
+    cleaned = {key: value for key, value in params.items() if key not in present}
+    return cleaned, sorted(present)
+
+
+def _log_dropped_fields(operation: str, kind: str, dropped: list[str]) -> None:
+    """Log dropped request fields with one cross-transport message shape."""
+    if dropped:
+        logger.debug(
+            "Dropped %s fields from %s: %s",
+            kind,
+            operation,
+            ", ".join(dropped),
+        )
+
+
 def strip_undeclared_envelope_fields(
     params: dict[str, Any], known_params: set[str] | None
 ) -> tuple[dict[str, Any], list[str]]:
@@ -211,11 +239,7 @@ def strip_undeclared_envelope_fields(
     """
     if known_params is None:
         return params, []
-    present = (params.keys() & ADCP_ENVELOPE_FIELDS) - known_params
-    if not present:
-        return params, []
-    cleaned = {k: v for k, v in params.items() if k not in present}
-    return cleaned, sorted(present)
+    return _strip_fields(params, ADCP_ENVELOPE_FIELDS - known_params)
 
 
 def strip_negotiation_fields(params: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -231,11 +255,7 @@ def strip_negotiation_fields(params: dict[str, Any]) -> tuple[dict[str, Any], li
         Tuple of (params without negotiation fields, sorted list of removed keys).
         Returns the original dict object unchanged when none are present.
     """
-    present = params.keys() & ADCP_NEGOTIATION_FIELDS
-    if not present:
-        return params, []
-    cleaned = {k: v for k, v in params.items() if k not in ADCP_NEGOTIATION_FIELDS}
-    return cleaned, sorted(present)
+    return _strip_fields(params, ADCP_NEGOTIATION_FIELDS)
 
 
 def strip_unknown_params(
@@ -252,11 +272,7 @@ def strip_unknown_params(
     Returns:
         Tuple of (cleaned dict with only known keys, sorted list of stripped key names).
     """
-    unknown = params.keys() - known_params
-    if not unknown:
-        return params, []
-    cleaned = {k: v for k, v in params.items() if k in known_params}
-    return cleaned, sorted(unknown)
+    return _strip_fields(params, params.keys() - known_params)
 
 
 def deep_strip_to_schema(

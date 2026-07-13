@@ -46,7 +46,10 @@ class ResolvedIdentity(BaseModel, frozen=True):
 
 # Token extraction lives in src.core.http_utils.extract_auth_token — the one
 # primitive shared by every transport boundary (this module, auth.py, and
-# UnifiedAuthMiddleware) so the header semantics cannot diverge.
+# UnifiedAuthMiddleware) so the header semantics cannot diverge. Keep the
+# historical private alias as a compatibility seam: existing callers import
+# ``resolved_identity._extract_auth_token`` even though its implementation is
+# now centralized in http_utils.
 from src.core.http_utils import extract_auth_token as _extract_auth_token
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 

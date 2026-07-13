@@ -13,8 +13,10 @@ Usage::
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel
@@ -51,10 +53,30 @@ class E2EConfig:
     Attributes:
         base_url: Docker stack URL (e.g., ``http://localhost:8092``).
         postgres_url: Docker PostgreSQL URL for factory data writes.
+        test_control_token: Per-run secret for server-visible E2E setup. Normal
+            protocol requests never receive this token.
     """
 
     base_url: str
     postgres_url: str
+    test_control_token: str | None = None
+
+
+@dataclass(frozen=True)
+class WireAuth:
+    """Raw request headers used to exercise a transport's real auth boundary.
+
+    Passing a :class:`WireAuth` as the ``identity`` override tells the harness
+    not to inject a pre-resolved ``ResolvedIdentity``. Each transport receives
+    only the state it would get from its ingress layer, so token extraction and
+    principal resolution remain production code under test.
+    """
+
+    headers: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        """Snapshot caller-owned mappings so a request cannot mutate later."""
+        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
 
 
 @dataclass(frozen=True)
@@ -67,8 +89,8 @@ class TransportResult:
         error: Exception raised during dispatch, if any.
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
         wire_response: Serialized success-path response body as a dict, captured
-            from the real wire (REST HTTP JSON body, MCP structured_content, A2A
-            artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
+            from the real wire (REST/E2E REST HTTP JSON body, MCP
+            structured_content, A2A artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
             the typed ``payload`` instead). Lets success-path tests assert the
             actual serialized shape (e.g. the v3.1 format_id federation contract).
         wire_error_envelope: Raw two-layer error envelope dict captured from

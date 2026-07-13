@@ -7,7 +7,41 @@ modes share the same lifecycle contract.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
+
+import pytest
+
+
+def _make_unit_capabilities_env(*, e2e_config=None):
+    """Build CapabilitiesEnv without binding a database for harness meta-tests."""
+    from tests.harness.capabilities import CapabilitiesEnv
+
+    class _UnitCapabilitiesEnv(CapabilitiesEnv):
+        use_real_db = False
+
+    return _UnitCapabilitiesEnv(e2e_config=e2e_config)
+
+
+def _expected_policy_control_calls(lease_id: str, *, versions: list[str], build_version: str):
+    """Canonical live-server install/reset call pair for one owned lease."""
+    headers = {"x-adcp-test-control-token": "per-run-secret"}
+    return [
+        call(
+            "PUT",
+            "/_internal/testing/adcp-version-policy",
+            headers=headers,
+            json={
+                "lease_id": lease_id,
+                "supported_versions": versions,
+                "build_version": build_version,
+            },
+        ),
+        call(
+            "DELETE",
+            f"/_internal/testing/adcp-version-policy/{lease_id}",
+            headers=headers,
+        ),
+    ]
 
 
 class TestBaseClassContract:
@@ -224,6 +258,37 @@ class TestBaseClassContract:
         assert env.identity.principal_id == "p1"
         assert env.identity.protocol == "mcp"
 
+    def test_wire_auth_snapshots_raw_headers(self):
+        """WireAuth preserves exact wire values without retaining caller state."""
+        from tests.harness import WireAuth
+
+        headers = {"Authorization": "  Bearer raw-token  "}
+        auth = WireAuth(headers=headers)
+        headers["Authorization"] = "mutated"
+
+        assert auth.headers["Authorization"] == "  Bearer raw-token  "
+
+    def test_build_rest_body_preserves_explicit_boundary_fields(self):
+        """Negotiation pins beside a typed request survive REST serialization."""
+        from pydantic import BaseModel
+
+        from tests.harness._base import BaseTestEnv
+
+        class _Request(BaseModel):
+            value: str
+
+        body = BaseTestEnv().build_rest_body(
+            req=_Request(value="payload"),
+            adcp_version="4.0",
+            adcp_major_version=4,
+        )
+
+        assert body == {
+            "value": "payload",
+            "adcp_version": "4.0",
+            "adcp_major_version": 4,
+        }
+
     def test_call_via_raises_for_unimplemented_transport(self):
         """call_via with Transport.A2A raises NotImplementedError if call_a2a not overridden."""
 
@@ -265,6 +330,159 @@ class TestBaseClassContract:
         assert result.is_success
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
+
+    def test_a2a_dispatcher_never_fabricates_wire_envelope(self):
+        """An unstashed AdCPError cannot become harness-generated wire evidence."""
+        from src.core.exceptions import AdCPValidationError
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        class _TestEnv(BaseTestEnv):
+            def call_a2a(self, **kwargs):
+                raise AdCPValidationError("invalid")
+
+        result = _TestEnv().call_via(Transport.A2A)
+
+        assert result.is_error
+        assert result.wire_error_envelope is None
+        assert result.synthesized_error_envelope is None
+
+    @pytest.mark.parametrize(
+        ("rest_method", "payload_argument"),
+        [("post", "json"), ("get", "params")],
+    )
+    def test_e2e_rest_dispatcher_forwards_wire_auth_and_uses_method_payload(
+        self,
+        rest_method,
+        payload_argument,
+    ):
+        """E2E REST mirrors in-process auth headers and GET/query semantics."""
+        from pydantic import BaseModel
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.dispatchers import RestE2EDispatcher
+        from tests.harness.transport import E2EConfig, WireAuth
+
+        class _ResponseModel(BaseModel):
+            ok: bool
+
+        class _TestEnv(BaseTestEnv):
+            REST_ENDPOINT = "/test"
+            REST_METHOD = rest_method
+
+            def parse_rest_response(self, data):
+                return _ResponseModel(**data)
+
+        env = _TestEnv(e2e_config=E2EConfig(base_url="http://example.test", postgres_url="postgresql://test"))
+        response = MagicMock(
+            status_code=200,
+            headers={"content-type": "application/json"},
+        )
+        response.json.return_value = {"ok": True}
+
+        with patch("httpx.Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            request_method = getattr(client, rest_method)
+            request_method.return_value = response
+            result = RestE2EDispatcher().dispatch(
+                env,
+                identity=WireAuth(headers={"Authorization": "  Bearer raw-token  "}),
+            )
+
+        request_method.assert_called_once_with(
+            "/test",
+            **{
+                payload_argument: {},
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Authorization": "  Bearer raw-token  ",
+                },
+            },
+        )
+        assert result.is_success
+        assert result.wire_response == {"ok": True}
+
+    def test_capabilities_policy_setup_uses_managed_in_process_patches(self):
+        """The UC-010 setup intent drives core policy and is undone on exit."""
+        from src.core import adcp_version as av
+        from tests.harness.transport import Transport
+
+        default_versions = av.supported_adcp_versions()
+        default_build = av.adcp_build_version()
+        with _make_unit_capabilities_env() as env:
+            env.configure_version_policy(
+                Transport.REST,
+                supported_versions=("3.0", "3.1"),
+                build_version="3.1.2+e2e.1",
+            )
+            assert av.supported_adcp_versions() == ("3.0", "3.1")
+            assert av.adcp_build_version() == "3.1.2+e2e.1"
+
+        assert av.supported_adcp_versions() == default_versions
+        assert av.adcp_build_version() == default_build
+
+    def test_capabilities_e2e_policy_setup_is_secret_gated_and_reset_on_failure(self):
+        """Live-server setup sends a leased snapshot and teardown always resets it."""
+        from tests.harness.transport import E2EConfig, Transport
+
+        config = E2EConfig(
+            base_url="http://example.test",
+            postgres_url="postgresql://test",
+            test_control_token="per-run-secret",
+        )
+        env = _make_unit_capabilities_env(e2e_config=config)
+        lease_id = env._version_policy_lease
+        response = MagicMock()
+
+        with patch("httpx.Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            client.request.return_value = response
+            with pytest.raises(RuntimeError, match="scenario failed"):
+                with env:
+                    env.configure_version_policy(
+                        Transport.E2E_REST,
+                        supported_versions=("3.1", "3.2"),
+                        build_version="3.2.0",
+                    )
+                    raise RuntimeError("scenario failed")
+
+        assert client.request.call_args_list == _expected_policy_control_calls(
+            lease_id,
+            versions=["3.1", "3.2"],
+            build_version="3.2.0",
+        )
+        assert response.raise_for_status.call_count == 2
+
+    def test_capabilities_e2e_policy_ambiguous_put_still_resets_owned_lease(self):
+        """A lost PUT response cannot leave server-global policy poisoning later tests."""
+        from tests.harness.transport import E2EConfig, Transport
+
+        config = E2EConfig(
+            base_url="http://example.test",
+            postgres_url="postgresql://test",
+            test_control_token="per-run-secret",
+        )
+        env = _make_unit_capabilities_env(e2e_config=config)
+        lease_id = env._version_policy_lease
+        response = MagicMock()
+        response.raise_for_status.side_effect = [RuntimeError("ambiguous PUT failure"), None]
+
+        with patch("httpx.Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            client.request.return_value = response
+            with pytest.raises(RuntimeError, match="ambiguous PUT failure"):
+                with env:
+                    env.configure_version_policy(
+                        Transport.E2E_REST,
+                        supported_versions=("3.0", "3.1"),
+                        build_version="3.1.2+e2e.1",
+                    )
+
+        assert client.request.call_args_list == _expected_policy_control_calls(
+            lease_id,
+            versions=["3.0", "3.1"],
+            build_version="3.1.2+e2e.1",
+        )
 
     def test_call_via_impl_uses_call_impl(self):
         """call_via(Transport.IMPL) routes through call_impl."""

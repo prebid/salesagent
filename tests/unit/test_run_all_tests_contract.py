@@ -21,6 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER = _REPO_ROOT / "run_all_tests.sh"
 _HOST_RUNNER = _REPO_ROOT / "run_all_tests_host.sh"
 _TOX_INI = _REPO_ROOT / "tox.ini"
+_COMPOSE_FILE = _REPO_ROOT / "docker-compose.e2e.yml"
 _ALL_SUITES = "unit,integration,bdd,admin,e2e,ui"
 
 
@@ -86,3 +87,17 @@ def test_six_suite_list_is_single_sourced():
     assert _runner_all_suites() == canonical, "run_all_tests.sh ALL_SUITES drifted from tox env_list"
     assert _host_runner_collect_suites() == canonical, "run_all_tests_host.sh collect_reports drifted from tox env_list"
     assert {s.strip() for s in _ALL_SUITES.split(",")} == canonical, "_ALL_SUITES constant drifted from tox env_list"
+
+
+def test_e2e_test_control_secret_reaches_server_and_bdd_tox_env():
+    """The per-run secret must survive both compose and tox isolation layers."""
+    token_name = "ADCP_TEST_CONTROL_TOKEN"
+    runner_text = _RUNNER.read_text()
+    compose_text = _COMPOSE_FILE.read_text()
+    tox_text = _TOX_INI.read_text()
+    pass_env = tox_text.split("pass_env =", 1)[1].split("setenv =", 1)[0]
+
+    assert token_name in runner_text, "run_all_tests.sh does not generate the E2E control secret"
+    assert f'if [ -z "${{{token_name}:-}}" ]' not in runner_text, "runner must not reuse a caller's stale secret"
+    assert compose_text.count(f"{token_name}:") >= 2, "compose must pass the secret to server and test runner"
+    assert token_name in pass_env, "tox strips the E2E control secret before the BDD process starts"

@@ -77,6 +77,12 @@ if [ "$DELEGATE" = 1 ]; then
     exec "$(dirname "$0")/run_all_tests_host.sh" "$@"
 fi
 
+# The separate live server exposes narrowly scoped setup controls only when
+# both ADCP_TESTING=true and this per-run secret are present. It is shared with
+# the in-network test runner through compose, never sent on protocol requests.
+ADCP_TEST_CONTROL_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export ADCP_TEST_CONTROL_TOKEN
+
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 

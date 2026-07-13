@@ -283,6 +283,61 @@ class TestDebugEndpointGate:
             response = client.get("/debug/db-state")
             assert response.status_code == 404
 
+    def test_version_policy_control_requires_per_run_secret_and_owner_lease(self):
+        """The mutable E2E setup seam is hidden and cannot cross scenario leases."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        client = TestClient(app)
+        token = "test-control-token-0123456789abcdef"
+        lease_id = "bdd_policy_lease_0123456789abcdef"
+        payload = {
+            "lease_id": lease_id,
+            "supported_versions": ["3.0", "3.1"],
+            "build_version": "3.1.2+e2e.1",
+        }
+        path = "/_internal/testing/adcp-version-policy"
+
+        with patch.dict(os.environ, {"ADCP_TEST_CONTROL_TOKEN": token}):
+            os.environ.pop("ADCP_TESTING", None)
+            blocked = client.put(path, headers={"x-adcp-test-control-token": token}, json=payload)
+            assert blocked.status_code == 404
+
+        with patch.dict(os.environ, {"ADCP_TESTING": "true", "ADCP_TEST_CONTROL_TOKEN": token}):
+            assert client.put(path, json=payload).status_code == 404
+            assert client.put(path, headers={"x-adcp-test-control-token": "wrong"}, json=payload).status_code == 404
+
+            response = client.put(path, headers={"x-adcp-test-control-token": token}, json=payload)
+            assert response.status_code == 200
+            assert response.json() == payload
+            try:
+                other_payload = {
+                    **payload,
+                    "lease_id": "other_policy_lease_fedcba9876543210",
+                    "supported_versions": ["3.1", "3.2"],
+                }
+                conflict = client.put(
+                    path,
+                    headers={"x-adcp-test-control-token": token},
+                    json=other_payload,
+                )
+                assert conflict.status_code == 409
+
+                from src.core.adcp_version import supported_adcp_versions
+
+                assert supported_adcp_versions() == ("3.0", "3.1")
+                wrong_owner = client.delete(
+                    f"{path}/other_policy_lease_fedcba9876543210",
+                    headers={"x-adcp-test-control-token": token},
+                )
+                assert wrong_owner.status_code == 409
+            finally:
+                reset = client.delete(f"{path}/{lease_id}", headers={"x-adcp-test-control-token": token})
+                assert reset.status_code == 204
+
+        assert path not in client.get("/openapi.json").json()["paths"]
+
 
 # ---------------------------------------------------------------------------
 # salesagent-nb7k [P1]: format_resolver uses run_async_in_sync_context

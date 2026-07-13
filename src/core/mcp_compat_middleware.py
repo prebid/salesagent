@@ -17,13 +17,14 @@ from mcp.types import CallToolRequestParams
 from src.core.adcp_version import validate_adcp_version_pins
 from src.core.exceptions import AdCPError
 from src.core.request_compat import (
+    _log_dropped_fields,
     deep_strip_to_schema,
     normalize_request_params,
     strip_negotiation_fields,
     strip_undeclared_envelope_fields,
     strip_unknown_params,
 )
-from src.core.tool_error_logging import record_boundary_error_for_identity, translate_to_tool_error
+from src.core.tool_error_logging import _reject_at_mcp_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,7 @@ class RequestCompatMiddleware(Middleware):
                     identity = await context.fastmcp_context.get_state("identity")
             except Exception:  # best-effort — never mask the version error
                 identity = None
-            record_boundary_error_for_identity("mcp", tool_name, exc, identity)
-            translate_to_tool_error(exc)
+            _reject_at_mcp_boundary(tool_name, exc, identity)
 
         # Step 3: Drop AdCP version-negotiation envelope fields (all environments).
         # Every AdCP SDK client injects adcp_version / adcp_major_version for
@@ -101,9 +101,8 @@ class RequestCompatMiddleware(Middleware):
         # are protocol envelope, not tool params — unlike Step 5's schema strip,
         # this runs in every environment.
         normalized, dropped = strip_negotiation_fields(normalized)
-        if dropped:
-            modified = True
-            logger.debug("Dropped AdCP negotiation fields from %s: %s", tool_name, ", ".join(dropped))
+        modified = modified or bool(dropped)
+        _log_dropped_fields(tool_name, "AdCP negotiation", dropped)
 
         # Resolve the tool's declared params once — used by the envelope strip
         # (all environments) and the production unknown-field strip below.
@@ -116,9 +115,8 @@ class RequestCompatMiddleware(Middleware):
         # that doesn't would otherwise reject it (#1512). Protocol envelope,
         # not business data — unlike Step 5's general unknown strip.
         normalized, dropped_env = strip_undeclared_envelope_fields(normalized, known_params)
-        if dropped_env:
-            modified = True
-            logger.debug("Dropped undeclared AdCP envelope fields from %s: %s", tool_name, ", ".join(dropped_env))
+        modified = modified or bool(dropped_env)
+        _log_dropped_fields(tool_name, "undeclared AdCP envelope", dropped_env)
 
         # Step 5: Strip unknown fields (schema-aware, production only)
         # In dev mode, unknown fields reach TypeAdapter and fail loudly —

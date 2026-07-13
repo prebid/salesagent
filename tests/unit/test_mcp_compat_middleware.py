@@ -126,7 +126,7 @@ class TestMiddlewareDropsUndeclaredEnvelopeFields:
     declare them, so a conformant client's envelope doesn't trip validation (#1512)."""
 
     @pytest.mark.asyncio
-    async def test_context_stripped_when_tool_does_not_declare_it(self, middleware):
+    async def test_context_stripped_when_tool_does_not_declare_it(self, middleware, caplog):
         ctx = _make_context("get_adcp_capabilities", {"context": {"correlation_id": "c1"}})
         captured_ctx = None
 
@@ -135,12 +135,16 @@ class TestMiddlewareDropsUndeclaredEnvelopeFields:
             captured_ctx = context
 
         # get_adcp_capabilities declares only `protocols` — not the AdCP `context` field.
-        with patch.object(middleware, "_get_known_params", AsyncMock(return_value={"protocols"})):
-            with patch("src.core.config.is_production", return_value=False):
-                await middleware.on_call_tool(ctx, capturing_call_next)
+        with (
+            patch.object(middleware, "_get_known_params", AsyncMock(return_value={"protocols"})),
+            patch("src.core.config.is_production", return_value=False),
+            caplog.at_level("DEBUG", logger="src.core.request_compat"),
+        ):
+            await middleware.on_call_tool(ctx, capturing_call_next)
 
         assert captured_ctx is not None
         assert "context" not in captured_ctx.message.arguments
+        assert caplog.messages == ["Dropped undeclared AdCP envelope fields from get_adcp_capabilities: context"]
 
     @pytest.mark.asyncio
     async def test_context_kept_when_tool_declares_it(self, middleware):
@@ -170,7 +174,7 @@ class TestMiddlewareDropsNegotiationFields:
     """
 
     @pytest.mark.asyncio
-    async def test_negotiation_fields_removed_before_dispatch(self, middleware):
+    async def test_negotiation_fields_removed_before_dispatch(self, middleware, caplog):
         ctx = _make_context(
             "get_products",
             {"brief": "ads", "adcp_version": "3.1", "adcp_major_version": 3},
@@ -183,13 +187,19 @@ class TestMiddlewareDropsNegotiationFields:
 
         # Not production, and no deprecated-field translations — proves the drop
         # is independent of both the env gate and normalize_request_params.
-        with patch("src.core.config.is_production", return_value=False):
+        with (
+            patch("src.core.config.is_production", return_value=False),
+            caplog.at_level("DEBUG", logger="src.core.request_compat"),
+        ):
             await middleware.on_call_tool(ctx, capturing_call_next)
 
         assert captured_ctx is not None
         assert captured_ctx.message.arguments == {"brief": "ads"}
         assert "adcp_version" not in captured_ctx.message.arguments
         assert "adcp_major_version" not in captured_ctx.message.arguments
+        assert caplog.messages == [
+            "Dropped AdCP negotiation fields from get_products: adcp_major_version, adcp_version"
+        ]
 
     @pytest.mark.asyncio
     async def test_no_negotiation_fields_leaves_args_untouched(self, middleware):

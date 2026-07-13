@@ -1011,26 +1011,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-19: build_version MUST NOT be used for negotiation
     # BR-19: build_version is advisory triage only
 
-  @T-UC-010-v31-version-unsupported-cross-major @v31 @extension @ext-f @error @post-f4 @boundary @partition
-  Scenario Outline: version-unsupported cross-major trigger fires above AND below the native major - <pin>
-    Given a tenant is resolvable from the request context
-    And the seller speaks adcp release-precision versions "3.0", "3.1"
-    When the Buyer Agent calls get_adcp_capabilities MCP tool with adcp_version "<pin>"
-    Then the response should be a VERSION_UNSUPPORTED error
-    And the error details should include supported_versions as a non-empty array
-    And the Buyer Agent must select the next adcp_version from supported_versions
-    # get_adcp_capabilities.mdx: "the seller validates against its major_versions and returns
-    # VERSION_UNSUPPORTED if not in range" — the membership test is symmetric. A below-native
-    # pin ("2.0") is as out-of-range as an above-native one ("4.0"); both must be graded on the
-    # wire on every transport. The below-native row grades the deliberate membership semantics
-    # this PR chose (#1546); "4.0" is the symmetric above-native control.
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
-
-    Examples:
-      | pin |
-      | 4.0 |
-      | 2.0 |
-
   @T-UC-010-v31-request-signing-monotonicity @v31 @invariant @boundary @partition
   Scenario Outline: request-signing posture sets boundary - <boundary_point>
     Given a tenant is resolvable from the request context

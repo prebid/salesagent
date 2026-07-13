@@ -31,10 +31,10 @@ The first two are pinned at v3.1-04f59d2d5 (adcp 3.1.0-beta.3).
 
 Wired to real production across all wire transports (auto-parametrized; UC-018
 -> CreativeListEnv via conftest ``_detect_uc`` / ``_harness_env``). The repo
-sunsets the IMPL pseudo-transport in BDD, so the scenario runs on a2a/mcp/rest.
-(The isolation Then steps read the success-path ``wire_response``, which the E2E
-REST dispatcher does not stash — so those assertions cover a2a/mcp/rest, not
-e2e_rest.) Each transport returns the same typed response, and
+sunsets the IMPL pseudo-transport in BDD, so the scenario runs on a2a/mcp/rest
+and also e2e_rest when the live stack is enabled. Each transport preserves its
+success-path ``wire_response`` for the isolation assertions, returns the same
+typed response, and
 the Then steps validate its production JSON serialization
 (``model_dump(mode="json", exclude_none=True)`` — the same NestedModelSerializerMixin
 path that produces the on-the-wire bytes); the parametrization still exercises
@@ -320,9 +320,9 @@ def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
 def _wire_creatives(ctx: dict) -> list[dict[str, Any]]:
     """Return the creatives array as the buyer sees it on the wire.
 
-    REST/A2A/MCP stash the real serialized response on ``ctx["wire_response"]``
-    (CreativeListEnv stashes on all three wire transports), so the concept-field
-    assertions check the actual on-the-wire bytes rather than a re-serialization.
+    REST/A2A/MCP and live E2E REST stash the real serialized response on
+    ``ctx["wire_response"]``, so the concept-field assertions check the actual
+    on-the-wire bytes rather than a re-serialization.
     Falls back to the production serializer only when no wire was captured (e.g. a
     non-stashing path), so the step still has data to assert on.
     """

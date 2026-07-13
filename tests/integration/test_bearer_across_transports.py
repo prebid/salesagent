@@ -31,10 +31,35 @@ import uuid
 import pytest
 
 from tests.harness.capabilities import CapabilitiesEnv
+from tests.helpers import assert_envelope_shape
 
 # The three header forms this PR's normalization must treat identically.
 _BEARER_FORMS = ["Bearer {token}", "  Bearer {token}  ", "bearer {token}"]
 _BEARER_IDS = ["canonical", "padded", "lowercase-scheme"]
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize("transport", ["mcp", "a2a", "rest"])
+def test_valid_wire_auth_roundtrips_through_each_harness_boundary(integration_db, transport):
+    """Control for WireAuth: raw valid headers must reach each real resolver."""
+    from tests.harness.creative_list import CreativeListEnv
+    from tests.harness.transport import Transport, WireAuth
+
+    selected = Transport(transport)
+    with CreativeListEnv() as env:
+        tenant, principal = env.setup_default_data()
+        wire_auth = WireAuth(
+            headers={
+                "Authorization": f"Bearer {principal.access_token}",
+                "x-adcp-tenant": tenant.tenant_id,
+            }
+        )
+
+        result = env.call_via(selected, identity=wire_auth)
+
+    assert result.is_success, f"WireAuth was dropped on {transport}: {result.error}"
+    assert result.payload is not None
+    assert result.payload.creatives == []
 
 
 def _build_jsonrpc_skill(skill: str, params: dict | None = None) -> dict:
@@ -68,8 +93,8 @@ class TestBearerAuthenticatesOnRestWire:
 
     @pytest.mark.parametrize(
         "authorization_template",
-        ["Bearer {token}", "  Bearer {token}  ", "bearer {token}"],
-        ids=["canonical", "padded", "lowercase-scheme"],
+        _BEARER_FORMS,
+        ids=_BEARER_IDS,
     )
     def test_bearer_header_authenticates(self, integration_db, authorization_template):
         from starlette.testclient import TestClient
@@ -110,7 +135,7 @@ class TestBearerAuthenticatesOnRestWire:
 
             assert response.status_code == 401
             # AdCPAuthenticationError carries the project's AUTH_TOKEN_INVALID wire code.
-            assert response.json()["adcp_error"]["code"] == "AUTH_TOKEN_INVALID"
+            assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID", recovery="terminal")
 
 
 @pytest.mark.requires_db
@@ -164,7 +189,10 @@ class TestBearerAuthenticatesOnA2AWire:
                 },
             )
 
-            assert _is_auth_rejection(response.json()), "Auth-required A2A skill accepted a request with no token"
+            body = response.json()
+            assert _is_auth_rejection(body), "Auth-required A2A skill accepted a request with no token"
+            assert "data" in body["error"], f"A2A auth error omitted its AdCP envelope: {body}"
+            assert_envelope_shape(body["error"]["data"], "AUTH_TOKEN_INVALID", recovery="terminal")
 
 
 @pytest.mark.requires_db

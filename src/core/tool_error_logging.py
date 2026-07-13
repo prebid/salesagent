@@ -321,6 +321,17 @@ def translate_to_tool_error(error: Exception) -> NoReturn:
     raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
 
 
+def _reject_at_mcp_boundary(tool_name: str, error: AdCPError, identity: Any) -> NoReturn:
+    """Record and translate a typed error rejected before MCP tool dispatch.
+
+    MCP middleware failures bypass ``with_error_logging`` because the tool
+    wrapper never runs. Both middleware layers therefore use this boundary
+    helper to keep observability and the two-layer wire translation coupled.
+    """
+    record_boundary_error_for_identity("mcp", tool_name, error, identity)
+    translate_to_tool_error(error)
+
+
 def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, kwargs: dict) -> NoReturn:
     """Shared exception path for both sync and async ``with_error_logging`` wrappers.
 

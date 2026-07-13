@@ -2,12 +2,16 @@
 
 Covers the four BR-UC-010 scenarios derived from the pinned schema
 (``error-details/version-unsupported.json`` + ``core/version-envelope.json``
-at v3.1.0-beta.3, @source commit 04f59d2d5):
+at v3.1.0-beta.3, @source commit 04f59d2d5), plus the hand-authored
+release-resolution companion grounded in ``docs/reference/versioning.mdx``:
 
 - version-unsupported (string ``adcp_version`` pin)
 - version-unsupported-major-fallback (deprecated int ``adcp_major_version``)
 - version-unsupported-build-version-advisory
 - details (VERSION_UNSUPPORTED error) boundary outline
+- cross-major pins above and below the seller's native major
+- stable same-major pins below the seller's minimum release
+- unmatched prerelease pins
 
 Every scenario dispatches through the parametrized ``ctx["transport"]``
 (MCP / A2A / REST), so each transport's boundary validation is graded.
@@ -19,7 +23,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
@@ -70,22 +73,22 @@ def _repin_and_retry(ctx: dict) -> None:
 
 
 @given(parsers.parse('the seller speaks adcp release-precision versions "{first}", "{second}"'))
-def given_seller_release_versions(ctx: dict, monkeypatch: pytest.MonkeyPatch, first: str, second: str) -> None:
+def given_seller_release_versions(ctx: dict, first: str, second: str) -> None:
     """Pin the seller's supported release set for this scenario.
 
-    supported_adcp_versions() is the single source the validator and the
-    VERSION_UNSUPPORTED details both read, so overriding it drives the whole
-    negotiation surface.
+    ``CapabilitiesEnv`` realizes this intent on the actual transport surface:
+    managed in-process patches for MCP/A2A/REST, or an atomic leased snapshot
+    on the separate live server for E2E REST.
     """
     versions = (first, second)
-    monkeypatch.setattr("src.core.adcp_version.supported_adcp_versions", lambda: versions)
+    ctx["env"].configure_version_policy(ctx["transport"], supported_versions=versions)
     ctx["seller_versions"] = versions
 
 
 @given(parsers.parse('the seller\'s build_version is "{build_version}"'))
-def given_seller_build_version(ctx: dict, monkeypatch: pytest.MonkeyPatch, build_version: str) -> None:
+def given_seller_build_version(ctx: dict, build_version: str) -> None:
     """Pin the seller's advisory build_version for this scenario."""
-    monkeypatch.setattr("src.core.adcp_version.adcp_build_version", lambda: build_version)
+    ctx["env"].configure_version_policy(ctx["transport"], build_version=build_version)
     ctx["seller_build_version"] = build_version
 
 

@@ -13,12 +13,15 @@ factory-created rows from ``setup_default_data()``.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
+from unittest.mock import patch
 
 from adcp.types import GetAdcpCapabilitiesResponse
 
 from src.core.request_compat import ADCP_NEGOTIATION_FIELDS
 from tests.harness._base import IntegrationEnv
+from tests.harness.transport import Transport
 
 
 class CapabilitiesEnv(IntegrationEnv):
@@ -29,6 +32,113 @@ class CapabilitiesEnv(IntegrationEnv):
 
     REST_ENDPOINT = "/api/v1/capabilities"
     REST_METHOD = "get"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        from src.core.adcp_version import adcp_build_version, supported_adcp_versions
+
+        self._version_policy_lease = uuid.uuid4().hex
+        self._configured_supported_versions = supported_adcp_versions()
+        self._configured_build_version = adcp_build_version()
+        self._e2e_version_policy_lease_attempted = False
+
+    def configure_version_policy(
+        self,
+        transport: Transport,
+        *,
+        supported_versions: tuple[str, ...] | None = None,
+        build_version: str | None = None,
+    ) -> None:
+        """Realize seller-policy setup on the selected transport's true surface.
+
+        In-process boundaries use managed patchers. ``e2e_rest`` cannot see
+        runner-process patches, so it installs the same complete snapshot on
+        the isolated live server through the secret-gated test-control API.
+        The subsequent buyer request carries no setup override.
+        """
+        if supported_versions is not None:
+            self._configured_supported_versions = supported_versions
+        if build_version is not None:
+            self._configured_build_version = build_version
+
+        if transport == Transport.E2E_REST:
+            self._install_e2e_version_policy()
+            return
+
+        patch_targets: list[tuple[str, Any]] = []
+        if supported_versions is not None:
+            patch_targets.append(("src.core.adcp_version.supported_adcp_versions", supported_versions))
+        if build_version is not None:
+            patch_targets.append(("src.core.adcp_version.adcp_build_version", build_version))
+        for target, value in patch_targets:
+            patcher = patch(target, return_value=value)
+            patcher.start()
+            self._patchers.append(patcher)
+
+    def _test_control_headers(self) -> dict[str, str]:
+        if self.e2e_config is None or not self.e2e_config.test_control_token:
+            raise RuntimeError("E2E version-policy setup requires a per-run ADCP_TEST_CONTROL_TOKEN")
+        return {"x-adcp-test-control-token": self.e2e_config.test_control_token}
+
+    def _install_e2e_version_policy(self) -> None:
+        # A timeout can occur after the server atomically installs the policy
+        # but before the response reaches the runner. Mark the lease before the
+        # call so teardown always issues an owner-scoped, idempotent reset.
+        self._e2e_version_policy_lease_attempted = True
+        self._call_e2e_test_control(
+            "PUT",
+            "/_internal/testing/adcp-version-policy",
+            payload={
+                "lease_id": self._version_policy_lease,
+                "supported_versions": list(self._configured_supported_versions),
+                "build_version": self._configured_build_version,
+            },
+        )
+
+    def _reset_e2e_version_policy(self) -> None:
+        self._call_e2e_test_control(
+            "DELETE",
+            f"/_internal/testing/adcp-version-policy/{self._version_policy_lease}",
+        )
+        self._e2e_version_policy_lease_attempted = False
+
+    def _call_e2e_test_control(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Call one authenticated setup operation on the isolated test server."""
+        import httpx
+
+        assert self.e2e_config is not None
+        request_kwargs: dict[str, Any] = {"headers": self._test_control_headers()}
+        if payload is not None:
+            request_kwargs["json"] = payload
+        with httpx.Client(base_url=self.e2e_config.base_url, timeout=10) as client:
+            response = client.request(method, path, **request_kwargs)
+            response.raise_for_status()
+
+    def __exit__(self, *exc: object) -> bool:
+        reset_error: Exception | None = None
+        if self._e2e_version_policy_lease_attempted:
+            try:
+                self._reset_e2e_version_policy()
+            except Exception as error:
+                reset_error = error
+
+        try:
+            result = super().__exit__(*exc)
+        except Exception as cleanup_error:
+            if reset_error is not None:
+                raise ExceptionGroup(
+                    "E2E version-policy reset and harness teardown failed", [reset_error, cleanup_error]
+                )
+            raise
+        if reset_error is not None:
+            raise reset_error
+        return result
 
     def setup_default_data(self) -> tuple[Any, Any]:
         """Create the tenant + principal rows the identity references."""

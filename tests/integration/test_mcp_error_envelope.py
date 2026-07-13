@@ -238,10 +238,10 @@ class TestMcpWireErrorEnvelope:
             Client(mcp).call_tool("get_media_buy_delivery", {...}) with identity=None
               → MCP wrapper resolve_identity returns None
               → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Identity is required")
-              → AdCPAuthRequiredError carries error_code="AUTH_TOKEN_INVALID" (passthrough STANDARD code)
+              → AdCPAuthRequiredError carries the project-specific error_code="AUTH_TOKEN_INVALID"
               → with_error_logging → translate_to_tool_error → wire envelope
 
-        AUTH_TOKEN_INVALID is a STANDARD spec code — passes through unchanged.
+        AUTH_TOKEN_INVALID is the project's BDD-grounded code and passes through unchanged.
         """
         is_error, envelope = self._call_mcp_tool_capturing_envelope(
             "get_media_buy_delivery",
@@ -252,7 +252,7 @@ class TestMcpWireErrorEnvelope:
         assert is_error, "Missing identity must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
 
-        # AdCPAuthRequiredError -> AUTH_TOKEN_INVALID (AdCP 3.1 spec code, passed through unchanged).
+        # AdCPAuthRequiredError -> project-specific AUTH_TOKEN_INVALID, passed through unchanged.
         # Recovery is terminal for AdCPAuthenticationError: a hardcoded class default,
         # intentionally set because the 3.1 storyboards grade the error code, not the recovery class.
         assert_envelope_shape(envelope, "AUTH_TOKEN_INVALID", recovery="terminal")

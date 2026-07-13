@@ -504,8 +504,8 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
-        # AdCPAuthenticationError.error_code = "AUTH_TOKEN_INVALID" (spec STANDARD code,
-        # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_TOKEN_INVALID, not
+        # AdCPAuthenticationError.error_code is the project-specific AUTH_TOKEN_INVALID
+        # (passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_TOKEN_INVALID, not
         # AUTH_REQUIRED (which is for AdCPAuthorizationError).
         assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID", recovery="terminal")
 
@@ -675,7 +675,7 @@ class TestErrorCodeWireTranslation:
     def test_translate_mapped_code(self):
         from src.core.exceptions import translate_error_code
 
-        # AUTH_TOKEN_INVALID passes through (spec error code for auth)
+        # Project-specific AUTH_TOKEN_INVALID passes through unchanged.
         assert translate_error_code("AUTH_TOKEN_INVALID") == "AUTH_TOKEN_INVALID"
         # BUDGET_CEILING_EXCEEDED is mapped to BUDGET_EXCEEDED
         assert translate_error_code("BUDGET_CEILING_EXCEEDED") == "BUDGET_EXCEEDED"

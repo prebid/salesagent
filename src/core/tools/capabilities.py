@@ -44,6 +44,9 @@ from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_PROTOCOLS: tuple[SupportedProtocol, ...] = (SupportedProtocol.media_buy,)
+_DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
+
 
 def _build_adcp_block() -> Adcp:
     """Build the ``adcp`` version/idempotency envelope block for the response.
@@ -109,8 +112,8 @@ def _get_adcp_capabilities_impl(
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
             adcp=_build_adcp_block(),
-            supported_protocols=[SupportedProtocol.media_buy],
-            specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            supported_protocols=list(_DEFAULT_PROTOCOLS),
+            specialisms=list(_DEFAULT_SPECIALISMS),
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -278,8 +281,8 @@ def _get_adcp_capabilities_impl(
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=_build_adcp_block(),
-        supported_protocols=[SupportedProtocol.media_buy],
-        specialisms=[AdcpSpecialism.sales_non_guaranteed],
+        supported_protocols=list(_DEFAULT_PROTOCOLS),
+        specialisms=list(_DEFAULT_SPECIALISMS),
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
     )

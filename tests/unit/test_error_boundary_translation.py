@@ -257,7 +257,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
     def test_adcp_auth_becomes_tool_error(self):
         """AdCPAuthenticationError from tool → ToolError envelope with AUTH_TOKEN_INVALID + terminal.
 
-        AUTH_TOKEN_INVALID is the spec STANDARD code (passthrough, not mapped).
+        AUTH_TOKEN_INVALID is the project's BDD-grounded code (passthrough, not mapped).
         AUTH_REQUIRED is reserved for AdCPAuthorizationError (403).
         """
         from fastmcp.exceptions import ToolError
@@ -399,7 +399,7 @@ class TestA2AHandlerExplicitSkillReraises:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             assert "bad token" in exc_info.value.message
-            # AdCPAuthenticationError pins error_code = "AUTH_TOKEN_INVALID" (spec STANDARD code).
+            # AdCPAuthenticationError pins the project-specific AUTH_TOKEN_INVALID code.
             assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
             assert exc_info.value.recovery == "terminal"
 
@@ -581,7 +581,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 401
-            # AUTH_TOKEN_INVALID is a spec STANDARD code (passthrough — not mapped to AUTH_REQUIRED).
+            # The project-specific AUTH_TOKEN_INVALID passes through without mapping to AUTH_REQUIRED.
             assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID", recovery="terminal")
 
     def test_adcp_not_found_from_impl_returns_404(self):

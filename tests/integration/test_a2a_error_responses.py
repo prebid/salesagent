@@ -188,7 +188,7 @@ class TestA2AErrorPropagation:
 
         # Principal-not-found raises AdCPAuthenticationError from _impl; the A2A
         # dispatcher catches the typed error and builds the two-layer envelope on
-        # a failed Task. AUTH_TOKEN_INVALID is a STANDARD_ERROR_CODES entry
+        # a failed Task. AUTH_TOKEN_INVALID is the project's BDD-grounded code
         # (passthrough — not rewritten by ERROR_CODE_MAPPING); recovery=terminal.
         assert_envelope_shape(
             artifact_data,

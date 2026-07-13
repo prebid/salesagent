@@ -131,7 +131,8 @@ class TestNonScalarConceptValueDropped:
                 status="approved",
                 data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
             )
-            with caplog.at_level(logging.WARNING):
+            listing_logger = "src.core.tools.creatives.listing"
+            with caplog.at_level(logging.WARNING, logger=listing_logger):
                 result = env.call_via(Transport.REST)
 
             assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
@@ -139,8 +140,18 @@ class TestNonScalarConceptValueDropped:
             # Dropped to None → exclude_none omits the keys from the wire entirely.
             assert "concept_id" not in creative
             assert "concept_name" not in creative
-            # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-            assert "Dropping non-scalar concept value" in caplog.text
+            # Observability (No Quiet Failures): both corrupt values are surfaced
+            # by the production module logger, not merely swallowed or captured
+            # incidentally through unrelated root-logger configuration.
+            dropped_warnings = [
+                record.getMessage()
+                for record in caplog.records
+                if record.name == listing_logger and record.levelno == logging.WARNING
+            ]
+            assert dropped_warnings == [
+                "Dropping non-scalar concept value of type list from creative listing",
+                "Dropping non-scalar concept value of type dict from creative listing",
+            ]
 
 
 class TestSellerConceptEnrichmentIsFilterable:

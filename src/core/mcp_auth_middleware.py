@@ -12,7 +12,7 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPError
-from src.core.tool_error_logging import record_boundary_error_for_identity, translate_to_tool_error
+from src.core.tool_error_logging import _reject_at_mcp_boundary
 from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
@@ -66,8 +66,7 @@ class MCPAuthMiddleware(Middleware):
             if require_auth and (identity is None or not identity.principal_id):
                 raise AdCPAuthenticationError("Authentication required")
         except AdCPError as exc:
-            record_boundary_error_for_identity("mcp", tool_name, exc, identity)
-            translate_to_tool_error(exc)
+            _reject_at_mcp_boundary(tool_name, exc, identity)
 
         if context.fastmcp_context:
             await context.fastmcp_context.set_state("identity", identity, serializable=False)

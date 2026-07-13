@@ -14,8 +14,8 @@
 
 Feature: BR-UC-011 Account Validation (hand-authored companion)
   As a Buyer
-  I want a brandless account entry to be rejected with a clear validation error
-  So that I get a correctable 400, never an opaque 500
+  I want account requests to fail with the correct boundary error
+  So that I can recover without receiving misleading protocol disclosures
 
   Background:
     Given a Seller Agent is operational and accepting requests
@@ -26,3 +26,20 @@ Feature: BR-UC-011 Account Validation (hand-authored companion)
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with a brandless account entry
     Then the brandless entry is rejected with a correctable VALIDATION_ERROR
+
+  # Local cross-transport policy (ungraded by the pinned AdCP storyboard):
+  # authenticate before validating a version pin, so an invalid caller cannot
+  # learn the seller's authoritative supported_versions list. Both pin forms
+  # are included; the in-process matrix makes this 2 x 3 = 6 wire cases, with
+  # two additional REST cases when the E2E matrix is enabled.
+  @T-UC-011-auth-before-version @sync @auth @v31 @error @boundary
+  Scenario Outline: Invalid authentication wins over an unsupported <pin_field> pin
+    Given the Buyer Agent presents an invalid bearer token
+    When the Buyer Agent sends a sync_accounts request with unsupported <pin_field> "<pin_value>"
+    Then the real wire response is a terminal AUTH_TOKEN_INVALID envelope
+    And the authentication rejection does not disclose supported_versions
+
+    Examples:
+      | pin_field          | pin_value |
+      | adcp_version       | 4.0       |
+      | adcp_major_version | 4         |

@@ -9,12 +9,12 @@ After the identity-at-transport-boundary refactor (salesagent-anjp), handlers re
 a pre-resolved identity parameter rather than resolving auth internally.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
-from a2a.types import InvalidRequestError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.exceptions import AdCPAuthenticationError
 from tests.factories.principal import PrincipalFactory
 
 
@@ -109,22 +109,87 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_create_media_buy_requires_auth(self):
         """create_media_buy should reject None identity (not a discovery endpoint)."""
-        with pytest.raises(InvalidRequestError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy", parameters={"product_ids": ["prod_1"]}, identity=None
             )
 
         assert "Authentication required" in str(exc_info.value)
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.recovery == "terminal"
 
     @pytest.mark.asyncio
     async def test_update_media_buy_requires_auth(self):
         """update_media_buy should reject None identity."""
-        with pytest.raises(InvalidRequestError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="update_media_buy", parameters={"media_buy_id": "mb_1"}, identity=None
             )
 
         assert "Authentication required" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_authentication_precedes_version_for_protected_skill(self):
+        """The defensive dispatcher guard must not disclose seller versions before auth."""
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
+            await self.handler._handle_explicit_skill(
+                skill_name="update_media_buy",
+                parameters={"adcp_version": "4.0", "media_buy_id": "mb_1"},
+                identity=None,
+            )
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert "supported_versions" not in (exc_info.value.details or {})
+
+    def test_missing_token_raises_typed_authentication_error_at_resolver(self):
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
+            self.handler._resolve_a2a_identity(None, require_valid_token=True)
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.recovery == "terminal"
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_never_sends_or_retains_attacker_push_callback(self):
+        """Pre-auth callback data cannot reach the generic task-failure webhook path."""
+        from a2a.server.routes.common import ServerCallContext
+        from a2a.types import (
+            InternalError,
+            SendMessageConfiguration,
+            SendMessageRequest,
+            TaskPushNotificationConfig,
+        )
+
+        from tests.helpers import assert_envelope_shape
+        from tests.utils.a2a_helpers import create_a2a_message_with_skill
+
+        params = SendMessageRequest(
+            message=create_a2a_message_with_skill(
+                "update_media_buy",
+                {"adcp_version": "4.0", "media_buy_id": "mb_1"},
+            ),
+            configuration=SendMessageConfiguration(
+                task_push_notification_config=TaskPushNotificationConfig(url="https://attacker.example/webhook")
+            ),
+        )
+
+        with (
+            patch("src.a2a_server.adcp_a2a_server.record_boundary_error") as record_error,
+            patch.object(self.handler, "_send_protocol_webhook", new_callable=AsyncMock) as send_webhook,
+            pytest.raises(InternalError) as exc_info,
+        ):
+            await self.handler.on_message_send(params, ServerCallContext())
+
+        assert_envelope_shape(exc_info.value.data, "AUTH_TOKEN_INVALID", recovery="terminal")
+        send_webhook.assert_not_awaited()
+        record_error.assert_called_once_with(
+            "a2a",
+            "message_processing",
+            ANY,
+            tenant_id="unknown",
+            principal_id="unknown",
+        )
+        assert self.handler.tasks == {}
+        assert self.handler._task_push_configs == {}
 
     @pytest.mark.asyncio
     async def test_discovery_skills_accept_anonymous_identity(self):
@@ -138,14 +203,11 @@ class TestAuthOptionalSkills:
         for skill_name, mock_path in discovery_skills.items():
             with patch(mock_path) as mock_tool:
                 mock_tool.return_value = {}
-                try:
-                    await self.handler._handle_explicit_skill(
-                        skill_name=skill_name,
-                        parameters={"brief": "test"} if skill_name == "get_products" else {},
-                        identity=self.anon_identity,
-                    )
-                except InvalidRequestError as e:
-                    assert "Authentication required" not in str(e)
+                await self.handler._handle_explicit_skill(
+                    skill_name=skill_name,
+                    parameters={"brief": "test"} if skill_name == "get_products" else {},
+                    identity=self.anon_identity,
+                )
 
     @pytest.mark.asyncio
     async def test_natural_language_without_auth(self):
@@ -175,11 +237,5 @@ class TestAuthOptionalSkills:
                 with patch.object(self.handler, "_get_products", new_callable=AsyncMock) as mock_products:
                     mock_products.return_value = {"products": []}
 
-                    try:
-                        result = await self.handler.on_message_send(params, context=ServerCallContext())
-                        assert result is not None
-                    except InvalidRequestError as e:
-                        if "Authentication" in str(e) or "authentication" in str(e):
-                            pytest.fail(f"Natural language request without auth should not require auth: {e}")
-                        else:
-                            raise
+                    result = await self.handler.on_message_send(params, context=ServerCallContext())
+                    assert result is not None

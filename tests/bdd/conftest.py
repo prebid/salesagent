@@ -2586,15 +2586,18 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-missing",
 }
 
-# UC-010 scenarios wired to CapabilitiesEnv — the VERSION_UNSUPPORTED
-# version-negotiation set derived from error-details/version-unsupported.json
-# (#1546). Everything else in BR-UC-010 xfails at the fixture until wired.
+# UC-010 scenarios wired to CapabilitiesEnv — the schema-derived
+# VERSION_UNSUPPORTED set plus the hand-authored release-resolution boundaries
+# in BR-UC-010-version-negotiation.feature (#1546). Everything else in the
+# generated BR-UC-010 feature xfails at the fixture until wired.
 _UC010_VERSION_NEGOTIATION_WIRED: set[str] = {
     "T-UC-010-v31-version-unsupported",
     "T-UC-010-v31-version-unsupported-major-fallback",
     "T-UC-010-v31-version-unsupported-build-version-advisory",
     "T-UC-010-v31-version-unsupported-details-bounds",
     "T-UC-010-v31-version-unsupported-cross-major",
+    "T-UC-010-v31-version-unsupported-sub-min",
+    "T-UC-010-v31-version-unsupported-prerelease",
 }
 
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
@@ -2684,7 +2687,11 @@ def e2e_stack():
         postgres_url = (
             f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
         )
-    return E2EConfig(base_url=base_url, postgres_url=postgres_url)
+    return E2EConfig(
+        base_url=base_url,
+        postgres_url=postgres_url,
+        test_control_token=os.environ.get("ADCP_TEST_CONTROL_TOKEN"),
+    )
 
 
 def _reset_e2e_db(e2e_config) -> None:
@@ -2932,11 +2939,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             )
 
     elif uc == "UC-010":
-        # Wired: the four VERSION_UNSUPPORTED version-negotiation scenarios
-        # (#1546). CapabilitiesEnv carries the negotiation envelope through
-        # each transport's boundary validation. The remaining UC-010 scenarios
-        # (capabilities payload shape, signing/idempotency bounds, ...) xfail
-        # fast here until their steps + harness support land.
+        # Wired: the schema-derived VERSION_UNSUPPORTED scenarios and the
+        # hand-authored resolution boundaries (#1546). CapabilitiesEnv carries
+        # the negotiation envelope through each transport's boundary validation.
+        # Remaining UC-010 scenarios (capabilities payload shape,
+        # signing/idempotency bounds, ...) xfail fast here until wired.
         marker_names = {m.name for m in request.node.iter_markers()}
         if marker_names & _UC010_VERSION_NEGOTIATION_WIRED:
             request.getfixturevalue("integration_db")

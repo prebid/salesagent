@@ -1,9 +1,8 @@
-"""BDD scenario binding for the UC-011 account-validation companion.
+"""BDD scenario binding for the hand-authored UC-011 validation companion.
 
-Hand-authored companion to BR-UC-011 (PR1399 R3-F1):
-encodes the brandless-entry rejection obligation that the upstream LLM
-derivation cannot see (an absent required field). Step definitions are
-imported via conftest.py (tests.bdd.steps.domain.uc011_accounts).
+The companion covers the brandless-entry obligation from PR1399 R3-F1 and
+the ungraded AUTH-before-VERSION cross-transport policy from PR #1546.
+Step definitions are imported through ``tests.bdd.conftest``.
 """
 
 from __future__ import annotations
