@@ -7,8 +7,10 @@ boundaries); ownership verification, principal resolution, request
 validation, and the transport wrappers are production code.
 
 Scenario texts are transport-flavored ("MCP tool", "A2A skill") because the
-storyboard narrates one transport per scenario, but the harness parametrizes
-every scenario across all wire transports — both When texts dispatch through
+storyboard narrates one transport per scenario. The two SUCCESS scenarios
+(main-mcp, main-rest) carry no transport tag and parametrize across all wire
+transports; the adapter/audit scenarios keep their @mcp/@rest tags and pin
+the narrated transport via ctx.setdefault — both When texts dispatch through
 ctx["transport"] identically.
 """
 

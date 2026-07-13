@@ -21,7 +21,11 @@ Feature: BR-UC-009 Update Performance Index
     And the Buyer is authenticated with a valid principal_id
 
 
-  @T-UC-009-main-mcp @main-flow @mcp
+  # RECONCILED (salesagent-1ek1, local edit — mirror upstream in adcp-req): transport
+  # tag dropped so this success scenario parametrizes across ALL wire transports
+  # (impl/a2a/mcp/rest); no Then step here is transport-shaped. The storyboard
+  # narrates MCP, but the graded contract is transport-uniform.
+  @T-UC-009-main-mcp @main-flow
   Scenario: Submit performance feedback via MCP - success
     Given the Buyer owns media buy "mb_perf_001"
     And the media buy has products ["pkg_display_001"]
@@ -63,7 +67,11 @@ Feature: BR-UC-009 Update Performance Index
     | avg_performance | 0.85        |
     # POST-S4: Operation audit-logged with principal, media buy, count, avg
 
-  @T-UC-009-main-rest @main-flow @rest @a2a
+  # RECONCILED (salesagent-1ek1, local edit — mirror upstream in adcp-req): transport
+  # tags dropped so this success scenario parametrizes across ALL wire transports —
+  # previously @rest @a2a suppressed parametrization and the step pinned A2A, so
+  # Transport.REST executed for ZERO UC-009 scenarios.
+  @T-UC-009-main-rest @main-flow
   Scenario: Submit performance feedback via A2A - success
     Given the Buyer owns media buy "mb_perf_004"
     And the media buy has products ["pkg_display_002"]
