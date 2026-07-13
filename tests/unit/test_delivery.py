@@ -1732,40 +1732,65 @@ class TestDeliveryWebhookHappyPath:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
         CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification.
-        The signer is adcp.sign_legacy_webhook: the signature covers
-        ``{unix_timestamp}.{body_bytes}`` and the returned body_bytes are the
-        exact wire bytes (byte-equality — #1441 removed the local signer that
-        re-serialized the payload differently from the transport).
+        Drives the PRODUCTION sender (send_delivery_webhook ->
+        _deliver_with_backoff), which signs via adcp.sign_legacy_webhook over
+        ``{unix_timestamp}.{body_bytes}`` and transmits those exact bytes
+        (byte-equality — #1441 removed the local signer that re-serialized the
+        payload differently from the transport). The oracle recomputes the
+        HMAC over the LITERAL bytes handed to httpx.
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
         import hashlib
         import hmac as hmac_mod
 
-        from adcp import sign_legacy_webhook
-
-        payload = {"media_buy_id": "mb_wh07", "impressions": 1000}
+        service = WebhookDeliveryService()
         secret = "a" * 32  # 32-char minimum secret
-        timestamp = 1_750_000_000  # spec: unix seconds
+        now = datetime.now(UTC)
 
-        headers1, body1 = sign_legacy_webhook(secret, payload, timestamp=timestamp)
-        headers2, body2 = sign_legacy_webhook(secret, payload, timestamp=timestamp)
+        with (
+            patch("src.services.webhook_delivery_service.httpx.Client") as mock_client,
+            patch("src.core.database.database_session.get_db_session") as mock_get_db,
+        ):
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        sig1 = headers1["X-AdCP-Signature"].removeprefix("sha256=")
-        assert len(sig1) == 64  # SHA-256 hex = 64 chars
+            mock_config = MagicMock()
+            mock_config.url = "https://example.com/webhook"
+            mock_config.authentication_type = None
+            mock_config.validation_token = None
+            mock_config.webhook_secret = secret
 
-        # Deterministic
-        assert headers1["X-AdCP-Signature"] == headers2["X-AdCP-Signature"]
-        assert body1 == body2
+            mock_session = MagicMock()
+            mock_session.scalars.return_value.all.return_value = [mock_config]
+            mock_get_db.return_value.__enter__.return_value = mock_session
 
-        # The signature verifies over the exact returned bytes
+            service.send_delivery_webhook(
+                media_buy_id="mb_wh07",
+                tenant_id="t1",
+                principal_id="p1",
+                reporting_period_start=now,
+                reporting_period_end=now,
+                impressions=1000,
+                spend=50.0,
+                is_final=False,
+            )
+
+            post_mock = mock_client.return_value.__enter__.return_value.post
+            assert post_mock.called
+            sent_headers = {k.lower(): v for k, v in post_mock.call_args.kwargs["headers"].items()}
+            sent_bytes = post_mock.call_args.kwargs["content"]
+
+        signature = sent_headers["x-adcp-signature"].removeprefix("sha256=")
+        timestamp = sent_headers["x-adcp-timestamp"]
+        assert timestamp.isdigit()  # spec: unix seconds, not ISO
+        assert len(signature) == 64  # SHA-256 hex
+
+        # Byte-equality oracle: the HMAC verifies over the exact transmitted bytes
         expected = hmac_mod.new(
-            secret.encode("utf-8"), str(timestamp).encode() + b"." + body1, hashlib.sha256
+            secret.encode("utf-8"), timestamp.encode() + b"." + sent_bytes, hashlib.sha256
         ).hexdigest()
-        assert sig1 == expected
-
-        # Different payload produces different signature
-        headers3, _ = sign_legacy_webhook(secret, {"media_buy_id": "mb_wh07", "impressions": 2000}, timestamp=timestamp)
-        assert headers3["X-AdCP-Signature"] != headers1["X-AdCP-Signature"]
+        assert signature == expected
 
     def test_webhook_excludes_aggregated_totals(self):
         """UC-004-WH-09: webhook does NOT include aggregated_totals.
