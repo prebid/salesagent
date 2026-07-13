@@ -10,6 +10,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules.
 from __future__ import annotations
 
 import json
+
 import pytest
 
 # ---------------------------------------------------------------------------

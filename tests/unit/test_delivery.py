@@ -1764,9 +1764,7 @@ class TestDeliveryWebhookHappyPath:
         assert sig1 == expected
 
         # Different payload produces different signature
-        headers3, _ = sign_legacy_webhook(
-            secret, {"media_buy_id": "mb_wh07", "impressions": 2000}, timestamp=timestamp
-        )
+        headers3, _ = sign_legacy_webhook(secret, {"media_buy_id": "mb_wh07", "impressions": 2000}, timestamp=timestamp)
         assert headers3["X-AdCP-Signature"] != headers1["X-AdCP-Signature"]
 
     def test_webhook_excludes_aggregated_totals(self):

@@ -12,6 +12,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules.
 from __future__ import annotations
 
 import json
+
 import pytest
 
 from src.services.webhook_delivery_service import (
@@ -293,7 +294,6 @@ class TestSendWebhookEnhancedHmacSigning:
         """
         import hashlib
         import hmac
-        import json
 
         from tests.factories import (
             PrincipalFactory,
