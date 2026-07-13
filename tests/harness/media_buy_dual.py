@@ -154,10 +154,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return flat
 
     def _call_update_a2a(self, **kwargs: Any) -> Any:
-        # Drive the REAL A2A on_message_send pipeline (mirrors MediaBuyCreateEnv.call_a2a)
-        # so the submitted reconstruction at adcp_a2a_server.py:484 runs and the serialized
-        # artifact is stashed as wire_response. The union (submitted|success|error) needs
-        # status/media_buy_id discrimination, so reconstruct via _parse_update_rest_response.
+        # Drive the REAL A2A on_message_send pipeline (mirrors MediaBuyCreateEnv.call_a2a).
+        # A SUBMITTED update never carries an artifact body: on_message_send early-returns
+        # a Task (state=SUBMITTED, no artifacts) and the base handler synthesizes the
+        # submitted wire from the Task (tests/harness/_base.py) — production has no A2A
+        # submitted reconstruction (salesagent-pscj). Completed/error results DO carry an
+        # artifact, stashed as wire_response and reconstructed via _parse_update_rest_response.
         return self._run_a2a_handler(
             "update_media_buy",
             lambda **data: self._parse_update_rest_response(data),
@@ -217,10 +219,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             UpdateMediaBuySuccess,
         )
 
-        # Mirror the production A2A union discrimination (adcp_a2a_server.py:484-489):
-        # submitted first (status="submitted"+task_id, no applied media_buy_id — a submitted
-        # envelope must not be mis-reconstructed as Success, whose status is Literal completed),
-        # then success (has media_buy_id), else error.
+        # Harness-side union discrimination for the REST/synthesized wires: submitted first
+        # (status="submitted"+task_id, no applied media_buy_id — a submitted envelope must
+        # not be mis-reconstructed as Success, whose status is Literal completed), then
+        # success (has media_buy_id), else error. The submitted arm serves the REST wire and
+        # the harness-synthesized A2A submitted dict — production A2A has NO submitted
+        # reconstruction (Task early-return; salesagent-pscj).
         if data.get("status") == "submitted":
             return UpdateMediaBuySubmitted(**data)
         if "media_buy_id" in data:

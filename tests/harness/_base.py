@@ -398,6 +398,11 @@ class BaseTestEnv:
         # A2A/MCP dispatchers. None unless such a path ran — REST builds its
         # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
         self._last_wire_response: dict[str, Any] | None = None
+        # Raw A2A Task returned by the last _run_a2a_handler call. The submitted
+        # (manual-approval) contract lives on the Task itself — state=SUBMITTED
+        # with NO artifacts — and the synthesized submitted wire above cannot
+        # prove artifact absence, so guards assert on this captured Task.
+        self._last_a2a_task: Any = None
         # Relative date-token resolver for media-buy Given steps (env.clock).
         self.clock = _TestClock()
 
@@ -534,6 +539,17 @@ class BaseTestEnv:
             f"{type(self).__name__} does not implement call_a2a(). Override to enable Transport.A2A dispatch."
         )
 
+    @property
+    def last_a2a_task(self) -> Any:
+        """Raw A2A Task from the last ``_run_a2a_handler`` dispatch (or None).
+
+        Public accessor for Task-level contract assertions — e.g. the submitted
+        (manual-approval) contract, where state=TASK_STATE_SUBMITTED with NO
+        artifacts IS the wire and the parsed response is a harness synthesis
+        that cannot prove artifact absence.
+        """
+        return self._last_a2a_task
+
     def call_mcp(self, **kwargs: Any) -> Any:
         """Call the async MCP wrapper with a mock Context.
 
@@ -658,6 +674,10 @@ class BaseTestEnv:
         # Parse Task.artifacts[0] into response_cls
         if not isinstance(task_result, Task):
             raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
+
+        # Expose the raw Task so tests can pin Task-level contract facts
+        # (state, artifact absence) that the parsed response cannot prove.
+        self._last_a2a_task = task_result
 
         # AdCP-domain errors now surface as a failed Task with the two-layer
         # envelope in the artifact DataPart. Reconstruct the AdCPError so
