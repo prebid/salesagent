@@ -240,13 +240,18 @@ class TestAuthOptionalSkills:
         an anonymous identity SUCCESSFULLY and carries a callback. The callback must be
         refused before storage, so the later status/failure webhook has no
         attacker-chosen target (e.g. http://169.254.169.254/latest/meta-data) to POST to.
+
+        The rejection surfaces as a buyer-CORRECTABLE FAILED Task (not a JSON-RPC
+        InternalError) — the wire-envelope shape is pinned by the raw-wire test in
+        tests/integration/test_a2a_error_responses.py (#1512).
         """
         from a2a.server.routes.common import ServerCallContext
         from a2a.types import (
-            InternalError,
             SendMessageConfiguration,
             SendMessageRequest,
+            Task,
             TaskPushNotificationConfig,
+            TaskState,
         )
 
         from tests.utils.a2a_helpers import create_a2a_message_with_skill
@@ -258,13 +263,13 @@ class TestAuthOptionalSkills:
             ),
         )
 
-        with (
-            patch.object(self.handler, "_resolve_a2a_identity", return_value=self.anon_identity),
-            pytest.raises(InternalError),
-        ):
-            await self.handler.on_message_send(params, ServerCallContext())
+        with patch.object(self.handler, "_resolve_a2a_identity", return_value=self.anon_identity):
+            result = await self.handler.on_message_send(params, ServerCallContext())
 
-        # The callback is never stored, so the status/failure webhook has nothing to deliver.
+        # Buyer-correctable FAILED task, NOT an InternalError; callback never stored so
+        # the status/failure webhook has nothing to deliver.
+        assert isinstance(result, Task)
+        assert result.status.state == TaskState.TASK_STATE_FAILED
         assert self.handler._task_push_configs == {}
 
     def test_validate_push_callback_rejects_ssrf_url_for_authenticated_caller(self):
@@ -282,7 +287,7 @@ class TestAuthOptionalSkills:
 
         config = TaskPushNotificationConfig(url="https://buyer.example.com/webhook")
         with patch(
-            "src.a2a_server.adcp_a2a_server.WebhookURLValidator.validate_webhook_url",
+            "src.a2a_server.adcp_a2a_server.WebhookURLValidator.validate_callback_url",
             return_value=(True, ""),
         ):
             self.handler._validate_push_callback(config, self.mock_identity)  # must not raise

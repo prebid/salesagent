@@ -420,7 +420,7 @@ class AdCPRequestHandler(RequestHandler):
                 "push_notification_config requires authentication; an unauthenticated request cannot register a callback.",
                 suggestion="Authenticate before supplying a push notification callback.",
             )
-        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
+        is_valid, error_msg = WebhookURLValidator.validate_callback_url(url)
         if not is_valid:
             raise AdCPValidationError(
                 f"push_notification_config.url failed SSRF validation: {error_msg}",
@@ -460,7 +460,7 @@ class AdCPRequestHandler(RequestHandler):
             # Defense-in-depth: re-validate at delivery time to catch a DNS-rebinding /
             # TOCTOU change between registration and delivery, and to guard any callback
             # that reached storage through a path other than on_message_send (#1512).
-            is_valid, ssrf_error = WebhookURLValidator.validate_webhook_url(url)
+            is_valid, ssrf_error = WebhookURLValidator.validate_callback_url(url)
             if not is_valid:
                 logger.error("Push notification URL failed SSRF re-validation at delivery, skipping: %s", ssrf_error)
                 return
@@ -686,7 +686,29 @@ class AdCPRequestHandler(RequestHandler):
             # (#1512) — otherwise a discovery request could drive an outbound POST
             # to an internal/metadata endpoint via the later status webhook.
             if push_notification_config:
-                self._validate_push_callback(push_notification_config, identity)
+                try:
+                    self._validate_push_callback(push_notification_config, identity)
+                except AdCPValidationError as callback_exc:
+                    # A rejected callback is a buyer-CORRECTABLE error, not a server
+                    # fault. Surface it as a FAILED Task carrying the two-layer envelope
+                    # DataPart (VALIDATION_ERROR) — the same shape as a failed skill —
+                    # instead of letting it fall through to the outer handler, which
+                    # would emit a JSON-RPC -32603 InternalError whose data the A2A v0.3
+                    # adapter drops (data: null). The callback is never stored, so no
+                    # webhook can be driven (#1512). Like the per-skill AdCPError path,
+                    # this does not drive the audit/activity sinks for a buyer input error.
+                    logger.warning("Rejected push_notification_config callback: %s", callback_exc)
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
+                    del task.artifacts[:]
+                    task.artifacts.append(
+                        Artifact(
+                            artifact_id="error_1",
+                            name="processing_error",
+                            parts=[Part(data=_dict_to_value(self._build_error_envelope(callback_exc)))],
+                        )
+                    )
+                    self.tasks[task_id] = task
+                    return task
                 self._task_push_configs[task_id] = push_notification_config
                 if push_notification_config.url:
                     logger.info(

@@ -293,7 +293,9 @@ class ProtocolWebhookService:
                 logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
 
                 def _post() -> requests.Response:
-                    return self._session.post(url, json=payload, headers=headers, timeout=10.0)
+                    # allow_redirects=False (#1512 SSRF): a validated public URL must not be
+                    # able to 302 the POST to a private/metadata address after validation.
+                    return self._session.post(url, json=payload, headers=headers, timeout=10.0, allow_redirects=False)
 
                 response = await asyncio.to_thread(_post)
                 response.raise_for_status()

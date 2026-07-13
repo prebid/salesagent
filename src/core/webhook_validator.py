@@ -82,3 +82,24 @@ class WebhookURLValidator:
                 return True, ""
 
         return is_valid, error
+
+    @classmethod
+    def validate_callback_url(cls, url: str) -> tuple[bool, str]:
+        """Env-gated validation for a buyer-supplied push callback URL (#1512).
+
+        The single gate used at callback registration AND delivery. Production
+        requires HTTPS and blocks loopback/localhost (so a plain-HTTP or internal
+        target is refused); non-production relaxes both so local webhook receivers
+        (e.g. the E2E localhost receiver) work. In every environment the SSRF
+        range checks (link-local/metadata 169.254.169.254, RFC-1918) still apply.
+
+        HTTPS-in-prod plus disabled redirects on the outbound client (see
+        protocol_webhook_service) close the demonstrated redirect-to-metadata and
+        plain-HTTP vectors; connect-time peer pinning against DNS rebinding is a
+        residual tracked separately.
+        """
+        from src.core.config import is_production
+
+        if is_production():
+            return check_url_ssrf(url, require_https=True)
+        return cls.validate_for_testing(url, allow_localhost=True)

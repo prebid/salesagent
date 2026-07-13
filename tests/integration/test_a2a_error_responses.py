@@ -339,6 +339,43 @@ class TestA2AErrorPropagation:
         wire_field = artifact_data["errors"][0].get("field") or ""
         assert "budget" in wire_field, f"expected a budget field path on the wire, got {wire_field!r}"
 
+    async def test_ssrf_callback_rejected_as_validation_envelope_wire(self, handler, test_tenant, test_principal):
+        """A callback URL targeting a metadata/internal address surfaces VALIDATION_ERROR on the wire.
+
+        Round-1 raised AdCPValidationError from the push-callback guard BEFORE the per-skill
+        translation seam, so on_message_send emitted a JSON-RPC -32603 InternalError whose data
+        the A2A v0.3 adapter drops (data: null) — which also broke E2E. The rejection must instead
+        produce a buyer-CORRECTABLE two-layer envelope on the failed Task's artifact DataPart, and
+        the callback must never be stored (#1512).
+        """
+        from a2a.types import SendMessageConfiguration, TaskPushNotificationConfig
+
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        message = self.create_message_with_skill("get_adcp_capabilities", {})
+        params = SendMessageRequest(
+            message=message,
+            configuration=SendMessageConfiguration(
+                task_push_notification_config=TaskPushNotificationConfig(url="http://169.254.169.254/latest/meta-data")
+            ),
+        )
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None and len(result.artifacts) > 0
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="SSRF", recovery="correctable")
+        assert handler._task_push_configs == {}, "a rejected callback must never be stored"
+
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
         identity = PrincipalFactory.make_identity(

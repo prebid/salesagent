@@ -283,3 +283,40 @@ class TestWebhookAuthenticator:
             tampered_str, headers["X-Webhook-Signature"], headers["X-Webhook-Timestamp"], secret
         )
         assert not is_valid
+
+
+class TestProtocolWebhookOutboundClient:
+    """The protocol webhook outbound POST must not follow redirects (#1512 SSRF).
+
+    A validated public URL that 302-redirects the POST to a private/metadata
+    address would re-open the SSRF hole after validation; the client must send
+    allow_redirects=False so the redirect is never followed.
+    """
+
+    def test_send_notification_disables_redirects(self):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from src.core.database.models import PushNotificationConfig
+        from src.services.protocol_webhook_service import ProtocolWebhookService
+
+        config = PushNotificationConfig(
+            id="pnc-redir",
+            tenant_id="t",
+            principal_id="p",
+            url="http://93.184.216.34/webhook",
+            authentication_type=None,
+            authentication_token=None,
+        )
+        service = ProtocolWebhookService()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.status_code = 200
+
+        with patch.object(service._session, "post", return_value=mock_response) as mock_post:
+            asyncio.run(
+                service.send_notification(config, {"status": "completed"}, metadata={"task_type": "create_media_buy"})
+            )
+
+        assert mock_post.called, "the webhook POST should have been attempted"
+        assert mock_post.call_args.kwargs.get("allow_redirects") is False

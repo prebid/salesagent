@@ -110,6 +110,54 @@ class TestCheckUrlSsrf:
         assert "resolve" in error.lower() or "cannot" in error.lower()
 
 
+class TestValidateCallbackUrl:
+    """The env-gated callback gate: strict in prod, localhost-friendly in test (#1512)."""
+
+    def test_production_requires_https(self):
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with (
+            patch("src.core.config.is_production", return_value=True),
+            patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"),
+        ):
+            is_valid, error = WebhookURLValidator.validate_callback_url("http://example.com/webhook")
+        assert is_valid is False
+        assert "https" in error.lower()
+
+    def test_production_accepts_public_https(self):
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with (
+            patch("src.core.config.is_production", return_value=True),
+            patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"),
+        ):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("https://example.com/webhook")
+        assert is_valid is True
+
+    def test_production_blocks_localhost(self):
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with patch("src.core.config.is_production", return_value=True):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("https://localhost:8765/webhook")
+        assert is_valid is False
+
+    def test_test_mode_allows_localhost_http(self):
+        """Un-breaks the E2E localhost webhook receiver (round-1 regression)."""
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with patch("src.core.config.is_production", return_value=False):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("http://localhost:8765/webhook")
+        assert is_valid is True
+
+    def test_metadata_ip_blocked_even_in_test_mode(self):
+        """Localhost tolerance must NOT extend to link-local/metadata targets."""
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with patch("src.core.config.is_production", return_value=False):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("http://169.254.169.254/latest/meta-data")
+        assert is_valid is False
+
+
 class TestBlockedHostnames:
     """BLOCKED_HOSTNAMES covers all known internal-alias patterns."""
 
