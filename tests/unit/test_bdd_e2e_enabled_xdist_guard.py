@@ -31,8 +31,21 @@ def _config(numprocesses):
 @pytest.mark.parametrize("numprocesses", [1, 4])
 def test_e2e_enabled_under_xdist_raises(monkeypatch, numprocesses):
     monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    # Isolate from the runner's env: run_all_tests exports E2E_PER_WORKER=1
+    # (Phase B per-worker stacks), which legitimately exempts the guard — but
+    # this test grades the SHARED-stack failure mode, so clear it.
+    monkeypatch.delenv("E2E_PER_WORKER", raising=False)
     with pytest.raises(pytest.UsageError, match="BDD_XDIST_N=0"):
         pytest_configure(_config(numprocesses))
+
+
+@pytest.mark.parametrize("numprocesses", [1, 4])
+def test_e2e_enabled_under_xdist_allowed_with_per_worker_stacks(monkeypatch, numprocesses):
+    """Phase B: with E2E_PER_WORKER=1 each worker has its own server+DB, so
+    xdist + BDD_E2E_ENABLED is legitimate and the guard must not raise."""
+    monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    monkeypatch.setenv("E2E_PER_WORKER", "1")
+    pytest_configure(_config(numprocesses))  # must not raise
 
 
 @pytest.mark.parametrize("numprocesses", [0, None])
