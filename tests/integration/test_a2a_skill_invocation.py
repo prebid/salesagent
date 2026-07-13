@@ -426,11 +426,11 @@ class TestA2ASkillInvocation:
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            from src.core.adcp_version import adcp_major_version
+            from src.core.adcp_version import adcp_major_version, supported_adcp_versions
 
             skill_params = {
-                # SDK version-negotiation envelope (supported major) + undeclared framing.
-                "adcp_version": "3.1",
+                # SDK version-negotiation envelope (supported release) + undeclared framing.
+                "adcp_version": supported_adcp_versions()[0],
                 "adcp_major_version": adcp_major_version(),
                 "ext": {"vendor": "acme"},
             }

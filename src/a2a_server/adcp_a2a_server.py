@@ -109,6 +109,7 @@ from src.core.tools import (
 )
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version import get_version
+from src.core.webhook_validator import WebhookURLValidator
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -391,6 +392,41 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             logger.warning("Failed to log A2A operation: %s", e)
 
+    def _validate_push_callback(self, push_notification_config: Any, identity: ResolvedIdentity | None) -> None:
+        """Guard a client-supplied push callback before it is persisted (#1512 SSRF).
+
+        Two controls, both required:
+
+        1. **Authentication.** A push callback is only meaningful for an
+           authenticated caller with an async task to notify. An anonymous
+           (auth-optional discovery) request supplying a callback has no
+           legitimate use, and honoring it would let an unauthenticated party
+           drive an outbound POST from the seller — so it is refused.
+        2. **SSRF validation.** The callback URL must pass the same
+           ``WebhookURLValidator`` the media-buy delivery path uses (blocks
+           loopback, link-local/metadata ``169.254.169.254``, and RFC-1918
+           targets), closing the internal-endpoint / cloud-metadata
+           exfiltration vector.
+
+        Raises :class:`AdCPValidationError` (correctable) on either failure, so
+        the callback is never stored and the later status/failure webhook has
+        nothing to deliver.
+        """
+        url = push_notification_config.url if push_notification_config else None
+        if not url:
+            return
+        if identity is None or not identity.is_authenticated:
+            raise AdCPValidationError(
+                "push_notification_config requires authentication; an unauthenticated request cannot register a callback.",
+                suggestion="Authenticate before supplying a push notification callback.",
+            )
+        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
+        if not is_valid:
+            raise AdCPValidationError(
+                f"push_notification_config.url failed SSRF validation: {error_msg}",
+                suggestion="Supply a publicly routable https callback URL.",
+            )
+
     async def _send_protocol_webhook(
         self,
         task: Task,
@@ -419,6 +455,14 @@ class AdCPRequestHandler(RequestHandler):
             url = webhook_config.url
             if not url:
                 logger.info("[red]No push notification URL present; skipping webhook[/red]")
+                return
+
+            # Defense-in-depth: re-validate at delivery time to catch a DNS-rebinding /
+            # TOCTOU change between registration and delivery, and to guard any callback
+            # that reached storage through a path other than on_message_send (#1512).
+            is_valid, ssrf_error = WebhookURLValidator.validate_webhook_url(url)
+            if not is_valid:
+                logger.error("Push notification URL failed SSRF re-validation at delivery, skipping: %s", ssrf_error)
                 return
 
             auth = webhook_config.authentication if webhook_config.HasField("authentication") else None
@@ -636,8 +680,13 @@ class AdCPRequestHandler(RequestHandler):
 
             # Persist task/callback state only after authentication has resolved.
             # Otherwise an unauthenticated request could retain attacker-owned
-            # callback state or reach the generic failure-webhook path.
+            # callback state or reach the generic failure-webhook path. The guard
+            # below enforces that: an anonymous caller cannot register a callback,
+            # and any callback URL must pass SSRF validation before it is stored
+            # (#1512) — otherwise a discovery request could drive an outbound POST
+            # to an internal/metadata endpoint via the later status webhook.
             if push_notification_config:
+                self._validate_push_callback(push_notification_config, identity)
                 self._task_push_configs[task_id] = push_notification_config
                 if push_notification_config.url:
                     logger.info(
