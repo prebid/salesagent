@@ -567,12 +567,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # Mirror the approve arm: send the internal CreateMediaBuySuccess so the
                     # rejection notification carries the persisted ``revision`` (the reject
                     # transition bumped it). confirmed_at stays None for a rejected buy.
+                    # rejection_reason is a spec MUST on the seller rejection webhook
+                    # (pinned beta.3 specification.mdx) — carry the same reason recorded on
+                    # the workflow step (default when the admin left it blank). #1544.
                     create_media_buy_rejected_result = CreateMediaBuySuccess(
                         media_buy_id=media_buy_id,
                         packages=[Package(package_id=x.package_id) for x in all_packages],
                         context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
                         confirmed_at=rejected_buy.confirmed_at,
                         revision=rejected_buy.revision,
+                        rejection_reason=reason or "Rejected by administrator",
                     )
                     metadata = {
                         "task_type": step_data["tool_name"],

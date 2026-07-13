@@ -287,6 +287,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
     valid_actions: list[MediaBuyValidAction] | None = None
     context: ContextObject | None = None
+    # Seller rejection reason. Pinned beta.3 core/media-buy.json defines
+    # ``rejection_reason`` ("present only when status is 'rejected'"), and
+    # specification.mdx makes it a MUST on the seller rejection webhook
+    # (payload MUST include media_buy_id, status='rejected', rejection_reason).
+    # Optional/None on non-rejection results; declared so it survives
+    # extra='forbid' in dev/test like the sibling additions above. #1544.
+    rejection_reason: str | None = None
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
