@@ -1556,8 +1556,8 @@ class MockAdServer(AdServerAdapter):
                             ]
 
                         # Validate the configuration
-                        validation_errors = self.validate_product_config(new_config)
-                        if validation_errors:
+                        is_valid, validation_error = self.validate_product_config(new_config)
+                        if not is_valid:
                             # Get formats for re-rendering
                             from src.admin.blueprints.products import get_creative_formats
 
@@ -1570,7 +1570,7 @@ class MockAdServer(AdServerAdapter):
                                 config=config,
                                 formats=available_formats,
                                 selected_formats=product_obj.format_ids or [],
-                                error=validation_errors[0],
+                                error=validation_error,
                             )
 
                         # Save to database

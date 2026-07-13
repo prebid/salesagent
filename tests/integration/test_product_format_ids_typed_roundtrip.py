@@ -309,6 +309,13 @@ class TestMockAdServerFormatWritePath:
                     "after the mock adapter config POST the persisted format_ids must be "
                     f"FormatId objects ({{agent_url, id}}), never strings — got {type(fid).__name__}: {fid!r}"
                 )
+            # The SUBMITTED ids must round-trip — a pin that re-reads the seeded
+            # row passes with the write path present, absent, or dead
+            # (salesagent-jrb5: the `if validation_errors:` tuple-truthiness bug
+            # made the commit branch unreachable and this pin vacuous).
+            assert sorted(fid.id for fid in loaded) == sorted(submitted_ids), (
+                f"config POST must persist the submitted format ids {submitted_ids}, got {[fid.id for fid in loaded]}"
+            )
 
 
 @pytest.mark.requires_db
