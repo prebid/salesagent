@@ -8,9 +8,12 @@ All helpers enforce the NEW AdCP V2.3 format with proper schema validation.
 import uuid
 import warnings
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tests.factories.creative_asset import build_assets, image_spec
+
+if TYPE_CHECKING:
+    from fastmcp.client import Client
 
 
 def generate_buyer_ref(prefix: str = "test") -> str:
@@ -300,3 +303,59 @@ def get_test_date_range(days_from_now: int = 1, duration_days: int = 30) -> tupl
     end = start + timedelta(days=duration_days)
 
     return (start.isoformat(), end.isoformat())
+
+
+async def create_media_buy_via_client(
+    client: "Client",
+    brand: dict[str, Any] | None = None,
+    brief: str = "display advertising",
+    total_budget: float = 5000.0,
+    push_notification_url: str | None = None,
+    days_from_now: int = 1,
+    duration_days: int = 30,
+) -> tuple[str, str]:
+    """Discover the first product and create a media buy, returning (media_buy_id, pricing_option_id).
+
+    Encapsulates the repeated get_products → build_adcp_media_buy_request → create_media_buy
+    sequence used across multiple E2E tests so each test does not duplicate the same block.
+
+    Args:
+        client: An active FastMCP Client already connected to the server.
+        brand: Brand reference dict (default: ``{"domain": "testbrand.com"}``).
+        brief: Product discovery brief string.
+        total_budget: Total budget for the created media buy.
+        push_notification_url: If provided, sets ``push_notification_config.url`` on the request.
+        days_from_now: Campaign start offset in days from now.
+        duration_days: Campaign duration in days.
+
+    Returns:
+        ``(media_buy_id, pricing_option_id)`` — both discovered dynamically from server responses.
+    """
+    if brand is None:
+        brand = {"domain": "testbrand.com"}
+
+    products_data = parse_tool_result(await client.call_tool("get_products", {"brand": brand, "brief": brief}))
+    assert products_data.get("products"), f"get_products returned no products; got: {products_data}"
+    product = products_data["products"][0]
+    assert product.get("pricing_options"), (
+        f"Product {product.get('product_id')} must expose pricing_options; got: {product}"
+    )
+    pricing_option_id = product["pricing_options"][0]["pricing_option_id"]
+
+    start_time, end_time = get_test_date_range(days_from_now=days_from_now, duration_days=duration_days)
+    create_request = build_adcp_media_buy_request(
+        product_ids=[product["product_id"]],
+        total_budget=total_budget,
+        start_time=start_time,
+        end_time=end_time,
+        brand=brand,
+        pricing_option_id=pricing_option_id,
+    )
+    if push_notification_url is not None:
+        create_request["push_notification_config"] = {"url": push_notification_url}
+
+    create_data = parse_tool_result(await client.call_tool("create_media_buy", create_request))
+    media_buy_id = create_data.get("media_buy_id")
+    assert media_buy_id, f"create_media_buy must return media_buy_id; got: {create_data}"
+
+    return media_buy_id, pricing_option_id

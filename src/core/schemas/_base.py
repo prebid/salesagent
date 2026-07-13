@@ -1607,6 +1607,29 @@ class CheckMediaBuyStatusResponse(SalesAgentBaseModel):
 
 
 # --- Additional Schema Classes ---
+
+
+class PackageImplementationConfig(SalesAgentBaseModel):
+    """Marker/base type for MediaPackage.implementation_config.
+
+    Not currently extended: today's adapter-specific config models
+    (``GAMImplementationConfig`` in ``src/adapters/gam_implementation_config_schema.py``,
+    ``BroadstreetImplementationConfig`` in
+    ``src/adapters/broadstreet/config_schema.py``) subclass plain Pydantic
+    ``BaseModel`` directly, not this class, and no code path currently
+    constructs a ``PackageImplementationConfig`` and assigns it to
+    ``MediaPackage.implementation_config`` — the field has no producer.
+    ``extra="allow"`` keeps the field forward-compatible if/when an adapter
+    is wired to populate it via this shared base.
+
+    This field is internal-only (exclude=True on MediaPackage) and never serialized
+    to the wire — it exists solely so adapters can carry typed config alongside a
+    MediaPackage without resorting to a loose dict, once wired.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
 class MediaPackage(SalesAgentBaseModel):
     package_id: str
     name: str
@@ -1620,6 +1643,9 @@ class MediaPackage(SalesAgentBaseModel):
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
+    implementation_config: PackageImplementationConfig | None = Field(
+        default=None, exclude=True
+    )  # Internal: adapter-specific per-package config. Not serialized to wire.
 
 
 class PackagePerformance(SalesAgentBaseModel):

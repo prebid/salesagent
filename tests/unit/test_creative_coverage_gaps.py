@@ -52,6 +52,10 @@ def mock_format_spec():
     spec.format_id = "display_300x250_image"
     spec.agent_url = "https://creative.adcontextprotocol.org"
     spec.name = "Medium Rectangle"
+    # Explicitly set to None so _find_format identifies this as a static
+    # (non-generative) format. Without this, Mock() auto-creates a truthy
+    # Mock object for output_format_ids, causing the generative path to be taken.
+    spec.output_format_ids = None
     return spec
 
 

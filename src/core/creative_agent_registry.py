@@ -1,10 +1,5 @@
 """Creative Agent Registry for dynamic format discovery per AdCP v2.4.
 
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [valid-type] on lines ~179, ~192: ImageFormatAsset | VideoFormatAsset union
-  annotation. SDK asset classes are dynamically resolved type factories; mypy
-  cannot validate the union. Permanent until upstream ships StrEnum.
-
 This module provides:
 1. Creative agent registry (system defaults + tenant-specific)
 2. Dynamic format discovery via MCP
@@ -26,7 +21,7 @@ Testing:
 import copy
 import logging
 import os
-import typing
+import uuid as _uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -35,35 +30,50 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
+from adcp.types import (
+    BrandReference,
+    FormatReferenceStructuredObject,
+    ImageFormatAsset,
+    VideoFormatAsset,
+)
+from adcp.types import (
+    BuildCreativeRequest as _BuildCreativeRequestConcrete,
+)
 from adcp.types import Error as AdCPResponseError
-from adcp.types import ImageFormatAsset
+from adcp.types.generated_poc.core.creative_manifest import CreativeManifest
+from adcp.types.generated_poc.core.format import BaseIndividualAsset
 from pydantic import ValidationError
+from yarl import URL as _URL
 
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
 )
+from src.core.schema_helpers import to_brand_reference
 from src.core.schemas import Format, FormatId, canonical_agent_url, url
 
 
 def _known_asset_types() -> frozenset[str]:
-    """Asset-type Literals adcp's closed discriminated union models.
+    """Asset-type Literals the adcp SDK models.
 
-    Derived dynamically from the adcp schema (not hardcoded) so the tolerant
+    Derived from the AssetContentType enum (adcp 5.7+) so the tolerant
     ingestion stays correct across adcp version bumps — what counts as
-    "additive" is always "not in the union the pinned library knows about".
+    "additive" is always "not in the enum the pinned library knows about".
+
+    The pre-5.7 annotation-walk over Format.assets collected nothing under
+    the Annotated[…, Discriminator] shape introduced in 5.7, so we derive
+    from the enum directly instead.
+
+    AssetContentType (14 members) is the response-level content-type enum
+    and doesn't cover every asset_type Literal the SDK's asset-shape models
+    use as a discriminator: "zip" (individual zip-bundle asset) and "card"
+    (RepeatableAssetGroup member asset) are modeled elsewhere in the schema
+    but absent from AssetContentType. Union them in explicitly so the
+    tolerant-ingestion set matches the SDK's full known asset_type surface,
+    not just the subset AssetContentType happens to enumerate.
     """
-    literals: set[str] = set()
-    assets_field = Format.model_fields["assets"].annotation
-    # annotation shape: list[Union[ImageFormatAsset, VideoFormatAsset, ...]] | None
-    for outer in typing.get_args(assets_field):
-        for inner in typing.get_args(outer):  # the Union inside list[...]
-            for arm in typing.get_args(inner):
-                asset_type_field = getattr(arm, "model_fields", {}).get("asset_type")
-                if asset_type_field is not None:
-                    literals.update(typing.get_args(asset_type_field.annotation))
-    return frozenset(literals)
+    return frozenset(m.value for m in AssetType) | {"zip", "card"}
 
 
 _KNOWN_ASSET_TYPES = _known_asset_types()
@@ -175,12 +185,10 @@ from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools
 
 def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Format:
     """Create a single mock format with proper typing for testing."""
-    from adcp.types import VideoFormatAsset
-
     # adcp 4.3.0: Assets classes are type-discriminated with Literal asset_type fields.
     # ImageFormatAsset = image, VideoFormatAsset = video. Pass asset_type as plain string (not enum).
     if asset_type == "video":
-        asset_item: ImageFormatAsset | VideoFormatAsset = VideoFormatAsset(  # type: ignore[valid-type]
+        asset_item: BaseIndividualAsset = VideoFormatAsset(
             item_type="individual",
             asset_id="primary",
             asset_type="video",
@@ -193,7 +201,7 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
             asset_type="image",
             required=True,
         )
-    assets: list[ImageFormatAsset | VideoFormatAsset] = [asset_item]  # type: ignore[valid-type]
+    assets: list[BaseIndividualAsset] = [asset_item]
     # Use Format (our extended class) instead of AdcpFormat to include is_standard field
     # Explicitly pass None for optional internal fields to satisfy mypy
     return Format(
@@ -201,6 +209,52 @@ def _create_mock_format(format_id_str: str, name: str, asset_type: str) -> Forma
         name=name,
         assets=assets,
         is_standard=True,  # Mock formats are standard formats
+        platform_config=None,
+        category=None,
+        requirements=None,
+        iab_specification=None,
+        accepts_3p_tags=None,
+    )
+
+
+def _create_mock_format_multi(format_id_str: str, name: str, asset_types: list[str]) -> Format:
+    """Create a mock format representing a multi-asset-type format for testing.
+
+    Used for formats like ``text_ad_search`` that logically require asset types
+    beyond the SDK's closed discriminated union (e.g. ``"url"`` and ``"text"``).
+
+    The SDK's Pydantic discriminated union only accepts a closed set of
+    ``asset_type`` Literals (image, video, …).  Rather than fighting the
+    validator, we represent each logical asset slot with an ``image`` asset
+    whose ``asset_id`` encodes the intended type.  The format is registered and
+    discoverable; the ``_KNOWN_ASSET_TYPES`` extension (see ``_known_asset_types()``
+    above) is what actually makes the validator accept ``"url"`` assets from
+    real agents.
+    """
+    # FIXME(adcontextprotocol/adcp-client-python#742): The SDK's discriminated
+    # union only accepts a closed set of asset_type Literals (image, video,
+    # …).  We encode the intended type in asset_id (e.g. asset_id="url") and
+    # force asset_type="image" to satisfy the validator.  Any code that reads
+    # format.assets[i].asset_type will see "image" for all slots — including
+    # the "url" slot — which is incorrect. #742 tracks the upstream fix
+    # (open/unknown discriminator arm for the closed union); #1490 is an
+    # unrelated, already-merged salesagent PR and must not be cited here.
+    assets: list[BaseIndividualAsset] = []
+    for i, asset_type in enumerate(asset_types):
+        asset_id = asset_type if i == 0 else f"{asset_type}_{i}"
+        assets.append(
+            ImageFormatAsset(
+                item_type="individual",
+                asset_id=asset_id,
+                asset_type="image",  # SDK only accepts closed Literal; asset_id encodes intent
+                required=True,
+            )
+        )
+    return Format(
+        format_id=FormatId(id=format_id_str, agent_url=url("https://creative.adcontextprotocol.org")),
+        name=name,
+        assets=assets,
+        is_standard=True,
         platform_config=None,
         category=None,
         requirements=None,
@@ -228,6 +282,7 @@ def _get_mock_formats() -> list[Format]:
         _create_mock_format("display_image", "Display Image", "image"),
         _create_mock_format("display_html", "Display HTML", "image"),
         _create_mock_format("display_js", "Display JavaScript", "image"),
+        _create_mock_format_multi("text_ad_search", "Text Ad Search", ["text", "url"]),
     ]
 
 
@@ -933,24 +988,26 @@ class CreativeAgentRegistry:
         agent_url: str,
         format_id: str,
         message: str,
-        gemini_api_key: str,
         promoted_offerings: dict[str, Any] | None = None,
         context_id: str | None = None,
-        finalize: bool = False,
+        brand: dict[str, Any] | BrandReference | str | None = None,
+        creative_manifest: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build a creative using AI generation via the creative agent.
 
-        This calls the creative agent's build_creative tool which requires the user's
-        Gemini API key (the creative agent doesn't pay for API calls).
+        Uses ``ADCPMultiAgentClient`` + ``BuildCreativeRequest`` per AdCP 3.1.
+        ``idempotency_key`` is generated automatically (required on every AdCP
+        task request in 3.1).
 
         Args:
             agent_url: URL of the creative agent
-            format_id: Format ID (must be generative type like display_300x250_generative)
+            format_id: Format ID string (e.g. ``display_300x250_generative``)
             message: Creative brief or refinement instructions
-            gemini_api_key: User's Gemini API key (REQUIRED)
             promoted_offerings: Brand and product information for AI generation
             context_id: Session ID for iterative refinement (optional)
-            finalize: Set to true to finalize the creative (default: False)
+            brand: Optional brand value (str, dict, or Pydantic model) forwarded
+                to the creative agent as a ``BrandRef``-shaped dict.
+            creative_manifest: Optional pre-built creative manifest dict.
 
         Returns:
             Build response containing:
@@ -958,38 +1015,77 @@ class CreativeAgentRegistry:
             - context_id: Session ID for refinement
             - status: "draft" or "finalized"
             - creative_output: Generated creative manifest with output_format
+
+        Note:
+            AdCP 3.1's ``build_creative`` has no ``finalize`` field — the closest
+            spec concept is ``quality`` (``"draft"`` | ``"production"``, output
+            fidelity, not a finalize/commit action). A previous version of this
+            method accepted a ``finalize: bool`` parameter that rode through via
+            ``extra="allow"`` and was always ``False`` in practice (callers read
+            ``getattr(creative, "approved", False)``, but ``CreativeAsset`` has no
+            ``approved`` field) — i.e. it was dead code, not a working feature.
+            It was removed rather than silently reinterpreted as ``quality``,
+            since the caller-visible semantics (draft vs. production fidelity)
+            differ from a boolean finalize/commit flag and need an explicit
+            product decision before wiring.
         """
-        # Use custom MCP client for non-standard tools (build_creative not in AdCP spec)
-        async with create_mcp_client(agent_url=agent_url, timeout=30) as client:
-            params = {
-                "message": message,
-                "format_id": format_id,
-                "gemini_api_key": gemini_api_key,
-                "finalize": finalize,
-            }
+        # Resolve brand to a typed BrandReference for the SDK request.
+        # to_brand_reference() is the single str/dict/model → BrandReference
+        # converter used everywhere in the codebase (also used by
+        # create_get_products_request and the create_media_buy boundary) —
+        # it normalizes scheme/path/case for strings internally.
+        brand_typed: BrandReference | None = to_brand_reference(brand)
 
-            if promoted_offerings:
-                params["promoted_offerings"] = promoted_offerings
+        # Validate creative_manifest via model_validate (not model_construct) so its
+        # field validators are enforced rather than silently skipped. (The
+        # ≥16-char idempotency_key constraint below is on BuildCreativeRequest, not
+        # on CreativeManifest — model_validate() here guards the manifest's own
+        # fields, e.g. asset shape.) CreativeManifest(…) trips mypy under adcp 5.7
+        # (alias hides kwargs) — use .model_validate(dict) instead.
+        manifest: CreativeManifest | None = (
+            CreativeManifest.model_validate(creative_manifest) if creative_manifest else None
+        )
 
-            if context_id:
-                params["context_id"] = context_id
+        idempotency_key = str(_uuid.uuid4())
 
-            result = await client.call_tool("build_creative", params)
+        request = _BuildCreativeRequestConcrete(
+            message=message,
+            target_format_id=FormatReferenceStructuredObject(
+                agent_url=agent_url,
+                id=format_id,
+            ),
+            idempotency_key=idempotency_key,
+            creative_manifest=manifest,
+            brand=brand_typed,
+        )
 
-            # Use structured_content field for JSON response (MCP protocol update)
-            if hasattr(result, "structured_content") and result.structured_content:
-                return result.structured_content
+        # Build a transient CreativeAgent for this URL so we can use _build_adcp_client.
+        # The agent name is derived from the URL (used as the routing key in the client).
+        agent_name = _URL(str(agent_url)).host or str(agent_url)
+        transient_agent = CreativeAgent(agent_url=str(agent_url), name=agent_name)
+        client = self._build_adcp_client([transient_agent])
 
-            # Fallback: Parse result from content field (legacy)
-            import json
+        import logging
 
-            if isinstance(result.content, list) and result.content:
-                creative_data = result.content[0].text if hasattr(result.content[0], "text") else result.content[0]
-                if isinstance(creative_data, str):
-                    creative_data = json.loads(creative_data)
-                return creative_data
+        logger = logging.getLogger(__name__)
 
-            return {}
+        try:
+            result = await client.agent(agent_name).build_creative(request)
+        except ADCPError as e:
+            from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
+
+            # Mirror _fetch_formats_from_agent: translate the SDK's exception
+            # hierarchy into the internal typed AdCPError taxonomy so recovery
+            # (terminal for auth, transient for timeout/connection) survives to
+            # the caller instead of being flattened by a blanket `except Exception`.
+            raise_mapped_adcp_error(e, agent_label=agent_name, logger=logger)
+
+        # Return the result as a plain dict for downstream processing
+        if hasattr(result, "model_dump"):
+            return result.model_dump(mode="json")
+        if isinstance(result, dict):
+            return result
+        return {}
 
 
 # Global registry instance

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
 from tests.harness import make_mock_uow
@@ -111,6 +111,11 @@ def sync_patches():
         mock_registry = Mock()
         mock_registry.list_all_formats = mock_list_all_formats
         mock_registry.get_format = mock_get_format
+        # preview_creative must be an AsyncMock so run_async_in_sync_context can
+        # await it in the static creative path (_processing.py).  Returning None
+        # triggers the "no previews" branch; the test creative has a banner_image
+        # asset URL so has_media_url=True and creation continues successfully.
+        mock_registry.preview_creative = AsyncMock(return_value=None)
 
         mock_uow, mock_creative_repo = make_creative_uow()
 

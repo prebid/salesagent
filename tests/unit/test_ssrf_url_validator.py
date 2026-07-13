@@ -292,3 +292,157 @@ class TestSignalsAgentEndpointSSRFWiring:
         assert "edit" in response.headers.get("Location", "")
         # Confirm the agent URL was NOT committed as the unsafe value
         mock_session.commit.assert_not_called()
+
+
+def _make_creative_agent_client():
+    """Create a Flask test client authenticated as super admin for creative agent endpoints."""
+    from src.admin.app import create_app
+
+    app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["test_user"] = "test_super_admin@example.com"
+        sess["test_user_role"] = "super_admin"
+        sess["authenticated"] = True
+    return client
+
+
+def _mock_db_for_creative_agent_add(mock_db, tenant_id="default"):
+    """Wire mock_db so the add handler can query Tenant."""
+    mock_tenant = MagicMock()
+    mock_tenant.tenant_id = tenant_id
+    mock_session = MagicMock()
+    mock_session.scalars.return_value.first.return_value = mock_tenant
+    mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_db.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_session
+
+
+class TestCreativeAgentEndpointSSRFWiring:
+    """Flask endpoint-level tests confirming check_url_ssrf() is wired into handlers.
+
+    These tests exercise the actual POST /tenant/<id>/creative-agents/add and
+    POST /tenant/<id>/creative-agents/<id>/edit endpoints so that removing or
+    bypassing the check_url_ssrf() call in the handler would cause a real failure.
+
+    creative-agents is the dial-site registry for build_creative/preview_creative
+    calls — the same SSRF exposure as signals-agents, and must be guarded the
+    same way.
+    """
+
+    def test_add_endpoint_rejects_docker_internal_url(self):
+        """POST /creative-agents/add with host.docker.internal URL must return a redirect with error flash."""
+        client = _make_creative_agent_client()
+
+        with patch("src.admin.blueprints.creative_agents.get_db_session") as mock_db:
+            _mock_db_for_creative_agent_add(mock_db)
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                response = client.post(
+                    "/tenant/default/creative-agents/add",
+                    data={
+                        "agent_url": "http://host.docker.internal:9999",
+                        "name": "SSRF Test Agent",
+                        "enabled": "on",
+                        "priority": "10",
+                    },
+                    follow_redirects=False,
+                )
+
+        # Must redirect back to add form (not to list — which would mean success)
+        assert response.status_code == 302
+        assert "add" in response.headers.get("Location", "")
+
+    def test_add_endpoint_accepts_safe_public_url(self):
+        """POST /creative-agents/add with a safe public URL must proceed past the SSRF check."""
+        client = _make_creative_agent_client()
+
+        with patch("src.admin.blueprints.creative_agents.get_db_session") as mock_db:
+            mock_session = _mock_db_for_creative_agent_add(mock_db)
+            # Make session.add() and commit() no-ops
+            mock_session.add = MagicMock()
+            mock_session.commit = MagicMock()
+            with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+                with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                    response = client.post(
+                        "/tenant/default/creative-agents/add",
+                        data={
+                            "agent_url": "https://creative.example.com/agent",
+                            "name": "Safe Agent",
+                            "enabled": "on",
+                            "priority": "10",
+                        },
+                        follow_redirects=False,
+                    )
+
+        # Must redirect to list (success) — not back to add form
+        assert response.status_code == 302
+        assert "add" not in response.headers.get("Location", "")
+
+    def test_edit_endpoint_rejects_unsafe_url_on_update(self):
+        """POST /creative-agents/<id>/edit updating URL to host.docker.internal must be rejected.
+
+        The handler assigns agent.agent_url from the form value first, then
+        validates it — so it is the new submitted value being checked.
+        """
+        client = _make_creative_agent_client()
+
+        existing_agent = MagicMock()
+        existing_agent.id = 1
+        existing_agent.agent_url = "https://safe.example.com/agent"
+        existing_agent.auth_credentials = None
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.first.return_value = existing_agent
+
+        with patch("src.admin.blueprints.creative_agents.get_db_session") as mock_db:
+            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                response = client.post(
+                    "/tenant/default/creative-agents/1/edit",
+                    data={
+                        "agent_url": "http://host.docker.internal:9999",
+                        "name": "Existing Agent",
+                        "enabled": "on",
+                        "priority": "10",
+                    },
+                    follow_redirects=False,
+                )
+
+        # Must redirect back to edit form (not to list — which would mean success)
+        assert response.status_code == 302
+        assert "edit" in response.headers.get("Location", "")
+        # Confirm the agent URL was NOT committed as the unsafe value
+        mock_session.commit.assert_not_called()
+
+    def test_test_connection_endpoint_rejects_unsafe_stored_url(self):
+        """POST /creative-agents/<id>/test with an unsafe stored URL must be rejected
+        before any outbound request is attempted (defence-in-depth for pre-existing rows).
+        """
+        client = _make_creative_agent_client()
+
+        existing_agent = MagicMock()
+        existing_agent.id = 1
+        existing_agent.agent_url = "http://host.docker.internal:9999"
+        existing_agent.name = "Unsafe Agent"
+        existing_agent.auth_type = None
+        existing_agent.auth_credentials = None
+        existing_agent.enabled = True
+        existing_agent.priority = 10
+
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.first.return_value = existing_agent
+
+        with patch("src.admin.blueprints.creative_agents.get_db_session") as mock_db:
+            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                response = client.post(
+                    "/tenant/default/creative-agents/1/test",
+                    follow_redirects=False,
+                )
+
+        assert response.status_code == 400
+        body = response.get_json()
+        assert body["success"] is False
+        assert "not allowed" in body["error"].lower()
