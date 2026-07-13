@@ -1,7 +1,7 @@
 """Guard: buyer-path creative lookups must be principal-scoped.
 
-Disease pattern (PR #1430 review, cross-principal FK-500/leak; extended by
-salesagent-ft8s): the creatives PK is composite ``(creative_id, tenant_id,
+Disease pattern (PR #1430 review, cross-principal FK-500/leak; guard
+extended in the #1430 re-review round): the creatives PK is composite ``(creative_id, tenant_id,
 principal_id)``. A buyer-path lookup that filters tenant-only matches ANOTHER
 principal's row, so a cross-principal reference passes existence gates (then
 violates the composite FK on insert) and leaks the other principal's fields
@@ -53,7 +53,7 @@ _QUERY_ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/database/repositories/creative.py", "admin_get_by_id"),
     ("src/core/database/repositories/creative.py", "admin_get_by_ids"),
     # CreativeReview lookup; callers are the admin AI-review blueprint + the
-    # GATE-PUSH flow. Naming drift (no admin_ prefix) tracked in salesagent-qkk4.
+    # GATE-PUSH flow. Naming drift (no admin_ prefix) — rename is a follow-up.
     ("src/core/database/repositories/creative.py", "get_prior_ai_review"),
     # CreativeAssignmentRepository: tenant-scoped assignment reads for the
     # admin surface (creative approval fan-out).
@@ -290,7 +290,7 @@ class TestCreativeLookupPrincipalScoped:
             fix_hint=(
                 "Creative-family lookups comparing creative_id must ALSO compare principal_id "
                 "in the SAME query (composite PK — tenant-only matching enables the "
-                "cross-principal FK-500/leak, PR #1430 review / salesagent-ft8s). "
+                "cross-principal FK-500/leak, PR #1430 review). "
                 "Admin-by-design lookups belong in _QUERY_ALLOWLIST (shrink-only)."
             ),
         )
@@ -308,7 +308,7 @@ class TestCreativeLookupPrincipalScoped:
             fix_hint=(
                 "admin_* repository lookups are principal-agnostic and MUST NOT be called "
                 "from buyer-facing tool code (this is how the update_media_buy cross-principal "
-                "hole hid behind the old admin_* name exemption — salesagent-ft8s). "
+                "hole hid behind the old admin_* name exemption — #1430 re-review). "
                 "Genuinely seller-side tool flows belong in _ADMIN_CALL_ALLOWLIST (shrink-only)."
             ),
         )

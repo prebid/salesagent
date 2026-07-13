@@ -312,7 +312,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     name). The behavior — typed AdCPError propagates (transient agent failures
     keep their recovery semantics, #1430: transient-error taxonomy fix), untyped errors log and
     become None (unknown-format) — lives in the SINGLE shared fetch path,
-    format_resolver.fetch_format_spec (salesagent-mpo1).
+    format_resolver.fetch_format_spec (#1430 review).
     """
     from src.core.format_resolver import fetch_format_spec
 
@@ -522,7 +522,7 @@ def _pre_validate_package_creatives(
 
     try:
         with MediaBuyUoW(tenant_id) as pre_validate_uow:
-            # FIXME(salesagent-9f2): creative validation should use a repository
+            # FIXME(#1119): creative validation should use a repository
             assert pre_validate_uow.session is not None
             _validate_creatives_before_adapter_call(packages, tenant_id, principal_id, session=pre_validate_uow.session)
     except AdCPError:
@@ -668,7 +668,7 @@ def _build_adapter_asset_from_creative(
     # typed transient AdCPError from either fetch PROPAGATES — a rate-limited
     # agent must not be degraded into a missing-spec asset error, and the
     # fallback must not mask it by re-fetching from the same throttled agent
-    # (salesagent-mpo1). AdCPFormatNotFoundError from the resolver = genuinely
+    # (#1430 review). AdCPFormatNotFoundError from the resolver = genuinely
     # unknown -> proceed without a spec (extraction falls back to raw data).
     if creative.format:
         format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))

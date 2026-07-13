@@ -39,9 +39,9 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # and "Sellers MUST return this code uniformly for any creative_id not owned by
 # the calling account" (#1430 review). CONFIGURATION_ERROR per the enum:
 # terminal — "the buyer cannot resolve a seller-side deployment
-# misconfiguration and MUST NOT auto-retry" (salesagent-nr2q). The remaining
+# misconfiguration and MUST NOT auto-retry" (#1430 review). The remaining
 # demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same treatment
-# in salesagent-zgpb.
+# in #1602.
 _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
     "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
@@ -235,7 +235,7 @@ class AdCPError(Exception):
     # Class-level identity defaults. Subclasses override these.
     # Recovery follows the WIRE code, not the internal taxonomy: the base
     # INTERNAL_ERROR maps to SERVICE_UNAVAILABLE on the wire, whose pinned
-    # enumMetadata classification is transient (salesagent-nr2q). Subclasses
+    # enumMetadata classification is transient (#1430 review). Subclasses
     # whose wire code is pinned terminal declare terminal explicitly.
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
@@ -447,8 +447,7 @@ class AdCPAuthenticationError(AdCPError):
     not the ``terminal`` base default. The enum carries operationally distinct
     sub-cases (missing credentials → retry; presented-but-rejected → escalate),
     but its single canonical ``recovery`` classification is ``correctable``,
-    and the wire contract is graded against that enum (salesagent-xc2j,
-    superseding the earlier "storyboards grade only the code" judgment).
+    and the wire contract is graded against that enum (#1430, superseding the earlier "storyboards grade only the code" judgment).
     """
 
     _default_status_code: ClassVar[int] = 401
@@ -468,7 +467,7 @@ class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
     Emits ``AUTH_REQUIRED`` with ``correctable`` recovery, matching the pinned
-    AdCP error-code enum and ``AdCPAuthenticationError`` (salesagent-xc2j).
+    AdCP error-code enum and ``AdCPAuthenticationError``.
     """
 
     _default_status_code: ClassVar[int] = 403
@@ -495,7 +494,7 @@ class AdCPNotFoundError(AdCPError):
 
     Recovery=correctable: the wire code is INVALID_REQUEST (via
     ERROR_CODE_MAPPING), whose pinned enumMetadata classification is
-    correctable — recovery follows the wire code (salesagent-nr2q).
+    correctable — recovery follows the wire code (#1430 review).
     """
 
     _default_status_code: ClassVar[int] = 404
@@ -557,7 +556,7 @@ class AdCPConflictError(AdCPError):
     a generic resource conflict (e.g. concurrent modification) is resolved by
     retrying with backoff. Subclasses whose specific code the enum classifies as
     correctable (ACCOUNT_AMBIGUOUS, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_EXPIRED)
-    override this (salesagent-xds6).
+    override this.
     """
 
     _default_status_code: ClassVar[int] = 409
@@ -570,7 +569,7 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
 
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
     # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
-    # an explicit account_id) — override the transient CONFLICT parent (salesagent-xds6).
+    # an explicit account_id) — override the transient CONFLICT parent.
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -592,7 +591,7 @@ class AdCPBudgetExhaustedError(AdCPError):
 
     Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
     an exhausted budget cannot be recovered autonomously — an operator must add
-    budget — so the buyer agent must not retry (salesagent-xds6).
+    budget — so the buyer agent must not retry.
     """
 
     _default_status_code: ClassVar[int] = 422
@@ -625,7 +624,7 @@ class AdCPConfigurationError(AdCPError):
     ``terminal``: the buyer has no lever to fix server config and per the
     pinned enum "MUST NOT auto-retry". CONFIGURATION_ERROR is a
     _SPEC_SUPPLEMENT_CODES pass-through — it reaches the wire untranslated
-    (salesagent-nr2q).
+    (#1430 review).
     """
 
     _default_status_code: ClassVar[int] = 500
