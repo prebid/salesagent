@@ -468,3 +468,22 @@ class TestStripUndeclaredEnvelopeFields:
         )
         assert cleaned == {"some_business_field": 1}
         assert stripped == ["context"]
+
+    def test_revision_is_not_tolerated_so_it_fails_loud(self):
+        """`revision` must NOT be silently stripped — a pinned revision fails loud (#1512).
+
+        update-media-buy-request.json (v3.1.0-beta.3) requires CONFLICT on a revision
+        mismatch, which no tool implements yet (no MediaBuy.revision column; tracked in
+        #1607). Tolerating `revision` silently dropped the buyer's optimistic-concurrency
+        guard and performed a STALE update. Keeping it out of ADCP_ENVELOPE_FIELDS means it
+        is retained here and rejected by strict per-tool validation instead.
+        """
+        from src.core.request_compat import ADCP_ENVELOPE_FIELDS
+
+        assert "revision" not in ADCP_ENVELOPE_FIELDS
+        # A tool that declares only media_buy_id no longer has revision stripped away.
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            {"media_buy_id": "mb_1", "revision": 5}, known_params={"media_buy_id"}
+        )
+        assert "revision" in cleaned
+        assert "revision" not in stripped

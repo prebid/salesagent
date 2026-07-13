@@ -182,12 +182,17 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
         # every AdCP request schema carries additionalProperties: true, and
         # building/by-layer/L1/security.mdx § Idempotency requires sellers to
         # accept requests carrying idempotency_key ("no rejecting on undeclared
-        # envelope fields"). revision/push_notification_config are per-task
-        # request fields (not universal envelope), tolerated on the same basis.
-        # Tools that declare these (e.g. create_media_buy's idempotency_key)
-        # still receive them.
+        # envelope fields"). push_notification_config is a per-task request field
+        # (not universal envelope), tolerated on the same basis. Tools that declare
+        # these (e.g. create_media_buy's idempotency_key) still receive them.
         "idempotency_key",
-        "revision",
+        # NOTE: `revision` is deliberately NOT tolerated. update-media-buy-request.json
+        # (v3.1.0-beta.3) says a supplied revision mismatch MUST return CONFLICT — a
+        # behavior no tool implements yet (there is no MediaBuy.revision column). Tolerating
+        # it silently dropped the buyer's concurrency guard and performed a STALE update. Until
+        # optimistic concurrency lands (#1607), leaving revision out of this set makes a pinned
+        # revision fail loudly under strict validation instead of silently succeeding.
+        # (Production `extra="ignore"` still drops it — full cross-env CONFLICT is part of #1607.)
     }
 )
 
