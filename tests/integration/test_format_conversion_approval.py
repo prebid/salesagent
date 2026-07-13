@@ -263,162 +263,6 @@ class TestFormatConversionApproval:
         # Cleanup
         _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
-    def test_invalid_format_missing_agent_url(
-        self, test_tenant, test_principal, test_currency_limit, test_property_tag
-    ):
-        """❌ FormatReference dict missing agent_url should fail validation."""
-        product_id = "prod_no_agent_url"
-        media_buy_id = "mb_no_agent_url"
-
-        with get_db_session() as session:
-            # Create product with invalid format (no agent_url)
-            product = create_test_db_product(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                name="Invalid Format Product",
-                description="Product with missing agent_url",
-                format_ids=[
-                    {
-                        "id": "display_300x250",
-                        # Missing agent_url - should fail
-                    }
-                ],
-            )
-            session.add(product)
-
-            # Add pricing option
-            pricing = PricingOption(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                pricing_model="CPM",
-                rate=Decimal("10.00"),
-                currency="USD",
-                is_fixed=True,
-            )
-            session.add(pricing)
-
-            # Create media buy
-            now = datetime.now(UTC)
-            media_buy = MediaBuy(
-                tenant_id=test_tenant,
-                media_buy_id=media_buy_id,
-                principal_id=test_principal,
-                order_name="Invalid Format Order",
-                advertiser_name="Test Advertiser",
-                budget=1000.0,
-                start_date=(now + timedelta(days=1)).date(),
-                end_date=(now + timedelta(days=7)).date(),
-                start_time=now + timedelta(days=1),
-                end_time=now + timedelta(days=7),
-                status="pending_approval",
-                raw_request={
-                    "brand": {"domain": "testbrand.com"},
-                    "start_time": (now + timedelta(days=1)).isoformat(),
-                    "end_time": (now + timedelta(days=7)).isoformat(),
-                    "packages": [
-                        {
-                            # package_id is internal, not in AdCP PackageRequest spec
-                            "product_id": product_id,
-                            "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
-                        }
-                    ],
-                },
-            )
-            session.add(media_buy)
-            session.commit()
-
-        # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
-
-        # Execute approval - should fail
-        success, message = execute_approved_media_buy(media_buy_id, test_tenant)
-
-        assert not success, "Approval should fail with missing agent_url"
-        # Typed FormatId reconstruction (#1172) rejects earlier with new wording;
-        # the missing field must still be NAMED in the message.
-        assert "agent_url" in message.lower()
-        assert "failed to reconstruct package" in message.lower()
-        assert "field is missing" in message.lower()
-
-        # Cleanup
-        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
-
-    def test_invalid_format_empty_agent_url(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
-        """❌ FormatReference dict with empty agent_url should fail validation."""
-        product_id = "prod_empty_agent_url"
-        media_buy_id = "mb_empty_agent_url"
-
-        with get_db_session() as session:
-            # Create product with empty agent_url
-            product = create_test_db_product(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                name="Empty Agent URL Product",
-                description="Product with empty agent_url",
-                format_ids=[
-                    {
-                        "agent_url": "",  # Empty string - should fail
-                        "id": "display_300x250",
-                    }
-                ],
-            )
-            session.add(product)
-
-            # Add pricing option
-            pricing = PricingOption(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                pricing_model="CPM",
-                rate=Decimal("10.00"),
-                currency="USD",
-                is_fixed=True,
-            )
-            session.add(pricing)
-
-            # Create media buy
-            now = datetime.now(UTC)
-            media_buy = MediaBuy(
-                tenant_id=test_tenant,
-                media_buy_id=media_buy_id,
-                principal_id=test_principal,
-                order_name="Empty Agent URL Order",
-                advertiser_name="Test Advertiser",
-                budget=1000.0,
-                start_date=(now + timedelta(days=1)).date(),
-                end_date=(now + timedelta(days=7)).date(),
-                start_time=now + timedelta(days=1),
-                end_time=now + timedelta(days=7),
-                status="pending_approval",
-                raw_request={
-                    "brand": {"domain": "testbrand.com"},
-                    "start_time": (now + timedelta(days=1)).isoformat(),
-                    "end_time": (now + timedelta(days=7)).isoformat(),
-                    "packages": [
-                        {
-                            # package_id is internal, not in AdCP PackageRequest spec
-                            "product_id": product_id,
-                            "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
-                        }
-                    ],
-                },
-            )
-            session.add(media_buy)
-            session.commit()
-
-        # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
-
-        # Execute approval - should fail
-        success, message = execute_approved_media_buy(media_buy_id, test_tenant)
-
-        assert not success, "Approval should fail with empty agent_url"
-        assert "agent_url" in message.lower()
-
-        # Cleanup
-        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
-
     def test_invalid_agent_url_not_http(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """❌ FormatReference with non-HTTP(S) agent_url should fail validation."""
         product_id = "prod_invalid_url"
@@ -495,83 +339,47 @@ class TestFormatConversionApproval:
         # Cleanup
         _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
 
-    def test_invalid_format_missing_format_id(
-        self, test_tenant, test_principal, test_currency_limit, test_property_tag
-    ):
-        """❌ FormatReference dict missing format_id/id should fail validation."""
-        product_id = "prod_no_format_id"
-        media_buy_id = "mb_no_format_id"
+    @pytest.mark.parametrize(
+        "invalid_format",
+        [
+            # missing agent_url
+            {"id": "display_300x250"},
+            # empty agent_url (AnyUrl rejects "")
+            {"agent_url": "", "id": "display_300x250"},
+            # missing id
+            {"agent_url": "https://creatives.example.com"},
+            # neither id nor format_id — wrong field entirely
+            {"agent_url": "https://creatives.example.com", "name": "Display Ad"},
+        ],
+        ids=["missing-agent-url", "empty-agent-url", "missing-id", "wrong-field"],
+    )
+    def test_invalid_format_dict_rejected_at_write_boundary(self, integration_db, invalid_format):
+        """Invalid format dicts are rejected at the typed column's write boundary (#1172).
 
-        with get_db_session() as session:
-            # Create product with missing format_id
-            product = create_test_db_product(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                name="No Format ID Product",
-                description="Product with missing format_id",
-                format_ids=[
-                    {
-                        "agent_url": "https://creatives.example.com",
-                        # Missing format_id/id - should fail
-                    }
-                ],
-            )
-            session.add(product)
+        These cases previously seeded invalid rows and asserted that
+        execute_approved_media_buy failed gracefully downstream. Since
+        JSONType(model=FormatId) validates raw dicts at bind, the invalid row
+        can never be created through the ORM — rejection moved from the
+        conversion logic to the write boundary, and the typed read path can
+        never see an invalid dict.
+        """
+        from pydantic import ValidationError
+        from sqlalchemy.exc import StatementError
 
-            # Add pricing option
-            pricing = PricingOption(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                pricing_model="CPM",
-                rate=Decimal("10.00"),
-                currency="USD",
-                is_fixed=True,
-            )
-            session.add(pricing)
+        from tests.factories import ProductFactory, TenantFactory
+        from tests.harness._base import BareIntegrationEnv
 
-            # Create media buy
-            now = datetime.now(UTC)
-            media_buy = MediaBuy(
-                tenant_id=test_tenant,
-                media_buy_id=media_buy_id,
-                principal_id=test_principal,
-                order_name="No Format ID Order",
-                advertiser_name="Test Advertiser",
-                budget=1000.0,
-                start_date=(now + timedelta(days=1)).date(),
-                end_date=(now + timedelta(days=7)).date(),
-                start_time=now + timedelta(days=1),
-                end_time=now + timedelta(days=7),
-                status="pending_approval",
-                raw_request={
-                    "brand": {"domain": "testbrand.com"},
-                    "start_time": (now + timedelta(days=1)).isoformat(),
-                    "end_time": (now + timedelta(days=7)).isoformat(),
-                    "packages": [
-                        {
-                            # package_id is internal, not in AdCP PackageRequest spec
-                            "product_id": product_id,
-                            "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
-                        }
-                    ],
-                },
-            )
-            session.add(media_buy)
-            session.commit()
-
-        # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
-
-        # Execute approval - should fail
-        success, message = execute_approved_media_buy(media_buy_id, test_tenant)
-
-        assert not success, "Approval should fail with missing format_id"
-        # Error message varies: "no valid formats" or "format validation failed"
-        assert "format" in message.lower() or "id" in message.lower()
-
-        # Cleanup
-        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
+        with BareIntegrationEnv() as env:
+            tenant = TenantFactory()
+            session = env.get_session()
+            with pytest.raises((ValidationError, StatementError)):
+                ProductFactory(
+                    tenant=tenant,
+                    product_id="prod_invalid_format_bind",
+                    format_ids=[invalid_format],
+                )
+                session.flush()
+            session.rollback()
 
     def test_valid_format_id_dict_conversion(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
         """✅ Valid FormatId dict (with 'id' key) converts successfully."""
@@ -644,81 +452,6 @@ class TestFormatConversionApproval:
 
         assert success, f"Approval should succeed: {message}"
         # Success returns (True, None), so no message to check
-
-        # Cleanup
-        _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)
-
-    def test_invalid_dict_missing_id(self, test_tenant, test_principal, test_currency_limit, test_property_tag):
-        """❌ Dict with neither 'id' nor 'format_id' should fail validation."""
-        product_id = "prod_missing_both"
-        media_buy_id = "mb_missing_both"
-
-        with get_db_session() as session:
-            # Create product with dict missing both id fields
-            product = create_test_db_product(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                name="Missing ID Product",
-                description="Product with dict missing both id fields",
-                format_ids=[
-                    {
-                        "agent_url": "https://creatives.example.com",
-                        "name": "Display Ad",  # Wrong field - not id or format_id
-                    }
-                ],
-            )
-            session.add(product)
-
-            # Add pricing option
-            pricing = PricingOption(
-                tenant_id=test_tenant,
-                product_id=product_id,
-                pricing_model="CPM",
-                rate=Decimal("10.00"),
-                currency="USD",
-                is_fixed=True,
-            )
-            session.add(pricing)
-
-            # Create media buy
-            now = datetime.now(UTC)
-            media_buy = MediaBuy(
-                tenant_id=test_tenant,
-                media_buy_id=media_buy_id,
-                principal_id=test_principal,
-                order_name="Missing Both IDs Order",
-                advertiser_name="Test Advertiser",
-                budget=1000.0,
-                start_date=(now + timedelta(days=1)).date(),
-                end_date=(now + timedelta(days=7)).date(),
-                start_time=now + timedelta(days=1),
-                end_time=now + timedelta(days=7),
-                status="pending_approval",
-                raw_request={
-                    "brand": {"domain": "testbrand.com"},
-                    "start_time": (now + timedelta(days=1)).isoformat(),
-                    "end_time": (now + timedelta(days=7)).isoformat(),
-                    "packages": [
-                        {
-                            # package_id is internal, not in AdCP PackageRequest spec
-                            "product_id": product_id,
-                            "budget": 1000.0,
-                            "pricing_option_id": "pricing_opt_1",
-                        }
-                    ],
-                },
-            )
-            session.add(media_buy)
-            session.commit()
-
-        # Create MediaPackage record (required by execute_approved_media_buy)
-        create_media_package(media_buy_id, "pkg_1", product_id, 1000.0, test_tenant)
-
-        # Execute approval - should fail
-        success, message = execute_approved_media_buy(media_buy_id, test_tenant)
-
-        assert not success, "Approval should fail with missing id/format_id"
-        assert "id" in message.lower()
 
         # Cleanup
         _cleanup_media_buy_and_product(test_tenant, media_buy_id, product_id)

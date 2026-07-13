@@ -441,7 +441,10 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     brand_domain = brand.domain
     brand_id = None
     if hasattr(brand, "brand_id") and brand.brand_id is not None:
-        brand_id = str(brand.brand_id)
+        # BrandId is a RootModel — unwrap .root (str() of the model yields its
+        # repr, "root='spark'", which poisoned the stored brand dict and the
+        # natural key; caught by the typed-column bind validation, #1172).
+        brand_id = str(brand.brand_id.root)
     operator = entry.operator
     sandbox = entry.sandbox
     return brand_domain, brand_id, operator, sandbox
