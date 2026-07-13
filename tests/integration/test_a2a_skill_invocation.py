@@ -508,7 +508,13 @@ class TestA2ASkillInvocation:
     async def test_multiple_skill_invocations(
         self, handler, sample_tenant, sample_principal, mock_identity, sample_products
     ):
-        """Test multiple skill invocations in a single message."""
+        """A message with multiple skills is REJECTED before any skill runs.
+
+        Aggregating divergent per-skill outcomes into one Task is incoherent once a
+        skill has real side effects (a submitted create_media_buy persists a workflow
+        while a sibling fails), so a multi-skill batch is rejected up front as a typed
+        UNSUPPORTED_FEATURE failed Task — no skill executes. Full-Task identity across
+        real per-skill child Tasks is tracked in #1614."""
         # Mock authentication token
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
@@ -553,26 +559,18 @@ class TestA2ASkillInvocation:
             )
             params = SendMessageRequest(message=message)
 
-            # Process the message - this will execute the real code path
+            # Process the message - this executes the real code path.
             result = await handler.on_message_send(params, context=ctx)
 
-            # Verify both skills were processed
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert len(result.metadata["skills_requested"]) == 2
-            assert "get_products" in result.metadata["skills_requested"]
-            assert "list_creative_formats" in result.metadata["skills_requested"]
-            assert len(result.artifacts) == 2
+            # Rejected up front → terminal failed Task with UNSUPPORTED_FEATURE, and no
+            # skill ran (a real get_products would have produced a product_catalog).
+            from tests.utils.a2a_helpers import extract_data_from_artifact
 
-            # Verify both artifacts have data (parts may have TextPart before DataPart)
-            for artifact in result.artifacts:
-                data_part_found = False
-                for part in artifact.parts:
-                    # a2a-sdk 1.0 protobuf: Part uses oneof 'content' with text/raw/url/data
-                    if part.HasField("data"):
-                        data_part_found = True
-                        break
-                assert data_part_found, "Expected DataPart in artifact.parts"
+            assert isinstance(result, Task)
+            assert result.status.state == TaskState.TASK_STATE_FAILED
+            envelope = extract_data_from_artifact(result.artifacts[0])
+            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE", envelope
+            assert "multiple skills" in envelope["errors"][0]["message"].lower()
 
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
     # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)

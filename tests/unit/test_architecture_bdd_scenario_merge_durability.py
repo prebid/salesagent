@@ -86,6 +86,41 @@ def _handmaintained_candidates_from_traceability():
     return candidates
 
 
+def _all_feature_scenarios(compile_bdd):
+    """``(feature file, @T- id tag)`` for EVERY scenario in the compiled features."""
+    out = []
+    for feature_path in sorted(FEATURES_DIR.glob("*.feature")):
+        feature = compile_bdd.parse_feature_file(feature_path.read_text())
+        for scenario in feature.scenarios:
+            sid = compile_bdd._extract_id_from_tags(scenario.tags)
+            if sid:
+                out.append((feature_path.name, f"@{sid}"))
+    return out
+
+
+def _traceability_scenarios():
+    """``(feature file, @T- id tag)`` for every row in the traceability inventory."""
+    data = yaml.safe_load(TRACEABILITY_PATH.read_text()) or {}
+    return [
+        (row["adcp_feature"], f"@{row['adcp_scenario_id']}")
+        for rows in (data.get("mappings") or {}).values()
+        for row in rows
+    ]
+
+
+def _untracked_scenarios(compile_bdd):
+    """Compiled scenarios with NO traceability row at all — completely SOURCE-LESS.
+
+    A scenario present in a feature file but absent from ``bdd-traceability.yaml`` has
+    no adcp-req (or hand-edit) provenance, so ``compile_bdd.py --merge`` classifies it
+    ``LEGACY-DELETE``. This closes the reviewer's blind spot: a scenario missing its
+    marker, registry entry, AND traceability row is invisible to any check that starts
+    from markers or from traceability — but it IS visible here, by comparing the
+    compiled feature files against the traceability inventory."""
+    tracked = set(_traceability_scenarios())
+    return [s for s in _all_feature_scenarios(compile_bdd) if s not in tracked]
+
+
 def _marked_scenarios_on_disk(compile_bdd):
     """Every scenario under ``features/`` carrying a hand-edit marker, keyed by
     its ``(feature file, @T- id tag)`` — the same key shape as the registry."""
@@ -140,30 +175,34 @@ def test_registry_is_bijection_with_marked_scenarios():
     )
 
 
-def test_traceability_candidates_are_marked_and_registered():
-    """Independent-source completeness — hand-maintained candidates enumerated
-    from ``bdd-traceability.yaml`` must each be registered (and, via the
-    bijection above, marked).
+def test_source_less_scenarios_are_marked_and_registered():
+    """Independent-source completeness — every SOURCE-LESS compiled scenario must be
+    registered (and, via the bijection above, marked).
 
-    The two checks above are marker-derived: they cannot see a scenario missing
-    BOTH a marker and a registry entry, because it is in neither the ``marked``
-    nor the ``registered`` set. This check derives candidates from the
-    *independent* traceability inventory (scenarios grounded in spec prose,
-    ``upstream_refs → *.mdx``, which have no adcp-req render and would be
-    LEGACY-DELETE'd unmarked), so a spec-grounded scenario that forgot its
-    ``@hand-edited`` marker surfaces here as an unregistered candidate.
+    The marker-derived checks above cannot see a scenario missing BOTH a marker and a
+    registry entry. This check derives candidates two independent ways so no orphan
+    hides:
 
-    ``candidates == registered`` here plus ``marked == registered`` above
-    transitively pin ``candidates == marked == registered``: a candidate missing
-    only its marker is registered-but-unmarked (caught by the bijection); a
-    candidate missing its registry entry is a new violation here.
+      * spec-grounded — a traceability row whose ``upstream_refs`` point at a spec
+        artifact (``*.mdx``/``*.yaml``/``*.json``/URL), which has no adcp-req render; and
+      * untracked — a compiled scenario with NO traceability row at all.
+
+    Both are ``LEGACY-DELETE`` risks, so the union must equal the registry. This closes
+    the reviewer's adversarial case: an unmarked scenario with no registry entry AND no
+    traceability row is invisible to marker- or traceability-only scans, but appears here
+    as an untracked candidate.
     """
+    compile_bdd = _load_compiler()
+    candidates = set(_handmaintained_candidates_from_traceability()) | set(_untracked_scenarios(compile_bdd))
+
     assert_violations_match_allowlist(
-        found=set(_handmaintained_candidates_from_traceability()),
+        found=candidates,
         allowlist=set(HAND_MAINTAINED_SCENARIOS),
         fix_hint=(
-            "A traceability scenario grounded in spec prose (upstream_refs → *.mdx) has no "
-            "adcp-req source, so compile_bdd.py --merge would LEGACY-DELETE it unless it carries an "
-            "@hand-edited / # HAND-EDITED marker AND is registered in HAND_MAINTAINED_SCENARIOS."
+            "A source-less scenario — grounded in a spec artifact (upstream_refs → *.mdx/*.yaml/"
+            "*.json) OR with no traceability row at all — would be LEGACY-DELETE'd by "
+            "compile_bdd.py --merge. It must carry an @hand-edited / # HAND-EDITED marker AND be "
+            "registered in HAND_MAINTAINED_SCENARIOS (or be given a proper adcp-req source + "
+            "traceability row)."
         ),
     )

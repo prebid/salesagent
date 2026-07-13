@@ -27,22 +27,54 @@ from tests.utils.a2a_helpers import make_test_a2a_identity
 _TEST_IDENTITY = make_test_a2a_identity()
 
 # ---------------------------------------------------------------------------
-# Every A2A skill in the production dispatch registry (adcp_a2a_server.py
-# ``_skill_handler_map``). Kept in bijection with production by
-# test_transport_inventory_matches_production_registry — a skill added to the
-# registry without a wire test here fails the build.
+# Explicit per-skill contract. Every registered skill MUST have an entry here
+# (asserted), and each entry is INDEPENDENTLY authored — NOT derived from the
+# registry — so the checks are not tautological: a new dispatch entry can't pass
+# without a human classifying it, and a skill routed to the wrong handler is
+# caught by the per-skill wire assertion.
+#   classification: "implemented" (must NOT return UNSUPPORTED_FEATURE) or
+#                   "unsupported" (must return a UNSUPPORTED_FEATURE failed Task)
+#   advertised:     whether the agent card advertises it (asserted for exact equality)
+#   params:         request params that reach the skill's terminal branch
 # ---------------------------------------------------------------------------
+SKILL_METADATA: dict[str, dict] = {
+    "get_adcp_capabilities": {"classification": "implemented", "advertised": True, "params": {}},
+    "get_products": {"classification": "implemented", "advertised": True, "params": {}},
+    "create_media_buy": {"classification": "implemented", "advertised": True, "params": {}},
+    "list_creative_formats": {"classification": "implemented", "advertised": True, "params": {}},
+    "list_accounts": {"classification": "implemented", "advertised": True, "params": {}},
+    "sync_accounts": {"classification": "implemented", "advertised": True, "params": {}},
+    "list_authorized_properties": {"classification": "implemented", "advertised": True, "params": {}},
+    "update_media_buy": {"classification": "implemented", "advertised": True, "params": {}},
+    "get_media_buys": {"classification": "implemented", "advertised": True, "params": {}},
+    "get_media_buy_delivery": {"classification": "implemented", "advertised": True, "params": {}},
+    "update_performance_index": {"classification": "implemented", "advertised": True, "params": {}},
+    "sync_creatives": {"classification": "implemented", "advertised": True, "params": {}},
+    "list_creatives": {"classification": "implemented", "advertised": True, "params": {}},
+    "approve_creative": {"classification": "unsupported", "advertised": True, "params": {}},
+    "get_media_buy_status": {"classification": "unsupported", "advertised": True, "params": {}},
+    "optimize_media_buy": {"classification": "unsupported", "advertised": True, "params": {}},
+    "create_creative": {
+        "classification": "unsupported",
+        "advertised": False,
+        "params": {"format_id": "display_300x250", "content_uri": "https://ex/c.jpg", "name": "c"},
+    },
+    "assign_creative": {
+        "classification": "unsupported",
+        "advertised": False,
+        "params": {"media_buy_id": "mb-1", "package_id": "pkg-1", "creative_id": "cr-1"},
+    },
+}
+
 ALL_SKILLS = sorted(AdCPRequestHandler()._skill_handler_map().keys())
+IMPLEMENTED_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["classification"] == "implemented")
+UNSUPPORTED_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["classification"] == "unsupported")
+ADVERTISED_SKILLS = {s for s, m in SKILL_METADATA.items() if m["advertised"]}
 
 # Discovery (no-auth) skills come from the production frozenset so this never drifts.
 DISCOVERY_SKILLS = sorted(_PROD_DISCOVERY_SKILLS)
 
 AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if s not in DISCOVERY_SKILLS]
-
-# Registered skills deliberately NOT advertised on the agent card: unimplemented
-# creative stubs (validate params, then return UNSUPPORTED_FEATURE). The agent
-# should not advertise capabilities it does not offer.
-UNADVERTISED_SKILLS = {"create_creative", "assign_creative"}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -457,24 +489,11 @@ class TestA2AStubHandlers:
     a structured, recoverable AdCP error rather than a transport exception.
     """
 
-    # Every registered stub that terminates in AdCPCapabilityNotSupportedError,
-    # mapped to params that reach that terminal branch. create_creative and
-    # assign_creative validate required params first, so empty params would stop
-    # at VALIDATION_ERROR — supply valid params so the wire assertion actually
-    # exercises the unsupported branch (Finding: reach each stub's terminal branch).
-    UNSUPPORTED_SKILLS = {
-        "approve_creative": {},
-        "get_media_buy_status": {},
-        "optimize_media_buy": {},
-        "create_creative": {"format_id": "display_300x250", "content_uri": "https://ex/c.jpg", "name": "c"},
-        "assign_creative": {"media_buy_id": "mb-1", "package_id": "pkg-1", "creative_id": "cr-1"},
-    }
-
-    @pytest.mark.parametrize("skill", sorted(UNSUPPORTED_SKILLS))
+    @pytest.mark.parametrize("skill", UNSUPPORTED_SKILLS)
     @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     def test_unsupported_skill_returns_failed_task_not_transport_error(self, mock_resolve, client, auth_headers, skill):
-        """Each unimplemented skill returns a failed Task with UNSUPPORTED_FEATURE, not JSON-RPC."""
-        payload = _build_jsonrpc(skill, self.UNSUPPORTED_SKILLS[skill])
+        """Each unsupported skill returns a failed Task with UNSUPPORTED_FEATURE, not JSON-RPC."""
+        payload = _build_jsonrpc(skill, SKILL_METADATA[skill]["params"])
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
 
@@ -486,27 +505,43 @@ class TestA2AStubHandlers:
         )
         assert data.get("adcp_error", {}).get("recovery") == "correctable", f"'{skill}': {data}"
 
+    @pytest.mark.parametrize("skill", IMPLEMENTED_SKILLS)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
+    def test_implemented_skill_does_not_return_unsupported_feature(self, mock_resolve, client, auth_headers, skill):
+        """A skill classified 'implemented' must NOT surface UNSUPPORTED_FEATURE.
 
-class TestA2ARegistryBijection:
-    """The transport suite's skill inventory must equal the production registry."""
+        This is the non-tautological half: a skill mis-routed to an unsupported
+        handler (the reviewer's mutation) would return a UNSUPPORTED_FEATURE failed
+        Task and fail here, even without a DB (empty params yield VALIDATION_ERROR or
+        a JSON-RPC error, never UNSUPPORTED_FEATURE, for a genuinely-implemented skill).
+        """
+        payload = _build_jsonrpc(skill, {})
+        response = client.post("/a2a", json=payload, headers=auth_headers)
+        body = response.json()
+        if "result" in body:
+            data = _extract_artifact_data(body["result"])
+            assert data.get("adcp_error", {}).get("code") != "UNSUPPORTED_FEATURE", (
+                f"'{skill}' is classified implemented but routed to an unsupported handler: {data}"
+            )
 
-    def test_transport_inventory_matches_production_registry(self):
-        """No registered skill may lack a wire test, and no test may name a ghost skill.
 
-        ``ALL_SKILLS`` is derived from ``_skill_handler_map`` so dispatch tests cover
-        every skill; this pins the inverse — every registered skill is classified as
-        either an implemented dispatch target or a known UNSUPPORTED stub. A skill
-        added to production without a home here fails the build (Finding: the oracle
-        omitted 5 of 18 registered skills).
+class TestA2ARegistryContract:
+    """Explicit skill metadata ↔ production registry & agent card (non-tautological)."""
+
+    def test_metadata_covers_exactly_the_production_registry(self):
+        """SKILL_METADATA must be a bijection with the production registry.
+
+        Both sides are independently authored (the metadata is NOT derived from the
+        registry), so a skill added to ``_skill_handler_map`` without a metadata entry
+        — or a stale metadata entry — fails here. Combined with the per-skill wire
+        assertions (implemented ≠ UNSUPPORTED_FEATURE, unsupported = UNSUPPORTED_FEATURE),
+        a mis-classified or mis-routed skill can no longer pass silently.
         """
         registry = set(AdCPRequestHandler()._skill_handler_map())
-        unsupported = set(TestA2AStubHandlers.UNSUPPORTED_SKILLS)
-        implemented = registry - unsupported
-
-        assert set(ALL_SKILLS) == registry, "ALL_SKILLS drifted from the production registry"
-        assert unsupported <= registry, f"UNSUPPORTED_SKILLS names non-registered skills: {unsupported - registry}"
-        # Every registered skill is accounted for: implemented (dispatch-tested) or an unsupported stub.
-        assert implemented | unsupported == registry
+        assert set(SKILL_METADATA) == registry, (
+            f"metadata↔registry drift — missing: {registry - set(SKILL_METADATA)}, "
+            f"stale: {set(SKILL_METADATA) - registry}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -551,23 +586,23 @@ class TestA2AAllSkillsDispatch:
 class TestAgentCardContract:
     """Verify agent card advertises all skills and has required structure."""
 
-    def test_agent_card_skills_match_dispatch(self, client):
-        """Agent card advertises every dispatchable skill except the deliberate stubs.
+    def test_agent_card_advertises_exactly_the_metadata_advertised_set(self, client):
+        """The agent card's advertised skills must EXACTLY equal ``ADVERTISED_SKILLS``.
 
-        Every registered skill must be advertised EXCEPT the unimplemented creative
-        stubs in ``UNADVERTISED_SKILLS`` (the agent should not advertise capabilities
-        it doesn't offer). Pinning the exact exclusion catches both a skill that
-        silently stops being advertised and a stub that gets advertised by accident.
+        Exact set equality (not ``⊇``) catches both a dispatchable skill that stops
+        being advertised AND an arbitrary extra skill advertised by accident (the
+        reviewer's mutation), because the expected set is the independently-authored
+        metadata, not something derived from the card itself.
         """
         response = client.get("/.well-known/agent-card.json")
         card = response.json()
         advertised_skills = {s["name"] for s in card.get("skills", [])}
 
-        expected = set(ALL_SKILLS) - UNADVERTISED_SKILLS
-        missing = expected - advertised_skills
-        assert not missing, f"dispatchable skills not advertised in agent card: {sorted(missing)}"
-        wrongly_advertised = UNADVERTISED_SKILLS & advertised_skills
-        assert not wrongly_advertised, f"unimplemented stubs should not be advertised: {sorted(wrongly_advertised)}"
+        assert advertised_skills == ADVERTISED_SKILLS, (
+            f"agent card advertised set drifted from SKILL_METADATA — "
+            f"unexpected: {sorted(advertised_skills - ADVERTISED_SKILLS)}, "
+            f"missing: {sorted(ADVERTISED_SKILLS - advertised_skills)}"
+        )
 
     def test_agent_card_url_no_trailing_slash(self, client):
         """Agent card URL must not have trailing slash (causes redirects)."""

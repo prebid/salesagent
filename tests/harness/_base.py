@@ -281,10 +281,23 @@ def _read_failed_a2a_task(
 
     if expect_processing_error:
         envelope = extract_processing_error_envelope(task)
-    elif task.artifacts:
-        envelope = extract_data_from_artifact(task.artifacts[0])
     else:
-        return None, AdCPError(f"A2A task failed: {task.status}")
+        # Scan EVERY artifact for the structured error envelope — not just
+        # artifacts[0]. A task may carry sibling artifacts in any order, so a
+        # first-artifact-only read is order-dependent and can surface a non-error
+        # sibling. Prefer the first artifact whose DataPart is a two-layer envelope
+        # (``adcp_error``/``errors``); fall back to the first DataPart, then to a
+        # bare AdCPError.
+        envelope = None
+        for artifact in task.artifacts:
+            data = extract_data_from_artifact(artifact)
+            if isinstance(data, dict) and ("adcp_error" in data or "errors" in data):
+                envelope = data
+                break
+            if envelope is None and data:
+                envelope = data
+        if envelope is None:
+            return None, AdCPError(f"A2A task failed: {task.status}")
     reconstructed = _envelope_to_adcp_error(envelope, fallback_message=fallback_message)
     if reconstructed is not None:
         return envelope, reconstructed

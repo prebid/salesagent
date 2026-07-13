@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.types import (
     Artifact,
+    InternalError,
     InvalidRequestError,
     Part,
     SendMessageRequest,
@@ -61,50 +62,32 @@ def _make_handler() -> tuple[AdCPRequestHandler, object]:
 
 
 @pytest.mark.asyncio
-async def test_untyped_processing_failure_returns_failed_task_with_internal_error_envelope():
-    """An unexpected exception during message processing returns a failed Task.
+async def test_untyped_crash_raises_sanitized_internal_error_without_leaking_secrets():
+    """An untyped internal crash → sanitized JSON-RPC InternalError; the raw exception
+    text (which may carry credentials/SQL/hostnames) never reaches the client.
 
-    The injected ``RuntimeError`` is an UNTYPED internal crash. The AdCP
-    3.1.0-beta.3 transport-errors.mdx "Layer Separation" table classifies an
-    "internal crash" under the TRANSPORT layer, so routing it to a failed Task
-    (rather than a JSON-RPC error) is the project's deliberate uniform-envelope
-    choice — not a mandatory spec rule (production carries this distinction in
-    the ``on_message_send`` except-block comment). What this test pins is the
-    normalization + wire shape of that deliberate choice: base ``AdCPError``
-    (internal INTERNAL_ERROR → wire ``SERVICE_UNAVAILABLE`` via
-    ``ERROR_CODE_MAPPING``), the two-layer envelope on the ``processing_error``
-    artifact DataPart, and a RETURNED failed Task — never a raised JSON-RPC
-    ``InternalError``. (Typed application failures, by contrast, are spec-
-    mandated to ride in the task body — see the other tests here.)
+    Per transport-errors.mdx an internal crash is a TRANSPORT-layer error, and the
+    error-security requirements forbid exposing internals. So untyped exceptions are
+    logged server-side and surfaced as a generic InternalError — only TYPED
+    ``AdCPError`` (controlled messages) become failed Tasks. Uses a secret-shaped
+    message to pin that it is not echoed back.
     """
     handler, ctx = _make_handler()
     params = make_nl_send_message_request("Show me available products in the catalog")
+    secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
-        with patch(
-            "src.a2a_server.adcp_a2a_server.core_get_products_tool",
-            side_effect=RuntimeError("adapter exploded"),
-        ):
-            result = await handler.on_message_send(params, context=ctx)
+        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool", side_effect=RuntimeError(secret)):
+            with pytest.raises(InternalError) as exc_info:
+                await handler.on_message_send(params, context=ctx)
 
-    assert isinstance(result, Task), f"expected a returned Task, got {type(result).__name__}"
-    assert result.status.state == TaskState.TASK_STATE_FAILED, (
-        f"expected TASK_STATE_FAILED, got {result.status.state!r}"
-    )
-    envelope = extract_processing_error_envelope(result)
-    # Untyped exceptions normalize to base AdCPError (INTERNAL_ERROR / terminal);
-    # on the wire the code lands in STANDARD_ERROR_CODES as SERVICE_UNAVAILABLE.
-    # `terminal` is the deliberate base-class divergence from that code's canonical
-    # `transient` recovery (a genuine bug won't heal on retry) — see the
-    # `_default_recovery` note in src/core/exceptions.py.
-    assert_envelope_shape(
-        envelope,
-        "SERVICE_UNAVAILABLE",
-        recovery="terminal",
-        message_substr="adapter exploded",
-    )
-    # The failed Task is also the stored lifecycle record.
-    assert handler.tasks[result.id].status.state == TaskState.TASK_STATE_FAILED
+    err = exc_info.value
+    client_facing = f"{err.message} {json.dumps(err.data)}"
+    for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
+        assert leak not in client_facing, f"raw exception leaked to client ({leak!r}): {client_facing}"
+    # Still a structured error with a safe, generic wire code + message.
+    assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+    assert "internal error" in err.message.lower()
 
 
 @pytest.mark.asyncio
@@ -162,69 +145,56 @@ async def test_typed_adcp_error_keeps_its_own_wire_code_on_failed_task():
 
 
 @pytest.mark.asyncio
-async def test_auth_extraction_failure_returns_failed_task_before_identity_resolution():
-    """Failure before identity resolution still returns the failed Task envelope.
+async def test_auth_extraction_failure_raises_sanitized_internal_error_no_nameerror():
+    """A crash before identity resolution raises a sanitized InternalError, no NameError.
 
-    This pins the ``identity = None`` hoist: auth-token extraction happens before
-    identity resolution, so the outer handler must not raise ``NameError`` while
-    recording/logging the original failure. It also pins the immediate-terminal
-    no-webhook rule: this failed Task is returned synchronously, so no protocol
-    webhook is emitted (a2a-guide.mdx terminal-state rule).
+    Pins the ``identity = None`` hoist: auth-token extraction happens before identity
+    resolution, so the untyped-crash handler must read ``identity`` (None) without a
+    ``NameError`` while logging. The crash is untyped → sanitized JSON-RPC
+    InternalError (not a failed Task), the raw text is not leaked, and no webhook.
     """
     handler = AdCPRequestHandler()
-    handler._get_auth_token = MagicMock(side_effect=RuntimeError("auth context unavailable"))
+    handler._get_auth_token = MagicMock(side_effect=RuntimeError("auth context unavailable at db.internal"))
     handler._send_protocol_webhook = AsyncMock()
     ctx = make_a2a_context(headers={"host": "test.example.com"})
     params = make_nl_send_message_request("Show me available products in the catalog")
 
-    result = await handler.on_message_send(params, context=ctx)
+    with pytest.raises(InternalError) as exc_info:
+        await handler.on_message_send(params, context=ctx)
 
-    assert isinstance(result, Task), f"expected a returned Task, got {type(result).__name__}"
-    assert result.status.state == TaskState.TASK_STATE_FAILED
-    assert_envelope_shape(
-        extract_processing_error_envelope(result),
-        "SERVICE_UNAVAILABLE",
-        recovery="terminal",
-        message_substr="auth context unavailable",
-    )
-    # Immediate terminal response → no webhook (the caller already has the Task).
+    err = exc_info.value
+    client_facing = f"{err.message} {json.dumps(err.data)}"
+    assert "db.internal" not in client_facing and "auth context unavailable" not in client_facing, client_facing
+    assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
     handler._send_protocol_webhook.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_all_skills_failed_returns_failed_task_with_per_skill_artifacts_no_webhook():
-    """All skills fail → immediate failed Task carrying each skill's envelope, no webhook.
+async def test_multi_skill_message_rejected_before_any_side_effect():
+    """A message carrying >1 skill is rejected up front — no skill runs, no side effects.
 
-    Each failed skill contributes its OWN ``error_result`` artifact (two-layer
-    envelope) to the Task body, so both reasons are preserved without a joined
-    webhook string. Because the failed Task is returned synchronously (immediate
-    terminal), no protocol webhook is emitted — a2a-guide.mdx terminal-state rule.
+    Aggregating divergent per-skill outcomes into one Task is incoherent when a skill
+    has real side effects (a submitted create_media_buy persists a workflow while a
+    sibling fails). So a multi-skill batch is rejected as a typed application failure
+    (UNSUPPORTED_FEATURE) BEFORE dispatch — ``_handle_explicit_skill`` is never
+    called, and the immediate terminal failure sends no webhook.
     """
     handler, ctx = _make_handler()
     handler._send_protocol_webhook = AsyncMock()
-    handler._handle_explicit_skill = AsyncMock(
-        side_effect=[
-            AdCPValidationError("first skill exploded"),
-            AdCPValidationError("second skill exploded"),
-        ]
-    )
-    message = create_a2a_message_with_skill("get_products", {})
-    message.parts.append(create_a2a_message_with_skill("list_creatives", {}).parts[0])
+    handler._handle_explicit_skill = AsyncMock()  # must NOT be called
+    message = create_a2a_message_with_skill("create_media_buy", {})
+    message.parts.append(create_a2a_message_with_skill("approve_creative", {}).parts[0])
     params = SendMessageRequest(message=message)
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
         result = await handler.on_message_send(params, context=ctx)
 
-    assert isinstance(result, Task), f"expected a returned Task, got {type(result).__name__}"
+    assert isinstance(result, Task)
     assert result.status.state == TaskState.TASK_STATE_FAILED
-
-    # Both failures ride in the Task body as separate error artifacts — the
-    # per-skill reasons are preserved without any joined webhook string.
-    assert len(result.artifacts) == 2, f"expected one error artifact per failed skill, got {len(result.artifacts)}"
-    messages = [_first_error_message(a) for a in result.artifacts]
-    assert messages == ["first skill exploded", "second skill exploded"], messages
-
-    # Immediate terminal response → no webhook.
+    envelope = extract_processing_error_envelope(result)
+    assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE", envelope
+    assert "multiple skills" in envelope["errors"][0]["message"].lower()
+    handler._handle_explicit_skill.assert_not_awaited()  # zero side effects
     handler._send_protocol_webhook.assert_not_awaited()
 
 
@@ -247,47 +217,6 @@ async def test_immediate_completed_task_sends_no_webhook():
         result = await handler.on_message_send(params, context=ctx)
 
     assert result.status.state == TaskState.TASK_STATE_COMPLETED
-    handler._send_protocol_webhook.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("order", ["submitted_first", "failed_first"])
-async def test_mixed_submitted_and_failed_preserves_failure_envelope(order):
-    """A mixed submitted+failed batch is terminal-failed with EVERY artifact preserved.
-
-    Regression for the early-return bug: the submitted scan used to short-circuit
-    before artifacts were built, returning SUBMITTED with zero artifacts and
-    silently dropping the failed skill's UNSUPPORTED_FEATURE envelope. Now status
-    is decided by precedence (failed > submitted > completed) AFTER all artifacts
-    are built, so both invocation orders preserve the failure and the pending
-    result. Immediate terminal failure → no webhook.
-    """
-    handler, ctx = _make_handler()
-    handler._send_protocol_webhook = AsyncMock()
-    submitted = {"media_buy_id": "mb-1", "status": "submitted"}
-    failure = AdCPCapabilityNotSupportedError(message="approve_creative skill not yet implemented")
-
-    if order == "submitted_first":
-        skills = [("create_media_buy", {}), ("approve_creative", {})]
-        handler._handle_explicit_skill = AsyncMock(side_effect=[submitted, failure])
-    else:
-        skills = [("approve_creative", {}), ("create_media_buy", {})]
-        handler._handle_explicit_skill = AsyncMock(side_effect=[failure, submitted])
-
-    message = create_a2a_message_with_skill(*skills[0])
-    message.parts.append(create_a2a_message_with_skill(*skills[1]).parts[0])
-    params = SendMessageRequest(message=message)
-
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
-        result = await handler.on_message_send(params, context=ctx)
-
-    # Failure precedence → terminal FAILED, but every result is preserved as an artifact.
-    assert result.status.state == TaskState.TASK_STATE_FAILED
-    assert len(result.artifacts) == 2, f"both results must be preserved, got {len(result.artifacts)} artifacts"
-    all_data = [extract_data_from_artifact(a) for a in result.artifacts]
-    codes = [d.get("adcp_error", {}).get("code") for d in all_data]
-    assert "UNSUPPORTED_FEATURE" in codes, f"failure envelope dropped: {all_data}"
-    assert any(d.get("status") == "submitted" for d in all_data), f"submitted result dropped: {all_data}"
     handler._send_protocol_webhook.assert_not_awaited()
 
 

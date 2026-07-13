@@ -146,39 +146,31 @@ DISCOVERY_SKILLS = frozenset(
 
 
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
-    """Canonical InternalError shape for non-Task A2A boundary failures.
+    """Canonical JSON-RPC ``InternalError`` for A2A boundary failures — SANITIZED.
 
-    Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
-    dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
-    surface those as a two-layer envelope on a failed Task's DataPart —
-    including the top-level ``on_message_send`` fallthrough, which RETURNS a
-    failed Task carrying the envelope artifact rather than raising this helper.
-    For typed application failures that routing is what AdCP 3.1.x transport
-    rules (building/operating/transport-errors.mdx "Layer Separation") mandate;
-    untyped internal crashes are only SHOULD-level there (the table lists them
-    under the transport layer), so routing their normalized envelope to the
-    failed-Task body too is a deliberate choice (see the outer handler). JSON-RPC
-    errors are reserved for genuine transport faults (``A2AError``) and methods
-    with no Task to carry the envelope.
+    Security (transport-errors.mdx "Error Message Security"): raw exception text may
+    contain credentials, connection strings, SQL, hostnames, filesystem paths, or
+    upstream responses and MUST NOT reach the client. So:
 
-    Use this helper only at ``InternalError(...)`` raise sites that have no
-    async Task to attach an envelope artifact to. The canonical prefix is
-    ``"{operation} failed: {exc}"`` so storyboard runners can parse the
-    failure uniformly.
+    - A TYPED ``AdCPError`` carries a controlled, client-safe ``message`` — it passes
+      through with its own wire code and text.
+    - Any UNTYPED exception is replaced with a generic message and a base
+      ``SERVICE_UNAVAILABLE`` envelope; the raw ``str(exc)`` is NEVER placed on the
+      wire (callers log it server-side via ``record_boundary_error``).
 
-    The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
-    this helper — they have no async Task to carry a DataPart, so the two-layer
-    envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
-    / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
-    SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
-    a non-``A2AError`` (e.g. ``AdCPAdapterError``) would hit the dispatcher's
-    ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
-    envelope.
+    ``InternalError`` stays an ``A2AError`` so the SDK's ``JsonRpcDispatcher``
+    serializes it as a structured JSON-RPC error (the four
+    ``on_*_task_push_notification_config`` methods, and the untyped-crash branch of
+    ``on_message_send``, all raise through here). The two-layer envelope rides in the
+    error's ``data`` field (``error.data["adcp_error"]`` / ``error.data["errors"][0]``).
     """
-    return InternalError(
-        message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
-    )
+    if isinstance(exc, AdCPError):
+        adcp_error: AdCPError = exc
+        message = f"{operation} failed: {exc.message}"
+    else:
+        adcp_error = AdCPError("An internal error occurred while processing the request.")
+        message = f"Internal error during {operation}"
+    return InternalError(message=message, data=build_two_layer_error_envelope(adcp_error))
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -207,6 +199,23 @@ class AdCPRequestHandler(RequestHandler):
         """
 
         return build_two_layer_error_envelope(normalize_to_adcp_error(exc))
+
+    @staticmethod
+    def _failed_task_artifact(exc: Exception) -> "Artifact":
+        """The ``processing_error`` artifact for a failed Task.
+
+        Per the A2A binding for errors, a failed artifact carries BOTH a
+        human-readable TextPart and the authoritative structured DataPart (the
+        two-layer AdCP envelope) — not a DataPart alone. The strict reader accepts
+        this shape (one DataPart, optional TextPart)."""
+        envelope = AdCPRequestHandler._build_error_envelope(exc)
+        errors = envelope.get("errors") or []
+        text = errors[0].get("message") if errors else "Request failed."
+        return Artifact(
+            artifact_id="error_1",
+            name="processing_error",
+            parts=[Part(text=text), Part(data=_dict_to_value(envelope))],
+        )
 
     @staticmethod
     def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
@@ -672,7 +681,23 @@ class AdCPRequestHandler(RequestHandler):
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
-                # Process explicit skill invocations
+                # Reject a multi-skill batch BEFORE executing ANY skill. Aggregating
+                # divergent per-skill outcomes into one Task is incoherent when a skill
+                # has real side effects: e.g. create_media_buy persists a pending
+                # (submitted) workflow while a sibling fails, which would terminalize
+                # the Task as failed even though the accepted work keeps running. Until
+                # per-skill child Tasks exist (tracked as a follow-up), one skill per
+                # message is the contract. Raised as a typed application error →
+                # failed Task (UNSUPPORTED_FEATURE); no skill runs, so no side effects.
+                if len(skill_invocations) > 1:
+                    raise AdCPCapabilityNotSupportedError(
+                        message=(
+                            "Batching multiple skills in one message is not supported "
+                            f"({[inv['skill'] for inv in skill_invocations]}); send one skill per message."
+                        )
+                    )
+
+                # Process the single explicit skill invocation.
                 results = []
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
@@ -746,7 +771,9 @@ class AdCPRequestHandler(RequestHandler):
                         )
 
                     # Generate human-readable text from response __str__()
-                    # Per A2A spec, use TextPart + DataPart pattern (not description field)
+                    # Per A2A spec, use TextPart + DataPart pattern (not description field).
+                    # A FAILED artifact carries the error message as its TextPart (A2A
+                    # error binding: TextPart + DataPart), never a DataPart alone.
                     text_message = None
                     if res["success"] and isinstance(artifact_data, dict):
                         try:
@@ -755,6 +782,9 @@ class AdCPRequestHandler(RequestHandler):
                                 text_message = str(response_obj)
                         except Exception:
                             logger.debug("Response reconstruction failed, skipping text part", exc_info=True)
+                    elif not res["success"] and isinstance(artifact_data, dict):
+                        errors = artifact_data.get("errors") or []
+                        text_message = errors[0].get("message") if errors else "Skill invocation failed."
 
                     # Build parts list per A2A spec: optional text Part + required data Part
                     parts = []
@@ -1006,11 +1036,26 @@ class AdCPRequestHandler(RequestHandler):
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
+        except AdCPError as e:
+            # TYPED application/task failure → failed Task carrying the two-layer
+            # envelope (transport-errors.mdx "Layer Separation"). The AdCPError
+            # message is CONTROLLED (e.g. "Unknown skill 'x'", "brief must not be
+            # empty"), so it is client-safe to surface. Immediate terminal response
+            # returned synchronously below → no webhook (a2a-guide.mdx). Falls through
+            # to the shared store-and-return.
+            del task.artifacts[:]
+            task.artifacts.append(self._failed_task_artifact(e))
+            self._mark_task_failed(task)
         except Exception as e:
-            # Use identity resolved at transport boundary (if available)
+            # UNTYPED internal crash. The spec table classifies an internal crash as
+            # a TRANSPORT-layer error, and the security requirements forbid exposing
+            # raw internals (credentials, SQL, hostnames, paths, upstream responses).
+            # So we log the raw exception SERVER-SIDE only (record_boundary_error) and
+            # raise a SANITIZED JSON-RPC InternalError whose client-facing envelope
+            # carries NO raw exception text. Never build a failed-Task envelope from
+            # ``str(exc)`` here — that is the leak fixed by this branch.
             err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
             err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
             record_boundary_error(
                 "a2a",
                 "message_processing",
@@ -1018,41 +1063,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=err_tenant_id,
                 principal_id=err_principal_id,
             )
-
-            # Attach error to task artifacts as a spec-compliant two-layer
-            # envelope (same shape as failed-skill DataParts) so storyboard
-            # runners can ``JSON.parse`` the artifact uniformly regardless of
-            # which failure path produced it. ``_build_error_envelope``
-            # normalizes untyped exceptions to base AdCPError (wire code
-            # SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING) and passes
-            # through a typed AdCPError's own wire code.
-            del task.artifacts[:]
-            task.artifacts.append(
-                Artifact(
-                    artifact_id="error_1",
-                    name="processing_error",
-                    parts=[Part(data=_dict_to_value(self._build_error_envelope(e)))],
-                )
-            )
-
-            self._mark_task_failed(task)
-
-            # Per AdCP 3.1.x transport rules (spec prose:
-            # building/operating/transport-errors.mdx "Layer Separation" and the
-            # two-layer error-handling model), TYPED application/task failures
-            # (AdCPError) belong in the task response body as a failed Task
-            # carrying the envelope artifact; JSON-RPC errors are reserved for
-            # genuine transport faults (A2AError, re-raised above). For UNTYPED
-            # internal crashes the table lists "internal crash" under the
-            # transport layer and the two-layer rule is SHOULD-level — routing
-            # them to the failed-Task body as well is a deliberate choice here
-            # (uniform envelope for storyboard runners; observability preserved
-            # via record_boundary_error above), not a spec mandate. This is an
-            # immediate terminal response returned synchronously below, so no
-            # webhook is emitted (a2a-guide.mdx terminal-state rule); we fall
-            # through to the shared store-and-return — never raise InternalError
-            # here. Cross-transport execution of the same BDD scenario is tracked
-            # in #1574 once the transport-aware harness from #1430 is available.
+            raise _internal_error_for("message processing", e) from e
 
         self.tasks[task_id] = task
         return task

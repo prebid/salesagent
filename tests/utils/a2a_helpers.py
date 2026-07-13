@@ -65,16 +65,21 @@ def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
 
     ``on_message_send``'s outer error handler attaches the envelope built by
     ``AdCPRequestHandler._build_error_envelope`` to the failed Task as a
-    single ``processing_error`` artifact with one DataPart (AdCP 3.1.x
-    transport-errors.mdx "Layer Separation": application failures ride in
-    the task body, not JSON-RPC errors). Asserts that artifact contract,
-    then delegates the decode to ``extract_data_from_artifact``.
+    ``processing_error`` artifact. Per the A2A error binding, that artifact carries
+    a human-readable TextPart PLUS the authoritative structured DataPart (the
+    two-layer envelope). Asserts that shape (exactly one DataPart and one TextPart),
+    then delegates the decode to ``extract_data_from_artifact`` (which selects the
+    DataPart).
     """
     assert task.artifacts, "failed Task must carry the error envelope artifact"
     artifact = task.artifacts[0]
     assert artifact.name == "processing_error", f"expected processing_error artifact, got {artifact.name!r}"
-    assert len(artifact.parts) == 1, f"envelope artifact must be a single DataPart, got {len(artifact.parts)} parts"
-    assert artifact.parts[0].HasField("data"), "envelope artifact part must be a DataPart"
+    data_parts = [p for p in artifact.parts if p.HasField("data")]
+    text_parts = [p for p in artifact.parts if p.HasField("text")]
+    assert len(data_parts) == 1, f"error artifact must carry exactly one authoritative DataPart, got {len(data_parts)}"
+    assert len(text_parts) == 1, (
+        f"error artifact must carry a human-readable TextPart (A2A error binding), got {len(text_parts)}"
+    )
     return extract_data_from_artifact(artifact)
 
 
