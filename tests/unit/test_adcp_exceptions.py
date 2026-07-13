@@ -682,6 +682,20 @@ class TestErrorCodeWireTranslation:
         # RATE_LIMIT_EXCEEDED is mapped to RATE_LIMITED
         assert translate_error_code("RATE_LIMIT_EXCEEDED") == "RATE_LIMITED"
 
+    def test_spec_codes_pass_through_translate_unchanged(self):
+        """Every SPEC_CODES member is buyer-visible verbatim, never rewritten.
+
+        SPEC_CODES are the pinned-spec / project codes allowed beyond the SDK's
+        STANDARD_ERROR_CODES; their whole purpose is to reach the buyer as
+        themselves. A stray ERROR_CODE_MAPPING entry (BILLING_NOT_SUPPORTED ->
+        UNSUPPORTED_FEATURE previously) would silently collapse one into a generic
+        code and contradict that contract, so pin the invariant for all of them.
+        """
+        from src.core.exceptions import SPEC_CODES, translate_error_code
+
+        for code in SPEC_CODES:
+            assert translate_error_code(code) == code, f"{code} must pass through translate_error_code unchanged"
+
     def test_translate_unmapped_code_passes_through(self):
         from src.core.exceptions import translate_error_code
 

@@ -79,7 +79,11 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "UNSUPPORTED_TARGETING": "UNSUPPORTED_FEATURE",
     "PLACEMENT_TARGETING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
     "UNSUPPORTED_ACTION": "UNSUPPORTED_FEATURE",
-    "BILLING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
+    # NB: BILLING_NOT_SUPPORTED is deliberately NOT mapped. It is a distinct
+    # pinned-spec code (SDK ErrorCode enum member, buyer-visible via SPEC_CODES,
+    # BR-RULE-059) that the buyer must see verbatim — collapsing it to the generic
+    # UNSUPPORTED_FEATURE would erase the billing-specific meaning. It passes
+    # through translate_error_code() unchanged, matching the SPEC_CODES contract.
     # Resource lookup
     "NO_PACKAGES_FOUND": "PACKAGE_NOT_FOUND",
     # Resource state
