@@ -77,6 +77,19 @@ MEDIA_BUY_SPECIFIC_METHODS = {
     "get_by_id_or_raise",
 }
 
+# Repository methods that RETURN a LIST of MediaBuy and are defined ONLY on
+# MediaBuyRepository (the cross-tenant scheduler sweep). ``for x in <method>(...)``
+# — or the comprehension form — binds x to one MediaBuy, so a ``.status`` write
+# through the loop variable bypasses the seam exactly like a singular binding.
+# Kept separate from MEDIA_BUY_SPECIFIC_METHODS (which yield one row and are
+# matched in the assignment position too) because these are recognized ONLY in
+# the ``for``/comprehension iterator position: a list bound to a name is not a
+# single MediaBuy, but each item it yields is. The ``.media_buys.<method>()``
+# receiver forms are already covered by ``_rhs_is_media_buy``; this set catches
+# the static/classmethod calls (``MediaBuyRepository.get_all_by_statuses(...)``)
+# that have no ``.media_buys`` receiver.
+MEDIA_BUY_COLLECTION_METHODS = {"get_all_by_statuses"}
+
 # Pre-existing violations: (relative_file_path, binding_name, attribute).
 # Empty — #1544 routed every production write through the repository. It may
 # only ever shrink; a new entry means a new bypass was introduced.
@@ -112,6 +125,22 @@ def _rhs_is_media_buy(rhs: ast.expr) -> bool:
     return False
 
 
+def _rhs_is_media_buy_iterable(rhs: ast.expr) -> bool:
+    """True if *rhs* yields an ITERABLE of MediaBuy (e.g. the cross-tenant sweep).
+
+    Covers the static/classmethod list methods in ``MEDIA_BUY_COLLECTION_METHODS``
+    — ``MediaBuyRepository.get_all_by_statuses(session, statuses)`` — that have no
+    ``.media_buys`` receiver and so are invisible to :func:`_rhs_is_media_buy`. The
+    ``.media_buys.<method>()`` iterables are already handled there, so this only
+    needs the bare-method-name case. Used solely in the ``for``/comprehension
+    iterator position, where each yielded item is one MediaBuy.
+    """
+    if not isinstance(rhs, ast.Call):
+        return False
+    func = rhs.func
+    return isinstance(func, ast.Attribute) and func.attr in MEDIA_BUY_COLLECTION_METHODS
+
+
 def _media_buy_typed_locals(tree: ast.AST) -> set[str]:
     """Local names bound (anywhere in the file) from a MediaBuy source."""
     names: set[str] = set()
@@ -130,7 +159,9 @@ def _media_buy_typed_locals(tree: ast.AST) -> set[str]:
         # ``for mb in uow.media_buys.get_active()``). A status write through the
         # loop variable bypasses the seam exactly like a direct assignment, so
         # the target is MediaBuy-typed here too.
-        elif isinstance(node, (ast.For, ast.comprehension)) and _rhs_is_media_buy(node.iter):
+        elif isinstance(node, (ast.For, ast.comprehension)) and (
+            _rhs_is_media_buy(node.iter) or _rhs_is_media_buy_iterable(node.iter)
+        ):
             if isinstance(node.target, ast.Name):
                 names.add(node.target.id)
     return names
@@ -241,6 +272,23 @@ def test_no_direct_media_buy_status_writes_outside_repository():
             "are stamped. See #1544."
         ),
     )
+
+
+def test_detector_flags_cross_tenant_sweep_loop_binding():
+    """The detector must flag a status write through the cross-tenant sweep loop var.
+
+    ``for row in MediaBuyRepository.get_all_by_statuses(...): row.status = ...`` is
+    a MediaBuy status write that bypasses the seam, even though the call has no
+    ``.media_buys`` receiver and ``row`` is not a conventional binding name. This
+    shape previously evaded the guard (get_all_by_statuses was absent from every
+    type-source set), leaving the invariant bypassable. Regression lock for #1544.
+    """
+    src = (
+        "def sweep(session):\n"
+        "    for row in MediaBuyRepository.get_all_by_statuses(session, ['active']):\n"
+        "        row.status = 'completed'\n"
+    )
+    assert ("row", "status") in _detect(ast.parse(src))
 
 
 # ---------------------------------------------------------------------------

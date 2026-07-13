@@ -18,7 +18,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, object_session
 
 from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
 
@@ -486,6 +486,15 @@ class MediaBuyRepository:
         ignore it because they flush the whole mutation afterwards regardless.
         """
         if media_buy.confirmed_at is None and is_media_buy_seller_confirmed(media_buy.status):
+            # The in-memory ``confirmed_at`` guard is only trustworthy when the row
+            # was loaded under a row lock (or is freshly created). The single-row
+            # mutators load ``FOR UPDATE`` + ``populate_existing`` and the create
+            # path just inserted the row, so ``confirmed_at is None`` here reflects
+            # the committed state. The one seam that loads WITHOUT a lock —
+            # :meth:`apply_status_transition` (scheduler sweep / creative-sync) —
+            # locks and refreshes ``confirmed_at`` itself before calling this, so a
+            # stale ``None`` cannot slip through and clobber a concurrently
+            # committed stamp. Value: the approval instant, else the create instant.
             media_buy.confirmed_at = media_buy.approved_at or media_buy.created_at
             return True
         return False
@@ -809,7 +818,23 @@ class MediaBuyRepository:
         instant. Returns the same (mutated) row so the seam matches the
         ``MediaBuy | None`` shape of every sibling mutator — the return is never
         None here because the caller supplies a loaded row. See #1544.
+
+        Unlike the tenant-scoped mutators, callers here loaded the row WITHOUT a
+        row lock (the scheduler sweep via :meth:`get_all_by_statuses`, creative-
+        sync inside ``CreativeUoW``), so the identity-mapped ``confirmed_at`` may
+        be a stale ``None`` while a concurrent approval has already committed the
+        real stamp. Lock and refresh ``confirmed_at`` here before stamping so the
+        write-once check in :meth:`_stamp_confirmation_if_needed` sees the
+        committed value and cannot clobber it with this row's ``created_at``. The
+        ``FOR UPDATE`` lock is held until the caller commits, serializing
+        concurrent transitions of the same buy. ``revision`` needs no refresh — it
+        bumps via a server-side expression that serializes at the write-lock.
         """
+        session = object_session(media_buy)
+        if session is not None:
+            # Lock the row and re-read the committed confirmed_at before the
+            # write-once decision (no-op columns otherwise; status is set after).
+            session.refresh(media_buy, ["confirmed_at"], with_for_update=True)
         media_buy.status = new_status
         MediaBuyRepository._stamp_confirmation_if_needed(media_buy)
         MediaBuyRepository._bump_revision(media_buy)

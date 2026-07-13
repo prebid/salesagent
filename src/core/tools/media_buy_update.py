@@ -254,15 +254,38 @@ def _update_media_buy_impl(
             # side effect. The lock is held by this UoW until commit, so two
             # same-token requests cannot both reach the adapter.
             #
-            # Pessimistic-lock tradeoff: because the FOR UPDATE lock is held
-            # across the adapter network call below (until commit), a slow or hung
-            # adapter would otherwise let a concurrent update to the SAME buy block
-            # until the global statement_timeout. Bound the wait tightly so a
-            # contended update fails fast (retryable) instead: SET LOCAL scopes
-            # this to the current transaction only. #1544.
+            # Pessimistic-lock tradeoff: the FOR UPDATE lock is held across the
+            # adapter network call below (until commit). Two SET LOCAL bounds,
+            # scoped to this transaction only, keep a slow or hung adapter from
+            # turning that into an unbounded stall:
+            #   * lock_timeout bounds a contended WAITER — a second same-token
+            #     request trying to ACQUIRE the lock fails fast (retryable) after
+            #     5s instead of blocking to the global statement_timeout.
+            #   * idle_in_transaction_session_timeout bounds the lock HOLDER —
+            #     while the adapter call runs, this backend sits idle-in-
+            #     transaction holding the row lock, and statement_timeout does NOT
+            #     cover that gap (no SQL is executing). Without this bound a hung
+            #     adapter would pin the row indefinitely; the timeout terminates
+            #     such a session so the lock is released and the buy stays mutable.
+            # #1544.
             session.execute(text("SET LOCAL lock_timeout = '5s'"))
+            session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '30s'"))
             _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use, for_update=True, populate_existing=True)
             _current_status = _current_mb.status if _current_mb else ""
+            # Optimistic-concurrency gate runs BEFORE the terminal-state gate: the
+            # pinned update-media-buy-request schema says sellers MUST reject with
+            # CONFLICT whenever a supplied revision mismatches — unconditionally,
+            # including for a buy that has since reached a terminal state. Checking
+            # terminal-state first would mask a stale write as GONE/INVALID_STATE
+            # and deny the buyer the refetch-and-retry recovery that CONFLICT
+            # signals (a GONE buyer stops; a CONFLICT buyer re-reads, sees the
+            # terminal state, and stops for the right reason). #1544.
+            if req.revision is not None and _current_mb is not None:
+                _persisted_revision = _current_mb.revision
+                if req.revision != _persisted_revision:
+                    raise media_buy_revision_conflict(
+                        req.media_buy_id, expected=req.revision, current=_persisted_revision, context=req.context
+                    )
             if is_terminal_status(_current_status):
                 raise AdCPGoneError(
                     f"Cannot update media buy in terminal state: {_current_status}",
@@ -272,12 +295,6 @@ def _update_media_buy_impl(
                         f"Create a new media buy to run a new campaign."
                     ),
                 )
-            if req.revision is not None and _current_mb is not None:
-                _persisted_revision = _current_mb.revision
-                if req.revision != _persisted_revision:
-                    raise media_buy_revision_conflict(
-                        req.media_buy_id, expected=req.revision, current=_persisted_revision, context=req.context
-                    )
 
             _requested = _requested_actions(req)
             _allowed = set(valid_actions_for_status(_current_status))

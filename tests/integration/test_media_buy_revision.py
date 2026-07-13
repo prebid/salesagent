@@ -208,6 +208,38 @@ class TestRevisionOptimisticConcurrency:
             # Rejected update wrote nothing: revision unchanged on a fresh read.
             assert _get_buy(env, created.media_buy_id).revision == 1
 
+    def test_terminal_and_stale_revision_prefers_conflict_over_gone(self, integration_db):
+        """CONFLICT precedence: a stale token against a buy that has since reached a
+        terminal state MUST reject with CONFLICT (refetch-and-retry), not GONE.
+
+        The pinned update-media-buy-request schema mandates CONFLICT on ANY revision
+        mismatch unconditionally, so the optimistic-concurrency gate runs before the
+        terminal-state gate. Pre-fix the terminal check ran first and returned GONE,
+        masking the stale write and denying the buyer the refetch recovery. #1544.
+        """
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories import MediaBuyRepository
+        from src.core.exceptions import AdCPConflictError
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        with MediaBuyDualEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            created = _create_buy(env, product)  # persisted revision 1
+
+            # Drive the buy into a terminal state out-of-band (revision 1 → 2).
+            with get_db_session() as session:
+                MediaBuyRepository(session, env.identity.tenant_id).update_status(created.media_buy_id, "completed")
+                session.commit()
+
+            # Buyer sends a STALE token (1) against the now-terminal buy (revision 2).
+            with pytest.raises(AdCPConflictError) as exc_info:
+                env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=created.media_buy_id, budget=9000.0, revision=1))
+
+            assert exc_info.value.error_code == "CONFLICT"
+            assert exc_info.value.details is not None
+            assert exc_info.value.details["expected_version"] == 1
+            assert exc_info.value.details["current_version"] == 2
+
     def test_matching_revision_proceeds_and_increments(self, integration_db):
         from tests.harness.media_buy_dual import MediaBuyDualEnv
 
