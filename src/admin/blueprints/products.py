@@ -91,6 +91,22 @@ def _invalid_format_agent_urls(formats_parsed: list[dict]) -> list[str]:
     return invalid
 
 
+def _flash_if_invalid_agent_urls(formats_parsed: list[dict]) -> bool:
+    """Validate submitted agent_urls and flash the shared error message.
+
+    Returns True when invalid values were found (and the error flashed) —
+    the caller only decides render-vs-redirect.
+    """
+    invalid_agent_urls = _invalid_format_agent_urls(formats_parsed)
+    if not invalid_agent_urls:
+        return False
+    flash(
+        f"Invalid agent_url values: {', '.join(invalid_agent_urls)}. Each format's agent_url must be a valid URL.",
+        "error",
+    )
+    return True
+
+
 def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     """Parse format entries from form JSON without validation.
 
@@ -714,13 +730,7 @@ def add_product(tenant_id):
                 try:
                     formats_parsed = json.loads(formats_json)
                     if isinstance(formats_parsed, list) and formats_parsed:
-                        invalid_agent_urls = _invalid_format_agent_urls(formats_parsed)
-                        if invalid_agent_urls:
-                            flash(
-                                f"Invalid agent_url values: {', '.join(invalid_agent_urls)}. "
-                                f"Each format's agent_url must be a valid URL.",
-                                "error",
-                            )
+                        if _flash_if_invalid_agent_urls(formats_parsed):
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
                         # Validate formats against creative agent registry
@@ -1344,13 +1354,7 @@ def edit_product(tenant_id, product_id):
         try:
             formats_parsed = json.loads(formats_json)
             if isinstance(formats_parsed, list) and formats_parsed:
-                invalid_agent_urls = _invalid_format_agent_urls(formats_parsed)
-                if invalid_agent_urls:
-                    flash(
-                        f"Invalid agent_url values: {', '.join(invalid_agent_urls)}. "
-                        f"Each format's agent_url must be a valid URL.",
-                        "error",
-                    )
+                if _flash_if_invalid_agent_urls(formats_parsed):
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                 # Validate formats against creative agent registry
