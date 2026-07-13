@@ -10,6 +10,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import WebhookDeliveryLog
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.helpers.delivery_response import make_delivery_response
 from tests.integration.test_delivery_webhooks_integration import (
     _create_basic_media_buy_with_webhook,
     _create_test_tenant_and_principal,
@@ -19,24 +20,7 @@ from tests.integration.test_delivery_webhooks_integration import (
 @pytest.mark.requires_db
 def test_mock_response_validation():
     """Verify mock response passes validation checks."""
-    mock_response = GetMediaBuyDeliveryResponse(
-        reporting_period={"start": "2025-01-01T00:00:00Z", "end": "2025-01-02T00:00:00Z"},
-        currency="USD",
-        media_buy_deliveries=[
-            {
-                "media_buy_id": "mb_1",
-                "status": "active",  # Required field per AdCP spec
-                "totals": {"impressions": 1000, "spend": 10.0, "clicks": 5},
-                "by_package": [],
-            }
-        ],
-        aggregated_totals={  # Required field per AdCP spec
-            "spend": 10.0,
-            "impressions": 1000,
-            "clicks": 5,
-            "media_buy_count": 1,
-        },
-    )
+    mock_response = make_delivery_response("mb_1")
     assert isinstance(mock_response, GetMediaBuyDeliveryResponse)
     assert mock_response.errors is None
 
@@ -53,24 +37,7 @@ async def test_force_trigger_delivery_webhook_bypasses_duplicate_check(integrati
     scheduler = DeliveryWebhookScheduler()
 
     # Mock delivery response to ensure success (avoiding actual adapter calls)
-    mock_response = GetMediaBuyDeliveryResponse(
-        reporting_period={"start": "2025-01-01T00:00:00Z", "end": "2025-01-02T00:00:00Z"},
-        currency="USD",
-        media_buy_deliveries=[
-            {
-                "media_buy_id": media_buy_id,
-                "status": "active",  # Required field per AdCP spec
-                "totals": {"impressions": 1000, "spend": 10.0, "clicks": 5},
-                "by_package": [],
-            }
-        ],
-        aggregated_totals={  # Required field per AdCP spec
-            "spend": 10.0,
-            "impressions": 1000,
-            "clicks": 5,
-            "media_buy_count": 1,
-        },
-    )
+    mock_response = make_delivery_response(media_buy_id)
 
     # Mock webhook sending to avoid network calls
     async def fake_send_notification(*args, **kwargs):
