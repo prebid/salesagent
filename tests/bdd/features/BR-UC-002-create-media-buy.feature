@@ -212,13 +212,15 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-nl-unsupported @extension @error @transport-layer-separation @a2a
+  @T-UC-002-ext-nl-unsupported @extension @error @transport-layer-separation @a2a @hand-edited
   Scenario: NL media-buy request is unsupported -- returned as a failed task, not a transport error
     Given an authenticated buyer
     When the buyer sends a natural-language "create a media buy" request
     Then the error code should be "UNSUPPORTED_FEATURE"
     And the error recovery should be "correctable"
     And the wire error envelope should carry code "UNSUPPORTED_FEATURE" with recovery "correctable"
+    # HAND-EDITED: no adcp-req id yet (upstream obligation tracked in #1574) —
+    # @hand-edited classifies this LEGACY-PRESERVE so compile_bdd.py --merge keeps it.
     # grounded: AdCP 3.1.0-beta.3 building/operating/transport-errors.mdx "Layer Separation"
     # storyboard: ungraded, pending upstream obligation (#1574)
     # drives the top-level on_message_send except -> failed Task envelope, not JSON-RPC

@@ -78,8 +78,12 @@ def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
     return extract_data_from_artifact(artifact)
 
 
-def make_mock_a2a_identity() -> "ResolvedIdentity":
-    """Standard mock ResolvedIdentity for A2A handler unit tests."""
+def make_test_a2a_identity() -> "ResolvedIdentity":
+    """Standard factory-built ResolvedIdentity for A2A handler unit tests.
+
+    Not a ``unittest.mock`` object — a real identity from
+    ``PrincipalFactory.make_identity`` with canned A2A test values.
+    """
     from tests.factories import PrincipalFactory
 
     return PrincipalFactory.make_identity(

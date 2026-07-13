@@ -25,12 +25,11 @@ from tests.helpers import assert_envelope_shape
 from tests.utils.a2a_helpers import (
     create_a2a_message_with_skill,
     extract_processing_error_envelope,
-    make_mock_a2a_identity,
     make_nl_send_message_request,
+    make_test_a2a_identity,
 )
 
-_MOCK_IDENTITY = make_mock_a2a_identity()
-_make_nl_request = make_nl_send_message_request
+_TEST_IDENTITY = make_test_a2a_identity()
 
 
 def _make_handler() -> tuple[AdCPRequestHandler, object]:
@@ -52,9 +51,9 @@ async def test_untyped_processing_failure_returns_failed_task_with_internal_erro
     raise a JSON-RPC ``InternalError`` for an application failure.
     """
     handler, ctx = _make_handler()
-    params = _make_nl_request("Show me available products in the catalog")
+    params = make_nl_send_message_request("Show me available products in the catalog")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
         with patch(
             "src.a2a_server.adcp_a2a_server.core_get_products_tool",
             side_effect=RuntimeError("adapter exploded"),
@@ -87,9 +86,9 @@ async def test_typed_adcp_error_keeps_its_own_wire_code_on_failed_task():
     errors through ``normalize_to_adcp_error`` unchanged.
     """
     handler, ctx = _make_handler()
-    params = _make_nl_request("Show me available products in the catalog")
+    params = make_nl_send_message_request("Show me available products in the catalog")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
         with patch(
             "src.a2a_server.adcp_a2a_server.core_get_products_tool",
             side_effect=AdCPValidationError("brief must not be empty"),
@@ -120,7 +119,7 @@ async def test_auth_extraction_failure_returns_failed_task_before_identity_resol
     handler._get_auth_token = MagicMock(side_effect=RuntimeError("auth context unavailable"))
     handler._send_protocol_webhook = AsyncMock()
     ctx = make_a2a_context(headers={"host": "test.example.com"})
-    params = _make_nl_request("Show me available products in the catalog")
+    params = make_nl_send_message_request("Show me available products in the catalog")
 
     result = await handler.on_message_send(params, context=ctx)
 
@@ -161,7 +160,7 @@ async def test_all_skills_failed_webhook_carries_joined_reasons():
     message.parts.append(create_a2a_message_with_skill("list_creatives", {}).parts[0])
     params = SendMessageRequest(message=message)
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
         result = await handler.on_message_send(params, context=ctx)
 
     assert isinstance(result, Task), f"expected a returned Task, got {type(result).__name__}"
@@ -171,6 +170,41 @@ async def test_all_skills_failed_webhook_carries_joined_reasons():
         status="failed",
         error="first skill exploded; second skill exploded",
     )
+
+
+def test_read_failed_a2a_task_strict_asserts_on_artifactless_task():
+    """Strict mode must trip the artifact-present pin on an artifact-less failed Task.
+
+    Pins the branch order in ``_read_failed_a2a_task``: the
+    ``expect_processing_error`` dispatch happens BEFORE the ``task.artifacts``
+    guard, so the strict reader's "failed Task must carry the error envelope
+    artifact" assertion is reachable. Reverting to guard-first silently
+    downgrades strict mode to the loose fallback and this test goes red.
+    """
+    from a2a.types import TaskStatus
+
+    from tests.harness._base import _read_failed_a2a_task
+
+    bare_failed = Task(id="t-bare", status=TaskStatus(state=TaskState.TASK_STATE_FAILED))
+
+    with pytest.raises(AssertionError, match="must carry the error envelope artifact"):
+        _read_failed_a2a_task(bare_failed, fallback_message="x", expect_processing_error=True)
+
+
+def test_read_failed_a2a_task_loose_falls_back_on_artifactless_task():
+    """Loose mode keeps the harness fallback: (None, bare AdCPError) — no raise."""
+    from a2a.types import TaskStatus
+
+    from src.core.exceptions import AdCPError
+    from tests.harness._base import _read_failed_a2a_task
+
+    bare_failed = Task(id="t-bare", status=TaskStatus(state=TaskState.TASK_STATE_FAILED))
+
+    envelope, error = _read_failed_a2a_task(bare_failed, fallback_message="x")
+
+    assert envelope is None
+    assert type(error) is AdCPError, f"expected bare AdCPError fallback, got {type(error).__name__}"
+    assert "A2A task failed" in str(error)
 
 
 @pytest.mark.asyncio

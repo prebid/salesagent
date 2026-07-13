@@ -985,11 +985,16 @@ class AdCPRequestHandler(RequestHandler):
 
             # Per AdCP 3.1.x transport rules (spec prose:
             # building/operating/transport-errors.mdx "Layer Separation" and the
-            # two-layer error-handling model), application/task-execution
-            # failures MUST be returned in the task response body as a failed
-            # Task carrying the envelope artifact. JSON-RPC errors are reserved
-            # for genuine transport faults (A2AError, re-raised above). So we
-            # fall through to the shared store-and-return below — never raise
+            # two-layer error-handling model), TYPED application/task failures
+            # (AdCPError) belong in the task response body as a failed Task
+            # carrying the envelope artifact; JSON-RPC errors are reserved for
+            # genuine transport faults (A2AError, re-raised above). For UNTYPED
+            # internal crashes the table lists "internal crash" under the
+            # transport layer and the two-layer rule is SHOULD-level — routing
+            # them to the failed-Task body as well is a deliberate choice here
+            # (uniform envelope for storyboard runners; observability preserved
+            # via record_boundary_error above), not a spec mandate. So we fall
+            # through to the shared store-and-return below — never raise
             # InternalError here. Cross-transport execution of the same BDD
             # scenario is tracked in #1574 once the transport-aware harness
             # from #1430 is available.

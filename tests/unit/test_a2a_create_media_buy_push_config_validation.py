@@ -53,15 +53,10 @@ async def test_short_webhook_credentials_do_not_block_create_media_buy():
     manual-approval (submitted) path is never reached.
     """
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from tests.factories.principal import PrincipalFactory
+    from tests.utils.a2a_helpers import make_test_a2a_identity
 
     handler = AdCPRequestHandler()
-    identity = PrincipalFactory.make_identity(
-        principal_id="test-principal",
-        tenant_id="test-tenant",
-        tenant={"tenant_id": "test-tenant"},
-        protocol="a2a",
-    )
+    identity = make_test_a2a_identity()
 
     params = _valid_packages_params()
     # Transport-layer push notification config (as injected by
@@ -122,15 +117,10 @@ async def test_no_auth_push_config_still_works():
     """Control: a no-auth push_notification_config must keep working (the bug
     only manifests when the authentication block forces the MinLen(32) check)."""
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from tests.factories.principal import PrincipalFactory
+    from tests.utils.a2a_helpers import make_test_a2a_identity
 
     handler = AdCPRequestHandler()
-    identity = PrincipalFactory.make_identity(
-        principal_id="test-principal",
-        tenant_id="test-tenant",
-        tenant={"tenant_id": "test-tenant"},
-        protocol="a2a",
-    )
+    identity = make_test_a2a_identity()
 
     params = _valid_packages_params()
     params["push_notification_config"] = {"url": "http://localhost:9999/webhook"}

@@ -16,12 +16,11 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.a2a_helpers import make_a2a_context
 from tests.utils.a2a_helpers import (
     extract_processing_error_envelope,
-    make_mock_a2a_identity,
     make_nl_send_message_request,
+    make_test_a2a_identity,
 )
 
-_MOCK_IDENTITY = make_mock_a2a_identity()
-_make_nl_message = make_nl_send_message_request
+_TEST_IDENTITY = make_test_a2a_identity()
 
 
 @pytest.mark.asyncio
@@ -38,9 +37,9 @@ async def test_nl_product_query_calls_resolve_identity_once():
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("Show me available products in the catalog")
+    params = make_nl_send_message_request("Show me available products in the catalog")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
             # core_get_products_tool returns a Pydantic GetProductsResponse;
             # NL _get_products iterates response.products so the mock must
@@ -66,9 +65,9 @@ async def test_nl_pricing_query_calls_resolve_identity_once():
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("What is the pricing for CPM ads?")
+    params = make_nl_send_message_request("What is the pricing for CPM ads?")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
             # Return a dict to bypass model_dump() path
             mock_products.return_value = {"products": [], "message": "No products found"}
@@ -91,9 +90,9 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("Show me audience targeting options")
+    params = make_nl_send_message_request("Show me audience targeting options")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
         # Mock the core capabilities function (not the handler — to expose both calls)
         with patch("src.core.tools.capabilities.get_adcp_capabilities_raw") as mock_caps:
             mock_caps.return_value = {"protocols": [], "targeting": {}}
@@ -130,9 +129,9 @@ async def test_nl_media_buy_returns_failed_task_with_envelope():
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("Create a campaign for Nike")
+    params = make_nl_send_message_request("Create a campaign for Nike")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
         task = await handler.on_message_send(params, context=ctx)
 
     # Identity is resolved once during route dispatch before the raise.
