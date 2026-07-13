@@ -124,3 +124,35 @@ class TestGetSignalsWireExposure:
                 f"POST {env.REST_ENDPOINT} returned {response.status_code}: {response.text}"
             )
             _assert_sports_signal_response(GetSignalsResponse(**response.json()))
+
+
+class TestGetSignalsBodyDeclaresAllSpecFields:
+    """REST boundary ACCEPTS every declared v3.1.1 get-signals-request property.
+
+    salesagent-6065: GetSignalsBody omitted ext / push_notification_config /
+    if_pricing_version / if_wholesale_feed_version — on the dev/CI arm
+    (extra="forbid", Pattern #7) a spec-valid request carrying any of them was
+    rejected with INVALID_REQUEST; in production they were silently dropped.
+    Spec: dist/schemas/3.1.1/signals/get-signals-request.json @ v3.1.1 declares
+    16 properties including these four.
+    """
+
+    def test_spec_valid_request_with_all_declared_fields_accepted(self, integration_db):
+        with SignalsEnv() as env:
+            env.setup_default_data()
+
+            response = env._run_rest_request(
+                env.REST_ENDPOINT,
+                req=GetSignalsRequest(
+                    signal_spec="sports",
+                    ext={"vendor": {"k": "v"}},
+                    push_notification_config={"url": "https://buyer.example.com/hooks"},
+                    if_pricing_version="abc123",
+                    if_wholesale_feed_version="def456",
+                ),
+            )
+
+            assert response.status_code == 200, (
+                f"spec-valid request with declared optional fields rejected: {response.status_code}: {response.text}"
+            )
+            _assert_sports_signal_response(GetSignalsResponse(**response.json()))

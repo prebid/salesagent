@@ -194,7 +194,7 @@ class ListAuthorizedPropertiesBody(SalesAgentBaseModel):
 
 
 class GetSignalsBody(SalesAgentBaseModel):
-    """POST /signals request body — mirrors v3.1.1 get-signals-request (all fields optional)."""
+    """POST /signals request body — mirrors v3.1.1 get-signals-request (all 16 declared properties, all optional)."""
 
     discovery_mode: str | None = None
     account: dict[str, Any] | None = None
@@ -208,6 +208,10 @@ class GetSignalsBody(SalesAgentBaseModel):
     max_results: int | None = None
     pagination: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
+    push_notification_config: dict[str, Any] | None = None
+    if_pricing_version: str | None = None
+    if_wholesale_feed_version: str | None = None
     adcp_version: str = "1.0.0"
 
 
