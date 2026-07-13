@@ -1006,9 +1006,6 @@ class TestAssignmentProcessing:
         per-creative failure, an assignment_errors entry for the skipped package,
         and ZERO assignment rows for the failed creative.
         """
-        from sqlalchemy import select
-
-        from src.core.database.database_session import get_db_session
         from src.core.database.models import CreativeAssignment as DBAssignment
 
         with CreativeSyncEnv() as env:
@@ -1025,17 +1022,14 @@ class TestAssignmentProcessing:
                 validation_mode="lenient",
             )
 
-        # No 500 — a real SyncCreativesResponse is returned.
-        assert len(response.creatives) == 1
-        result = response.creatives[0]
-        assert result.action == "failed"
-        assert result.assignment_errors is not None
-        assert pkg_id in result.assignment_errors
+            # No 500 — a real SyncCreativesResponse is returned.
+            assert len(response.creatives) == 1
+            result = response.creatives[0]
+            assert result.action == "failed"
+            assert result.assignment_errors is not None
+            assert pkg_id in result.assignment_errors
 
-        with get_db_session() as session:
-            assignments = session.scalars(
-                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_bad")
-            ).all()
+            assignments = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_bad")
             assert assignments == [], "No assignment row may be written for a creative that was not persisted"
 
     def test_batch_valid_and_invalid_creative_assignments(self, integration_db):
@@ -1044,9 +1038,6 @@ class TestAssignmentProcessing:
         A's assignment persists; B's does not. B's per-creative failure and its
         skipped assignment are reported. No FK violation, no 500.
         """
-        from sqlalchemy import select
-
-        from src.core.database.database_session import get_db_session
         from src.core.database.models import CreativeAssignment as DBAssignment
 
         with CreativeSyncEnv() as env:
@@ -1065,20 +1056,15 @@ class TestAssignmentProcessing:
                 validation_mode="lenient",
             )
 
-        result_by_id = {r.creative_id: r for r in response.creatives}
-        assert result_by_id["c_ok"].action != "failed"
-        assert result_by_id["c_ok"].assigned_to == [pkg_id]
-        assert result_by_id["c_bad"].action == "failed"
-        assert result_by_id["c_bad"].assignment_errors is not None
-        assert pkg_id in result_by_id["c_bad"].assignment_errors
+            result_by_id = {r.creative_id: r for r in response.creatives}
+            assert result_by_id["c_ok"].action != "failed"
+            assert result_by_id["c_ok"].assigned_to == [pkg_id]
+            assert result_by_id["c_bad"].action == "failed"
+            assert result_by_id["c_bad"].assignment_errors is not None
+            assert pkg_id in result_by_id["c_bad"].assignment_errors
 
-        with get_db_session() as session:
-            ok_assignments = session.scalars(
-                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_ok", package_id=pkg_id)
-            ).all()
-            bad_assignments = session.scalars(
-                select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_bad")
-            ).all()
+            ok_assignments = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_ok", package_id=pkg_id)
+            bad_assignments = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_bad")
             assert len(ok_assignments) == 1, "Valid creative's assignment must persist"
             assert bad_assignments == [], "Invalid creative's assignment must not persist"
 
