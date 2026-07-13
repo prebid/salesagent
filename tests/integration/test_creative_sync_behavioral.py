@@ -20,8 +20,12 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPCreativeRejectedErr
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
 from tests.harness import CreativeSyncEnv, make_identity
+from tests.harness.transport import Transport
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+# Wire transports only — IMPL has no wire envelope by definition.
+_WIRE_TRANSPORTS = [Transport.REST, Transport.MCP, Transport.A2A]
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -324,7 +328,8 @@ class TestValidationModeSemantics:
             for r in good_results:
                 assert r.action != "failed", f"Creative {r.creative_id} should succeed in lenient mode"
 
-    def test_strict_mode_unknown_assignment_creative_is_creative_not_found_on_wire(self, integration_db):
+    @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
+    def test_strict_mode_unknown_assignment_creative_is_creative_not_found_on_wire(self, integration_db, transport):
         """Strict-mode assignment to an UNKNOWN creative_id must emit CREATIVE_NOT_FOUND.
 
         Spec grounding (pinned 3.1 enum, enums/error-code.json @ 04f59d2d5):
@@ -334,8 +339,11 @@ class TestValidationModeSemantics:
         The parallel package-not-found branch in the same function already uses
         the entity-specific PACKAGE_NOT_FOUND; creative-not-found rode the
         generic VALIDATION_ERROR instead (PR #1430 review, CON-07).
+
+        Graded on every wire transport: a boundary re-adding a
+        STANDARD_ERROR_CODES gate on MCP/A2A (demoting the supplement-only
+        CREATIVE_NOT_FOUND passthrough) must fail this matrix, not just REST.
         """
-        from tests.harness.transport import Transport
         from tests.helpers import assert_envelope_shape
 
         with CreativeSyncEnv() as env:
@@ -345,7 +353,7 @@ class TestValidationModeSemantics:
             pkg = MediaPackageFactory(media_buy=media_buy)
 
             result = env.call_via(
-                Transport.REST,
+                transport,
                 creatives=[],
                 assignments={"c_never_synced": [pkg.package_id]},
                 validation_mode="strict",
