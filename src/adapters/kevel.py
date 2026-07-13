@@ -6,7 +6,7 @@ from typing import Any
 import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
-from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.constants import ADAPTER_HTTP_TIMEOUT, REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -316,7 +316,9 @@ class Kevel(AdServerAdapter):
                 "IsActive": True,
             }
 
-            response = requests.post(f"{self.base_url}/campaign", headers=self.headers, json=campaign_payload)
+            response = requests.post(
+                f"{self.base_url}/campaign", headers=self.headers, json=campaign_payload, timeout=ADAPTER_HTTP_TIMEOUT
+            )
             response.raise_for_status()
             campaign_data = response.json()
             campaign_id = campaign_data["Id"]
@@ -363,7 +365,9 @@ class Kevel(AdServerAdapter):
                             )  # Convert to hours, minimum 1 (int for Kevel API)
                             flight_payload["FreqCapType"] = 1  # 1 = per user (cookie-based)
 
-                flight_response = requests.post(f"{self.base_url}/flight", headers=self.headers, json=flight_payload)
+                flight_response = requests.post(
+                    f"{self.base_url}/flight", headers=self.headers, json=flight_payload, timeout=ADAPTER_HTTP_TIMEOUT
+                )
                 flight_response.raise_for_status()
 
             # Use the actual campaign ID from Kevel
@@ -411,7 +415,10 @@ class Kevel(AdServerAdapter):
             try:
                 # Get all flights for the campaign to map package names to flight IDs
                 flights_response = requests.get(
-                    f"{self.base_url}/flight", headers=self.headers, params={"campaignId": media_buy_id}
+                    f"{self.base_url}/flight",
+                    headers=self.headers,
+                    params={"campaignId": media_buy_id},
+                    timeout=ADAPTER_HTTP_TIMEOUT,
                 )
                 flights_response.raise_for_status()
                 flights = flights_response.json().get("items", [])
@@ -441,7 +448,10 @@ class Kevel(AdServerAdapter):
 
                     # Create the creative
                     creative_response = requests.post(
-                        f"{self.base_url}/creative", headers=self.headers, json=creative_payload
+                        f"{self.base_url}/creative",
+                        headers=self.headers,
+                        json=creative_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     creative_response.raise_for_status()
                     creative_data = creative_response.json()
@@ -455,7 +465,12 @@ class Kevel(AdServerAdapter):
                     if flight_ids_to_associate:
                         for flight_id in flight_ids_to_associate:
                             ad_payload = {"CreativeId": creative_id, "FlightId": flight_id, "IsActive": True}
-                            ad_response = requests.post(f"{self.base_url}/ad", headers=self.headers, json=ad_payload)
+                            ad_response = requests.post(
+                                f"{self.base_url}/ad",
+                                headers=self.headers,
+                                json=ad_payload,
+                                timeout=ADAPTER_HTTP_TIMEOUT,
+                            )
                             ad_response.raise_for_status()
 
                     created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
@@ -548,7 +563,9 @@ class Kevel(AdServerAdapter):
                 "Filter": {"CampaignId": media_buy_id},
             }
 
-            response = requests.post(f"{self.base_url}/report/queue", headers=self.headers, json=report_request)
+            response = requests.post(
+                f"{self.base_url}/report/queue", headers=self.headers, json=report_request, timeout=ADAPTER_HTTP_TIMEOUT
+            )
             response.raise_for_status()
             report_id = response.json()["Id"]
 
@@ -558,7 +575,9 @@ class Kevel(AdServerAdapter):
             time.sleep(1)
 
             # Get report results
-            results_response = requests.get(f"{self.base_url}/report/{report_id}/results", headers=self.headers)
+            results_response = requests.get(
+                f"{self.base_url}/report/{report_id}/results", headers=self.headers, timeout=ADAPTER_HTTP_TIMEOUT
+            )
             results_response.raise_for_status()
 
             # Parse results and aggregate
@@ -689,14 +708,20 @@ class Kevel(AdServerAdapter):
                     # Update campaign status
                     update_payload = {"IsActive": action == "resume_media_buy"}
                     update_response = requests.put(
-                        f"{self.base_url}/campaign/{campaign_id}", headers=self.headers, json=update_payload
+                        f"{self.base_url}/campaign/{campaign_id}",
+                        headers=self.headers,
+                        json=update_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     update_response.raise_for_status()
 
                 elif action in ["pause_package", "resume_package"] and package_id:
                     # Get flight ID by name
                     flights_response = requests.get(
-                        f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id}
+                        f"{self.base_url}/flight",
+                        headers=self.headers,
+                        params={"campaignId": campaign_id},
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     flights_response.raise_for_status()
                     flights = flights_response.json().get("items", [])
@@ -709,7 +734,10 @@ class Kevel(AdServerAdapter):
                     is_resume = action == "resume_package"
                     update_payload = {"IsActive": is_resume}
                     update_response = requests.put(
-                        f"{self.base_url}/flight/{flight['Id']}", headers=self.headers, json=update_payload
+                        f"{self.base_url}/flight/{flight['Id']}",
+                        headers=self.headers,
+                        json=update_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     update_response.raise_for_status()
 
@@ -734,7 +762,10 @@ class Kevel(AdServerAdapter):
                 ):
                     # Get flight ID by name
                     flights_response = requests.get(
-                        f"{self.base_url}/flight", headers=self.headers, params={"campaignId": campaign_id}
+                        f"{self.base_url}/flight",
+                        headers=self.headers,
+                        params={"campaignId": campaign_id},
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     flights_response.raise_for_status()
                     flights = flights_response.json().get("items", [])
@@ -754,7 +785,10 @@ class Kevel(AdServerAdapter):
                     # Update flight impressions
                     impressions_payload: dict[str, int] = {"Impressions": new_impressions}
                     update_response = requests.put(
-                        f"{self.base_url}/flight/{flight['Id']}", headers=self.headers, json=impressions_payload
+                        f"{self.base_url}/flight/{flight['Id']}",
+                        headers=self.headers,
+                        json=impressions_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     update_response.raise_for_status()
 

@@ -483,7 +483,18 @@ class AdServerAdapter(ABC):
         budget: int | None,
         today: datetime,
     ) -> UpdateMediaBuyResponse:
-        """Updates a media buy with a specific action."""
+        """Updates a media buy with a specific action.
+
+        Bounded-execution contract (#1544): ``update_media_buy`` runs inside the
+        update tool's Unit of Work while a ``FOR UPDATE`` row lock is held, so an
+        unbounded ad-server call would pin that lock (and its DB connection) until
+        the TCP stack gives up. Implementations MUST bound every outbound network
+        call with a connect+read timeout (see
+        :data:`src.adapters.constants.ADAPTER_HTTP_TIMEOUT`, or the client's
+        equivalent) so the call raises in-thread within the bound; the tool then
+        rolls back and releases the lock cleanly. The same applies to
+        :meth:`create_media_buy` and any other method that reaches the ad server.
+        """
         pass
 
     def get_config_ui_endpoint(self) -> str | None:

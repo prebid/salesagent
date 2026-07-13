@@ -12,6 +12,7 @@ import requests
 from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
+from src.adapters.constants import ADAPTER_HTTP_TIMEOUT
 from src.core.retry_utils import api_retry
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -242,7 +243,7 @@ class XandrAdapter(AdServerAdapter):
         auth_data = {"auth": {"username": self.username, "password": self.password}}
 
         try:
-            response = requests.post(auth_url, json=auth_data)
+            response = requests.post(auth_url, json=auth_data, timeout=ADAPTER_HTTP_TIMEOUT)
             response.raise_for_status()
 
             data = response.json()
@@ -269,13 +270,13 @@ class XandrAdapter(AdServerAdapter):
 
         try:
             if method == "GET":
-                response = requests.get(url, headers=headers, params=data)
+                response = requests.get(url, headers=headers, params=data, timeout=ADAPTER_HTTP_TIMEOUT)
             elif method == "POST":
-                response = requests.post(url, headers=headers, json=data)
+                response = requests.post(url, headers=headers, json=data, timeout=ADAPTER_HTTP_TIMEOUT)
             elif method == "PUT":
-                response = requests.put(url, headers=headers, json=data)
+                response = requests.put(url, headers=headers, json=data, timeout=ADAPTER_HTTP_TIMEOUT)
             elif method == "DELETE":
-                response = requests.delete(url, headers=headers)
+                response = requests.delete(url, headers=headers, timeout=ADAPTER_HTTP_TIMEOUT)
             else:
                 raise ValueError(f"Unsupported method: {method}")
 
