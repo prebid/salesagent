@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SECURITY_AUDIT = _REPO_ROOT / "scripts" / "security-audit.sh"
 _SECURITY_IGNORES = _REPO_ROOT / "scripts" / "security-ignored-vulns.sh"
@@ -97,16 +99,48 @@ def _run_security_audit(tmp_path: Path, uv_ignores: str) -> list[str]:
     return json.loads(argv_file.read_text())
 
 
-def test_security_ignored_vulns_are_valid_comma_separated_lists() -> None:
-    """Suppression lists may be empty, but populated lists must be compact CSV."""
+def _is_compact_csv(ignore_list: str) -> bool:
+    """A populated suppression list must be comma-separated with no blank,
+    padded, or space-containing IDs. An empty string is not a *populated*
+    list, so it is not compact CSV."""
+    ids = ignore_list.split(",")
+    return (
+        all(ids)
+        and all(ignore_id == ignore_id.strip() for ignore_id in ids)
+        and all(" " not in ignore_id for ignore_id in ids)
+    )
+
+
+@pytest.mark.parametrize(
+    ("ignore_list", "expected"),
+    [
+        ("PYSEC-1", True),
+        ("PYSEC-1,GHSA-2", True),
+        ("", False),  # empty is "no suppressions", not a populated list
+        ("PYSEC-1,", False),  # trailing empty token
+        (",PYSEC-1", False),  # leading empty token
+        ("PYSEC-1,,GHSA-2", False),  # blank interior token
+        (" PYSEC-1", False),  # leading padding
+        ("PYSEC-1 ,GHSA-2", False),  # trailing padding
+        ("GHSA 2", False),  # internal space
+    ],
+)
+def test_compact_csv_rule_accepts_and_rejects(ignore_list: str, expected: bool) -> None:
+    """The compact-CSV rule runs against synthetic inputs regardless of the
+    live suppression state, so the validation logic is always exercised even
+    when both live lists are empty."""
+    assert _is_compact_csv(ignore_list) is expected
+
+
+def test_live_security_ignored_vulns_are_compact_csv() -> None:
+    """The live suppression lists may be empty, but any populated list must be
+    compact CSV. This asserts against whatever is currently declared; it is a
+    no-op only while both lists are empty (the synthetic test above still
+    exercises the rule)."""
     for ignore_list in _source_security_ignores():
         if not ignore_list:
             continue
-
-        ids = ignore_list.split(",")
-        assert all(ids)
-        assert all(ignore_id == ignore_id.strip() for ignore_id in ids)
-        assert all(" " not in ignore_id for ignore_id in ids)
+        assert _is_compact_csv(ignore_list), ignore_list
 
 
 def test_security_audit_omits_uv_secure_ignore_flags_when_no_suppressions(tmp_path: Path) -> None:

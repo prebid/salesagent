@@ -28,12 +28,18 @@ jobs:
       - run: |
           set -euo pipefail
           source scripts/security-ignored-vulns.sh
-          IFS=',' read -r -a pip_ignores <<< "$PIP_AUDIT_IGNORED_VULNS"
+          # Empty suppression list => zero-element array => no --ignore-vuln args,
+          # mirroring the uv-secure guard in scripts/security-audit.sh. The
+          # ${arr[@]+"${arr[@]}"} form keeps the empty-array expansion safe under
+          # `set -u` on every bash (3.2+), not just the CI runner's bash 5.x.
           ignore_args=()
-          for vuln in "${pip_ignores[@]}"; do
-            ignore_args+=(--ignore-vuln "$vuln")
-          done
-          uvx pip-audit "${ignore_args[@]}" -r /tmp/requirements.txt
+          if [[ -n "$PIP_AUDIT_IGNORED_VULNS" ]]; then
+            IFS=',' read -r -a pip_ignores <<< "$PIP_AUDIT_IGNORED_VULNS"
+            for vuln in "${pip_ignores[@]}"; do
+              ignore_args+=(--ignore-vuln "$vuln")
+            done
+          fi
+          uvx pip-audit ${ignore_args[@]+"${ignore_args[@]}"} -r /tmp/requirements.txt
 
   zizmor:
     name: zizmor (workflow security lint)
