@@ -1390,6 +1390,20 @@ class Principal(SalesAgentBaseModel):
     name: str
     platform_mappings: dict[str, Any]
 
+    @classmethod
+    def from_orm_row(cls, row: Any) -> "Principal":
+        """Convert an ORM Principal row to the schema Principal.
+
+        The single ORM→schema converter (duck-typed on the three shared
+        attributes) — used by both the auth boundary and PrincipalRepository
+        so the field list cannot drift between copies.
+        """
+        return cls(
+            principal_id=row.principal_id,
+            name=row.name,
+            platform_mappings=row.platform_mappings,
+        )
+
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal."""
         from src.core.platform_mappings import resolve_adapter_id

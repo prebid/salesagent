@@ -19,11 +19,7 @@ def _to_schema_principal(principal: Principal) -> "SchemaPrincipal":
     """Convert the ORM row (already loaded at the boundary) to the schema Principal."""
     from src.core.schemas import Principal as SchemaPrincipal
 
-    return SchemaPrincipal(
-        principal_id=principal.principal_id,
-        name=principal.name,
-        platform_mappings=principal.platform_mappings,
-    )
+    return SchemaPrincipal.from_orm_row(principal)
 
 
 def get_principal_from_token(

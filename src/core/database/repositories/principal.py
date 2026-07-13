@@ -40,8 +40,4 @@ class PrincipalRepository:
         ).first()
         if row is None:
             return None
-        return Principal(
-            principal_id=row.principal_id,
-            name=row.name,
-            platform_mappings=row.platform_mappings,
-        )
+        return Principal.from_orm_row(row)
