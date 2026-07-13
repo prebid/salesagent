@@ -235,20 +235,36 @@ class AdCPRequestHandler(RequestHandler):
         task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
 
     @staticmethod
-    def _task_artifacts_data(task: Task) -> dict[str, Any]:
-        """All artifact DataParts of a task, keyed by artifact name, or ``{}``.
+    def _task_artifacts_data(task: Task) -> list[tuple[str, dict[str, Any]]]:
+        """Every artifact DataPart as an ordered ``(artifact_name, decoded_data)``.
 
         Single decoder for A2A DataPart → dict (protobuf ``Value`` → JSON), shared
-        by completed-status detection and the webhook payload builder so a
-        multi-artifact Task is never reduced to a single stale DataPart. A failed
-        Task's error envelope, a sync_creatives result, and every sibling result
-        are all preserved."""
-        data: dict[str, Any] = {}
+        by completed-status detection and the webhook payload builder. Returns a
+        LIST, not a name-keyed dict, so repeated skills that emit identically-named
+        artifacts (e.g. two ``error_result``) are all preserved — none silently
+        overwrites another. A failed Task's error envelope, a sync_creatives
+        result, and every sibling result are kept."""
+        pairs: list[tuple[str, dict[str, Any]]] = []
         for artifact in task.artifacts:
             for part in artifact.parts:
                 if part.HasField("data"):
-                    data[artifact.name] = json.loads(json_format.MessageToJson(part.data))
-        return data
+                    pairs.append((artifact.name, json.loads(json_format.MessageToJson(part.data))))
+        return pairs
+
+    @staticmethod
+    def _webhook_result_data(task: Task) -> dict[str, Any]:
+        """Pack all artifact data into one dict for ``create_a2a_webhook_payload``.
+
+        The library renders a single artifact from this dict, so we key by artifact
+        name but DE-COLLIDE duplicates (``error_result``, ``error_result#2``, …) —
+        preserving every artifact's data on the wire rather than overwriting."""
+        result_data: dict[str, Any] = {}
+        for name, data in AdCPRequestHandler._task_artifacts_data(task):
+            key, n = name, 2
+            while key in result_data:
+                key, n = f"{name}#{n}", n + 1
+            result_data[key] = data
+        return result_data
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
@@ -446,12 +462,12 @@ class AdCPRequestHandler(RequestHandler):
 
             # Build result data for the webhook payload. ``create_a2a_webhook_payload``
             # renders its artifact FROM this dict, so we pass the Task's own structured
-            # artifact data — ALL artifacts keyed by name (the two-layer AdCP envelope
-            # on a ``failed`` task, the full sync_creatives result, every sibling) —
-            # never a lossy ``{"error": "..."}``, a single stale DataPart, or an empty
-            # dict. Callers may still pass an explicit ``result``; otherwise we read it
-            # off the task's artifacts.
-            result_data: dict[str, Any] = result if result is not None else self._task_artifacts_data(task)
+            # artifact data — EVERY artifact, de-colliding duplicate names (the two-layer
+            # AdCP envelope on a ``failed`` task, the full sync_creatives result, every
+            # sibling) — never a lossy ``{"error": "..."}``, a single stale DataPart, an
+            # empty dict, or a name-overwritten sibling. Callers may still pass an
+            # explicit ``result``; otherwise we read it off the task's artifacts.
+            result_data: dict[str, Any] = result if result is not None else self._webhook_result_data(task)
 
             # Use create_a2a_webhook_payload to get the correct payload type:
             # - Task for final states (completed, failed, canceled)
@@ -955,9 +971,8 @@ class AdCPRequestHandler(RequestHandler):
             task_state = TaskState.TASK_STATE_COMPLETED
             task_status_str = "completed"
 
-            # Single DataPart decode via the shared helper (Finding: consolidate decoders).
-            result_data = self._task_artifacts_data(task)
-            for artifact_name, data_dict in result_data.items():
+            # Single DataPart decode via the shared helper (consolidated decoder).
+            for artifact_name, data_dict in self._task_artifacts_data(task):
                 # sync_creatives returns a "result" artifact whose creatives may be
                 # pending review → the task is non-terminal (submitted), not completed.
                 if artifact_name == "result" and isinstance(data_dict, dict):

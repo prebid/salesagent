@@ -292,33 +292,34 @@ async def test_mixed_submitted_and_failed_preserves_failure_envelope(order):
 
 
 @pytest.mark.asyncio
-async def test_async_failure_webhook_preserves_all_artifacts_on_the_wire():
-    """A failure webhook (async transition) serializes ALL of the Task's artifacts.
+async def test_send_protocol_webhook_serializes_every_artifact_including_duplicate_names():
+    """``_send_protocol_webhook`` puts EVERY artifact's data on the wire — including
+    duplicate-named ones — never a single stale value or a flattened error string.
 
-    Immediate terminal failures do not notify, but a task that fails after being
-    returned async must push the full Task per a2a-guide.mdx ("FINAL STATES:
-    Extract from .artifacts"). This tests the REAL serializer output (the wire
-    payload emitted to the push service), not the mocked builder: a two-DataPart
-    Task must not be reduced to a single stale value, and the envelope must never
-    flatten to a bare ``{"error": str}``.
+    Scope note: this is a focused unit test of the webhook serializer at the status
+    production actually calls it with (``submitted``); the real async *failure*
+    transition is emitted elsewhere (``src/core/context_manager.py``) and is out of
+    this helper's scope. Two artifacts share the name ``error_result`` (repeated
+    skill in one message) plus a distinct sibling — all three must survive
+    serialization, so name-based overwriting is caught.
     """
     from google.protobuf import json_format
 
     handler = AdCPRequestHandler()
 
-    envelope = AdCPRequestHandler._build_error_envelope(AdCPValidationError("brief must not be empty"))
-    task = Task(
-        id="task_async_fail",
-        context_id="ctx_async_fail",
-        status=TaskStatus(state=TaskState.TASK_STATE_FAILED),
-    )
-    # Two distinct DataParts — the second must survive (the old first-only decoder dropped it).
+    env_a = AdCPRequestHandler._build_error_envelope(AdCPValidationError("first skill exploded"))
+    env_b = AdCPRequestHandler._build_error_envelope(AdCPValidationError("second skill exploded"))
+    task = Task(id="task_sub", context_id="ctx_sub", status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+    # Two artifacts with the SAME name (repeated skill) + a distinct sibling.
     task.artifacts.append(
-        Artifact(artifact_id="error_1", name="processing_error", parts=[Part(data=_dict_to_value(envelope))])
+        Artifact(artifact_id="skill_result_1", name="error_result", parts=[Part(data=_dict_to_value(env_a))])
+    )
+    task.artifacts.append(
+        Artifact(artifact_id="skill_result_2", name="error_result", parts=[Part(data=_dict_to_value(env_b))])
     )
     task.artifacts.append(
         Artifact(
-            artifact_id="ctx_1",
+            artifact_id="skill_result_3",
             name="get_products_result",
             parts=[Part(data=_dict_to_value({"products": [{"id": "p-sibling"}]}))],
         )
@@ -333,16 +334,16 @@ async def test_async_failure_webhook_preserves_all_artifacts_on_the_wire():
     service = MagicMock()
     service.send_notification = AsyncMock(side_effect=_capture)
 
-    # NOTE: create_a2a_webhook_payload is NOT mocked — we verify the real emitted wire Task.
+    # create_a2a_webhook_payload is NOT mocked — we verify the real emitted wire payload.
     with patch("src.a2a_server.adcp_a2a_server.get_protocol_webhook_service", return_value=service):
-        await handler._send_protocol_webhook(task, status="failed")
+        await handler._send_protocol_webhook(task, status="submitted")
 
     service.send_notification.assert_awaited_once()
     wire = json.dumps(json_format.MessageToDict(captured["payload"]))
-    # Both artifacts' structured data survive serialization; envelope not flattened.
-    assert "VALIDATION_ERROR" in wire, f"envelope code missing from wire payload: {wire}"
-    assert "brief must not be empty" in wire
-    assert "p-sibling" in wire, f"second DataPart dropped from wire payload (first-only regression): {wire}"
+    # BOTH same-named error envelopes AND the sibling survive (no name overwrite, no flatten).
+    assert "first skill exploded" in wire, f"first same-named artifact dropped: {wire}"
+    assert "second skill exploded" in wire, f"second same-named artifact overwritten by name collision: {wire}"
+    assert "p-sibling" in wire, f"sibling artifact dropped: {wire}"
 
 
 def test_read_failed_a2a_task_strict_asserts_on_artifactless_task():

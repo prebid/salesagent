@@ -515,7 +515,7 @@ class TestA2ARegistryBijection:
 
 
 class TestA2AAllSkillsDispatch:
-    """Verify all 13 skills are reachable through the transport layer."""
+    """Verify every registered skill (ALL_SKILLS, derived from the production registry) is reachable."""
 
     @pytest.mark.parametrize("skill", ALL_SKILLS)
     def test_skill_dispatches_not_404(self, client, auth_headers, skill):
