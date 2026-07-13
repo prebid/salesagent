@@ -171,9 +171,11 @@ def pytest_configure(config: pytest.Config) -> None:
 # xpass-graduation workflow). One row per gap; per-UC context lives on the row.
 _SPEC_GAP_XFAILS: list[tuple[frozenset[str], str]] = [
     # UC-001 (salesagent-8wf2 wiring): T-UC-001-main is env-wired and its steps
-    # run for real, but the wire carries neither relevance_score ordering nor
-    # brief_relevance — the impl sorts internally when AI ranking is enabled and
-    # never serializes either field. T-UC-001-alt-anonymous: the spec expects
+    # run for real, but the wire never carries brief_relevance (a pinned v3.1.1
+    # product field) — the impl sorts internally when AI ranking is enabled and
+    # never serializes it. (The former relevance_score ordering leg was
+    # RECONCILED away — not a pinned 3.1.1 field; see BR-UC-001 feature comment.)
+    # T-UC-001-alt-anonymous: the spec expects
     # success with pricing suppressed when brand_manifest_policy is public, but
     # every _impl runs the require_identity gate (src/core/auth.py) — a
     # token-less wire request gets AUTH_REQUIRED on all transports. Production

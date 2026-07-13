@@ -205,23 +205,13 @@ def then_products_have_required_fields(ctx: dict) -> None:
             assert product.get(field) is not None, f"{product.get('product_id')!r} missing required field {field!r}"
 
 
-@then("the products should be ordered by relevance_score descending")
-def then_products_ordered_by_relevance(ctx: dict) -> None:
-    """Production gap: relevance_score is not emitted on the products wire.
-
-    The impl sorts internally when AI ranking is enabled but never serializes
-    a relevance_score field — this hard assert keeps T-UC-001-main strict-xfail
-    until production emits it (see conftest _UC001_XFAIL_TAGS).
-    """
-    products = _wire_products(ctx)
-    scores = [p.get("relevance_score") for p in products]
-    assert all(s is not None for s in scores), f"relevance_score missing on the wire: {scores}"
-    assert scores == sorted(scores, reverse=True), f"products not ordered by relevance_score desc: {scores}"
-
-
 @then("each product should include brief_relevance explanation")
 def then_products_have_brief_relevance(ctx: dict) -> None:
-    """Production gap twin of the relevance ordering assert (strict-xfail)."""
+    """Production gap: brief_relevance is a pinned v3.1.1 product field (and a
+    get-products-request fields enum member) the wire never carries — this hard
+    assert keeps T-UC-001-main strict-xfail until production emits it (see
+    conftest _SPEC_GAP_XFAILS). Its former twin (relevance_score ordering) was
+    RECONCILED away: not a pinned 3.1.1 field, unobservable on the wire."""
     products = _wire_products(ctx)
     assert products, "no products returned"
     for product in products:

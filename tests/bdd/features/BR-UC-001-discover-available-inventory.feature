@@ -41,7 +41,12 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the response status should be "completed"
     And the response should contain "products" array
     And each product should have product_id, name, format_ids, publisher_properties, pricing_options, and reporting_capabilities
-    And the products should be ordered by relevance_score descending
+    # RECONCILED with pinned spec v3.1.1 (salesagent-ljaa, local edit — mirror upstream
+    # in adcp-req): relevance_score has ZERO occurrences in the 3.1.1 schemas
+    # (core/product.json has brief_relevance only), so relevance ORDERING is
+    # unobservable on the wire — the ordering assert demanded an off-schema field
+    # and could never graduate. POST-S3's observable leg is brief_relevance
+    # (in the product schema AND the get-products-request fields enum), asserted below.
     And each product should include brief_relevance explanation
     # POST-S1: Buyer knows what inventory matches their brief
     # POST-S2: Buyer can evaluate each product's pricing, formats, reporting_capabilities
