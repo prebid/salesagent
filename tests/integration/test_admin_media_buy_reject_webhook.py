@@ -36,13 +36,18 @@ def pending_reject_media_buy(integration_db):
     are committed (factories persist on commit; ContextManager commits its own writes)
     so the Flask route's separate get_db_session() sees them.
     """
+    from datetime import UTC, datetime, timedelta
+
     from sqlalchemy.orm import Session as SASession
 
     from src.core.database.database_session import get_engine
     from tests.factories import (
         ALL_FACTORIES,
         MediaBuyFactory,
+        MediaPackageFactory,
+        PricingOptionFactory,
         PrincipalFactory,
+        ProductFactory,
         PropertyTagFactory,
         PushNotificationConfigFactory,
         TenantFactory,
@@ -61,11 +66,40 @@ def pending_reject_media_buy(integration_db):
             principal_id="reject_wh_principal",
             platform_mappings={"mock": {"id": "reject_wh_advertiser"}},
         )
+        # Real product + pricing so the APPROVE path's execute_approved_media_buy
+        # can reconstruct and re-execute the stored raw_request (the approve
+        # webhook test drives the full adapter-execution branch).
+        product = ProductFactory(tenant=tenant, product_id="prod_reject_wh")
+        PricingOptionFactory(product=product)
+        now = datetime.now(UTC)
         media_buy = MediaBuyFactory(
             tenant=tenant,
             principal=principal,
             media_buy_id="mb_reject_wh",
             status="pending_approval",
+            start_time=now + timedelta(days=7),
+            end_time=now + timedelta(days=37),
+            raw_request={
+                "brand": {"domain": "reject-wh.example.com"},
+                "po_number": "REJECT-WH-1",
+                "start_time": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_time": (now + timedelta(days=37)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "packages": [
+                    {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
+                ],
+            },
+        )
+        # Persisted package row — the approve path's adapter execution reads the
+        # buy's MediaPackage records ("No packages found" aborts before the webhook).
+        MediaPackageFactory(
+            media_buy=media_buy,
+            package_id="pkg_reject_wh_1",
+            package_config={
+                "package_id": "pkg_reject_wh_1",
+                "product_id": product.product_id,
+                "budget": 5000.0,
+                "pricing_option_id": "cpm_usd_fixed",
+            },
         )
         PushNotificationConfigFactory(
             tenant=tenant,
@@ -141,7 +175,14 @@ class TestAdminMediaBuyRejectWebhook:
         mock_service.send_notification.assert_called_once_with(
             push_notification_config=ANY,
             payload=ANY,
-            metadata={"task_type": "create_media_buy"},
+            # Metadata carries the audit identifiers the webhook service logs
+            # (task_type/tenant_id/principal_id/media_buy_id — salesagent-hje2).
+            metadata={
+                "task_type": "create_media_buy",
+                "tenant_id": tenant_id,
+                "principal_id": "reject_wh_principal",
+                "media_buy_id": media_buy_id,
+            },
         )
 
     def test_reject_webhook_does_not_embed_completed_success(
@@ -194,3 +235,108 @@ class TestAdminMediaBuyRejectWebhook:
         assert not embedded.get("confirmed_at"), (
             "rejected webhook embeds confirmed_at — the buy was rejected, not confirmed/completed"
         )
+
+    def test_reject_webhook_embeds_wire_code_not_internal_code(
+        self, authenticated_admin_session, pending_reject_media_buy
+    ):
+        """The rejected webhook body carries the WIRE error code POLICY_VIOLATION.
+
+        Regression for salesagent-qyu9 (PR #1567 round-2 blocker 1): the reject
+        branch hand-picked the INTERNAL code MEDIA_BUY_REJECTED for the embedded
+        Error. src/core/exceptions.py maps MEDIA_BUY_REJECTED -> POLICY_VIOLATION
+        and lists it in INTERNAL_CODES ("Seller declined the buy; wire emits
+        POLICY_VIOLATION"); the tool path emits POLICY_VIOLATION for this same
+        event (AdCPMediaBuyRejectedError). The webhook must not leak the internal
+        token to the buyer agent — both paths carry the identical wire code.
+        """
+        tenant_id = pending_reject_media_buy["tenant_id"]
+        media_buy_id = pending_reject_media_buy["media_buy_id"]
+
+        captured: dict = {}
+
+        async def _capture(*, push_notification_config=None, payload=None, metadata=None):
+            captured["payload"] = payload
+
+        mock_service = MagicMock()
+        mock_service.send_notification = AsyncMock(side_effect=_capture)
+
+        with patch(
+            "src.admin.blueprints.operations.get_protocol_webhook_service",
+            return_value=mock_service,
+        ):
+            resp = authenticated_admin_session.post(
+                f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+                data={"action": "reject", "reason": "Budget too low"},
+            )
+
+        assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
+        assert "payload" in captured, "reject route did not send a webhook payload"
+        payload = captured["payload"]
+        body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+
+        embedded = body.get("result") or {}
+        errors = embedded.get("errors") or []
+        assert errors, f"rejected webhook must embed an errors array, got result={embedded!r}"
+        assert errors[0]["code"] == "POLICY_VIOLATION", (
+            f"rejected webhook leaked code {errors[0]['code']!r} to the buyer — the wire code for a "
+            "seller rejection is POLICY_VIOLATION (ERROR_CODE_MAPPING; MEDIA_BUY_REJECTED is internal)"
+        )
+        assert "Budget too low" in errors[0].get("message", ""), (
+            "rejection reason must reach the buyer in the error message"
+        )
+
+    def test_approve_webhook_embeds_confirmed_success_via_factory(
+        self, authenticated_admin_session, pending_reject_media_buy
+    ):
+        """The APPROVED media buy webhook embeds a confirmed completed Success.
+
+        Pin for salesagent-hje2 (approve site routed through the sync_success()
+        factory): the buy IS committed at approval time, so the embedded result
+        must keep asserting completion — status="completed", confirmed_at and
+        revision from the subclass defaults, the media_buy_id, and NO leaked
+        internal fields. Guards the factory switch against any wire drift and
+        pins that approve stays a Success (never the Submitted variant the
+        pending-approval CREATE path now emits — salesagent-2t4m).
+        """
+        tenant_id = pending_reject_media_buy["tenant_id"]
+        media_buy_id = pending_reject_media_buy["media_buy_id"]
+
+        captured: dict = {}
+
+        async def _capture(*, push_notification_config=None, payload=None, metadata=None):
+            captured["payload"] = payload
+            captured["metadata"] = metadata
+
+        mock_service = MagicMock()
+        mock_service.send_notification = AsyncMock(side_effect=_capture)
+
+        with patch(
+            "src.admin.blueprints.operations.get_protocol_webhook_service",
+            return_value=mock_service,
+        ):
+            resp = authenticated_admin_session.post(
+                f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+                data={"action": "approve"},
+            )
+
+        assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
+        assert "payload" in captured, "approve route did not send a webhook payload"
+        payload = captured["payload"]
+        body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+
+        assert body["status"] == "completed", f"outer status should be completed, got {body.get('status')!r}"
+        embedded = body.get("result") or {}
+        assert embedded.get("media_buy_id") == media_buy_id
+        assert embedded.get("status") == "completed", (
+            f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
+        )
+        assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
+        assert embedded.get("revision") == 1, "approved buy must carry the initial revision"
+        assert "workflow_step_id" not in embedded, "internal workflow_step_id must not leak onto the wire"
+        # Metadata now carries the audit identifiers the webhook service logs.
+        assert captured["metadata"] == {
+            "task_type": "create_media_buy",
+            "tenant_id": tenant_id,
+            "principal_id": "reject_wh_principal",
+            "media_buy_id": media_buy_id,
+        }
