@@ -1641,14 +1641,15 @@ class AdCPRequestHandler(RequestHandler):
         # Pre-process format_id: upgrade legacy strings to FormatId models.
         from src.core.format_cache import upgrade_legacy_format_id
 
-        creatives = []
-        for c in parameters["creatives"]:
-            if isinstance(c, dict) and "format_id" in c:
-                c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-            creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
+        with adcp_validation_boundary(context="sync_creatives request"):
+            creatives = []
+            for c in parameters["creatives"]:
+                if isinstance(c, dict) and "format_id" in c:
+                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
 
-        ctx_param = parameters.get("context")
-        context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
+            ctx_param = parameters.get("context")
+            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
         # Call core function with spec-compliant parameters (AdCP v2.5)
         response = core_sync_creatives_tool(
