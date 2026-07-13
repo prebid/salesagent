@@ -24,7 +24,7 @@ from src.core.tools._media_buy_status import (
     TERMINAL_STATUSES,
     resolve_canonical_status,
 )
-from src.core.tools.media_buy_list import _compute_status
+from src.core.tools.media_buy_list import _PERSISTED_STATUS_TO_ADCP, _compute_status
 
 # A reference date inside the default flight window below, so a generic serving
 # status resolves to "active" (not date-refined away).
@@ -131,6 +131,80 @@ class TestCanonicalVocabularyPinnedToSdk:
         """
         assert NO_MORE_DATA_STATUSES == TERMINAL_STATUSES - {"paused"}
         assert NO_MORE_DATA_STATUSES == {"completed", "rejected", "canceled", "failed"}
+
+
+class TestAdcpProjectionAgreesWithCanonicalMap:
+    """The update-response lifecycle projection stays in lockstep with the canonical map.
+
+    ``_PERSISTED_STATUS_TO_ADCP`` (media_buy_list.py) is the pure-column coercion
+    consumed by the update-response dual-emit; ``PERSISTED_STATUS_TO_CANONICAL``
+    (_media_buy_status.py) is the authoritative persisted->status map. They must
+    agree row-for-row modulo exactly TWO sanctioned adaptations (#1417 round-8
+    review):
+
+    1. ``failed`` -> ``rejected`` — the same lifecycle collapse ``_compute_status``
+       applies: the AdCP lifecycle enum has no "failed".
+    2. ``ready``/``scheduled`` -> ``pending_start`` — the coercion runs with NO row
+       or flight dates (buy-is-None fallback), so the date-gated serving aliases
+       cannot be date-refined; pre-flight is the truthful unrefined reading.
+
+    The per-row expectations below are LITERALS on purpose: recomputing them from
+    the production override dict would make this oracle tautological. A third
+    divergence — or an omitted persisted value — must fail loudly here.
+    """
+
+    # Every persisted MediaBuy.status value and the exact ADCP lifecycle value the
+    # projection must produce. Literal, not derived (see class docstring).
+    EXPECTED_ADCP_ROWS: dict[str, str] = {
+        "active": "active",
+        "approved": "active",
+        "ready": "pending_start",  # sanctioned adaptation #2
+        "scheduled": "pending_start",  # sanctioned adaptation #2
+        "pending_activation": "pending_start",
+        "paused": "paused",
+        "completed": "completed",
+        "rejected": "rejected",
+        "canceled": "canceled",
+        "failed": "rejected",  # sanctioned adaptation #1
+        "draft": "pending_creatives",
+        "pending": "pending_start",
+        "pending_approval": "pending_start",
+        "pending_creatives": "pending_creatives",
+        "pending_start": "pending_start",
+    }
+
+    def test_expected_rows_cover_the_canonical_key_universe(self):
+        """The literal expectations themselves cover exactly the canonical keys.
+
+        Guards the oracle: adding a persisted value to the canonical map without
+        deciding its lifecycle projection fails here first.
+        """
+        assert set(self.EXPECTED_ADCP_ROWS) == set(PERSISTED_STATUS_TO_CANONICAL)
+
+    def test_adcp_map_covers_every_persisted_status(self):
+        """No persisted value may ever be omitted from the lifecycle projection.
+
+        An omitted key makes ``normalize_persisted_media_buy_status`` return None
+        and silently drop the ``media_buy_status`` field for a real persisted row.
+        """
+        assert set(_PERSISTED_STATUS_TO_ADCP) == set(PERSISTED_STATUS_TO_CANONICAL), (
+            f"missing from ADCP projection: {set(PERSISTED_STATUS_TO_CANONICAL) - set(_PERSISTED_STATUS_TO_ADCP)}; "
+            f"extra in ADCP projection: {set(_PERSISTED_STATUS_TO_ADCP) - set(PERSISTED_STATUS_TO_CANONICAL)}"
+        )
+
+    def test_every_row_matches_canonical_modulo_sanctioned_adaptations(self):
+        """Each row equals its canonical value except the two sanctioned adaptations.
+
+        Asserted per row against the LITERAL expectations so a future third
+        divergence (like the past draft drift) fails loudly with the exact row.
+        """
+        for persisted, expected in self.EXPECTED_ADCP_ROWS.items():
+            actual = _PERSISTED_STATUS_TO_ADCP.get(persisted)
+            assert actual is not None, f"persisted {persisted!r} missing from _PERSISTED_STATUS_TO_ADCP"
+            assert actual is MediaBuyStatus(expected), (
+                f"persisted {persisted!r}: ADCP projection -> {actual.value!r}, expected {expected!r} "
+                f"(canonical: {PERSISTED_STATUS_TO_CANONICAL[persisted]!r})"
+            )
 
 
 class TestLegacyAndUnknownStatusesNotDropped:
