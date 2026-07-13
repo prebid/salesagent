@@ -222,6 +222,11 @@ class AdCPError(Exception):
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
+    # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
+    # "provide valid credentials") sets this so no raise site can forget the
+    # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
+    _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     error_code: str
@@ -249,7 +254,7 @@ class AdCPError(Exception):
         self.message = message
         self.details = details
         self.field = field
-        self.suggestion = suggestion
+        self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
         self.retry_after = retry_after
         self.context = context
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
@@ -415,6 +420,9 @@ class AdCPInvalidRequestError(AdCPValidationError):
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
 
 
+AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
@@ -436,6 +444,10 @@ class AdCPAuthenticationError(AdCPError):
     _default_status_code: ClassVar[int] = 401
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    # Every authentication rejection shares one buyer fix hint, so the graded
+    # top-level suggestion (error.json) can never be forgotten at a raise site
+    # (#1417 round-8 review item 4: 11 of 12 raise sites emitted an empty suggestion).
+    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
