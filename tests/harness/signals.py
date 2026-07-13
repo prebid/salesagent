@@ -33,16 +33,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from pydantic import BaseModel
-
 from src.core.schemas import GetSignalsRequest, GetSignalsResponse
 from tests.harness._base import IntegrationEnv
-
-
-class _McpGetSignalsArguments(BaseModel):
-    """One-field envelope: flattening this model yields nested {"req": {...}} MCP arguments."""
-
-    req: GetSignalsRequest
 
 
 class SignalsEnv(IntegrationEnv):
@@ -72,11 +64,11 @@ class SignalsEnv(IntegrationEnv):
     def call_mcp(self, **kwargs: Any) -> Any:
         """Call get_signals via Client(mcp) — full pipeline dispatch.
 
-        Wraps the request in ``_McpGetSignalsArguments`` so the arguments
-        reach FastMCP as nested ``{"req": {...}}`` (see module docstring).
+        Dispatches the FLAT request fields — exactly the arguments a
+        conformant buyer sends per the v3.1.1 get-signals-request schema.
         """
         req = kwargs.pop("req", None) or GetSignalsRequest()
-        return self._run_mcp_client("get_signals", GetSignalsResponse, req=_McpGetSignalsArguments(req=req), **kwargs)
+        return self._run_mcp_client("get_signals", GetSignalsResponse, req=req, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Serialize only the fields the caller actually set.

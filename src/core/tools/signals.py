@@ -7,6 +7,7 @@ implementation pattern from CLAUDE.md.
 import logging
 import time
 import uuid
+from typing import Any
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -201,19 +202,68 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
     return GetSignalsResponse(signals=signals, errors=None, context=req.context)
 
 
-async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | None = None):
+async def get_signals(
+    signal_spec: str | None = None,
+    signal_ids: list[str] | None = None,
+    signal_refs: list[str] | None = None,
+    discovery_mode: str | None = None,
+    filters: dict[str, Any] | None = None,
+    destinations: list[dict[str, Any]] | None = None,
+    countries: list[str] | None = None,
+    fields: list[str] | None = None,
+    max_results: int | None = None,
+    pagination: dict[str, Any] | None = None,
+    account: str | None = None,
+    context: ContextObject | dict | None = None,
+    ext: dict[str, Any] | None = None,
+    push_notification_config: dict[str, Any] | None = None,
+    if_pricing_version: str | None = None,
+    if_wholesale_feed_version: str | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
+    ctx: Context | ToolContext | None = None,
+):
     """Optional endpoint for discovering available signals (audiences, contextual, etc.)
 
-    MCP tool wrapper that delegates to the shared implementation.
+    MCP tool wrapper that delegates to the shared implementation. Exposes the
+    request fields FLAT on the MCP wire — the argument schema a conformant
+    buyer sends per the v3.1.1 get-signals-request — matching every sibling
+    MCP tool (a single ``req:`` parameter would nest the schema as
+    ``{"req": {...}}`` and reject spec-shaped calls).
 
     Args:
-        req: Request containing query parameters for signal discovery
-        context: FastMCP context (automatically provided)
+        ctx: FastMCP context (automatically provided)
 
     Returns:
         ToolResult with GetSignalsResponse data
     """
-    identity = resolve_identity_from_context(context, require_valid_token=False)
+    provided = {
+        name: value
+        for name, value in {
+            "signal_spec": signal_spec,
+            "signal_ids": signal_ids,
+            "signal_refs": signal_refs,
+            "discovery_mode": discovery_mode,
+            "filters": filters,
+            "destinations": destinations,
+            "countries": countries,
+            "fields": fields,
+            "max_results": max_results,
+            "pagination": pagination,
+            "account": account,
+            "context": context,
+            "ext": ext,
+            "push_notification_config": push_notification_config,
+            "if_pricing_version": if_pricing_version,
+            "if_wholesale_feed_version": if_wholesale_feed_version,
+            "adcp_version": adcp_version,
+            "adcp_major_version": adcp_major_version,
+        }.items()
+        if value is not None
+    }
+    with adcp_validation_boundary(context="get_signals request"):
+        req = GetSignalsRequest.model_validate(provided)
+    identity = resolve_identity_from_context(ctx, require_valid_token=False)
     response = await _get_signals_impl(req, identity)
     return ToolResult(content=str(response), structured_content=response)
 
