@@ -301,8 +301,8 @@ def _verify_principal(
 
     Raises:
         AdCPAuthenticationError: Missing principal
-        ValueError: Media buy not found
-        PermissionError: Principal doesn't own media buy
+        AdCPMediaBuyNotFoundError: Media buy not found
+        AdCPAuthorizationError: Principal doesn't own media buy
     """
     principal_id = require_principal_id(identity, context=context)
 

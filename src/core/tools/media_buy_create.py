@@ -2095,6 +2095,7 @@ async def _create_media_buy_impl(
                 budget_err,
                 suggestion="Set each package budget to a positive amount.",
                 field=package_field_path("budget"),
+                context=req.context,
             )
 
         # 2. DateTime validation
