@@ -30,7 +30,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.principal import PrincipalFactory
-from tests.helpers.format_assertions import assert_wire_format_id_is_object
+from tests.helpers.format_assertions import assert_wire_format_id_is_object, capture_advertised_format_id
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -7016,18 +7016,14 @@ def then_no_operation_level_errors(ctx: dict) -> None:
 def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     """Call get_products in-process to capture the seller's advertised format_id.
 
-    Mirrors the UC-005 roundtrip capture (uc005_format_id_roundtrip.py): seeds a
-    Product whose format_ids entry matches the format the sync path accepts on the
-    current transport (``_product_format_entry``), then calls ``_get_products_impl``
-    with the env identity and captures ``products[].format_ids[0]`` verbatim.
+    Shares the UC-005 capture core (tests/helpers/format_assertions.py::
+    capture_advertised_format_id): seeds a Product whose format_ids entry matches
+    the format the sync path accepts on the current transport
+    (``_product_format_entry``), then captures ``products[].format_ids[0]`` verbatim.
 
     TRANSPORT-BYPASS: the capture is scenario seeding, not a When dispatch — the
     transport only varies the subsequent sync_creatives call in the When step.
     """
-    import asyncio
-
-    from src.core.schemas import GetProductsRequest
-    from src.core.tools.products import _get_products_impl
     from tests.factories import PricingOptionFactory, ProductFactory
 
     env = ctx["env"]
@@ -7041,16 +7037,7 @@ def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     PricingOptionFactory(product=product)
     env._commit_factory_data()
 
-    req = GetProductsRequest(brief="format_id roundtrip on sync")
-    response = asyncio.run(_get_products_impl(req, env.identity))
-
-    assert response.products, "get_products returned no products — cannot capture format_id"
-    matching = [p for p in response.products if p.product_id == product.product_id]
-    assert matching, f"seeded product {product.product_id!r} not in get_products response"
-    assert matching[0].format_ids, "seeded product has no format_ids — cannot capture format_id"
-
-    fid = matching[0].format_ids[0]
-    captured = {"agent_url": str(fid.agent_url), "id": str(fid.id)}
+    captured = capture_advertised_format_id(env, product_id=product.product_id, brief="format_id roundtrip on sync")
     # Shape guard: the captured reference must already be the {agent_url, id} object.
     assert_wire_format_id_is_object(captured)
     ctx["captured_format_id"] = captured
