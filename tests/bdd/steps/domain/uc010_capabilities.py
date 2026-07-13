@@ -21,13 +21,16 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import wire_field, wire_path
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
-# Pinned spec v3.1.1 core/media-buy-features.json — exactly these properties.
+# Pinned spec v3.1.1 core/media-buy-features.json — exactly these properties,
+# ALL OPTIONAL ("Optional media-buy protocol features"; no required array):
+# a seller omits a flag it does not declare. Production declares the first
+# three today; committed_metrics_supported is asserted only-if-present.
 _FEATURE_FLAGS = (
     "inline_creative_management",
     "property_list_filtering",
     "catalog_management",
-    "committed_metrics_supported",
 )
+_OPTIONAL_FEATURE_FLAGS = ("committed_metrics_supported",)
 
 
 def _split_quoted(values: str) -> list[str]:
@@ -143,12 +146,21 @@ def then_account_section(ctx: dict) -> None:
     assert account.get("supported_billing"), f"account.supported_billing empty: {account.get('supported_billing')!r}"
 
 
-@then("the response should include media_buy.features section with all 4 flags")
+@then("the response should include media_buy.features section with the declared feature flags")
 def then_features_section(ctx: dict) -> None:
     features = wire_path(ctx, "media_buy.features")
     assert isinstance(features, dict), f"media_buy.features missing: {features!r}"
     for flag in _FEATURE_FLAGS:
         assert isinstance(features.get(flag), bool), f"features.{flag} not a bool: {features.get(flag)!r}"
+    for flag in _OPTIONAL_FEATURE_FLAGS:
+        # Spec-optional: absence means "not declared"; a present value must be bool.
+        assert features.get(flag) is None or isinstance(features[flag], bool), (
+            f"features.{flag} present but not a bool: {features[flag]!r}"
+        )
+    unknown = set(features) - set(_FEATURE_FLAGS) - set(_OPTIONAL_FEATURE_FLAGS)
+    assert all(isinstance(features[f], bool) for f in unknown), (
+        f"additionalProperties must be booleans per the pinned schema: {unknown}"
+    )
 
 
 @then("the response should include media_buy.supported_pricing_models")

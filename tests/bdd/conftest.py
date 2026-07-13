@@ -182,14 +182,15 @@ _SPEC_GAP_XFAILS: list[tuple[frozenset[str], str]] = [
         frozenset({"T-UC-001-main", "T-UC-001-alt-anonymous"}),
         "UC-001 spec-production gap — see _SPEC_GAP_XFAILS comments",
     ),
-    # UC-010 (salesagent-8wf2 wiring): both rich main scenarios demand the
-    # `account` section (POST-S3: sandbox flag + billing models), which
-    # production never populates — GetAdcpCapabilitiesResponse.account stays
-    # None pending the account management epic (salesagent-oj0). Steps are
-    # wired and every other assert runs for real.
+    # UC-010 (salesagent-8wf2 wiring): both rich main scenarios end with three
+    # production-gap asserts (grouped last so the other eight run green):
+    # media_buy.supported_pricing_models and media_buy.reporting_delivery_methods
+    # are spec-optional sections production does not emit yet, and the `account`
+    # section (POST-S3: sandbox flag + billing models) stays None pending the
+    # account management epic (salesagent-oj0).
     (
         frozenset({"T-UC-010-main-mcp", "T-UC-010-main-rest"}),
-        "UC-010 spec-production gap — account section not populated (salesagent-oj0)",
+        "UC-010 spec-production gap — pricing_models/reporting_delivery_methods/account not populated (salesagent-oj0)",
     ),
     # UC-008 (salesagent-8wf2 wiring): main-mcp demands value_type on every
     # signal; the production catalog (src/core/tools/signals.py) never sets it
