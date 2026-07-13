@@ -97,6 +97,29 @@ def _merge_rest_version_pins(
     return merged
 
 
+def _effective_compat_version(pins: Mapping[str, Any]) -> str | None:
+    """The version string response compatibility should gate on.
+
+    A REST buyer may pin the release via ``adcp_version`` (release string) or the
+    deprecated ``adcp_major_version`` (int), in the query OR the JSON body.
+    Response v2-compat must gate on whichever release the buyer actually
+    negotiated — NOT the ``GetProductsBody.adcp_version`` model default
+    (``"1.0.0"``), which a query-only or major-only pin never populates, so a v3
+    client pinning by query/major would otherwise be served the legacy v2 shape
+    (``is_fixed`` / ``rate``). Returns ``None`` when the buyer sent no pin at all
+    (unpinned legacy client → caller falls back to the body default and gets v2
+    compat, preserving existing behavior). The deprecated integer major is
+    projected to ``MAJOR.0`` so ``needs_v2_compat`` classifies it by major.
+    """
+    version = pins.get("adcp_version")
+    if isinstance(version, str):
+        return version
+    major = pins.get("adcp_major_version")
+    if isinstance(major, int):
+        return f"{major}.0"
+    return None
+
+
 async def _validate_version_pins(request: Request) -> None:
     """AdCP version negotiation on the REST boundary (parity with MCP/A2A).
 
@@ -107,18 +130,22 @@ async def _validate_version_pins(request: Request) -> None:
     AdCPVersionUnsupportedError, rendered by the app-level AdCPError handler
     as the two-layer VERSION_UNSUPPORTED envelope. Starlette caches the body,
     so the endpoint's own body parsing is unaffected.
+
+    Also stashes the effective negotiated release on ``request.state`` so the
+    handler can gate response compatibility on the release the buyer actually
+    pinned (via any channel), not just the body model default.
     """
     query_pins = _coerce_rest_query_version_pins(request.query_params)
+    pins: Mapping[str, Any] = query_pins
     if request.method in ("POST", "PUT", "PATCH"):
         try:
             body = await request.json()
         except ValueError:
-            validate_adcp_version_pins(query_pins)
-            return  # malformed/empty JSON is reported by the endpoint's body parsing
+            body = None  # malformed/empty JSON is reported by the endpoint's body parsing
         if isinstance(body, dict):
-            validate_adcp_version_pins(_merge_rest_version_pins(query_pins, body))
-            return
-    validate_adcp_version_pins(query_pins)
+            pins = _merge_rest_version_pins(query_pins, body)
+    validate_adcp_version_pins(pins)
+    request.state.adcp_compat_version = _effective_compat_version(pins)
 
 
 async def _version_after_resolve(request: Request, _identity=resolve_auth) -> None:
@@ -286,7 +313,7 @@ class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (
 
 
 @router.post("/products", dependencies=[Depends(_version_after_resolve)])
-async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
+async def get_products(request: Request, body: GetProductsBody, identity: ResolvedIdentity | None = resolve_auth):
     """Get available products matching the brief (auth-optional discovery skill).
 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
@@ -298,12 +325,18 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
         filters=body.filters,
     )
     response = await products_module._get_products_impl(req, identity)
+    # Gate response compatibility on the release the buyer actually negotiated
+    # (query or body, adcp_version or adcp_major_version), stashed by
+    # _validate_version_pins. Falling back to body.adcp_version alone (default
+    # "1.0.0") made a v3 query pin or a major-only pin silently serve the legacy
+    # v2 shape (is_fixed / rate), while an unpinned client still gets the v2
+    # default via the fallback (#1512/#1546 review).
+    served_version = getattr(request.state, "adcp_compat_version", None) or body.adcp_version
     # Pass the MODEL, not a pre-dumped dict: apply_version_compat short-circuits
     # on a dict (the legacy pass-through) and would never derive the v2-compat
     # pricing fields (is_fixed / rate / price_guidance.floor) from the
-    # pricing-option models. Dumping here made the "1.0.0" Body default a no-op,
-    # so unpinned legacy clients silently got clean v3 responses (#1546 review).
-    return apply_version_compat("get_products", response, body.adcp_version)
+    # pricing-option models.
+    return apply_version_compat("get_products", response, served_version)
 
 
 @router.get("/capabilities", dependencies=[Depends(_version_after_resolve)])

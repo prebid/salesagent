@@ -306,7 +306,11 @@ class TestRestGetProductsWrapper:
         assert "products" in data
 
     def _post_products(self, body: dict):
-        """POST /api/v1/products with a fixed-price product wired into the impl.
+        """POST /api/v1/products (no query pins) with a fixed-price product."""
+        return self._post_products_to("/api/v1/products", body)
+
+    def _post_products_to(self, url: str, body: dict):
+        """POST to a products URL (optionally carrying query version pins).
 
         apply_version_compat is NOT mocked — the assertion is on the real wire
         JSON, so the transform must actually run against the returned model.
@@ -326,7 +330,7 @@ class TestRestGetProductsWrapper:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
             try:
-                return TestClient(app).post("/api/v1/products", json=body)
+                return TestClient(app).post(url, json=body)
             finally:
                 app.dependency_overrides.clear()
 
@@ -359,6 +363,76 @@ class TestRestGetProductsWrapper:
         po = response.json()["products"][0]["pricing_options"][0]
         assert "is_fixed" not in po, f"v3 client must get a clean response, got v2 fields: {po}"
         assert "rate" not in po
+
+    def test_rest_query_release_pin_gets_clean_response(self):
+        """A v3 release pinned via the QUERY string gets clean v3, not the v2 shape (#1512).
+
+        Response compat previously gated on GetProductsBody.adcp_version alone
+        (default "1.0.0"), which a query pin never populates — so a v3 query client
+        was silently served is_fixed/rate.
+        """
+        from urllib.parse import quote
+
+        from src.core.adcp_version import supported_adcp_versions
+
+        response = self._post_products_to(
+            f"/api/v1/products?adcp_version={quote(supported_adcp_versions()[0])}", {"brief": "ads"}
+        )
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"query v3 pin must get a clean response, got v2 fields: {po}"
+        assert "rate" not in po
+
+    def test_rest_body_major_pin_gets_clean_response(self):
+        """A v3 pin via the deprecated body adcp_major_version gets clean v3 (#1512)."""
+        from src.core.adcp_version import adcp_major_version
+
+        response = self._post_products({"brief": "ads", "adcp_major_version": adcp_major_version()})
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"body major={adcp_major_version()} pin must get a clean response: {po}"
+        assert "rate" not in po
+
+    def test_rest_query_major_pin_gets_clean_response(self):
+        """A v3 pin via the QUERY adcp_major_version gets clean v3 (#1512)."""
+        from src.core.adcp_version import adcp_major_version
+
+        response = self._post_products_to(
+            f"/api/v1/products?adcp_major_version={adcp_major_version()}", {"brief": "ads"}
+        )
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"query major={adcp_major_version()} pin must get a clean response: {po}"
+        assert "rate" not in po
+
+    def test_rest_conflicting_query_and_body_pins_rejected(self):
+        """Conflicting query vs body release pins are rejected before any response is built (#1512)."""
+        from src.core.adcp_version import supported_adcp_versions
+
+        response = self._post_products_to(
+            "/api/v1/products?adcp_version=4.0", {"brief": "ads", "adcp_version": supported_adcp_versions()[0]}
+        )
+
+        assert response.status_code == 400
+        assert response.json()["adcp_error"]["code"] == "VALIDATION_ERROR"
+
+    def test_rest_matching_query_and_body_pins_pass_clean(self):
+        """The same v3 release pinned in BOTH query and body is accepted and served clean (#1512)."""
+        from urllib.parse import quote
+
+        from src.core.adcp_version import supported_adcp_versions
+
+        pin = supported_adcp_versions()[0]
+        response = self._post_products_to(
+            f"/api/v1/products?adcp_version={quote(pin)}", {"brief": "ads", "adcp_version": pin}
+        )
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"matching v3 pins must get a clean response: {po}"
 
 
 # ---------------------------------------------------------------------------
