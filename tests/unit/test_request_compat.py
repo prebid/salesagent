@@ -55,6 +55,33 @@ class TestBrandManifestTranslation:
         assert "brand" not in result.params
         assert "brand_manifest" not in result.params
 
+    def test_brand_manifest_malformed_ipv6_url_string_stripped(self):
+        """Malformed URL strings must not crash compat middleware (#1537 review)."""
+        result = normalize_request_params(
+            "get_products",
+            {"brand_manifest": "https://[", "brief": "ads"},
+        )
+        assert "brand" not in result.params
+        assert "brand_manifest" not in result.params
+
+    def test_brand_manifest_malformed_ipv6_url_dict_stripped(self):
+        """Malformed URL in brand_manifest dict must not crash compat middleware."""
+        result = normalize_request_params(
+            "get_products",
+            {"brand_manifest": {"url": "http://[::1"}, "brief": "ads"},
+        )
+        assert "brand" not in result.params
+        assert "brand_manifest" not in result.params
+
+    def test_brand_manifest_bare_domain_dict_stripped(self):
+        """Dict branch must reject bare domains like the string branch (URL-only guard)."""
+        result = normalize_request_params(
+            "get_products",
+            {"brand_manifest": {"url": "acme.com"}, "brief": "ads"},
+        )
+        assert "brand" not in result.params
+        assert "brand_manifest" not in result.params
+
 
 # ---------------------------------------------------------------------------
 # 2. campaign_ref → buyer_campaign_ref
