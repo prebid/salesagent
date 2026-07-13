@@ -1,8 +1,11 @@
-# ADR-009 — Honest policy for #1228 F1 / F2 / G2 (no fake "fix incrementally")
+# ADR-009 — Honest policy for #1228 F1 / F2 / G2 (ratchet what bites; accept low-signal)
 
 ## Status
 
-Proposed 2026-07-09 (awaiting @chrishuie / @ChrisHuie sign-off on this PR).
+Proposed 2026-07-09; **revised 2026-07-13** per [@ChrisHuie](https://github.com/ChrisHuie)
+review on [#1579](https://github.com/prebid/salesagent/pull/1579) (aligns with
+[@KonstantinMirin](https://github.com/KonstantinMirin) preference for ratchet over permanent amnesty).
+Awaiting re-Accept on this PR.
 
 ## Context
 
@@ -11,125 +14,136 @@ Issue [#1228](https://github.com/prebid/salesagent/issues/1228) Cluster F/G call
 
 | ID | Surface | What #1228 found |
 |----|---------|------------------|
-| **F1** | `pyproject.toml` `[tool.ruff.lint].ignore` | Rules ignored with stale violation counts and "fix incrementally" comments — no ratchet, so debt can grow forever while CI stays green |
-| **F2** | `mypy.ini` TODO block | `check_untyped_defs` / `disallow_incomplete_defs` / `warn_return_any` left off with "enable incrementally" since 2025-12 — no progress mechanism |
-| **G2** | `obligation_coverage_allowlist.json` (~301 IDs) | Framed as "no decrement mechanism" / largest stagnation risk |
+| **F1** | `pyproject.toml` `[tool.ruff.lint].ignore` | Rules ignored with stale violation counts and "fix incrementally" comments — no ceiling, so debt can grow forever while CI stays green |
+| **F2** | `mypy.ini` TODO block | `check_untyped_defs` / related flags left off with "enable incrementally" since 2025-12 — no progress mechanism |
+| **G2** | `obligation_coverage_allowlist.json` | Framed as "no decrement mechanism" / largest stagnation risk |
 
 Mechanical #1228 residuals (A4, A5, B1, C5, C7, D2, E1, E2, H2) are already closed on
-`main` (see [status comment](https://github.com/prebid/salesagent/issues/1228#issuecomment-4930137012)).
-These three need an **explicit product/quality decision**, not another silent config tweak.
+`main`. These three need an **explicit quality decision**.
 
-Measured cost of flipping F1/F2 on today (2026-07-09, `src/`):
+Measured cost of enabling F1/F2 as **hard gates** today (2026-07-09 / Chris re-count,
+`src/`):
 
 | Switch | Approx. failures |
 |--------|------------------|
-| Ruff `C901` alone | ~186 |
+| Ruff `C901` alone | ~188 |
 | Ruff `PLR091*` + `PLR2004` + `B904` + `F403` | ~614 combined |
 | Mypy `--check-untyped-defs` | ~226 errors / 33 files |
 
-Enabling any of these as hard gates without a plan would red-main the repo. Building
-per-rule ratchets (like `.type-ignore-baseline`) is valuable **follow-up work**, but only
-after we stop lying in comments about incremental progress that is not happening.
+A **count ratchet** is not the same cost: freeze today's number, fail only on an
+increase, auto-lower on a decrease — zero forced remediation of existing code. We
+already run that pattern for `.type-ignore-baseline` and `.duplication-baseline`.
 
 ## Decision
 
-### F1 — Ruff ignores: split "style noise" vs "small debt"
+### F1 — Ruff: ratchet pure-complexity; permanently accept low-signal style rules
 
-**Permanently accepted** (complexity / magic-number style — not bug finders at current
-thresholds; enabling them is a multi-sprint refactor, not a CI flip):
+**Ratchet targets** (follow-up: `.ruff-complexity-baseline`, near-copy of
+`check_type_ignore_count.py` — **not implemented in this PR**):
 
-- `C901`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`, `PLR2004`
+- `C901` — complexity
+- `PLR0912` — too-many-branches
+- `PLR0915` — too-many-statements
 
-Comments in `pyproject.toml` must say **permanently accepted (ADR-009)**, not
-"fix incrementally".
+These are where new code most needs a mechanical stop. Until the baseline lands,
+comments say **ratchet target (ADR-009)** — not "fix incrementally" and not
+"permanently accepted".
 
-**Justified keep** (already had honest reasons; counts may drift — cleanup is welcome
-but not gated):
+**Permanently accepted** (linter is low-signal at current thresholds):
+
+- `PLR0911` — too-many-return-statements (guard-clause returns)
+- `PLR0913` — too-many-arguments (wide spec-mirroring signatures)
+- `PLR2004` — magic-value comparisons (inline constants often readable)
+
+Comments must say **permanently accepted (ADR-009)**.
+
+**Justified keep / boy-scout debt** (not a ratchet; clean up when touching):
 
 - `E501`, `E402`, `E741`, `B027`, `F841`, `F821`, `F405`
-- `B904`, `F403`, `E722` — still desirable to clean up; tracked as ordinary tech debt,
-  **not** as an implied ratchet. Prefer fixing in the file you touch (boy-scout) over a
-  mass campaign.
+- `B904`, `F403`, `E722`
 
-**Out of scope for this ADR:** implementing `.ruff-complexity-baseline` / per-rule
-violation counters. If we want ratchets later, file a follow-up issue after this ADR is
-Accepted — do not reintroduce "fix incrementally" without a machine-enforced ceiling.
+**Ratchet guardrail:** a baseline going **up** requires review justification. The
+`--update-baseline` path rewrites a tracked file — increases must be contested in
+review, or the ratchet decays into the same false "looks-enforced" #1228 named.
 
-### F2 — Mypy lenient flags: permanently deferred for current pin
+### F2 — Mypy lenient flags: follow-up ratchet, not permanently deferred
 
-Keep current defaults:
+Keep current defaults **for now** (`check_untyped_defs` / `disallow_incomplete_defs` /
+`warn_return_any` / `disallow_untyped_defs` = `False`).
 
-- `check_untyped_defs = False`
-- `disallow_incomplete_defs = False`
-- `warn_return_any = False`
-- `disallow_untyped_defs = False`
+**Do not** label this permanently deferred. Policy:
 
-Replace the stale "TODO: Enable these incrementally" block with an explicit
-**permanently deferred (ADR-009)** note. Enabling any of these is a dedicated initiative
-(hundreds of errors); it is not implied by day-to-day PRs.
+- Primary target: a **`check_untyped_defs` error-count ratchet** (same move as
+  `.type-ignore-baseline`), filed as a tracked follow-up.
+- Caveat: mypy counts drift with tool/plugin versions — scope carefully; not this PR.
+- Until that lands, day-to-day type-safety progress remains
+  `.type-ignore-baseline` + current Quality Gate mypy config.
 
-Existing ratchets that **do** enforce type-safety progress remain:
+Comments in `mypy.ini` must say **follow-up ratchet (ADR-009)**, not "permanently
+deferred" or "enable incrementally" without a ceiling.
 
-- `.type-ignore-baseline` + `check_type_ignore_count.py` (no new `# type: ignore`)
-- `mypy` in Quality Gate / pre-commit on the current config
+### G2 — Obligation allowlist: document the existing exact-match ratchet
 
-### G2 — Obligation allowlist: current shrink ratchet is the policy
+**Correction to #1228:** G2 already has a decrement mechanism.
+`tests/unit/test_architecture_obligation_coverage.py` enforces covered-or-allowlisted,
+stale-entry removal, and exact size match (`behavioral - covered`).
 
-**Correction to #1228:** G2 is **not** "no decrement mechanism".
-`tests/unit/test_architecture_obligation_coverage.py` already enforces:
-
-1. Every behavioral obligation is covered **or** allowlisted.
-2. Allowlist entries that gain a `Covers:` test must be removed (stale-entry fail).
-3. Allowlist size must equal `behavioral - covered` (exact match).
-
-**Accepted policy:**
+**Policy:**
 
 - Allowlist **may grow** when new behavioral obligations are documented without tests
-  (intentional backlog; reviewable in the PR that adds the obligation + allowlist row).
-- Allowlist **must shrink** when coverage lands (already CI-enforced).
-- We do **not** add a hard numeric ceiling in this PR (would block legitimate new
-  obligation docs). Optional follow-up: a soft dashboard / issue template, not a gate.
+  (intentional backlog; reviewable in that PR).
+- Allowlist **must shrink** when a `Covers:` test lands (already CI-enforced).
+- No hard numeric ceiling in this PR.
 
-Document this in the guard module docstring so the next reader does not re-open G2 as
-"unratcheted amnesty".
+**Reconcile with "allowlists can only shrink"** (CLAUDE.md / structural-guard rule):
+that rule applies to **violation** allowlists (code that breaks an invariant — new
+rows are new debt). The obligation-coverage file is a **coverage backlog**: growth
+means "we documented an obligation we have not tested yet," which is reviewable
+progress, not silent amnesty. Covered IDs must still leave the list. Same intent
+(no fake incremental cleanup); different object.
 
 ## Consequences
 
 **Good:**
 
-- #1228 F1/F2/G2 become closable with an honest paper trail.
-- New contributors stop reading "fix incrementally" as a promise CI does not keep.
-- Reviewers can reject PRs that re-add amnesty language without an ADR update.
+- F1/F2 stop promising progress CI does not enforce; ratchet intent is explicit.
+- Complexity growth gets a machine ceiling once the follow-up baseline lands.
+- G2 docstring matches the exact-match test and no longer contradicts the general
+  shrink-only guard rule without explanation.
+- Reviewers can reject `--update-baseline` increases without justification.
 
 **Tradeoffs:**
 
-- Complexity / untyped-defs debt will not auto-shrink via CI.
-- Progress on B904/F403/E722 and mypy strictness depends on deliberate follow-up work.
-- Chris (or maintainer) must explicitly Accept this ADR (or request ratchets instead)
-  before we mark #1228 F/G closed.
+- This PR is **policy + comment honesty only** — it does not ship
+  `.ruff-complexity-baseline` or a mypy untyped-defs counter.
+- Until follow-ups land, C901 / PLR0912 / PLR0915 / `check_untyped_defs` debt can still
+  grow (honest gap, same as today).
 
 ## Alternatives considered
 
-**Ratchet everything now** — rejected for this PR. Per-rule ruff baselines + mypy
-strictness campaigns are large, easy to get wrong, and need buy-in on *which* rules
-deserve ceilings. This ADR unblocks that conversation instead of shipping a half-baked
-counter.
+**Permanently accept all F1 complexity rules** — rejected on review. A count ratchet is
+cheap; permanent accept removes the mechanical stop where new code hurts most.
 
-**Delete the ignores / enable mypy flags** — rejected; ~800+ ruff hits and ~226 mypy
-errors would brick CI with no remediation plan.
+**Enable the rules / mypy flags as hard gates now** — rejected; ~800+ ruff hits and
+~226 mypy errors would brick CI with no remediation plan.
 
-**Leave "fix incrementally" comments** — rejected; that is the defect #1228 named.
+**Leave "fix incrementally" / "permanently deferred" comments** — rejected; that is
+the defect #1228 named (or its inverse overclaim).
+
+**Implement F1 + F2 ratchets in this PR** — deferred to follow-ups so the decision
+record can land without coupling policy Accept to a new hook.
 
 ## Review trigger
 
 Revisit when:
 
-1. A follow-up issue implements machine-enforced ceilings for any F1 rule or F2 flag, or
-2. Obligation allowlist size becomes a release-blocking concern (then consider a soft
-   budget + exception process).
+1. `.ruff-complexity-baseline` (C901 / PLR0912 / PLR0915) merges, or
+2. `check_untyped_defs` error-count ratchet merges, or
+3. Obligation allowlist size becomes a release-blocking concern.
 
 ## References
 
 - [#1228](https://github.com/prebid/salesagent/issues/1228) Cluster F / G
+- [#1579](https://github.com/prebid/salesagent/pull/1579) decision PR
 - Existing ratchets: `.type-ignore-baseline`, `.duplication-baseline`, `.coverage-baseline`
 - Guard: `tests/unit/test_architecture_obligation_coverage.py`
