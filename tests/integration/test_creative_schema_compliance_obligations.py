@@ -11,35 +11,21 @@ UC-006-CREATIVE-SCHEMA-COMPLIANCE-09, UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
 from __future__ import annotations
 
 import pytest
-from adcp.types import CreativeAsset
-from adcp.types import FormatId as AdcpFormatId
 
 from tests.factories.creative_asset import (
     AssetSpec,
     asset_spec,
     build_assets,
     image_spec,
-    make_creative_asset_minimal,
+    make_test_banner_creative,
     text_spec,
     video_spec,
 )
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
-DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
-
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-
-def _make_creative_asset(**overrides) -> CreativeAsset:
-    """Build a minimal valid CreativeAsset for testing."""
-    defaults = {
-        "creative_id": "c_test_1",
-        "name": "Test Banner",
-        "format_id": AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
-        "assets": build_assets(image_spec("banner")),
-    }
-    defaults.update(overrides)
-    return make_creative_asset_minimal(**defaults)
+_make_creative_asset = make_test_banner_creative  # Canonical version from tests.factories.creative_asset
 
 
 # ---------------------------------------------------------------------------
