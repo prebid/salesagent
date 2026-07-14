@@ -284,6 +284,55 @@ class TestCreativeValidation:
             # Should succeed without registry lookup (non-HTTP agent_url)
             assert response.creatives[0].action != "failed"
 
+    def test_input_validation_failure_uses_correctable_code(self, integration_db):
+        """An input-validation failure (here: empty name) is buyer-CORRECTABLE:
+        the per-creative error code must be VALIDATION_ERROR, not SERVICE_UNAVAILABLE
+        — the latter implies a transient outage and drives a conforming buyer to
+        retry a permanent error forever."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(creatives=[_make_creative_asset(creative_id="c_bad", name="")])
+            assert len(response.creatives) == 1
+            result = response.creatives[0]
+            assert result.action == "failed"
+            codes = [getattr(e, "code", None) for e in (result.errors or [])]
+            assert "SERVICE_UNAVAILABLE" not in codes, f"correctable failure mis-coded as transient: {codes}"
+            assert "VALIDATION_ERROR" in codes, f"expected VALIDATION_ERROR, got {codes}"
+
+    def test_unknown_format_failure_uses_correctable_code(self, integration_db):
+        """An unknown-format failure (typed AdCPValidationError, recovery correctable)
+        must surface as VALIDATION_ERROR, not the default SERVICE_UNAVAILABLE the
+        `except AdCPError` handler used to emit for every non-transient typed error."""
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # Make the registry reject the format so the real unknown-format
+            # AdCPValidationError path runs (the env's default mock accepts any id).
+            from unittest.mock import AsyncMock
+
+            env.mock["registry"].return_value.get_format = AsyncMock(return_value=None)
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(
+                        creative_id="c_bad_format",
+                        format_id=AdcpFormatId(
+                            agent_url="https://creative.adcontextprotocol.org",
+                            id="format_does_not_exist_xyz",
+                        ),
+                    )
+                ]
+            )
+            assert len(response.creatives) == 1
+            result = response.creatives[0]
+            assert result.action == "failed"
+            codes = [getattr(e, "code", None) for e in (result.errors or [])]
+            assert "SERVICE_UNAVAILABLE" not in codes, f"unknown format mis-coded as transient: {codes}"
+            assert "VALIDATION_ERROR" in codes, f"expected VALIDATION_ERROR, got {codes}"
+
 
 # ---------------------------------------------------------------------------
 # Validation Mode Tests — Covers: UC-006-MAIN-MCP-05
