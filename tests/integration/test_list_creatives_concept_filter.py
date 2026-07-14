@@ -25,6 +25,12 @@ MCP rejects the malformed filter.
 
 Spec: ``core/creative-filters.json`` (concept_ids ``minItems: 1``) + the BR-UC-018
 ext-c contract (validation failure → VALIDATION_ERROR + suggestion).
+
+This module also hosts the list_creatives untyped-``data``-blob coercion guards: a
+malformed ``concept_id``/``concept_name`` (``TestNumericConceptCoercion`` /
+``TestNonScalarConceptValueDropped``, #1407) or ``tags``
+(``TestMalformedTagsBlobCoerced``, #1508) value in the blob must be coerced or
+dropped-and-logged, never crash the whole listing on one bad row.
 """
 
 import pytest
@@ -200,3 +206,64 @@ class TestSellerConceptEnrichmentIsFilterable:
             # (the reader projects explicit kwargs + the subclass extra="ignore" policy),
             # but nothing else pins it — a future schema change that echoed data must redden.
             assert "concept_source" not in creatives[0]
+
+
+class TestMalformedTagsBlobCoerced:
+    """A malformed ``tags`` value in the untyped ``data`` blob is coerced to a valid
+    ``list[str]`` (or dropped to absent) and logged, never crashing the whole listing —
+    #1508, the list-field sibling of the concept coercion guards above.
+
+    ``Creative.tags`` is typed ``list[str] | None`` but read straight from the blob, so
+    a bare string or a list carrying numeric/object elements would 500 the entire
+    listing (``VALIDATION_ERROR``) during response construction. Reverting the
+    ``_coerce_blob_str_list`` call at the ``tags=`` site back to the raw
+    ``data.get("tags")`` reddens both tests (the listing raises mid-build)."""
+
+    def test_non_list_tags_value_is_dropped(self, integration_db, caplog):
+        """A non-list tags blob (a bare string) is dropped to absent, not crashed on."""
+        import logging
+
+        from tests.factories import CreativeFactory
+
+        with CreativeListEnv() as env:
+            tenant, principal = _seed_authenticated_principal(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data={"assets": {}, "tags": "premium"},  # bare string, not a list[str]
+            )
+            with caplog.at_level(logging.WARNING):
+                result = env.call_via(Transport.REST)
+
+            assert not result.is_error, f"non-list tags value crashed the listing: {result.error!r}"
+            creative = result.wire_response["creatives"][0]
+            # Dropped to None → exclude_none omits the key from the wire entirely.
+            assert "tags" not in creative
+            # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
+            assert "Dropping non-list tags value" in caplog.text
+
+    def test_non_string_tags_elements_are_coerced_or_dropped(self, integration_db, caplog):
+        """Scalar elements are stringified, non-scalar elements dropped+logged, order kept."""
+        import logging
+
+        from tests.factories import CreativeFactory
+
+        with CreativeListEnv() as env:
+            tenant, principal = _seed_authenticated_principal(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data={"assets": {}, "tags": [1, "keep", {"k": "v"}]},  # int + str + corrupt dict
+            )
+            with caplog.at_level(logging.WARNING):
+                result = env.call_via(Transport.REST)
+
+            assert not result.is_error, f"malformed tags elements crashed the listing: {result.error!r}"
+            creative = result.wire_response["creatives"][0]
+            # 1 -> "1" (scalar stringified), "keep" kept, {"k": "v"} dropped; order preserved.
+            assert creative["tags"] == ["1", "keep"]
+            assert "Dropping non-scalar tags value" in caplog.text

@@ -35,22 +35,50 @@ from src.core.validation_helpers import format_validation_error
 logger = logging.getLogger(__name__)
 
 
-def _coerce_concept_value(value: Any) -> str | None:
-    """Coerce an untyped concept blob value to the spec's string type.
+def _coerce_blob_scalar(value: Any, field_label: str) -> str | None:
+    """Coerce an untyped JSON-blob value to a spec string field.
 
-    ``concept_id``/``concept_name`` are strings per the AdCP response schema but
-    live in the untyped JSON ``data`` blob, where an out-of-band producer may write
-    a non-string scalar (e.g. a numeric CM360 group id). Scalars are stringified.
-    A non-scalar (list/dict) is corrupt for a string field, so it is dropped with a
-    warning — surfaced in logs (No Quiet Failures) rather than projected as a Python
-    repr — instead of crashing the whole listing on one bad row.
+    Fields like ``concept_id``/``concept_name`` are strings per the AdCP response
+    schema but live in the untyped JSON ``data`` blob, where an out-of-band producer
+    may write a non-string scalar (e.g. a numeric CM360 group id). Scalars are
+    stringified. A non-scalar (list/dict) is corrupt for a string field, so it is
+    dropped with a warning — surfaced in logs (No Quiet Failures) rather than projected
+    as a Python repr — instead of crashing the whole listing on one bad row.
     """
     if value is None or isinstance(value, str):
         return value
     if isinstance(value, (int, float)):  # bool is an int subclass; str(True)="True" is acceptable
         return str(value)
-    logger.warning("Dropping non-scalar concept value of type %s from creative listing", type(value).__name__)
+    logger.warning("Dropping non-scalar %s value of type %s from creative listing", field_label, type(value).__name__)
     return None
+
+
+def _coerce_concept_value(value: Any) -> str | None:
+    """Coerce an untyped ``concept_id``/``concept_name`` blob value to its spec string type."""
+    return _coerce_blob_scalar(value, "concept")
+
+
+def _coerce_blob_str_list(value: Any, field_label: str = "tags") -> list[str] | None:
+    """Coerce an untyped JSON-blob value to a spec ``list[str]`` field.
+
+    ``Creative.tags`` is typed ``list[str] | None`` but is read from the untyped
+    ``data`` blob, where a malformed value (a bare string, or a list with numeric /
+    object elements) would fail Creative validation and crash the whole listing on one
+    bad row — the same untyped-blob hazard :func:`_coerce_blob_scalar` handles for the
+    scalar concept fields. A non-list value is corrupt for a list field and dropped to
+    ``None`` with a warning; within a list each element is coerced via
+    :func:`_coerce_blob_scalar` (scalars stringified, non-scalars dropped+logged), so
+    ``[1, 2] -> ["1", "2"]`` and ``[{...}]`` drops the bad element. An emptied (or
+    already-empty) list collapses to ``None`` so ``exclude_none`` omits the key,
+    mirroring the concept fields' drop-to-absent behavior.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        logger.warning("Dropping non-list %s value of type %s from creative listing", field_label, type(value).__name__)
+        return None
+    coerced = [c for el in value if (c := _coerce_blob_scalar(el, field_label)) is not None]
+    return coerced or None
 
 
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
@@ -323,23 +351,24 @@ def _list_creatives_impl(
             # untyped and an external producer may write numeric group ids, so coerce
             # to the spec's string type via _coerce_concept_value rather than letting a
             # non-string value fail Creative validation and crash the whole listing.
-            concept_data = db_creative.data or {}
+            data_blob = db_creative.data or {}
 
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
                 format_id=format_obj,
                 assets=assets_dict,
-                # FIXME(#1508): raw untyped blob into typed list[str] — a malformed
-                # tags value (bare string, or [1, 2]) crashes the whole listing, the
-                # same hazard _coerce_concept_value handles for concept fields.
-                tags=db_creative.data.get("tags") if db_creative.data else None,
+                # tags/concept_id/concept_name are all read from the untyped data blob,
+                # where an out-of-band producer may write a malformed value; coerce
+                # (stringify scalars, drop+log corrupt data) rather than let one bad row
+                # crash the whole listing on Creative validation (#1508).
+                tags=_coerce_blob_str_list(data_blob.get("tags")),
                 # AdCP spec fields (listing Creative)
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,
-                concept_id=_coerce_concept_value(concept_data.get("concept_id")),
-                concept_name=_coerce_concept_value(concept_data.get("concept_name")),
+                concept_id=_coerce_concept_value(data_blob.get("concept_id")),
+                concept_name=_coerce_concept_value(data_blob.get("concept_name")),
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )
