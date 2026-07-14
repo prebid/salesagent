@@ -70,6 +70,12 @@ class Transport(StrEnum):
     E2E_A2A = "e2e_a2a"  # Real A2A via httpx → nginx → server (placeholder)
 
 
+# The three real wire transports (A2A, MCP, REST) — excludes IMPL (no wire) and the
+# E2E variants (need a live Docker stack). Shared by wire-level integration tests that
+# parametrize the same behavior across every transport a buyer can reach.
+ALL_WIRE = [Transport.A2A, Transport.MCP, Transport.REST]
+
+
 # Maps Transport → ResolvedIdentity.protocol value
 TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.IMPL: "mcp",  # _impl doesn't inspect protocol; keep default

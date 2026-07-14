@@ -162,8 +162,8 @@ class TestCreativeRepoGetByPrincipal:
         p2_ids = {c.creative_id for c in page2.creatives}
         assert p1_ids.isdisjoint(p2_ids)
 
-    def test_status_filter(self, integration_db):
-        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — status filter narrows results."""
+    def test_statuses_filter_single_value(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — statuses filter narrows results."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
@@ -172,10 +172,28 @@ class TestCreativeRepoGetByPrincipal:
 
             session = env.get_session()
             repo = CreativeRepository(session, "test_tenant")
-            result = repo.get_by_principal("p1", status="approved")
+            result = repo.get_by_principal("p1", statuses=["approved"])
 
-        assert result.total_count == 1
-        assert result.creatives[0].creative_id == "c_approved"
+            assert result.total_count == 1
+            assert result.creatives[0].creative_id == "c_approved"
+
+    def test_statuses_filter_matches_any(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — statuses (plural) filter matches
+        any of the given statuses and excludes others (mirrors MediaBuyRepository). #1502."""
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_approved", status="approved")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_rejected", status="rejected")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_pending", status="pending_review")
+
+            session = env.get_session()
+            repo = CreativeRepository(session, "test_tenant")
+            result = repo.get_by_principal("p1", statuses=["approved", "rejected"])
+
+            # Only the two requested statuses; the pending_review creative is excluded.
+            assert result.total_count == 2
+            assert {c.creative_id for c in result.creatives} == {"c_approved", "c_rejected"}
 
 
 class TestCreativeRepoListByPrincipal:
