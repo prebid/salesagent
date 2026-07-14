@@ -12,7 +12,6 @@ from typing import Any
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import (
-    ContextObject,
     CreativeAction,
     McpWebhookPayload,
 )
@@ -43,7 +42,7 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.utils import require_tenant_access
+from src.admin.utils import echo_context, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
@@ -176,11 +175,9 @@ async def _call_webhook_for_creative_status(
                 for c in all_creatives
             ]
 
-            # Convert context dict to ContextObject if present
-            context_data = step.request_data.get("context")
-            context_obj: ContextObject | None = None
-            if context_data and isinstance(context_data, dict):
-                context_obj = ContextObject.model_construct(**context_data)
+            # Echo the buyer's request context (shared helper, also used by the
+            # media-buy approve webhook in blueprints/operations.py).
+            context_obj = echo_context(step.request_data)
 
             complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False, context=context_obj)
 
