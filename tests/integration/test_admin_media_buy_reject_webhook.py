@@ -26,8 +26,8 @@ WEBHOOK_URL = "https://buyer.example.com/adcp-webhook"
 
 
 @pytest.fixture
-def pending_reject_media_buy(integration_db):
-    """A pending-approval media buy wired for the admin reject webhook path.
+def make_pending_media_buy(integration_db):
+    """Factory for a pending-approval media buy wired for the admin approve/reject webhook path.
 
     Builds (via factories + ContextManager production APIs — no session.add in the
     test body) a tenant + principal, a pending_approval media buy, an active
@@ -35,6 +35,9 @@ def pending_reject_media_buy(integration_db):
     whose ObjectWorkflowMapping ties it to the media buy with action "reject". All rows
     are committed (factories persist on commit; ContextManager commits its own writes)
     so the Flask route's separate get_db_session() sees them.
+
+    ``request_data_context``: optional dict stored as ``request_data["context"]`` on
+    the workflow step — drives the approve webhook's context-echo branch.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -55,10 +58,8 @@ def pending_reject_media_buy(integration_db):
 
     engine = get_engine()
     session = SASession(bind=engine)
-    try:
-        for f in ALL_FACTORIES:
-            f._meta.sqlalchemy_session = session
 
+    def _make(request_data_context: dict | None = None):
         tenant = TenantFactory(tenant_id="reject_wh_tenant")
         PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
         principal = PrincipalFactory(
@@ -109,6 +110,12 @@ def pending_reject_media_buy(integration_db):
         )
 
         # Tenant-scoped approval workflow step + object mapping (production API).
+        request_data = {
+            "push_notification_config": {"url": WEBHOOK_URL},
+            "protocol": "mcp",
+        }
+        if request_data_context is not None:
+            request_data["context"] = request_data_context
         cm = ContextManager()
         context = cm.create_context(
             tenant_id=tenant.tenant_id,
@@ -120,10 +127,7 @@ def pending_reject_media_buy(integration_db):
             owner="publisher",
             status="requires_approval",
             tool_name="create_media_buy",
-            request_data={
-                "push_notification_config": {"url": WEBHOOK_URL},
-                "protocol": "mcp",
-            },
+            request_data=request_data,
             object_mappings=[
                 {
                     "object_type": "media_buy",
@@ -133,14 +137,25 @@ def pending_reject_media_buy(integration_db):
             ],
         )
 
-        yield {
+        return {
             "tenant_id": tenant.tenant_id,
             "media_buy_id": media_buy.media_buy_id,
         }
+
+    try:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = session
+        yield _make
     finally:
         for f in ALL_FACTORIES:
             f._meta.sqlalchemy_session = None
         session.close()
+
+
+@pytest.fixture
+def pending_reject_media_buy(make_pending_media_buy):
+    """Pending media buy with NO request_data context (the absent-echo branch)."""
+    return make_pending_media_buy()
 
 
 class TestAdminMediaBuyRejectWebhook:
@@ -333,6 +348,12 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
         assert embedded.get("revision") == 1, "approved buy must carry the initial revision"
         assert "workflow_step_id" not in embedded, "internal workflow_step_id must not leak onto the wire"
+        # Absent-context branch pin (PR #1567 round-3): with no "context" key in
+        # the workflow step's request_data, the echo path stays dormant and the
+        # embedded result must not invent one (exclude_none omits the None field).
+        assert embedded.get("context") is None, (
+            f"approve webhook with no stored request context must not embed one, got {embedded.get('context')!r}"
+        )
         # Metadata now carries the audit identifiers the webhook service logs.
         assert captured["metadata"] == {
             "task_type": "create_media_buy",
@@ -340,3 +361,45 @@ class TestAdminMediaBuyRejectWebhook:
             "principal_id": "reject_wh_principal",
             "media_buy_id": media_buy_id,
         }
+
+    def test_approve_webhook_echoes_buyer_request_context(self, authenticated_admin_session, make_pending_media_buy):
+        """The approve webhook echoes the buyer's create_media_buy request context.
+
+        Oracle for PR #1567 round-3 (ChrisHuie review): 4f60cbf4c resolved the
+        context TODO by echoing request_data["context"], but no fixture carried a
+        context, so the non-None echo path never executed — reverting the echo to
+        context={} (or dropping it) kept every test green. This drives the real
+        admin approve route with a stored buyer context and asserts the outbound
+        webhook body's embedded result echoes it verbatim (ContextObject is an
+        extra=allow passthrough — arbitrary buyer keys survive).
+        """
+        buyer_context = {"correlation_id": "corr-approve-echo-1", "buyer_ref": "buyer-ref-42"}
+        ids = make_pending_media_buy(request_data_context=buyer_context)
+
+        captured: dict = {}
+
+        async def _capture(*, push_notification_config=None, payload=None, metadata=None):
+            captured["payload"] = payload
+
+        mock_service = MagicMock()
+        mock_service.send_notification = AsyncMock(side_effect=_capture)
+
+        with patch(
+            "src.admin.blueprints.operations.get_protocol_webhook_service",
+            return_value=mock_service,
+        ):
+            resp = authenticated_admin_session.post(
+                f"/tenant/{ids['tenant_id']}/media-buy/{ids['media_buy_id']}/approve",
+                data={"action": "approve"},
+            )
+
+        assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
+        assert "payload" in captured, "approve route did not send a webhook payload"
+        payload = captured["payload"]
+        body = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+
+        embedded = body.get("result") or {}
+        assert embedded.get("context") == buyer_context, (
+            f"approve webhook must echo the buyer's request context verbatim, "
+            f"got {embedded.get('context')!r} (expected {buyer_context!r})"
+        )

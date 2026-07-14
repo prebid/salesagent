@@ -567,7 +567,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                 if media_buy and media_buy.status == "pending_approval":
                     media_buy.status = "rejected"
-                    attributes.flag_modified(media_buy, "status")
 
                 db_session.commit()
 
