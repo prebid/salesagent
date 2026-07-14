@@ -28,6 +28,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -152,6 +153,11 @@ class Tenant(Base, JSONValidatorMixin):
     )
     signals_agents = relationship(
         "SignalsAgent",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+    )
+    tmp_providers = relationship(
+        "TMPProvider",
         back_populates="tenant",
         cascade="all, delete-orphan",
     )
@@ -1397,6 +1403,119 @@ class SignalsAgent(Base):
         Index("idx_signals_agents_tenant", "tenant_id"),
         Index("idx_signals_agents_enabled", "enabled"),
     )
+
+
+class TMPProvider(Base):
+    """Buyer-side TMP provider endpoint registration.
+
+    Each tenant can register one or more TMP providers (buyer-side agents that
+    implement the Trusted Match Protocol). The Sales Agent exposes these
+    registrations via a REST endpoint (``GET /tmp/providers``). The router polls
+    that endpoint — it never reads from this table directly.
+
+    Schema alignment: ``provider-registration.json`` (AdCP spec PR #2210).
+    """
+
+    __tablename__ = "tmp_providers"
+
+    provider_id: Mapped[str] = mapped_column(
+        PG_UUID(as_uuid=False),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
+    context_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    identity_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Conditional: MUST be present and non-empty when identity_match is true.
+    countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    uid_types: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Optional: property RIDs this provider serves. When absent, serves all properties.
+    properties: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    auth_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Stored encrypted via Fernet (same helper as Tenant._gemini_api_key).
+    # Use the auth_credentials property to read/write — never access the column directly.
+    _auth_credentials: Mapped[str | None] = mapped_column("auth_credentials", Text, nullable=True)
+    # Background health-check results (written by TMP health scheduler, read by admin UI).
+    health_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_health_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="tmp_providers")
+
+    __table_args__ = (
+        Index("idx_tmp_providers_tenant", "tenant_id"),
+        Index("idx_tmp_providers_status", "status"),
+    )
+
+    @property
+    def auth_credentials(self) -> str | None:
+        """Get decrypted auth credentials."""
+        if not self._auth_credentials:
+            return None
+        from src.core.utils.encryption import decrypt_api_key
+
+        try:
+            return decrypt_api_key(self._auth_credentials)
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(
+                f"Failed to decrypt auth credentials for TMP provider {self.provider_id}"
+            ) from exc
+
+    @auth_credentials.setter
+    def auth_credentials(self, value: str | None) -> None:
+        """Encrypt and store auth credentials."""
+        if not value:
+            self._auth_credentials = None
+            return
+        from src.core.utils.encryption import encrypt_api_key
+
+        self._auth_credentials = encrypt_api_key(value)
+
+    def to_dict(self, *, include_conditional: bool = True) -> dict:
+        """Serialize provider to a dict matching the TMP Router contract.
+
+        Args:
+            include_conditional: When True (default), include countries/uid_types/
+                properties only if they are non-None.  When False, always include
+                them (as None for legacy rows).
+        """
+        result: dict = {
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "endpoint": self.endpoint,
+            "context_match": self.context_match,
+            "identity_match": self.identity_match,
+            "timeout_ms": self.timeout_ms,
+            "priority": self.priority,
+            "status": self.status,
+        }
+        if include_conditional:
+            if self.countries:
+                result["countries"] = self.countries
+            if self.uid_types:
+                result["uid_types"] = self.uid_types
+            if self.properties:
+                result["properties"] = self.properties
+        else:
+            result["countries"] = self.countries
+            result["uid_types"] = self.uid_types
+            result["properties"] = self.properties
+        return result
 
 
 class GAMInventory(Base):

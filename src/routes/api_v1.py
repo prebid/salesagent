@@ -276,11 +276,16 @@ async def create_media_buy(
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )
+
     return response.model_dump(mode="json")
 
 
 @router.put("/media-buys/{media_buy_id}")
-async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
+async def update_media_buy(
+    media_buy_id: str,
+    body: UpdateMediaBuyBody,
+    identity: ResolvedIdentity = require_auth,
+):
     """Update an existing media buy (auth required)."""
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
@@ -293,6 +298,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         end_time=body.end_time,
         identity=identity,
     )
+
     return response.model_dump(mode="json")
 
 

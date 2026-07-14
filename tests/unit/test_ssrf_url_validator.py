@@ -11,6 +11,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 from src.core.security.url_validator import BLOCKED_HOSTNAMES, check_url_ssrf
+from tests.unit._tmp_helpers import make_super_admin_client
 
 
 class TestCheckUrlSsrf:
@@ -177,15 +178,7 @@ class TestValidateAgentUrl:
 
 def _make_signals_agent_client():
     """Create a Flask test client authenticated as super admin for signals agent endpoints."""
-    from src.admin.app import create_app
-
-    app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["test_user"] = "test_super_admin@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["authenticated"] = True
-    return client
+    return make_super_admin_client()
 
 
 def _mock_db_for_signals_add(mock_db, tenant_id="default"):

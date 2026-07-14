@@ -52,6 +52,7 @@ from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
 from src.routes.rest_compat_middleware import RestCompatMiddleware
+from src.routes.tmp_providers import router as tmp_providers_router
 
 logger = logging.getLogger(__name__)
 
@@ -355,11 +356,15 @@ def _create_dynamic_agent_card(request: Request):
             proto = forwarded_proto.split(",")[0].strip().lower()
             if proto in ("http", "https"):
                 return proto
-        return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
+        # Use exact equality (not startswith) to avoid the substring class bug:
+        # "startswith('localhost')" would misclassify "localhost.evil.com" as local.
+        # Strip the port component first so "localhost:8080" is handled correctly.
+        bare = hostname.split(":", 1)[0]
+        return "http" if bare in {"localhost", "127.0.0.1"} else "https"
 
     apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")
     if apx_incoming_host and not _is_valid_hostname(apx_incoming_host):
-        logger.warning(f"Invalid Apx-Incoming-Host header value, ignoring: {apx_incoming_host!r}")
+        logger.warning("Invalid Apx-Incoming-Host header value, ignoring: %r", apx_incoming_host)
         apx_incoming_host = None
     if apx_incoming_host:
         protocol = get_protocol(apx_incoming_host)
@@ -367,7 +372,7 @@ def _create_dynamic_agent_card(request: Request):
     else:
         host = _get_header_case_insensitive(request.headers, "Host") or ""
         if host and not _is_valid_hostname(host):
-            logger.warning(f"Invalid Host header value, ignoring: {host!r}")
+            logger.warning("Invalid Host header value, ignoring: %r", host)
             host = ""
         sales_domain = get_sales_agent_domain()
         if host and host != sales_domain:
@@ -466,6 +471,9 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 app.include_router(api_v1_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
+# TMP Router discovery endpoint — internal network only, no auth.
+# GET /tenant/{tenant_id}/tmp-providers/discovery
+app.include_router(tmp_providers_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):

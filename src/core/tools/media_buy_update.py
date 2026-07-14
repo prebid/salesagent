@@ -1419,6 +1419,10 @@ async def update_media_buy(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
+
+    from src.services.tmp_provider_sync import fire_tmp_sync
+
+    fire_tmp_sync(response, identity.tenant_id if identity else None)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -1495,4 +1499,9 @@ def update_media_buy_raw(
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
     # A2A/REST callers pass identity directly without a FastMCP Context, so there
     # is no workflow context_id to forward — _impl creates one if needed.
-    return _update_media_buy_impl(req=req, identity=identity, context_id=None)
+    result = _update_media_buy_impl(req=req, identity=identity, context_id=None)
+
+    from src.services.tmp_provider_sync import fire_tmp_sync
+
+    fire_tmp_sync(result, identity.tenant_id if identity else None)
+    return result
