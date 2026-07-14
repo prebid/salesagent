@@ -4,7 +4,8 @@
 
 Proposed 2026-07-09; **revised 2026-07-13** per [@ChrisHuie](https://github.com/ChrisHuie)
 review on [#1579](https://github.com/prebid/salesagent/pull/1579) (aligns with
-[@KonstantinMirin](https://github.com/KonstantinMirin) preference for ratchet over permanent amnesty).
+[@KonstantinMirin](https://github.com/KonstantinMirin) preference for ratchet over permanent amnesty);
+**honesty fix 2026-07-14** (C901 table → 186; drop inline stale counts from ratchet comments).
 Awaiting re-Accept on this PR.
 
 ## Context
@@ -21,14 +22,13 @@ Issue [#1228](https://github.com/prebid/salesagent/issues/1228) Cluster F/G call
 Mechanical #1228 residuals (A4, A5, B1, C5, C7, D2, E1, E2, H2) are already closed on
 `main`. These three need an **explicit quality decision**.
 
-Measured cost of enabling F1/F2 as **hard gates** today (2026-07-09 / Chris re-count,
-`src/`):
+Measured cost of enabling F1/F2 as **hard gates** today (`src/`, locked tooling):
 
-| Switch | Approx. failures |
-|--------|------------------|
-| Ruff `C901` alone | ~188 |
-| Ruff `PLR091*` + `PLR2004` + `B904` + `F403` | ~614 combined |
-| Mypy `--check-untyped-defs` | ~226 errors / 33 files |
+| Switch | Failures |
+|--------|----------|
+| Ruff `C901` alone | **186** (ruff 0.15.14; owned by `.ruff-complexity-baseline` once #1613 merges — do not restale inline) |
+| Ruff `PLR091*` + `PLR2004` + `B904` + `F403` | ~614 combined (2026-07-09 manual snapshot) |
+| Mypy `--check-untyped-defs` | ~226 errors / 33 files (2026-07-09 manual snapshot) |
 
 A **count ratchet** is not the same cost: freeze today's number, fail only on an
 increase, auto-lower on a decrease — zero forced remediation of existing code. We

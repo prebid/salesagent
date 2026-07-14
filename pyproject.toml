@@ -144,10 +144,10 @@ ignore = [
     # "Ratchet target" = follow-up count baseline (not this PR). "Permanently accepted" =
     # low-signal, no ceiling. "Boy-scout debt" = fix when touching.
     #
-    # --- Ratchet targets (follow-up: .ruff-complexity-baseline; ADR-009) ---
-    "C901",    # ~188 complex functions — count ratchet, not hard gate / not permanent accept
-    "PLR0912", # ~132 too-many-branches — same ratchet class as C901
-    "PLR0915", # ~108 too-many-statements — same ratchet class as C901
+    # --- Ratchet targets (count-ratcheted via .ruff-complexity-baseline; ADR-009) ---
+    "C901",    # count-ratcheted via .ruff-complexity-baseline (ADR-009); not a hard gate
+    "PLR0912", # count-ratcheted via .ruff-complexity-baseline (ADR-009); not a hard gate
+    "PLR0915", # count-ratcheted via .ruff-complexity-baseline (ADR-009); not a hard gate
     #
     # --- Permanently accepted (low-signal style; ADR-009) ---
     "PLR0911", # too-many-return-statements — guard-clause returns; low signal
