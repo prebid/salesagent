@@ -46,12 +46,19 @@ def _sync_one_creative_via_mcp():
 
 
 def test_mcp_wire_changes_and_warnings_are_never_null(integration_db):
-    """Per-creative changes/warnings on the MCP wire are lists or absent, never null."""
+    """Per-creative changes/warnings/errors on the MCP wire are lists or absent, never null.
+
+    All three fields were redeclared with default_factory=list in creative.py for the
+    same structured_content null risk (PR #1567 round-3: the oracle must cover errors
+    too — reverting only the errors redeclaration kept this test green before).
+    Mutation check: revert any of the three redeclarations to inherit the parent's
+    None default -> this test goes red on that field.
+    """
     wire = _sync_one_creative_via_mcp()
     creatives = wire.get("creatives")
     assert isinstance(creatives, list) and creatives, f"MCP wire must carry the creatives array, got {creatives!r}"
     for i, item in enumerate(creatives):
-        for field in ("changes", "warnings"):
+        for field in ("changes", "warnings", "errors"):
             if field in item:
                 assert isinstance(item[field], list), (
                     f"creatives[{i}].{field} must be an array on the MCP wire (spec 3.1.1 "
