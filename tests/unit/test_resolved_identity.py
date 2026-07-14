@@ -154,6 +154,35 @@ class TestResolveIdentity:
 
         assert identity.tenant_id == "default"
 
+    @patch("src.core.auth_utils.get_principal_from_token")
+    @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
+    @patch("src.core.resolved_identity.get_tenant_by_subdomain")
+    def test_invalid_token_error_does_not_disclose_tenant_id(
+        self, mock_get_subdomain, mock_get_vhost, mock_get_principal
+    ):
+        """An invalid-token rejection must not echo the resolved tenant id back to
+        the (unauthenticated) caller — the tenant is resolved from headers before
+        the token is validated, so leaking it discloses an internal identifier
+        (the tenant UUID in a host-routed deploy)."""
+        from src.core.exceptions import AdCPAuthenticationError
+
+        tenant_uuid = "902c0725-ca84-44ca-be0b-c81d6f0f8689"
+        mock_get_subdomain.return_value = {"tenant_id": tenant_uuid, "name": "Secret Tenant"}
+        mock_get_principal.return_value = (None, None)  # token does not resolve
+
+        with pytest.raises(AdCPAuthenticationError) as exc:
+            resolve_identity(
+                headers={"x-adcp-tenant": tenant_uuid, "x-adcp-auth": "wrong-token"},
+                auth_token="wrong-token",
+                protocol="mcp",
+                require_valid_token=True,
+            )
+
+        message = str(exc.value)
+        assert tenant_uuid not in message, f"auth error leaked the tenant id: {message!r}"
+        # Still actionable, just not disclosing.
+        assert "invalid" in message.lower()
+
 
 class TestAuthConsolidation:
     """Test that auth.py delegates to auth_utils.py (with retry)."""
