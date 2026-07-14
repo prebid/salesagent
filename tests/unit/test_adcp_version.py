@@ -66,17 +66,36 @@ def test_supported_versions_derived_from_sdk_spec_pin():
 
 
 def test_supported_versions_normalizes_full_semver_prerelease_not_to_bare_stable():
-    """The pinned 3.1.0-beta.3 build advertises "3.1-beta.3", never a bare "3.1".
+    """A prerelease spec pin advertises "3.1-beta.3", never a bare "3.1".
 
-    Authoritative: core/version-envelope.json (v3.1.0-beta.3) — "SDKs that read
-    full-semver values from bundle metadata ... MUST normalize to
-    release-precision (\"3.1-beta.1\") before emitting on the wire — meta-field
-    values are NOT valid wire values." Dropping the ``-beta.3`` suffix advertised
-    a stable release this build does not serve and made the seller reject a
-    correct "3.1-beta.3" buyer pin with VERSION_UNSUPPORTED.
+    Authoritative: core/version-envelope.json — "SDKs that read full-semver
+    values from bundle metadata ... MUST normalize to release-precision
+    (\"3.1-beta.1\") before emitting on the wire — meta-field values are NOT
+    valid wire values." Dropping the ``-beta.3`` suffix advertised a stable
+    release the build did not serve and made the seller reject a correct
+    "3.1-beta.3" buyer pin with VERSION_UNSUPPORTED.
+
+    The live pin is now the stable 3.1.1 (adcp 6.6.0), which no longer
+    exercises the prerelease branch — so the law is pinned against a synthetic
+    prerelease value at the SDK seam, plus the live stable expectation.
     """
-    assert adcp.get_adcp_spec_version() == "3.1.0-beta.3"  # guards the pin this exact expectation is grounded on
-    assert supported_adcp_versions() == ("3.1-beta.3",)
+    from unittest.mock import patch
+
+    # Live pin (guards the exact grounding of the stable expectation below).
+    assert adcp.get_adcp_spec_version() == "3.1.1"
+    assert supported_adcp_versions() == ("3.1",)
+
+    # Prerelease law survives independent of the live pin: PATCH dropped,
+    # prerelease segment preserved. _spec_release_components is @cache'd, so
+    # clear it around the synthetic pin (and after, restoring the live parse).
+    from src.core import adcp_version as adcp_version_module
+
+    try:
+        with patch("src.core.adcp_version.adcp.get_adcp_spec_version", return_value="3.1.0-beta.3"):
+            adcp_version_module._spec_release_components.cache_clear()
+            assert supported_adcp_versions() == ("3.1-beta.3",)
+    finally:
+        adcp_version_module._spec_release_components.cache_clear()
 
 
 def test_build_version_is_full_sdk_semver():
