@@ -158,8 +158,9 @@ class TestMediaBuyOrRaise:
         session = MagicMock()
         session.scalars.return_value.first.side_effect = [None, media_buy]
         repo = MediaBuyRepository(session, "tenant-1")
-        assert repo.get_package_or_raise("mb-1", "pkg-raw-only") is not None  # no raise
-        session.add.assert_called_once()
+        package = repo.get_package_or_raise("mb-1", "pkg-raw-only")  # no raise
+        assert package is not None
+        session.add.assert_called_once_with(package)
 
     def test_get_package_or_raise_raises_when_absent_everywhere(self):
         media_buy = MagicMock()
