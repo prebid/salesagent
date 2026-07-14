@@ -25,12 +25,21 @@ def upgrade() -> None:
     # that constant — a later change to the runtime set does not (and must not)
     # rewrite already-applied history. Single, unbatched UPDATE: the media_buys
     # table is small enough at this revision that batching is unwarranted.
+    #
+    # The extra ``OR (status = 'draft' AND approved_at IS NOT NULL)`` clause
+    # backfills a historical class: before #1544, the admin approve route parked a
+    # seller-approved-but-creative-blocked buy at ``draft`` (with ``approved_at``
+    # stamped) instead of ``pending_creatives``. Those rows WERE seller-confirmed,
+    # so their ``confirmed_at`` must be set from the approval instant even though
+    # ``draft`` is otherwise an unconfirmed status. (Going forward the route holds
+    # such buys at ``pending_creatives``, so this only reaches pre-fix rows.)
     op.execute(
         sa.text(
             """
             UPDATE media_buys
             SET confirmed_at = COALESCE(approved_at, created_at)
             WHERE status NOT IN ('draft', 'pending', 'pending_approval', 'rejected', 'failed')
+               OR (status = 'draft' AND approved_at IS NOT NULL)
             """
         )
     )
