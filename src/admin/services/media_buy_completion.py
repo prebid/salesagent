@@ -20,6 +20,7 @@ from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from sqlalchemy.orm import Session
 
+from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -229,11 +230,23 @@ def finalize_media_buy_approval(
     ``approved_at``/``approved_by`` are omitted when finalizing a buy already stamped at
     an earlier ``pending_creatives`` hold (creative-unblock): ``confirmed_at`` is
     write-once and ``approved_at`` keeps the original admin-approval instant.
+
+    **Crash-recoverable (#1637).** The claim moves the buy to the transient
+    ``finalizing`` status (NOT the final serving status) and commits BEFORE the
+    adapter, so a crash between the commit and terminalization never leaves the buy
+    seller-confirmed/serving with no remote order. Phase 2
+    (:func:`_run_adapter_and_finalize`) runs the adapter idempotently, then publishes
+    the flight-derived serving status AND terminalizes the step in ONE transaction;
+    the scheduler's reconciliation pass re-drives any buy stranded in ``finalizing``.
     """
     repo = MediaBuyRepository(session, tenant_id)
+    # PHASE 1 — single-winner CLAIM to the transient ``finalizing`` status, committed
+    # BEFORE any external work. Bumps revision + stamps approved_at/approved_by. The
+    # buy is NOT yet seller-confirmed (finalizing is unconfirmed), so confirmed_at is
+    # deferred to the serving transition in phase 2 (stamped from this approved_at). #1637.
     claimed = repo.update_status_computed(
         media_buy_id,
-        compute_target,
+        lambda _mb: MEDIA_BUY_FINALIZING_STATUS,
         approved_at=approved_at,
         approved_by=approved_by,
         expected_status=expected_status,
@@ -245,33 +258,123 @@ def finalize_media_buy_approval(
         return FinalizeOutcome.NOT_CLAIMED, None
     session.commit()
 
-    success, error_msg = run_adapter()
-    if not success:
-        repo.update_status_or_raise(media_buy_id, "failed")
-        # Store a buyer-facing two-layer error envelope as the step's response_data
-        # (NOT just error_message): durable tasks/get rebuilds the failed Task's
-        # artifact from response_data, so without this the buyer polls a FAILED task
-        # with no failure details. #1544 (P1).
-        error_envelope = build_two_layer_error_envelope(
-            AdCPAdapterError(error_msg or "Adapter execution failed while creating the media buy")
-        )
-        WorkflowRepository(session, tenant_id).update_status(
-            step_id, status="failed", error_message=error_msg, response_data=error_envelope
-        )
-        session.commit()
-        return FinalizeOutcome.ADAPTER_FAILED, error_msg
-
-    _terminalize_step_and_emit(
+    return _run_adapter_and_finalize(
         session,
         tenant_id,
-        media_buy=repo.get_by_id_or_raise(media_buy_id),
-        packages=repo.get_packages(media_buy_id),
+        media_buy_id=media_buy_id,
         step_id=step_id,
         step_data=step_data,
-        step_status="completed",
-        task_status=AdcpTaskStatus.completed,
+        compute_target=compute_target,
+        run_adapter=run_adapter,
     )
+
+
+def _remote_order_exists(repo: MediaBuyRepository, media_buy_id: str) -> bool:
+    """True once the adapter has created the remote order for this buy.
+
+    ``platform_order_id`` is persisted to every package's ``package_config`` AFTER
+    ``adapter.create_media_buy`` returns (media_buy_create.py). Its presence is the
+    durable idempotency anchor: a resume that sees it must NOT call the adapter
+    again. #1637.
+    """
+    return any((pkg.package_config or {}).get("platform_order_id") for pkg in repo.get_packages(media_buy_id))
+
+
+def _run_adapter_and_finalize(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str | None,
+    step_data: dict[str, Any] | None,
+    compute_target: Callable[[MediaBuy], str | None],
+    run_adapter: Callable[[], tuple[bool, str | None]],
+) -> tuple[FinalizeOutcome, str | None]:
+    """Phase 2 of the crash-recoverable approval: idempotent adapter + atomic publish.
+
+    Precondition: the buy is claimed in ``finalizing``. Shared by the initial
+    finalizer and the scheduler's reconciliation pass, so a mid-finalize crash is
+    resumed WITHOUT a duplicate remote order:
+
+      1. Idempotency guard — if ``platform_order_id`` is already persisted, a prior
+         attempt got past the adapter; skip it.
+      2. Otherwise run the adapter. On a handled failure, mark the buy + step
+         ``failed`` (with a buyer-facing envelope) and commit — a permanent decision,
+         NOT resumed. (An *unexpected* adapter exception propagates, leaving the buy in
+         ``finalizing`` for the reconciler to resume.)
+      3. On success, transition ``finalizing`` -> the flight-derived serving status
+         (NO revision re-bump — the claim already bumped) AND terminalize the step in
+         ONE commit, so the serving status and the completion artifact become durable
+         together. Emit the webhook after commit (best-effort).
+
+    ``step_id``/``step_data`` are ``None`` for the step-less creative-unblock path
+    (no async buyer task): the serving transition is committed on its own. #1637.
+    """
+    repo = MediaBuyRepository(session, tenant_id)
+    if not _remote_order_exists(repo, media_buy_id):
+        success, error_msg = run_adapter()
+        if not success:
+            repo.update_status_or_raise(media_buy_id, "failed")
+            if step_id is not None:
+                # Store a buyer-facing two-layer error envelope as the step's response_data
+                # (NOT just error_message): durable tasks/get rebuilds the failed Task's
+                # artifact from response_data. #1544 (P1).
+                error_envelope = build_two_layer_error_envelope(
+                    AdCPAdapterError(error_msg or "Adapter execution failed while creating the media buy")
+                )
+                WorkflowRepository(session, tenant_id).update_status(
+                    step_id, status="failed", error_message=error_msg, response_data=error_envelope
+                )
+            session.commit()
+            return FinalizeOutcome.ADAPTER_FAILED, error_msg
+
+    # Adapter succeeded (or the order already existed) — publish the serving status.
+    # ``expected_status=finalizing`` keeps it single-winner across a reconciler race;
+    # ``bump=False`` because the approval already bumped revision at the claim.
+    repo.update_status_computed(
+        media_buy_id, compute_target, expected_status=MEDIA_BUY_FINALIZING_STATUS, bump=False
+    )
+    if step_id is not None and step_data is not None:
+        # Commits the serving-status transition AND the terminal step artifact together.
+        _terminalize_step_and_emit(
+            session,
+            tenant_id,
+            media_buy=repo.get_by_id_or_raise(media_buy_id),
+            packages=repo.get_packages(media_buy_id),
+            step_id=step_id,
+            step_data=step_data,
+            step_status="completed",
+            task_status=AdcpTaskStatus.completed,
+        )
+    else:
+        session.commit()
     return FinalizeOutcome.APPLIED, None
+
+
+def resume_finalizing_media_buy(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str | None,
+    step_data: dict[str, Any] | None,
+    run_adapter: Callable[[], tuple[bool, str | None]],
+) -> tuple[FinalizeOutcome, str | None]:
+    """Re-drive a buy stranded in ``finalizing`` by a mid-finalize crash.
+
+    Called by the status scheduler's reconciliation pass. Runs phase 2 directly (the
+    buy is already claimed), so it resumes claimed-but-unterminated work idempotently
+    — the ``platform_order_id`` guard prevents a duplicate remote order. #1637.
+    """
+    return _run_adapter_and_finalize(
+        session,
+        tenant_id,
+        media_buy_id=media_buy_id,
+        step_id=step_id,
+        step_data=step_data,
+        compute_target=_flight_derived_status,
+        run_adapter=run_adapter,
+    )
 
 
 def _flight_derived_status(media_buy: MediaBuy) -> str:
@@ -367,22 +470,26 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[Fin
         mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
         step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
         if step is None:
-            # No workflow step (no async buyer task to notify) — still single-winner:
-            # claim pending_creatives → active BEFORE the adapter, then adapter only.
+            # No workflow step (no async buyer task to notify) — still single-winner
+            # AND crash-recoverable: claim pending_creatives → finalizing BEFORE the
+            # adapter, commit, then run phase 2 (step-less). #1544 / #1637.
             repo = MediaBuyRepository(session, tenant_id)
             claimed = repo.update_status_computed(
-                media_buy_id, _flight_derived_status, expected_status="pending_creatives"
+                media_buy_id, lambda _mb: MEDIA_BUY_FINALIZING_STATUS, expected_status="pending_creatives"
             )
             if claimed is None:
                 session.rollback()
                 return FinalizeOutcome.NOT_CLAIMED, None
             session.commit()
-            success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-            if not success:
-                repo.update_status_or_raise(media_buy_id, "failed")
-                session.commit()
-                return FinalizeOutcome.ADAPTER_FAILED, error_msg
-            return FinalizeOutcome.APPLIED, None
+            return _run_adapter_and_finalize(
+                session,
+                tenant_id,
+                media_buy_id=media_buy_id,
+                step_id=None,
+                step_data=None,
+                compute_target=_flight_derived_status,
+                run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+            )
 
         step_data = {
             "step_id": step.step_id,

@@ -18,8 +18,9 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS, Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.media_buy_flight import resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,9 @@ class MediaBuyStatusScheduler:
         while self.is_running:
             try:
                 await self._update_statuses()
+                # Resume any approval stranded mid-finalize by a crash (#1637). Runs
+                # after the flight-window sweep; its own errors never abort the loop.
+                await self._reconcile_finalizing_buys()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -115,6 +119,62 @@ class MediaBuyStatusScheduler:
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
+
+    async def _reconcile_finalizing_buys(self) -> None:
+        """Re-drive media buys stranded in ``finalizing`` by a mid-finalize crash.
+
+        The approval finalizer claims a buy into ``finalizing`` and commits BEFORE the
+        external adapter runs (#1637). If the process dies (or the adapter raises
+        unexpectedly) before the serving-status transition + step terminalization, the
+        buy is left in ``finalizing``. This pass finds those buys and resumes phase 2
+        idempotently — the ``platform_order_id`` guard inside
+        ``resume_finalizing_media_buy`` prevents a duplicate remote order, and the
+        serving-status + terminal-artifact commit is atomic. Each buy is reconciled in
+        its own transaction so one failure never blocks the others.
+        """
+        from functools import partial
+
+        from src.admin.services.media_buy_completion import resume_finalizing_media_buy
+        from src.core.tools.media_buy_create import execute_approved_media_buy
+
+        try:
+            with get_db_session() as session:
+                stranded = [
+                    (mb.tenant_id, mb.media_buy_id)
+                    for mb in MediaBuyRepository.get_all_by_statuses(session, [MEDIA_BUY_FINALIZING_STATUS])
+                ]
+        except Exception as e:
+            logger.error(f"Failed to scan for stranded finalizing media buys: {e}", exc_info=True)
+            return
+
+        for tenant_id, media_buy_id in stranded:
+            try:
+                with get_db_session() as session:
+                    wf_repo = WorkflowRepository(session, tenant_id)
+                    mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
+                    step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
+                    step_id = step.step_id if step else None
+                    step_data = (
+                        {
+                            "step_id": step.step_id,
+                            "context_id": step.context_id,
+                            "tool_name": step.tool_name,
+                            "request_data": step.request_data or {},
+                        }
+                        if step
+                        else None
+                    )
+                    outcome, _ = resume_finalizing_media_buy(
+                        session,
+                        tenant_id,
+                        media_buy_id=media_buy_id,
+                        step_id=step_id,
+                        step_data=step_data,
+                        run_adapter=partial(execute_approved_media_buy, media_buy_id, tenant_id),
+                    )
+                logger.info(f"Reconciled stranded finalizing media buy {media_buy_id}: {outcome}")
+            except Exception as e:
+                logger.error(f"Failed to reconcile finalizing media buy {media_buy_id}: {e}", exc_info=True)
 
     def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> str | None:
         """Compute the new status for a media buy based on flight dates.

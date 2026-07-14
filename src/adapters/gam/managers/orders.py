@@ -115,6 +115,16 @@ class GAMOrdersManager:
             return f"dry_run_order_{int(datetime.now(UTC).timestamp())}"
         else:
             order_service = self.client_manager.get_service("OrderService")
+            # Idempotency (#1637): a crash-recoverable approval resume may re-invoke
+            # order creation with the SAME deterministic order_name (the default
+            # template keys on media_buy_id). Reuse an existing non-archived order for
+            # this advertiser instead of creating a duplicate remote order — this
+            # closes the "adapter created the order, then the process died before
+            # platform_order_id was persisted" window that the DB-side guard cannot.
+            existing_order_id = self._find_existing_order_id(order_service, order_name)
+            if existing_order_id is not None:
+                logger.info(f"✓ Reusing existing GAM Order ID {existing_order_id} for '{order_name}' (idempotent create)")
+                return existing_order_id
             created_orders = order_service.createOrders([order])
             if created_orders:
                 order_id = str(created_orders[0]["id"])
@@ -122,6 +132,28 @@ class GAMOrdersManager:
                 return order_id
             else:
                 raise Exception("Failed to create order - no orders returned")
+
+    def _find_existing_order_id(self, order_service, order_name: str) -> str | None:
+        """Return the id of an existing non-archived order with this exact name for
+        this advertiser, or None. The idempotency lookup for crash-recoverable order
+        creation (#1637). A lookup failure must never block creation — it falls
+        through to ``createOrders`` (at worst reverting to the prior behaviour).
+        """
+        if not self.advertiser_id:
+            return None
+        try:
+            statement_builder = ad_manager.StatementBuilder()
+            statement_builder.Where("name = :name AND advertiserId = :advertiserId")
+            statement_builder.WithBindVariable("name", order_name)
+            statement_builder.WithBindVariable("advertiserId", int(self.advertiser_id))
+            statement = statement_builder.ToStatement()
+            result = order_service.getOrdersByStatement(statement)
+            for existing in (result or {}).get("results", []) or []:
+                if not existing.get("isArchived", False):
+                    return str(existing["id"])
+        except Exception as e:
+            logger.warning(f"Idempotency lookup for order '{order_name}' failed; will create: {e}")
+        return None
 
     @timeout(seconds=30)  # 30 seconds timeout for status check
     def get_order_status(self, order_id: str) -> str:

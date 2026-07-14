@@ -107,6 +107,9 @@ PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
     "pending_approval": "pending_start",
     "pending_creatives": "pending_creatives",
     "pending_start": "pending_start",
+    # Transient crash-recoverable claim (#1637): approved, remote order being
+    # created, not yet serving — closest canonical bucket is pending_start.
+    "finalizing": "pending_start",
 }
 
 # The complete set of values ``resolve_canonical_status`` may return, derived

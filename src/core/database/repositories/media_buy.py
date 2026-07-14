@@ -561,6 +561,7 @@ class MediaBuyRepository:
         expected_revision: int | None = None,
         expected_status: str | tuple[str, ...] | None = None,
         context: ContextObject | dict[str, Any] | None = None,
+        bump: bool = True,
     ) -> MediaBuy | None:
         """Shared single-row mutation skeleton: load-under-lock → mutate → bump → flush.
 
@@ -608,7 +609,12 @@ class MediaBuyRepository:
                 )
         mutate(media_buy)
         self._stamp_confirmation_if_needed(media_buy)
-        self._bump_revision(media_buy)
+        if bump:
+            # ``bump=False`` is the crash-recoverable finalize (#1637): the
+            # approval already bumped revision when it claimed ``finalizing``, so
+            # the deferred ``finalizing`` -> serving transition (and any reconciler
+            # retry of it) must NOT advance the token again.
+            self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
@@ -663,6 +669,7 @@ class MediaBuyRepository:
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
         expected_status: str | tuple[str, ...] | None = None,
+        bump: bool = True,
     ) -> MediaBuy | None:
         """Like :meth:`update_status`, but the destination status is COMPUTED under the lock.
 
@@ -695,7 +702,7 @@ class MediaBuyRepository:
             if approved_by is not None:
                 media_buy.approved_by = approved_by
 
-        return self._locked_mutate_and_bump(media_buy_id, _apply, expected_status=expected_status)
+        return self._locked_mutate_and_bump(media_buy_id, _apply, expected_status=expected_status, bump=bump)
 
     def update_status_computed_or_raise(
         self,

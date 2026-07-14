@@ -499,6 +499,13 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/admin/test_workflows_blueprint.py
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
     ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
+    # #1637 crash-recovery: seed a package carrying platform_order_id to exercise the
+    # resume idempotency guard (raw-session pattern, like test_approval_finalizer_race).
+    ("tests/integration/test_approval_crash_recovery.py", "test_resume_skips_adapter_when_order_already_created"),
+    (
+        "tests/integration/test_approval_crash_recovery.py",
+        "test_scheduler_reconciliation_pass_drives_stranded_buy_to_serving",
+    ),
     # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
     # FIXME(salesagent-e2e-admin-factories): migrate e2e seed helpers to factories.
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
@@ -735,6 +742,18 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "test_two_concurrent_updates_same_token_one_wins_one_conflicts",
     ),
     ("tests/integration/test_media_buy_status_scheduler.py", "_get_media_buy_revision"),
+    # #1637 crash-recovery: model interruption between the finalizing claim commit and
+    # terminalization, asserting committed state via fresh sessions (the harness binds one).
+    ("tests/integration/test_approval_crash_recovery.py", "test_crash_between_claim_and_terminalize_is_recoverable"),
+    ("tests/integration/test_approval_crash_recovery.py", "test_resume_skips_adapter_when_order_already_created"),
+    (
+        "tests/integration/test_approval_crash_recovery.py",
+        "test_scheduler_reconciliation_pass_drives_stranded_buy_to_serving",
+    ),
+    (
+        "tests/integration/test_approval_crash_recovery.py",
+        "test_happy_path_bumps_revision_once_and_stamps_confirmed_at",
+    ),
     ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),

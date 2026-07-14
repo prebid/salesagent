@@ -903,9 +903,21 @@ class AgentAccountAccess(Base):
 # on every status-mutation seam) — so the create path and the persisted column
 # get_media_buys reads back cannot drift: adding a new not-yet-committed status
 # here fixes both at once. See #1544.
+# ``finalizing`` is the crash-recoverable intermediate claim: the approval
+# finalizer moves the buy here (single-winner) and commits BEFORE the external
+# adapter runs, so the buy never reads as seller-confirmed/serving while its
+# remote order is unconfirmed. It is UNCONFIRMED on purpose — confirmed_at is
+# stamped only when the buy reaches its real serving status after adapter
+# success. A reconciler re-drives any buy stranded here by a mid-finalize crash.
+# #1637.
 MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
-    {"draft", "pending", "pending_approval", "rejected", "failed"}
+    {"draft", "pending", "pending_approval", "rejected", "failed", "finalizing"}
 )
+
+# The transient claim status the approval finalizer commits before external
+# adapter work; a buy left here by a crash is resumed by the status scheduler's
+# reconciliation pass. #1637.
+MEDIA_BUY_FINALIZING_STATUS: str = "finalizing"
 
 
 def is_media_buy_seller_confirmed(status: str | None) -> bool:
