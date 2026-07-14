@@ -161,10 +161,10 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         # approved status and no format restriction (uow.products.get_by_id
         # returns a product without format_ids). Tests that exercise the
         # rejection paths (missing/error/rejected/incompatible) override
-        # admin_get_by_ids or products.get_by_id.
+        # get_by_ids or products.get_by_id.
         self._uow_instance.creatives = MagicMock()
 
-        def _default_admin_get_by_ids(creative_ids: list[str]) -> list[Any]:
+        def _default_get_by_ids(creative_ids: list[str], principal_id: str) -> list[Any]:
             creatives = []
             for cid in creative_ids:
                 cr = MagicMock()
@@ -175,7 +175,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
                 creatives.append(cr)
             return creatives
 
-        self._uow_instance.creatives.admin_get_by_ids.side_effect = _default_admin_get_by_ids
+        self._uow_instance.creatives.get_by_ids.side_effect = _default_get_by_ids
 
         # products repo: default product has no format restriction so the
         # shared creative-format check is a no-op unless a test overrides it.

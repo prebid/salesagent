@@ -321,9 +321,14 @@ class MockAdServer(AdServerAdapter):
             logger.debug("Failed to load test behavior from DB", exc_info=True)
         return {}
 
-    @staticmethod
-    def _raise_injected_adapter_failure(test_behavior: dict) -> None:
-        """Raise the test-behavior-injected AdCPAdapterError (fail_on_create/update).
+    def _raise_injected_failure(self, flag: str) -> None:
+        """Raise the DB-injected adapter failure when ``flag`` is set.
+
+        BDD Given steps persist failure injection (fail_on_create /
+        fail_on_update / fail_on_upload + message/recovery/details) into
+        AdapterConfig test_behavior so the Docker-hosted adapter reproduces
+        the same fault the in-process mock raises via side_effect. No-op when
+        the flag is absent.
 
         The buyer suggestion rides the first-class ``suggestion=`` param —
         error.json places it at the top level of the error object, so a copy
@@ -331,6 +336,9 @@ class MockAdServer(AdServerAdapter):
         (#1417, same disease as cx41/58hl). ``error_details`` from
         test behavior stays in ``details`` for any other injected keys.
         """
+        test_behavior = self._read_test_behavior()
+        if not test_behavior.get(flag):
+            return
         from src.core.exceptions import AdCPAdapterError
 
         details = test_behavior.get("error_details")
@@ -529,9 +537,7 @@ class MockAdServer(AdServerAdapter):
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
-        test_behavior = self._read_test_behavior()
-        if test_behavior.get("fail_on_create"):
-            self._raise_injected_adapter_failure(test_behavior)
+        self._raise_injected_failure("fail_on_create")
 
         # Log pricing model info if provided (AdCP PR #88)
         if package_pricing_info:
@@ -932,6 +938,9 @@ class MockAdServer(AdServerAdapter):
     ) -> list[AssetStatus]:
         """Simulates adding creatives with HITL support."""
 
+        # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
+        self._raise_injected_failure("fail_on_upload")
+
         # HITL Mode Processing
         operation_mode = self._get_operation_mode("add_creative_assets")
 
@@ -1143,6 +1152,35 @@ class MockAdServer(AdServerAdapter):
 
         return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
 
+    def _load_delivery_simulation(self, media_buy_id: str) -> AdapterGetMediaBuyDeliveryResponse | None:
+        """Return a server-seeded delivery response for this media buy, or None (#1418).
+
+        The e2e harness writes the exact wire payload
+        (``AdapterGetMediaBuyDeliveryResponse.model_dump(mode="json")``) into a
+        ``delivery_simulation_configs`` row keyed by (tenant_id, media_buy_id).
+        The live server's Mock adapter reads it here so in-process and e2e
+        return byte-identical payloads. No row -> None -> legacy behavior.
+
+        Gated behind ADCP_TESTING: the table has no production writer, so the
+        per-poll DB read is pure test plumbing — a production deployment must
+        not query it at all (#1430: simulation-read gating).
+        """
+        import os
+
+        if os.environ.get("ADCP_TESTING", "").lower() != "true":
+            return None
+        if not self.tenant_id:
+            return None
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.delivery_simulation import DeliverySimulationConfigRepository
+
+        with get_db_session() as session:
+            row = DeliverySimulationConfigRepository(session, self.tenant_id).get(media_buy_id)
+            if row is None:
+                return None
+            return AdapterGetMediaBuyDeliveryResponse.model_validate(row.response_payload)
+
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
     ) -> AdapterGetMediaBuyDeliveryResponse:
@@ -1162,6 +1200,14 @@ class MockAdServer(AdServerAdapter):
                 self.log("[yellow]Simulating budget exceeded scenario[/yellow]")
             elif self.strategy_context.force_error == "low_delivery":
                 self.log("[yellow]Simulating low delivery scenario[/yellow]")
+
+        # Server-side delivery seeding (#1418): if the live server has a seeded
+        # row for this (tenant, media_buy), return it verbatim. This lets the
+        # e2e harness set exact delivery numbers by writing a DB row instead of
+        # patching an in-process MagicMock. Absent a row, behavior is unchanged.
+        seeded = self._load_delivery_simulation(media_buy_id)
+        if seeded is not None:
+            return seeded
 
         # Simulate API call
         if self.dry_run:
@@ -1418,9 +1464,7 @@ class MockAdServer(AdServerAdapter):
         assert self.tenant_id is not None, "tenant_id required for DB operations"
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
-        test_behavior = self._read_test_behavior()
-        if test_behavior.get("fail_on_update"):
-            self._raise_injected_adapter_failure(test_behavior)
+        self._raise_injected_failure("fail_on_update")
 
         with get_db_session() as session:
             if action == "update_package_budget" and package_id and budget is not None:

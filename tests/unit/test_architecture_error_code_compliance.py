@@ -1,8 +1,9 @@
-"""Guard: all wire error codes must be in SDK STANDARD_ERROR_CODES.
+"""Guard: all wire error codes must be in WIRE_STANDARD_CODES.
 
 AST-scans Error(code=...) construction sites in src/core/tools/ and
 src/adapters/ to verify every string-literal error code is either in
-STANDARD_ERROR_CODES or in the justified INTERNAL_CODES set.
+WIRE_STANDARD_CODES (SDK STANDARD_ERROR_CODES + the pinned-spec supplement)
+or in the justified INTERNAL_CODES set.
 
 Also verifies that AdCPError subclass error_code class attributes are
 standard or internal (complementing test_error_code_mapping.py).
@@ -15,9 +16,8 @@ import logging
 from pathlib import Path
 
 import pytest
-from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import INTERNAL_CODES
+from src.core.exceptions import INTERNAL_CODES, WIRE_STANDARD_CODES
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,9 @@ _SPEC_CODES = {
     "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
 }
 
-# All acceptable codes: SDK standard + justified internal + spec-required
-_ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | _SPEC_CODES
+# All acceptable codes: wire-standard (SDK + spec supplement) + justified
+# internal + spec-required literals
+_ALLOWED_CODES = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | _SPEC_CODES
 
 # Anchor scan paths on the test file's location so they resolve correctly
 # regardless of pytest's working directory (CI runs from the repo root;

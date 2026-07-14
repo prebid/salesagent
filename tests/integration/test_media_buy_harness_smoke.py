@@ -21,8 +21,9 @@ class TestMediaBuyCreateEnvEntersAndSeeds:
     def test_enter_seed_and_create(self, integration_db):
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
-        # tenant_id must be hyphen-free: TenantFactory derives subdomain "pub-{tenant_id}"
-        # and the product's publisher_domain from it; an underscore fails the AdCP domain regex.
+        # tenant_id kept hyphen-free: TenantFactory derives the subdomain via
+        # tenant_subdomain() (pub-<tenant_id>, underscores normalized to hyphens) and the
+        # product's publisher_domain from it, which keeps the derived name predictable here.
         with MediaBuyCreateEnv(tenant_id="smoketenant") as env:
             # Entering already exercised _build_mock_context_manager (built in _configure_mocks).
             tenant, principal, product, pricing_option = env.setup_media_buy_data()

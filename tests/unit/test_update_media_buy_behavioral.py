@@ -1153,7 +1153,7 @@ class TestUC003UpdateCreativeIds:
         """Helper to set up creative-related mocks.
 
         Wires the shared creative-validation path: existence/status/format are
-        resolved via ``uow.creatives.admin_get_by_ids`` and ``uow.products.get_by_id``
+        resolved via ``uow.creatives.get_by_ids`` and ``uow.products.get_by_id``
         (not raw session.scalars), matching production.
         """
         mock_session = env.mock["uow"].return_value.session
@@ -1175,8 +1175,8 @@ class TestUC003UpdateCreativeIds:
             creatives.append(c)
 
         # Creative existence/status via repository (shared validation helper).
-        uow.creatives.admin_get_by_ids.side_effect = None
-        uow.creatives.admin_get_by_ids.return_value = creatives
+        uow.creatives.get_by_ids.side_effect = None
+        uow.creatives.get_by_ids.return_value = creatives
 
         # Session scalars returns creatives (legacy paths) + no existing assignments.
         mock_scalars = MagicMock()
@@ -1207,8 +1207,8 @@ class TestUC003UpdateCreativeIds:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            env.mock["uow"].return_value.creatives.admin_get_by_ids.side_effect = None
-            env.mock["uow"].return_value.creatives.admin_get_by_ids.return_value = [c1]
+            env.mock["uow"].return_value.creatives.get_by_ids.side_effect = None
+            env.mock["uow"].return_value.creatives.get_by_ids.return_value = [c1]
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -1285,8 +1285,8 @@ class TestUC003UpdateCreativeIds:
             c1.status = "active"
             c1.agent_url = "http://test.com"
             c1.format = "video"
-            uow.creatives.admin_get_by_ids.side_effect = None
-            uow.creatives.admin_get_by_ids.return_value = [c1]
+            uow.creatives.get_by_ids.side_effect = None
+            uow.creatives.get_by_ids.return_value = [c1]
 
             # Product with only "display" format
             mock_product = MagicMock()
@@ -1329,8 +1329,8 @@ class TestUC003UpdateCreativeIds:
             c1.status = "active"
             c1.agent_url = "http://test.com"
             c1.format = "display"
-            uow.creatives.admin_get_by_ids.side_effect = None
-            uow.creatives.admin_get_by_ids.return_value = [c1]
+            uow.creatives.get_by_ids.side_effect = None
+            uow.creatives.get_by_ids.return_value = [c1]
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
@@ -1667,8 +1667,8 @@ class TestUC003UpdateCreativeAssignments:
             uow.media_buys.get_package.return_value = mock_pkg
 
             # C999 does not exist in the creative library.
-            uow.creatives.admin_get_by_ids.side_effect = None
-            uow.creatives.admin_get_by_ids.return_value = []
+            uow.creatives.get_by_ids.side_effect = None
+            uow.creatives.get_by_ids.return_value = []
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -2316,8 +2316,8 @@ class TestUC003ExtI:
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # No creatives found
-            env.mock["uow"].return_value.creatives.admin_get_by_ids.side_effect = None
-            env.mock["uow"].return_value.creatives.admin_get_by_ids.return_value = []
+            env.mock["uow"].return_value.creatives.get_by_ids.side_effect = None
+            env.mock["uow"].return_value.creatives.get_by_ids.return_value = []
             mock_scalars = MagicMock()
             mock_scalars.all.return_value = []
             mock_session.scalars.return_value = mock_scalars
@@ -2359,8 +2359,8 @@ class TestUC003ExtJ:
             c1.status = "rejected"
             c1.agent_url = "http://test.com"
             c1.format = "display"
-            uow.creatives.admin_get_by_ids.side_effect = None
-            uow.creatives.admin_get_by_ids.return_value = [c1]
+            uow.creatives.get_by_ids.side_effect = None
+            uow.creatives.get_by_ids.return_value = [c1]
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}
@@ -2406,8 +2406,8 @@ class TestUC003ExtJ:
             c2.agent_url = "http://test.com"
             c2.format = "display"
 
-            uow.creatives.admin_get_by_ids.side_effect = None
-            uow.creatives.admin_get_by_ids.return_value = [c1, c2]
+            uow.creatives.get_by_ids.side_effect = None
+            uow.creatives.get_by_ids.return_value = [c1, c2]
 
             mock_pkg = MagicMock()
             mock_pkg.package_config = {"product_id": "prod_1"}

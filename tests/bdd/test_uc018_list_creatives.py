@@ -31,10 +31,10 @@ The first two are pinned at v3.1-04f59d2d5 (adcp 3.1.0-beta.3).
 
 Wired to real production across all wire transports (auto-parametrized; UC-018
 -> CreativeListEnv via conftest ``_detect_uc`` / ``_harness_env``). The repo
-sunsets the IMPL pseudo-transport in BDD, so the scenario runs on a2a/mcp/rest.
-(The isolation Then steps read the success-path ``wire_response``, which the E2E
-REST dispatcher does not stash — so those assertions cover a2a/mcp/rest, not
-e2e_rest.) Each transport returns the same typed response, and
+sunsets the IMPL pseudo-transport in BDD, so the scenario runs on a2a/mcp/rest
+(plus e2e_rest in-network: this branch's ``RestE2EDispatcher`` stashes the
+success-path ``wire_response``, so the isolation Then steps assert real HTTP
+bytes there too). Each transport returns the same typed response, and
 the Then steps validate its production JSON serialization
 (``model_dump(mode="json", exclude_none=True)`` — the same NestedModelSerializerMixin
 path that produces the on-the-wire bytes); the parametrization still exercises
@@ -120,6 +120,31 @@ def _seed_creative(
 # ── Given ────────────────────────────────────────────────────────────
 
 
+def _get_or_create_tenant_and_principal(env: Any) -> tuple[Any, Any]:
+    """Idempotently seed the env's tenant + principal (shared e2e_rest DB).
+
+    Rationale on ``get_or_create`` (jdy1-M3, #1418): a prior e2e_rest scenario's
+    rows survive in the live-server DB, so plain factory inserts UniqueViolate.
+    """
+    from src.core.database.models import Principal, Tenant
+    from tests.factories import PrincipalFactory, TenantFactory
+    from tests.factories.core import get_or_create
+
+    tenant = get_or_create(
+        env,
+        Tenant,
+        {"tenant_id": env._tenant_id},
+        lambda: TenantFactory(tenant_id=env._tenant_id),
+    )
+    principal = get_or_create(
+        env,
+        Principal,
+        {"tenant_id": env._tenant_id, "principal_id": env._principal_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=env._principal_id),
+    )
+    return tenant, principal
+
+
 @given(parsers.parse('the Buyer is authenticated as principal "{principal_id}"'))
 def given_buyer_authenticated_as_principal(ctx: dict, principal_id: str) -> None:
     """Authenticate the listing buyer as *principal_id* (Background).
@@ -143,11 +168,8 @@ def given_recently_synced_three_creatives(ctx: dict) -> None:
     Seeded via CreativeFactory rather than a live sync_creatives call — see the
     module docstring. Records the synced creative_ids for the Then steps.
     """
-    from tests.factories import PrincipalFactory, TenantFactory
-
     env = ctx["env"]
-    tenant = TenantFactory(tenant_id=env._tenant_id)
-    principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
+    tenant, principal = _get_or_create_tenant_and_principal(env)
     synced_ids = [_seed_creative(tenant, principal, fmt).creative_id for fmt in _SYNCED_FORMATS]
     ctx["tenant"] = tenant
     ctx["principal"] = principal
@@ -265,11 +287,8 @@ def given_creatives_grouped_under_concept(ctx: dict, concept_id: str) -> None:
     helper supplies the factory's realistic default ``assets`` (the repository drops
     rows whose ``data["assets"]`` IS NULL) and layers the concept fields on top.
     """
-    from tests.factories import PrincipalFactory, TenantFactory
-
     env = ctx["env"]
-    tenant = TenantFactory(tenant_id=env._tenant_id)
-    principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
+    tenant, principal = _get_or_create_tenant_and_principal(env)
 
     in_concept_ids = [
         _seed_creative(tenant, principal, fmt, concept_id=concept_id, concept_name=_CONCEPT_NAME).creative_id
@@ -408,24 +427,34 @@ _ISOLATION_CREATIVES_KEY = "isolation_creatives_by_principal"
 @given(parsers.parse('principal "{principal_id}" has {count:d} creatives'))
 @given(parsers.parse('principal "{principal_id}" has {count:d} creatives in the same tenant'))
 def given_principal_has_n_creatives(ctx: dict, principal_id: str, count: int) -> None:
-    """Seed *count* approved creatives owned by *principal_id* under the shared tenant.
+    """Seed *count* approved creatives owned by *principal_id* under a fresh tenant.
 
-    Both isolation scenarios seed two principals in ONE tenant. The tenant is created
-    on the first seed and reused on subsequent ones: neither TenantFactory nor
-    PrincipalFactory uses ``sqlalchemy_get_or_create``, so a second
-    ``TenantFactory(tenant_id=...)`` would raise a duplicate-PK IntegrityError.
-    Records each principal's creative_ids so the Then steps can attribute ownership
+    Both isolation scenarios seed two principals in ONE tenant — the scenario's
+    requirement. WHICH tenant is env plumbing: each scenario gets its own
+    uniquely-named tenant (created on the first seed, reused via ctx on the
+    second) and the env is re-pointed at it with ``switch_tenant``. Over
+    e2e_rest the live-server DB is shared across scenarios, and the sibling
+    UC-018 Givens seed creatives for this same buyer — under a shared tenant
+    those survivors would leak into the unfiltered list and break the
+    exact-count / set-equality assertions (and re-seeding the same
+    tenant/principal rows would UniqueViolate). A fresh tenant per scenario
+    keeps every assertion at full strength on all transports. Records each
+    principal's creative_ids so the Then steps can attribute ownership
     (principal_id is off-wire — see the section comment).
 
     Two ``@given`` phrasings map to this one body: ``parsers.parse`` requires a
     whole-string match, so the "in the same tenant" variant needs its own decorator.
     """
+    from uuid import uuid4
+
     from tests.factories import PrincipalFactory, TenantFactory
 
     env = ctx["env"]
     tenant = ctx.get("tenant")
     if tenant is None:
-        tenant = TenantFactory(tenant_id=env._tenant_id)
+        tenant_id = f"uc018_iso_{uuid4().hex[:8]}"
+        tenant = TenantFactory(tenant_id=tenant_id)
+        env.switch_tenant(tenant_id)
         ctx["tenant"] = tenant
     principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
     seeded: dict[str, list[str]] = ctx.setdefault(_ISOLATION_CREATIVES_KEY, {})

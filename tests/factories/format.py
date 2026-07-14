@@ -25,6 +25,8 @@ Usage::
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import factory
 from adcp.types import (
     AudioFormatAsset,
@@ -165,6 +167,37 @@ def make_responsive_renders() -> Renders:
 def make_fixed_renders(width: int = 728, height: int = 90) -> Renders:
     """Create a fixed-dimension Renders object."""
     return make_renders(width=width, height=height)
+
+
+# ── Reference catalog selection ──────────────────────────────────────
+
+
+def pick_reference_formats(predicate: Callable[[Format], bool], min_count: int = 1) -> list[Format]:
+    """Select formats from the captured reference catalog that satisfy ``predicate``.
+
+    This is the single source for "a format with property X" in scenarios: it draws
+    from the same checked-in fixture the in-process harness and the e2e server serve,
+    so a selected format is guaranteed to exist on the live server too.
+
+    Raises loud (ValueError) if fewer than ``min_count`` reference formats match —
+    that is the true signal the scenario needs a format registered in the creative
+    agent's own registry, not a synthetic FormatFactory mint. See issue #1418.
+
+    >>> displays = pick_reference_formats(lambda f: f.format_id.id.startswith("display_"))
+    >>> all(f.format_id.id.startswith("display_") for f in displays)
+    True
+    """
+    from src.core.format_cache import load_reference_formats
+
+    matches = [fmt for fmt in load_reference_formats() if predicate(fmt)]
+    if len(matches) < min_count:
+        raise ValueError(
+            f"Reference catalog has {len(matches)} format(s) matching the predicate, "
+            f"need at least {min_count}. The scenario needs a format the reference agent "
+            "does not serve — register it in the creative agent's registry rather than "
+            "minting a synthetic one."
+        )
+    return matches
 
 
 # ── Factories ────────────────────────────────────────────────────────

@@ -1433,34 +1433,9 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the tenant is configured for auto-approval")
-def given_tenant_auto_approval(ctx: dict) -> None:
-    """Configure the tenant for auto-approval and verify the env reflects it.
-
-    Turns OFF ``human_review_required`` on the real tenant row AND in the
-    identity's tenant dict, and confirms the adapter mock is not gating on
-    manual approval — so the create returns ``status='completed'`` rather than
-    pending. The production approval gate (media_buy_create.py) is
-    ``tenant.human_review_required OR adapter.manual_approval_required`` AND
-    ``'create_media_buy' in adapter.manual_approval_operations``.
-
-    Only the wired idempotency scenarios (MediaBuyCreateEnv, with ctx["tenant"]
-    provisioned by conftest's _harness_env) reach this step; every other UC-002
-    scenario using this text is blanket-xfailed before any step runs.
-    """
-    env = ctx["env"]
-    env.set_review_requirement(ctx["tenant"], required=False)
-
-    adapter_mock = env.mock["adapter"].return_value
-    assert adapter_mock.manual_approval_required is False, (
-        "Step claims 'tenant is configured for auto-approval' but the adapter mock "
-        f"reports manual_approval_required={adapter_mock.manual_approval_required!r}"
-    )
-    assert "create_media_buy" not in (adapter_mock.manual_approval_operations or []), (
-        "Step claims auto-approval but the adapter mock gates create_media_buy on "
-        f"manual approval: {adapter_mock.manual_approval_operations!r}"
-    )
-    ctx["tenant_auto_approval"] = True
+# "the tenant is configured for auto-approval" is owned by the registered generic
+# given_media_buy.py (#1430 canonicalized it there with the e2e-aware
+# _seed_auto_approval); a duplicate def here would collide (shadowed-steps guard).
 
 
 # ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──

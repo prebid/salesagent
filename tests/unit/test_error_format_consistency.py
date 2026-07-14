@@ -553,9 +553,12 @@ class TestMCPRecoveryInErrorResponses:
         [
             # INTERNAL_ERROR and NOT_FOUND are INTERNAL_CODES; the boundary
             # translator maps them to STANDARD_ERROR_CODES at wire emission.
-            ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
+            # Recovery matches the pinned enumMetadata of the WIRE code
+            # (salesagent-nr2q): SERVICE_UNAVAILABLE=transient,
+            # INVALID_REQUEST=correctable.
+            ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
+            ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "correctable"),
             # The recovery-conformance oracle grades the CLASS ATTRIBUTE
             # (_default_recovery), not the MCP wire, so these two MUST stay here to pin
             # the real MCP ToolError recovery — matching the A2A table below. (#1417)
@@ -619,9 +622,12 @@ class TestA2ARecoveryInErrorResponses:
     @pytest.mark.parametrize(
         "exc_class,msg,expected_recovery",
         [
-            ("AdCPError", "internal", "terminal"),
+            # Recovery matches the pinned enumMetadata of the WIRE code
+            # (salesagent-nr2q): AdCPError→SERVICE_UNAVAILABLE=transient,
+            # AdCPNotFoundError→INVALID_REQUEST=correctable.
+            ("AdCPError", "internal", "transient"),
             ("AdCPValidationError", "bad", "correctable"),
-            ("AdCPNotFoundError", "missing", "terminal"),
+            ("AdCPNotFoundError", "missing", "correctable"),
             ("AdCPConflictError", "dup", "transient"),
             ("AdCPGoneError", "expired", "correctable"),
             ("AdCPBudgetExhaustedError", "broke", "terminal"),
@@ -746,13 +752,13 @@ class TestErrorCodeVocabularyConsistency:
         "BUDGET_EXHAUSTED",  # SDK standard: budget limit reached
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
-        "CONFIGURATION_ERROR",  # Internal only: server config broken
+        "CONFIGURATION_ERROR",  # Spec supplement: passthrough wire code, pinned terminal (salesagent-nr2q)
         # SDK standard codes added by the error-emission-architecture substrate.
         "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError
         "PRODUCT_NOT_FOUND",  # SDK standard: AdCPProductNotFoundError
         "SESSION_NOT_FOUND",  # SDK standard: AdCPContextNotFoundError (unresolvable context_id)
-        "CREATIVE_NOT_FOUND",  # Internal: AdCPCreativeNotFoundError (wire → INVALID_REQUEST)
+        "CREATIVE_NOT_FOUND",  # Spec supplement: AdCPCreativeNotFoundError (wire passthrough via WIRE_STANDARD_CODES)
         "FORMAT_NOT_FOUND",  # Internal: AdCPFormatNotFoundError (wire → INVALID_REQUEST)
         "TASK_NOT_FOUND",  # Internal: AdCPTaskNotFoundError (wire → INVALID_REQUEST)
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError

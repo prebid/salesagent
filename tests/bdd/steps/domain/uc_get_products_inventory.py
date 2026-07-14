@@ -85,11 +85,25 @@ def given_tenant(ctx: dict) -> None:
     disagree with the wire header — the server can't resolve the tenant, so
     identity is None and it rejects with "no identity in request".
     """
-    tenant = TenantFactory(
-        tenant_id="test_tenant",
-        ad_server="mock",
+    from src.core.database.models import Principal, Tenant
+    from tests.factories.core import get_or_create
+
+    # Idempotent seeding (get_or_create, jdy1-M3 / #1418): over e2e_rest all
+    # scenarios share one live-server DB, so a plain factory insert collides
+    # with a prior scenario's test_tenant row (tenants_pkey UniqueViolation).
+    # The subdomain stays the factory default per the docstring above.
+    tenant = get_or_create(
+        ctx["env"],
+        Tenant,
+        {"tenant_id": "test_tenant"},
+        lambda: TenantFactory(tenant_id="test_tenant", ad_server="mock"),
     )
-    PrincipalFactory(tenant=tenant, principal_id="test_principal")
+    get_or_create(
+        ctx["env"],
+        Principal,
+        {"principal_id": "test_principal", "tenant_id": "test_tenant"},
+        lambda: PrincipalFactory(tenant=tenant, principal_id="test_principal"),
+    )
     ctx["tenant"] = tenant
 
 

@@ -9,6 +9,7 @@ Covers: salesagent-xwkj, salesagent-11th, salesagent-0m59, salesagent-mi8l
 
 from __future__ import annotations
 
+import json
 from datetime import UTC
 
 import pytest
@@ -19,8 +20,12 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPCreativeRejectedErr
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
 from tests.harness import CreativeSyncEnv, make_identity
+from tests.harness.transport import Transport
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+# Wire transports only — IMPL has no wire envelope by definition.
+_WIRE_TRANSPORTS = [Transport.REST, Transport.MCP, Transport.A2A]
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -50,6 +55,16 @@ _make_identity = make_identity  # Canonical version from tests.harness
 # ---------------------------------------------------------------------------
 # Auth Tests — UC-006-EXT-A, UC-006-EXT-B
 # ---------------------------------------------------------------------------
+
+
+def _wire_entries(result) -> dict:
+    """Index the wire response's creatives[] by creative_id.
+
+    Shared read-back for TestAssignmentProcessing: every per-item wire
+    assertion goes through the same extraction instead of hand-rolling the
+    dict comprehension per test.
+    """
+    return {e.get("creative_id"): e for e in (result.wire_response or {}).get("creatives", [])}
 
 
 class TestSyncAuthRequired:
@@ -312,6 +327,130 @@ class TestValidationModeSemantics:
             good_results = [r for r in response.creatives if r.creative_id != "c_bad"]
             for r in good_results:
                 assert r.action != "failed", f"Creative {r.creative_id} should succeed in lenient mode"
+
+    @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
+    def test_strict_mode_unknown_assignment_creative_is_creative_not_found_on_wire(self, integration_db, transport):
+        """Strict-mode assignment to an UNKNOWN creative_id must emit CREATIVE_NOT_FOUND.
+
+        Spec grounding (pinned 3.1 enum, enums/error-code.json @ 04f59d2d5):
+        CREATIVE_NOT_FOUND — "Referenced creative does not exist in the agent's
+        creative library. Recovery: correctable (...). Sellers MUST return this
+        code uniformly for any creative_id not owned by the calling account".
+        The parallel package-not-found branch in the same function already uses
+        the entity-specific PACKAGE_NOT_FOUND; creative-not-found rode the
+        generic VALIDATION_ERROR instead (PR #1430 review, CON-07).
+
+        Graded on every wire transport: a boundary re-adding a
+        STANDARD_ERROR_CODES gate on MCP/A2A (demoting the supplement-only
+        CREATIVE_NOT_FOUND passthrough) must fail this matrix, not just REST.
+        """
+        from tests.helpers import assert_envelope_shape
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+
+            result = env.call_via(
+                transport,
+                creatives=[],
+                assignments={"c_never_synced": [pkg.package_id]},
+                validation_mode="strict",
+            )
+
+            assert result.is_error, f"Strict mode must abort on unknown creative: {result.payload!r}"
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "CREATIVE_NOT_FOUND",
+                recovery="correctable",
+                message_substr="c_never_synced",
+            )
+
+    def test_lenient_mode_unknown_assignment_creative_entry_is_creative_not_found(self, integration_db):
+        """Lenient-mode assignment to an UNKNOWN creative_id: the synthesized
+        per-item advisory entry must carry CREATIVE_NOT_FOUND, not the generic
+        VALIDATION_ERROR.
+
+        Spec grounding (pinned 3.1 enum, enums/error-code.json @ 04f59d2d5):
+        CREATIVE_NOT_FOUND — "Referenced creative does not exist in the agent's
+        creative library. Recovery: correctable (...). Sellers MUST return this
+        code uniformly for any creative_id not owned by the calling account".
+        error-handling.mdx "Not-found precedence" (newest prose at the pin,
+        3.1.0-beta.1): the resource-specific code for a creative_id reference
+        SHOULD be CREATIVE_NOT_FOUND. Ungraded by storyboard (zero
+        CREATIVE_NOT_FOUND hits in dist/compliance/3.1.0-beta.3).
+
+        Same-surface consistency: the strict-mode raise for the IDENTICAL
+        condition already emits CREATIVE_NOT_FOUND on the wire (287c93099,
+        test above) — the same condition on the same tool must surface the
+        same code on the lenient per-item advisory path
+        (_assignments.py synthesis loop, currently VALIDATION_ERROR).
+        """
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+
+            response = env.call_impl(
+                creatives=[],
+                assignments={"c_never_synced": [pkg.package_id]},
+                validation_mode="lenient",
+            )
+
+            entry = next(r for r in response.creatives if r.creative_id == "c_never_synced")
+            assert entry.action == "failed", f"Expected synthesized action='failed' entry, got: {entry}"
+            assert entry.errors, f"failed entry must carry errors[]: {entry}"
+            assert entry.errors[0].code == "CREATIVE_NOT_FOUND", (
+                f"Unknown-creative advisory must carry CREATIVE_NOT_FOUND (parity with the "
+                f"strict-mode raise for the same condition), got: {entry.errors[0].code!r}"
+            )
+            # SDK Error.recovery is a Recovery enum (not a str-mixin) — compare .value.
+            assert entry.errors[0].recovery.value == "correctable", (
+                f"CREATIVE_NOT_FOUND is buyer-correctable, got: {entry.errors[0].recovery!r}"
+            )
+
+    def test_lenient_mode_existing_creative_missing_package_entry_keeps_validation_error(self, integration_db):
+        """Negative control for the CREATIVE_NOT_FOUND advisory split: an
+        assignment-only reference to an EXISTING library creative whose only
+        failure is a nonexistent package_id must keep the generic
+        VALIDATION_ERROR on its synthesized entry.
+
+        A not-found creative short-circuits before any package checks
+        (_assignments.py: `continue` after the creative_row-is-None branch),
+        so one synthesized entry can never mix the two causes — this test uses
+        a SEPARATE, existing creative to pin that only the creative-not-found
+        cause flips to CREATIVE_NOT_FOUND. (Strict-mode PACKAGE_NOT_FOUND
+        parity for this condition is a known residual tracked in the
+        gl3m/#1598 lane, not claimed correct here.)
+        """
+        from tests.factories import CreativeFactory
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_exists_in_library",
+                format="display_300x250",
+                agent_url=DEFAULT_AGENT_URL,
+            )
+
+            response = env.call_impl(
+                creatives=[],
+                assignments={"c_exists_in_library": ["pkg_does_not_exist"]},
+                validation_mode="lenient",
+            )
+
+            entry = next(r for r in response.creatives if r.creative_id == "c_exists_in_library")
+            assert entry.action == "failed", f"Expected synthesized action='failed' entry, got: {entry}"
+            assert entry.errors, f"failed entry must carry errors[]: {entry}"
+            assert entry.errors[0].code == "VALIDATION_ERROR", (
+                f"Package-not-found-only advisory must keep VALIDATION_ERROR "
+                f"(only the creative-not-found cause flips), got: {entry.errors[0].code!r}"
+            )
 
     def test_strict_mode_also_processes_all_creatives(self, integration_db):
         """Covers: UC-006-EXT-C-02 — strict: validation errors still per-creative in strict mode."""
@@ -685,6 +824,209 @@ class TestAssignmentProcessing:
             ).all()
             assert len(assignments) == 1
 
+    def test_cross_principal_creative_reference_does_not_500_or_leak(self, integration_db):
+        """A principal referencing ANOTHER principal's creative_id in assignments
+        must get a clean response — not a raw FK IntegrityError 500 — no
+        assignment row may be inserted, and none of the owner's row fields may
+        leak into the requester's response.
+
+        creatives has a composite PK (creative_id, tenant_id, principal_id); the
+        existence gate must be principal-scoped like the parallel lookup in
+        _sync.py (SECURITY comment), so a cross-principal reference resolves to
+        "not found" instead of passing the gate on the other principal's row and
+        crashing on the FK insert (PR #1430 review). The owner's creative is
+        seeded with marker fields that only surface if the gate reads their row;
+        a same-request positive control (the requester's own creative) proves
+        the assignment machinery ran, so a zero-rows outcome from an unrelated
+        upstream gate cannot pass this scenario.
+        """
+        from src.core.database.models import CreativeAssignment as DBAssignment
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+
+        # Fields that exist ONLY on the owner's creative row. Any of them in the
+        # requester's wire response means the gate read the other principal's row
+        # (mirrors the create-path _LEAK_MARKERS discipline).
+        leak_markers = ("video_640x480", "rejected", "has status")
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            requester = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            owner = PrincipalFactory(tenant=tenant, principal_id="other_principal")
+            # The cross-principal creative exists ONLY under the other principal,
+            # armed with marker field values.
+            CreativeFactory(
+                tenant=tenant,
+                principal=owner,
+                creative_id="c_owned_by_other",
+                format="video_640x480",
+                status="rejected",
+                agent_url="https://creative.adcontextprotocol.org",
+            )
+            # Positive control: the requester's OWN creative in the same request
+            # must produce a real assignment row.
+            CreativeFactory(
+                tenant=tenant,
+                principal=requester,
+                creative_id="c_mine",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+            )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=requester)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[],
+                assignments={"c_owned_by_other": [pkg_id], "c_mine": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            assert not result.is_error, (
+                f"Cross-principal creative reference must not fail the request "
+                f"(was a raw FK 500): {result.wire_error_envelope}"
+            )
+            # Mutation-proofing (PR #1430 orphan-assignment fix): the skipped
+            # assignment must be VISIBLE on the wire as a synthesized failed
+            # entry — no-error+no-row alone survives deletion of the error
+            # recording.
+            entries = _wire_entries(result)
+            assert entries.get("c_owned_by_other", {}).get("action") == "failed", (
+                f"Skipped cross-principal assignment must surface as action='failed': {result.wire_response}"
+            )
+            # Leak absence: the owner's field values must not appear anywhere in
+            # the response the requester sees.
+            wire_text = json.dumps(result.wire_response).lower()
+            for marker in leak_markers:
+                assert marker not in wire_text, (
+                    f"Response leaks the other principal's creative fields ({marker!r}): {result.wire_response}"
+                )
+            # Positive control ran in the SAME request: real row for c_mine...
+            assert entries.get("c_mine", {}).get("assigned_to") == [pkg_id], (
+                f"Positive-control assignment must surface assigned_to: {entries.get('c_mine')}"
+            )
+            mine_rows = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_mine")
+            assert len(mine_rows) == 1, f"Positive-control assignment row must exist, got {len(mine_rows)}"
+            # ...and none for the cross-principal reference.
+            cross_rows = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_owned_by_other")
+            assert cross_rows == [], (
+                f"No assignment may be created from a cross-principal reference, got {len(cross_rows)}"
+            )
+
+    @pytest.mark.parametrize(
+        "orphan_creative_id, seed_other_principal",
+        [
+            ("c_never_synced", False),
+            ("c_owned_by_other", True),  # cross-principal reference: same uniform surface
+        ],
+    )
+    def test_orphan_assignment_error_surfaces_as_failed_result_on_wire(
+        self, integration_db, orphan_creative_id, seed_other_principal
+    ):
+        """creatives=[] + assignments referencing an unknown creative_id (lenient
+        mode) MUST surface the skipped assignment as a per-item result entry with
+        action='failed' — not return bare success the buyer can't distinguish
+        from a completed assignment.
+
+        Spec grounding (pinned 3.1, static/schemas/source/creative/
+        sync-creatives-response.json @ adcp 04f59d2d5): the success branch
+        FORBIDS a response-level errors array (mutually-exclusive oneOf), so
+        per-item failures ride creatives[] with action='failed' ("Items with
+        action='failed' indicate per-item validation/processing failures"),
+        errors[] "only present when action='failed'", assignment_errors keyed
+        by package id, and status "MUST be omitted when action is failed".
+        BR-RULE-033 INV-4 pins the principle: assignment errors are always
+        recorded in the response. salesagent-9qpj: the result merge only
+        decorated entries of creatives synced in the SAME request, so this
+        shape returned bare success.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            requester = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            if seed_other_principal:
+                owner = PrincipalFactory(tenant=tenant, principal_id="other_principal")
+                CreativeFactory(
+                    tenant=tenant,
+                    principal=owner,
+                    creative_id=orphan_creative_id,
+                    format="display_300x250",
+                    agent_url="https://creative.adcontextprotocol.org",
+                )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=requester)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[],
+                assignments={orphan_creative_id: [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            assert not result.is_error, (
+                f"Lenient orphan-assignment must stay on the success branch: {result.wire_error_envelope}"
+            )
+            wire = result.wire_response
+            assert wire is not None, "REST success must expose the wire body"
+            entries = _wire_entries(result)
+            assert orphan_creative_id in entries, (
+                f"Orphan assignment reference must produce a per-item action='failed' "
+                f"result entry — bare success hides the skipped assignment from the "
+                f"buyer (BR-RULE-033 INV-4). Wire: {wire}"
+            )
+            entry = entries[orphan_creative_id]
+            assert entry.get("action") == "failed", f"Expected action='failed', got: {entry}"
+            assignment_errors = entry.get("assignment_errors") or {}
+            assert assignment_errors.get(pkg_id), f"assignment_errors must name the skipped package {pkg_id}: {entry}"
+            assert entry.get("errors"), f"failed entry must carry errors[] per spec: {entry}"
+            assert "status" not in entry or entry.get("status") is None, (
+                f"status MUST be omitted when action='failed': {entry}"
+            )
+
+    def test_assign_only_existing_creative_surfaces_assigned_to_on_wire(self, integration_db):
+        """creatives=[] + assignments referencing an EXISTING library creative:
+        the successful assignment must surface as a synthesized 'unchanged'
+        entry with assigned_to — not vanish from the response (same merge hole
+        as the orphan-error shape, success-info variant). salesagent-9qpj.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="c_preexisting",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+            )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            result = env.call_via(
+                Transport.REST,
+                creatives=[],
+                assignments={"c_preexisting": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            assert not result.is_error
+            entries = _wire_entries(result)
+            entry = entries.get("c_preexisting")
+            assert entry is not None, (
+                f"Assign-only reference to an existing creative must produce a result "
+                f"entry carrying assigned_to: {result.wire_response}"
+            )
+            assert entry.get("action") == "unchanged", f"Sync didn't modify the creative: {entry}"
+            assert entry.get("assigned_to") == [pkg_id], f"assigned_to must name the package: {entry}"
+
     def test_none_assignments_produces_no_records(self, integration_db):
         """Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01 — None assignments = no assignment records."""
         from sqlalchemy import select
@@ -739,6 +1081,77 @@ class TestAssignmentProcessing:
                 select(DBAssignment).filter_by(tenant_id="test_tenant", creative_id="c_idem", package_id=pkg_id)
             ).all()
             assert len(assignments) == 1, "Idempotent: should not duplicate assignment"
+
+    def test_failed_creative_assignment_skipped_no_fk_violation(self, integration_db):
+        """Regression #1418 — lenient sync: invalid creative + its assignment.
+
+        A creative that fails validation is never persisted, so processing its
+        assignment must NOT attempt an INSERT (it would violate the creative FK
+        and surface as a 500). Expected: a clean success envelope reporting the
+        per-creative failure, an assignment_errors entry for the skipped package,
+        and ZERO assignment rows for the failed creative.
+        """
+        from src.core.database.models import CreativeAssignment as DBAssignment
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            # Empty name → validation failure → creative is skipped from persistence.
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_bad", name="")],
+                assignments={"c_bad": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            # No 500 — a real SyncCreativesResponse is returned.
+            assert len(response.creatives) == 1
+            result = response.creatives[0]
+            assert result.action == "failed"
+            assert result.assignment_errors is not None
+            assert pkg_id in result.assignment_errors
+
+            assignments = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_bad")
+            assert assignments == [], "No assignment row may be written for a creative that was not persisted"
+
+    def test_batch_valid_and_invalid_creative_assignments(self, integration_db):
+        """Regression #1418 — batch: valid+assigned creative A, invalid+assigned creative B.
+
+        A's assignment persists; B's does not. B's per-creative failure and its
+        skipped assignment are reported. No FK violation, no 500.
+        """
+        from src.core.database.models import CreativeAssignment as DBAssignment
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(creative_id="c_ok", name="Valid Creative"),
+                    _make_creative_asset(creative_id="c_bad", name=""),  # invalid
+                ],
+                assignments={"c_ok": [pkg_id], "c_bad": [pkg_id]},
+                validation_mode="lenient",
+            )
+
+            result_by_id = {r.creative_id: r for r in response.creatives}
+            assert result_by_id["c_ok"].action != "failed"
+            assert result_by_id["c_ok"].assigned_to == [pkg_id]
+            assert result_by_id["c_bad"].action == "failed"
+            assert result_by_id["c_bad"].assignment_errors is not None
+            assert pkg_id in result_by_id["c_bad"].assignment_errors
+
+            ok_assignments = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_ok", package_id=pkg_id)
+            bad_assignments = env.query(DBAssignment, tenant_id="test_tenant", creative_id="c_bad")
+            assert len(ok_assignments) == 1, "Valid creative's assignment must persist"
+            assert bad_assignments == [], "Invalid creative's assignment must not persist"
 
 
 class TestSchemaCompleteness:
@@ -867,25 +1280,39 @@ class TestSyncExtensions:
         assert any("list_creative_formats" in e for e in _error_messages(result.errors))
 
     def test_unreachable_agent_fails_with_retry(self, integration_db):
-        """Covers: UC-006-EXT-G-01 — agent unreachable → failed with retry suggestion."""
-        from unittest.mock import AsyncMock
+        """Covers: UC-006-EXT-G-01 — agent unreachable → buyer told to retry.
+
+        Production-grounded: the registry TYPES all network failures
+        (creative_agent_registry.py:500-531 — connect/timeout ->
+        AdCPServiceUnavailableError), so "unreachable" reaches sync_creatives
+        as a typed transient error and MUST surface as a transient
+        SERVICE_UNAVAILABLE wire envelope — not a terminal-looking per-item
+        creative failure (salesagent-mpo1). A raw ConnectionError never
+        escapes the registry in production.
+        """
+        from src.core.exceptions import AdCPServiceUnavailableError
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError(
+                "Connection failed: https://creative.adcontextprotocol.org/mcp — agent unreachable"
+            )
 
-            # Override: registry.get_format raises ConnectionError
-            registry_mock = env.mock["registry"].return_value
-            registry_mock.get_format = AsyncMock(side_effect=ConnectionError("Agent unreachable"))
-
-            response = env.call_impl(
+            result = env.call_via(
+                Transport.REST,
                 creatives=[_make_creative_asset(creative_id="c_unreachable")],
             )
 
-        assert len(response.creatives) == 1
-        result = response.creatives[0]
-        assert result.action == "failed"
-        assert any("unreachable" in e.lower() for e in _error_messages(result.errors))
+            assert result.is_error, f"Unreachable agent must fail the request transiently: {result.payload!r}"
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "SERVICE_UNAVAILABLE",
+                recovery="transient",
+                message_substr="unreachable",
+            )
 
     def test_package_not_found_lenient_logs_error(self, integration_db):
         """Covers: UC-006-EXT-J-02 — lenient: missing package → assignment_errors."""

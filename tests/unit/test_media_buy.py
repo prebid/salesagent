@@ -756,6 +756,92 @@ class TestCreateMediaBuyValidation:
             )
 
 
+class TestBuildAdapterAssetFormatFallback:
+    """_build_adapter_asset_from_creative format-spec fallback (salesagent-mpo1 TQ-04).
+
+    Cache-miss (None) falls back to format_resolver.get_format; a genuinely
+    unknown format proceeds with no spec (raw-data extraction); a typed
+    transient AdCPError propagates from EITHER fetch — never degraded into a
+    missing-spec asset error.
+    """
+
+    def _creative(self):
+        creative = MagicMock()
+        creative.creative_id = "c_fb"
+        creative.format = "display_300x250"
+        creative.agent_url = "https://creative.adcontextprotocol.org"
+        creative.name = "FB"
+        creative.data = {"url": "https://example.com/a.jpg", "width": 300, "height": 250}
+        return creative
+
+    def test_cache_miss_uses_format_resolver_fallback(self):
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        spec = MagicMock()
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+            patch("src.core.format_resolver.get_format", return_value=spec) as resolver,
+        ):
+            asset, err = _build_adapter_asset_from_creative(
+                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+            )
+        resolver.assert_called_once_with(
+            "display_300x250",
+            agent_url="https://creative.adcontextprotocol.org",
+            tenant_id="t1",
+            product_id=None,
+        )
+        assert err is None and asset is not None
+
+    def test_unknown_format_proceeds_without_spec(self):
+        from src.core.exceptions import AdCPFormatNotFoundError
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+            patch("src.core.format_resolver.get_format", side_effect=AdCPFormatNotFoundError("nope")),
+        ):
+            asset, err = _build_adapter_asset_from_creative(
+                self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+            )
+        # Raw creative data carries url/width/height, so the asset still builds.
+        assert err is None and asset is not None
+        assert asset["url"] == "https://example.com/a.jpg"
+
+    def test_transient_error_from_cached_fetch_propagates_without_fallback(self):
+        from src.core.exceptions import AdCPRateLimitError
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        with (
+            patch(
+                "src.core.tools.media_buy_create._get_format_spec_sync",
+                side_effect=AdCPRateLimitError("429"),
+            ),
+            patch("src.core.format_resolver.get_format") as resolver,
+        ):
+            with pytest.raises(AdCPRateLimitError):
+                _build_adapter_asset_from_creative(
+                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                )
+        resolver.assert_not_called()
+
+    def test_transient_error_from_resolver_fallback_propagates(self):
+        from src.core.exceptions import AdCPServiceUnavailableError
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+            patch(
+                "src.core.format_resolver.get_format",
+                side_effect=AdCPServiceUnavailableError("503"),
+            ),
+        ):
+            with pytest.raises(AdCPServiceUnavailableError):
+                _build_adapter_asset_from_creative(
+                    self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
+                )
+
+
 class TestCreateMediaBuyCreativeValidation:
     """UC-002 creative validation: pre-adapter creative checks."""
 
@@ -791,7 +877,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.return_value.all.return_value = [mock_creative]
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert "creative_errors" in exc_info.value.details
 
@@ -821,7 +907,7 @@ class TestCreateMediaBuyCreativeValidation:
         session.scalars.return_value.all.return_value = [mock_creative]
 
         with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-            _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
         assert "creative_errors" in exc_info.value.details
 
@@ -851,7 +937,7 @@ class TestCreateMediaBuyCreativeValidation:
         session.scalars.return_value.all.return_value = [mock_creative]
 
         with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-            _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
         assert "creative_errors" in exc_info.value.details
 
@@ -903,7 +989,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.side_effect = [creative_result, product_result]
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert "creative_errors" in exc_info.value.details
 
@@ -937,7 +1023,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.return_value.all.return_value = [mock_creative]
 
             # Should NOT raise -- generative creatives are skipped
-            _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+            _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
     def test_multiple_creative_errors_accumulated(self):
         """UC-002-C06: all creative validation errors collected before raising.
@@ -981,7 +1067,7 @@ class TestCreateMediaBuyCreativeValidation:
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             # Both errors should be accumulated in a single exception
             assert "creative_errors" in exc_info.value.details
@@ -2352,7 +2438,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c1, mock_c2]
+            mock_uow.creatives.get_by_ids.return_value = [mock_c1, mock_c2]
             mock_uow.products.get_by_id.return_value = mock_product
 
             # Existing-assignment lookup still goes through session.scalars.
@@ -2432,7 +2518,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_by_id.return_value = mock_buy
 
             # No creatives found via repository.
-            mock_uow.creatives.admin_get_by_ids.return_value = []
+            mock_uow.creatives.get_by_ids.return_value = []
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)not found"):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2517,7 +2603,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)cannot.*assign|error|state"):
@@ -2603,7 +2689,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)format|not supported"):
@@ -2705,7 +2791,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
-            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c2, mock_c4]
+            mock_uow.creatives.get_by_ids.return_value = [mock_c2, mock_c4]
             mock_uow.products.get_by_id.return_value = mock_product
 
             # Existing-assignment lookup still goes through session.scalars.
@@ -4015,121 +4101,87 @@ class TestDeliveryResponseSerialization:
 
 
 class TestGetMediaBuysStatusComputation:
-    """get_media_buys: _compute_status logic."""
+    """get_media_buys: _compute_status delegates to the shared resolve_canonical_status (#1545).
 
-    def test_pending_start_before_start(self):
-        """GMB-ST01: before start_date -> pending_start.
+    The persisted column is the source of truth for TERMINAL/explicit states
+    (paused, completed, rejected, canceled — never date-derived, preserving
+    #1417's core), while a GENERIC serving state ("active") is refined against
+    the flight window so get_media_buys and get_media_buy_delivery describe the
+    same buy identically (pinned by test_media_buy_status_consistency).
+    """
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_start
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_pending_start_when_before_start
-        """
-        from adcp.types import MediaBuyStatus
+    @staticmethod
+    def _make_buy(*, status="active", start_offset_days, end_offset_days, start_time=None, is_paused=False):
+        from src.core.tools.media_buy_list import _MediaBuyData
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
-
-        buy = _MediaBuyData(
+        return _MediaBuyData(
             media_buy_id="mb_1",
             currency="USD",
             budget=Decimal("1000"),
-            start_date=date.today() + timedelta(days=10),
-            end_date=date.today() + timedelta(days=40),
-            start_time=None,
+            start_date=date.today() + timedelta(days=start_offset_days),
+            end_date=date.today() + timedelta(days=end_offset_days),
+            start_time=start_time,
             end_time=None,
             raw_request={},
             created_at=None,
             updated_at=None,
-            status="active",
-            is_paused=False,
+            status=status,
+            is_paused=is_paused,
+            # PR1544 fields — required (no dataclass defaults, by design): the
+            # status-computation tests don't exercise them, so fixed values suffice.
             confirmed_at=None,
             revision=1,
         )
+
+    def test_active_persisted_before_flight_refines_to_pending_start(self):
+        """A generic 'active'-persisted buy whose flight has not started is
+        date-refined to pending_start (shared resolve_canonical_status taxonomy)."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_list import _compute_status
+
+        buy = self._make_buy(start_offset_days=10, end_offset_days=40)
         assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
     def test_active_when_in_flight(self):
-        """GMB-ST02: within flight dates -> active.
-
-        Spec: CONFIRMED -- media-buy-status.json: active
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_active_when_in_flight
-        """
+        """An 'active'-persisted buy within its flight window reports active."""
         from adcp.types import MediaBuyStatus
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
+        from src.core.tools.media_buy_list import _compute_status
 
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=5),
-            end_date=date.today() + timedelta(days=25),
-            start_time=None,
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-            confirmed_at=None,
-            revision=1,
-        )
+        buy = self._make_buy(start_offset_days=-5, end_offset_days=25)
         assert _compute_status(buy, date.today()) == MediaBuyStatus.active
 
-    def test_completed_when_past_end(self):
-        """GMB-ST03: past end_date -> completed.
-
-        Spec: CONFIRMED -- media-buy-status.json: completed
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_completed_when_past_end
-        """
+    def test_active_persisted_past_end_refines_to_completed(self):
+        """A generic 'active'-persisted buy past its end date is date-refined to
+        completed — the same answer get_media_buy_delivery gives for the buy."""
         from adcp.types import MediaBuyStatus
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
+        from src.core.tools.media_buy_list import _compute_status
 
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=40),
-            end_date=date.today() - timedelta(days=10),
-            start_time=None,
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-            confirmed_at=None,
-            revision=1,
-        )
+        buy = self._make_buy(start_offset_days=-40, end_offset_days=-10)
         assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
 
-    def test_prefers_start_time_over_start_date(self):
-        """GMB-ST04: start_time takes precedence over start_date.
-
-        Spec: UNSPECIFIED (implementation-defined start_time vs start_date precedence)
-        Ported from test_get_media_buys.py::test_prefers_start_time_over_start_date
-        """
+    def test_terminal_persisted_never_date_derived(self):
+        """A TERMINAL persisted state is returned verbatim regardless of the
+        flight window (#1417's core, preserved by the shared resolver): a
+        'completed' buy whose dates say in-flight stays completed."""
         from adcp.types import MediaBuyStatus
 
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
+        from src.core.tools.media_buy_list import _compute_status
 
-        # start_date is in the past, but start_time is in the future
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=5),
-            end_date=date.today() + timedelta(days=25),
-            start_time=datetime.now(UTC) + timedelta(days=10),
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-            confirmed_at=None,
-            revision=1,
+        buy = self._make_buy(status="completed", start_offset_days=-5, end_offset_days=25)
+        assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
+
+    def test_future_start_time_refines_to_pending_start(self):
+        """A future start_time refines a generic serving state to pending_start
+        even when start_date has arrived (time-of-day precision)."""
+        from adcp.types import MediaBuyStatus
+
+        from src.core.tools.media_buy_list import _compute_status
+
+        buy = self._make_buy(
+            start_offset_days=-5, end_offset_days=25, start_time=datetime.now(UTC) + timedelta(days=10)
         )
         assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 

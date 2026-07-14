@@ -774,7 +774,6 @@ class TestDeliveryStatusFilter:
         )
         mock_req = MagicMock()
         mock_req.media_buy_ids = ["mb_sim"]
-        mock_req.buyer_refs = None
         mock_req.status_filter = [MediaBuyStatus.completed]
         mock_repo = MagicMock()
         mock_repo.get_by_principal.return_value = [buy]
@@ -802,7 +801,6 @@ class TestDeliveryStatusFilter:
         )
         mock_req = MagicMock()
         mock_req.media_buy_ids = ["mb_sim"]
-        mock_req.buyer_refs = None
         mock_req.status_filter = [MediaBuyStatus.active]
         mock_repo = MagicMock()
         mock_repo.get_by_principal.return_value = [buy]

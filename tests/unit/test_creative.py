@@ -716,7 +716,7 @@ class TestCrossPrincipalIsolation:
         with (
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context"),
+            patch("src.core.format_resolver.fetch_format_spec"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
@@ -772,7 +772,7 @@ class TestCrossPrincipalIsolation:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -949,22 +949,30 @@ class TestCreativeValidation:
         assert result.creative_id == "c_test_1"
 
     def test_unreachable_agent_raises_with_retry(self):
-        """Unreachable creative agent raises ValueError with retry suggestion.
+        """Unreachable creative agent propagates the typed transient error.
+
+        Production-grounded (salesagent-mpo1): the registry types every
+        network failure (connect/timeout -> AdCPServiceUnavailableError), and
+        the shared fetch path propagates typed errors with their recovery
+        semantics instead of rewrapping them — a down agent is a transient
+        request failure, not a creative problem.
 
         Spec: UNSPECIFIED (implementation-defined error handling for agent connectivity).
         Covers: UC-006-CREATIVE-FORMAT-VALIDATION-03
         """
+        from src.core.exceptions import AdCPServiceUnavailableError
         from src.core.tools.creatives._validation import _validate_creative_input
 
         creative = _make_creative_asset()
         mock_registry = MagicMock()
 
         with patch(
-            "src.core.tools.creatives._validation.run_async_in_sync_context",
-            side_effect=ConnectionError("Agent down"),
+            "src.core.format_resolver.fetch_format_spec",
+            side_effect=AdCPServiceUnavailableError("Connection failed: agent unreachable"),
         ):
-            with pytest.raises(AdCPAdapterError, match="unreachable"):
+            with pytest.raises(AdCPServiceUnavailableError, match="unreachable") as exc_info:
                 _validate_creative_input(creative, mock_registry, "p1")
+        assert exc_info.value.recovery == "transient"
 
     def test_unknown_format_raises_with_discovery_hint(self):
         """Known agent but unknown format raises ValueError mentioning list_creative_formats.
@@ -978,7 +986,7 @@ class TestCreativeValidation:
         mock_registry = MagicMock()
 
         with patch(
-            "src.core.tools.creatives._validation.run_async_in_sync_context",
+            "src.core.format_resolver.fetch_format_spec",
             return_value=None,  # Format not found
         ):
             with pytest.raises(AdCPValidationError, match="list_creative_formats"):
@@ -1319,6 +1327,7 @@ class TestAssignmentProcessing:
             results=[],
             tenant={"tenant_id": "t1"},
             validation_mode="strict",
+            principal_id="principal_1",
         )
         assert result == []
 
@@ -1335,6 +1344,7 @@ class TestAssignmentProcessing:
             results=[],
             tenant={"tenant_id": "t1"},
             validation_mode="strict",
+            principal_id="principal_1",
         )
         assert result == []
 
@@ -1366,6 +1376,7 @@ class TestAssignmentProcessing:
                     results=results,
                     tenant={"tenant_id": "t1"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
     def test_lenient_mode_package_not_found_continues(self):
@@ -1394,6 +1405,7 @@ class TestAssignmentProcessing:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
             assert assignment_list == []
 
@@ -2533,7 +2545,7 @@ class TestDeleteMissing:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -2609,7 +2621,7 @@ class TestDryRun:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3063,7 +3075,7 @@ class TestValidationModeSemantics:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
+            patch("src.core.format_resolver.fetch_format_spec") as mock_val_async,
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -3142,6 +3154,7 @@ class TestValidationModeSemantics:
                     results=results,
                     tenant={"tenant_id": "t1"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
     def test_lenient_mode_continues_on_assignment_error(self):
@@ -3174,8 +3187,12 @@ class TestValidationModeSemantics:
                     return (mock_package, mock_media_buy)
                 return None
 
+            # Both creatives exist in the library (so assignments may be created);
+            # the error under test is package-not-found, not creative-not-found.
+            mock_creative_row = MagicMock()
+            mock_creative_row.agent_url = None
             mock_assignment_repo.find_package_with_media_buy.side_effect = find_pkg
-            mock_assignment_repo.get_creative_by_id.return_value = None
+            mock_assignment_repo.get_creative_by_id.return_value = mock_creative_row
             mock_assignment_repo.get_existing.return_value = None
 
             mock_new_assignment = MagicMock()
@@ -3196,6 +3213,7 @@ class TestValidationModeSemantics:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             # c1 should have assignment error, c2 should succeed
@@ -3269,8 +3287,12 @@ class TestAssignmentPackageValidationGaps:
             mock_media_buy.approved_at = None
             mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
 
-            # Creative lookup (for format validation) - no creative found, skip format check
-            mock_assignment_repo.get_creative_by_id.return_value = None
+            # Creative exists in the library; package_config has no product_id so the
+            # format check is skipped, but the creative must be present for the
+            # idempotent upsert path to run (see #1418).
+            mock_creative_row = MagicMock()
+            mock_creative_row.creative_id = "c1"
+            mock_assignment_repo.get_creative_by_id.return_value = mock_creative_row
 
             # Existing assignment found
             mock_assignment_repo.get_existing.return_value = mock_existing_assignment
@@ -3280,6 +3302,7 @@ class TestAssignmentPackageValidationGaps:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Weight should be reset to 100
@@ -3316,6 +3339,7 @@ class TestAssignmentPackageValidationGaps:
                     results=results,
                     tenant={"tenant_id": "t2"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
 
@@ -3417,6 +3441,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # URL normalization should strip /mcp and trailing / so formats match
@@ -3447,6 +3472,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             # No assignment created due to mismatch
@@ -3479,6 +3505,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Should succeed regardless of creative format
@@ -3509,6 +3536,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Should match via 'format_id' key
@@ -3539,6 +3567,7 @@ class TestFormatCompatibility:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
             # Should succeed without format check
@@ -3575,8 +3604,12 @@ class TestMediaBuyStatusTransition:
         mock_media_buy.status = media_buy_status
         mock_media_buy.approved_at = approved_at
 
+        # Creative must exist for an assignment to be created (a non-persisted
+        # creative is skipped to avoid an FK violation — see #1418).
+        mock_creative_row = MagicMock()
+        mock_creative_row.creative_id = "c1"
         mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
-        mock_assignment_repo.get_creative_by_id.return_value = None
+        mock_assignment_repo.get_creative_by_id.return_value = mock_creative_row
         mock_assignment_repo.get_existing.return_value = existing_assignment
 
         # Mock create for new assignments
@@ -3596,6 +3629,7 @@ class TestMediaBuyStatusTransition:
             results=results,
             tenant={"tenant_id": "t1"},
             validation_mode="strict",
+            principal_id="principal_1",
         )
         return mock_media_buy
 
@@ -3702,7 +3736,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3756,7 +3790,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3875,7 +3909,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -3925,7 +3959,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),  # format found
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -4011,7 +4045,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
+            patch("src.core.format_resolver.fetch_format_spec") as mock_val_async,
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -4077,7 +4111,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
+            patch("src.core.format_resolver.fetch_format_spec") as mock_val_async,
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -4240,7 +4274,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._validation.run_async_in_sync_context", return_value=None),
+            patch("src.core.format_resolver.fetch_format_spec", return_value=None),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._workflow.WorkflowUoW"),
@@ -4291,7 +4325,7 @@ class TestExtensionGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 side_effect=ConnectionError("Agent unreachable"),
             ),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -4352,6 +4386,7 @@ class TestExtensionGaps:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             assert results[0].assignment_errors is not None
@@ -4382,6 +4417,7 @@ class TestExtensionGaps:
                     results=results,
                     tenant={"tenant_id": "t1"},
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
     def test_ext_k_format_mismatch_lenient(self):
@@ -4427,6 +4463,7 @@ class TestExtensionGaps:
                 results=results,
                 tenant={"tenant_id": "t1"},
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
             assert assignment_list == []
@@ -4463,7 +4500,7 @@ class TestA2ATransportGaps:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -4740,7 +4777,7 @@ class TestDeleteMissingDefault:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
@@ -4855,7 +4892,7 @@ class TestCreativeIdsScopeFilterGap:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
-                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                "src.core.format_resolver.fetch_format_spec",
                 return_value=MagicMock(),
             ),
             patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),

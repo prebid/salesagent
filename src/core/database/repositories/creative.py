@@ -72,6 +72,26 @@ class CreativeRepository:
             )
         ).first()
 
+    def get_by_ids(self, creative_ids: list[str], principal_id: str) -> list[Creative]:
+        """Get multiple creatives by their IDs for a principal within the tenant.
+
+        The creatives PK is composite (creative_id, tenant_id, principal_id) —
+        buyer-path bulk loads must match the full key so another principal's
+        creative resolves to "not found" instead of passing existence gates
+        (and then violating the composite FK on assignment insert).
+        """
+        if not creative_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(Creative).where(
+                    Creative.tenant_id == self._tenant_id,
+                    Creative.principal_id == principal_id,
+                    Creative.creative_id.in_(creative_ids),
+                )
+            ).all()
+        )
+
     # ------------------------------------------------------------------
     # List queries
     # ------------------------------------------------------------------
@@ -373,14 +393,21 @@ class CreativeAssignmentRepository:
         media_buy_id: str,
         package_id: str,
         creative_id: str,
+        principal_id: str,
     ) -> CreativeAssignment | None:
-        """Get an existing assignment by its unique composite key."""
+        """Get an existing assignment by its unique composite key.
+
+        principal_id is part of the key: the same creative_id can exist under
+        two principals in one tenant (composite creatives PK), so an assignment
+        match must pin the owning principal.
+        """
         return self._session.scalars(
             select(CreativeAssignment).filter_by(
                 tenant_id=self._tenant_id,
                 media_buy_id=media_buy_id,
                 package_id=package_id,
                 creative_id=creative_id,
+                principal_id=principal_id,
             )
         ).first()
 
@@ -394,10 +421,14 @@ class CreativeAssignmentRepository:
         media_buy_id: str,
         package_id: str,
         creative_id: str,
-        principal_id: str | None = None,
+        principal_id: str,
         weight: int = 100,
     ) -> CreativeAssignment:
         """Create a new assignment within this tenant.
+
+        ``principal_id`` is required — the column is NOT NULL (part of the
+        composite FK to creatives), so a defaulted None here would only fail
+        at flush time, far from the caller.
 
         Does NOT commit - the caller handles that.
         """
@@ -447,23 +478,31 @@ class CreativeAssignmentRepository:
         mb_repo = MediaBuyRepository(self._session, self._tenant_id)
         return mb_repo.find_package_with_media_buy(package_id)
 
-    def get_creative_by_id(self, creative_id: str) -> Creative | None:
-        """Get a creative by tenant + creative_id (no principal filter)."""
-        return self._session.scalars(
-            select(Creative).where(
-                Creative.tenant_id == self._tenant_id,
-                Creative.creative_id == creative_id,
-            )
-        ).first()
+    def get_creative_by_id(self, creative_id: str, principal_id: str) -> Creative | None:
+        """Get a creative by its full composite key (tenant + principal + creative_id).
+
+        The creatives PK is (creative_id, tenant_id, principal_id) — a tenant-only
+        lookup would match ANOTHER principal's row, letting a cross-principal
+        reference pass the assignment existence gate and crash on the FK insert
+        (and leak the other principal's fields into the requester's errors).
+        Principal-scoped for the same reason as the sync lookup in _sync.py
+        (SECURITY comment there). ``principal_id`` is required: the column is
+        NOT NULL, so a None here would compile to ``IS NULL`` and silently
+        match nothing instead of failing loudly.
+
+        Delegates to CreativeRepository — the canonical composite-key lookup.
+        """
+        return CreativeRepository(self._session, self._tenant_id).get_by_id(creative_id, principal_id)
 
     def get_product_by_id(self, product_id: str) -> Product | None:
-        """Get a product by tenant + product_id."""
-        return self._session.scalars(
-            select(Product).where(
-                Product.tenant_id == self._tenant_id,
-                Product.product_id == product_id,
-            )
-        ).first()
+        """Get a product by tenant + product_id.
+
+        Delegates to ProductRepository — the canonical tenant-scoped Product
+        lookup.
+        """
+        from src.core.database.repositories.product import ProductRepository
+
+        return ProductRepository(self._session, self._tenant_id).get_by_id(product_id)
 
     def commit(self) -> None:
         """Commit the current transaction."""

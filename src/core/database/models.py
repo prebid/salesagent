@@ -2176,6 +2176,48 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
         )
 
 
+class DeliverySimulationConfig(Base):
+    """Server-side delivery seeding for the Mock adapter (#1418).
+
+    Holds a per-(tenant, media_buy) snapshot of the exact wire payload the Mock
+    adapter should return from ``get_media_buy_delivery`` — an
+    ``AdapterGetMediaBuyDeliveryResponse`` dumped with ``mode="json"``. The live
+    server's Mock adapter reads this row FIRST; when absent its existing
+    in-memory / fallback behavior is unchanged.
+
+    There is intentionally no FK to ``media_buys``: a row may be seeded before
+    the buy exists or for synthetic ids used by the e2e harness.
+    """
+
+    __tablename__ = "delivery_simulation_configs"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    media_buy_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    response_payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationship (lets factories pass a tenant object; no backref needed).
+    tenant = relationship("Tenant")
+
+    # No standalone tenant_id index: the composite PK (tenant_id, media_buy_id)
+    # already serves tenant_id-prefix scans (823974a5553e dropped the redundant
+    # idx_delivery_sim_tenant).
+    __table_args__ = (ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),)
+
+    def __repr__(self):
+        return (
+            f"<DeliverySimulationConfig("
+            f"tenant_id='{self.tenant_id}', "
+            f"media_buy_id='{self.media_buy_id}', "
+            f"created_at={self.created_at}, "
+            f"updated_at={self.updated_at}"
+            f")>"
+        )
+
+
 class WebhookDeliveryRecord(Base):
     """Tracks webhook delivery attempts with retry history.
 

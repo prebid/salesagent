@@ -202,12 +202,18 @@ class TestExceptionHierarchy:
 class TestRecoveryClassification:
     """Verify recovery field on AdCPError and all subclasses."""
 
-    def test_base_error_defaults_to_terminal(self):
-        """AdCPError base class defaults to recovery='terminal'."""
+    def test_base_error_defaults_to_transient(self):
+        """AdCPError base class defaults to recovery='transient'.
+
+        Recovery follows the WIRE code (salesagent-nr2q): the base
+        INTERNAL_ERROR maps to SERVICE_UNAVAILABLE, pinned transient in the
+        enumMetadata. This is the normalize_to_adcp_error crash-wrap path —
+        buyers may retry a generic server failure.
+        """
         from src.core.exceptions import AdCPError
 
         exc = AdCPError("something broke")
-        assert exc.recovery == "terminal"
+        assert exc.recovery == "transient"
 
     def test_validation_error_defaults_to_correctable(self):
         """AdCPValidationError defaults to recovery='correctable'."""
@@ -216,19 +222,19 @@ class TestRecoveryClassification:
         exc = AdCPValidationError("invalid field")
         assert exc.recovery == "correctable"
 
-    def test_not_found_error_defaults_to_terminal(self):
-        """AdCPNotFoundError (the *base*) defaults to recovery='terminal'.
+    def test_not_found_error_defaults_to_correctable(self):
+        """AdCPNotFoundError (the *base*) defaults to recovery='correctable'.
 
-        Specific typed subclasses (``AdCPMediaBuyNotFoundError``,
-        ``AdCPPackageNotFoundError``) override to ``correctable`` because the
-        buyer holds the lever — they can re-issue with the right id. The base
-        keeps ``terminal`` for genuinely-gone resources without a known
-        recovery path.
+        Recovery follows the WIRE code (salesagent-nr2q): NOT_FOUND maps to
+        INVALID_REQUEST, pinned correctable in the enumMetadata — the buyer
+        holds the lever (re-issue with a valid id), same as the typed
+        subclasses. Account-family subclasses whose own wire codes are pinned
+        terminal declare terminal explicitly.
         """
         from src.core.exceptions import AdCPNotFoundError
 
         exc = AdCPNotFoundError("resource missing")
-        assert exc.recovery == "terminal"
+        assert exc.recovery == "correctable"
 
     def test_media_buy_not_found_error_defaults_to_correctable(self):
         """AdCPMediaBuyNotFoundError overrides base to recovery='correctable'."""
@@ -502,7 +508,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/notfound")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="terminal")
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
 
     def test_context_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPContextNotFoundError raised in a route must return 404 with SESSION_NOT_FOUND.
@@ -517,16 +523,18 @@ class TestFastAPIExceptionHandlers:
         assert_envelope_shape(response.json(), "SESSION_NOT_FOUND", recovery="correctable")
 
     def test_creative_not_found_error_returns_404(self, exc_handler_test_app):
-        """AdCPCreativeNotFoundError → 404, wire INVALID_REQUEST, correctable.
+        """AdCPCreativeNotFoundError → 404, wire CREATIVE_NOT_FOUND, correctable.
 
-        The internal CREATIVE_NOT_FOUND code translates to INVALID_REQUEST at the
-        boundary (ERROR_CODE_MAPPING). recovery=correctable distinguishes it from
-        the base AdCPNotFoundError (terminal) — that override is the regression this pins.
+        CREATIVE_NOT_FOUND is a pinned-spec wire code (enums/error-code.json @
+        04f59d2d5: correctable, mandated uniformly for unowned creative_ids), so
+        it passes the boundary untranslated via the WIRE_STANDARD_CODES spec
+        supplement (#1430 review — the old INVALID_REQUEST demotion rode a stale
+        claim that the SDK lacked the code).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/creative-not-found")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+        assert_envelope_shape(response.json(), "CREATIVE_NOT_FOUND", recovery="correctable")
 
     def test_format_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPFormatNotFoundError → 404, wire INVALID_REQUEST, correctable.
@@ -671,22 +679,23 @@ class TestErrorCodeWireTranslation:
 
         assert translate_error_code("VALIDATION_ERROR") == "VALIDATION_ERROR"
         assert translate_error_code("MEDIA_BUY_NOT_FOUND") == "MEDIA_BUY_NOT_FOUND"
-        # Genuinely-unmapped codes pass through; INTERNAL_CODES that used to pass
-        # through (NOT_FOUND, CONFIGURATION_ERROR, INTERNAL_ERROR) are now
-        # explicitly mapped to STANDARD_ERROR_CODES targets — see
-        # test_internal_codes_translated_to_wire_safe_codes below.
+        # Genuinely-unmapped codes pass through; INTERNAL_CODES that used to
+        # pass through (NOT_FOUND, INTERNAL_ERROR) are explicitly mapped to
+        # STANDARD targets — see test_internal_codes_translated_to_wire_safe_codes
+        # below. CONFIGURATION_ERROR is a _SPEC_SUPPLEMENT_CODES pass-through
+        # (salesagent-nr2q), like CREATIVE_NOT_FOUND.
         assert translate_error_code("SOME_UNKNOWN_CODE_THAT_IS_NOT_MAPPED") == "SOME_UNKNOWN_CODE_THAT_IS_NOT_MAPPED"
 
     def test_internal_codes_translated_to_wire_safe_codes(self):
         """Base-class codes that should never reach the wire are translated to STANDARD targets.
 
-        Catches accidental leaks: AdCPError, AdCPNotFoundError, AdCPConfigurationError
-        instances that escape to the boundary now produce STANDARD_ERROR_CODES output
+        Catches accidental leaks: AdCPError and AdCPNotFoundError instances
+        that escape to the boundary now produce STANDARD_ERROR_CODES output
         instead of the previously-leaking internal codes.
         """
         from adcp.server.helpers import STANDARD_ERROR_CODES
 
-        from src.core.exceptions import INTERNAL_CODES, translate_error_code
+        from src.core.exceptions import INTERNAL_CODES, WIRE_STANDARD_CODES, translate_error_code
 
         # Every INTERNAL_CODES entry that could plausibly reach a buyer either:
         #   (a) has an explicit translation to a STANDARD code, OR
@@ -694,12 +703,18 @@ class TestErrorCodeWireTranslation:
         wire_safe = {
             "NOT_FOUND": "INVALID_REQUEST",
             "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
-            "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
         }
         for internal, expected_wire in wire_safe.items():
             assert internal in INTERNAL_CODES, f"{internal} should be in INTERNAL_CODES"
             assert translate_error_code(internal) == expected_wire
             assert expected_wire in STANDARD_ERROR_CODES
+
+        # CONFIGURATION_ERROR is no longer internal/demoted: the pinned enum
+        # defines it (recovery=terminal, "MUST NOT auto-retry"), so it passes
+        # through untranslated via _SPEC_SUPPLEMENT_CODES (salesagent-nr2q).
+        assert "CONFIGURATION_ERROR" not in INTERNAL_CODES
+        assert translate_error_code("CONFIGURATION_ERROR") == "CONFIGURATION_ERROR"
+        assert "CONFIGURATION_ERROR" in WIRE_STANDARD_CODES
 
     def test_to_wire_error_code_guarantees_standard(self):
         """``to_wire_error_code`` never returns a non-standard code.

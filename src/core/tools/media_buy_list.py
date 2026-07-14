@@ -66,8 +66,9 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object, require_identity, require_tenant
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
@@ -156,7 +157,9 @@ def _get_media_buys_impl(
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
         # FIXME(salesagent-9f2): _fetch_creative_approvals should use a repository method
         assert uow.session is not None
-        creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant_id, uow.session)
+        creative_approvals_by_package = _fetch_creative_approvals(
+            all_media_buy_ids, tenant_id, principal_id, uow.session
+        )
 
         # Resolve package configs for all media buys in one batch query
         packages_by_media_buy = _fetch_packages(all_media_buy_ids, uow)
@@ -506,7 +509,7 @@ _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
 
 
 def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
-    """Map a persisted ``MediaBuy.status`` string to its canonical AdCP ``MediaBuyStatus``.
+    """Map a persisted ``MediaBuy.status`` string to its AdCP ``MediaBuyStatus``.
 
     DB-status → AdCP-status coercion via ``_PERSISTED_STATUS_TO_ADCP`` (derived
     from ``PERSISTED_STATUS_TO_CANONICAL`` — the single authoritative
@@ -570,6 +573,7 @@ def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, lis
 def _fetch_creative_approvals(
     media_buy_ids: list[str],
     tenant_id: str,
+    principal_id: str,
     session: Session,
 ) -> dict[tuple[str, str], list[CreativeApproval]]:
     """Fetch creative approvals for all packages, grouped by (media_buy_id, package_id)."""
@@ -586,13 +590,14 @@ def _fetch_creative_approvals(
     if not assignments:
         return {}
 
-    # Fetch all referenced creatives in one query (scoped to tenant)
+    # Fetch all referenced creatives in one principal-scoped query. The map is
+    # keyed by bare creative_id, but the creatives PK is composite (creative_id,
+    # tenant_id, principal_id) — a tenant-only load could resolve a colliding id
+    # to ANOTHER principal's row and show their approval status to this buyer.
     creative_ids = [a.creative_id for a in assignments]
-    creative_stmt = select(Creative).where(
-        Creative.tenant_id == tenant_id,
-        Creative.creative_id.in_(creative_ids),
-    )
-    creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
+    creatives = {
+        c.creative_id: c for c in CreativeRepository(session, tenant_id).get_by_ids(creative_ids, principal_id)
+    }
 
     # Build approval objects grouped by (media_buy_id, package_id)
     result: dict[tuple[str, str], list[CreativeApproval]] = {}
