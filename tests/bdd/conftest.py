@@ -3331,10 +3331,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # signing/idempotency bounds, ...) xfail fast here until wired.
         marker_names = {m.name for m in request.node.iter_markers()}
         if marker_names & _UC010_VERSION_NEGOTIATION_WIRED:
-            request.getfixturevalue("integration_db")
             from tests.harness.capabilities import CapabilitiesEnv
 
-            with CapabilitiesEnv(e2e_config=ctx.get("e2e_config")) as env:
+            # _db_scope_for: per-test integration_db for in-process transports;
+            # over e2e_rest, point production at the live server DB instead so
+            # the env's factory writes and any in-process read-backs see the
+            # same database (an unconditional integration_db repointed the cached
+            # engine at an empty per-test DB and collided on the shared tenant).
+            with _db_scope_for(request, e2e_config), CapabilitiesEnv(e2e_config=e2e_config) as env:
                 env.setup_default_data()
                 ctx["env"] = env
                 yield
