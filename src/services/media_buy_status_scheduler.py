@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS, Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.media_buy_flight import resolve_flight_window_utc
@@ -123,25 +123,28 @@ class MediaBuyStatusScheduler:
     async def _reconcile_finalizing_buys(self) -> None:
         """Re-drive media buys stranded in ``finalizing`` by a mid-finalize crash.
 
-        The approval finalizer claims a buy into ``finalizing`` and commits BEFORE the
-        external adapter runs (#1637). If the process dies (or the adapter raises
-        unexpectedly) before the serving-status transition + step terminalization, the
-        buy is left in ``finalizing``. This pass finds those buys and resumes phase 2
-        idempotently — the ``platform_order_id`` guard inside
-        ``resume_finalizing_media_buy`` prevents a duplicate remote order, and the
-        serving-status + terminal-artifact commit is atomic. Each buy is reconciled in
-        its own transaction so one failure never blocks the others.
+        The approval finalizer claims a buy into ``finalizing`` (with a phase-2 lease)
+        and commits BEFORE the external adapter runs (#1637). If the process dies (or
+        the adapter raises unexpectedly) before the serving-status transition + step
+        terminalization, the buy is left in ``finalizing``. This pass scans for
+        RECOVERABLE strandings only — lease absent/expired (an unexpired lease means
+        a live worker owns phase 2) and ``finalize_recovery_mode IS NULL`` (buys
+        flagged ``manual_required`` are never re-touched: no hot loop) — and hands
+        each to ``resume_finalizing_media_buy``, whose lease CAS is the authoritative
+        single-winner gate and whose disposition check fail-closes non-replayable
+        adapters. Each buy is reconciled in its own transaction so one failure never
+        blocks the others.
         """
         from functools import partial
 
         from src.admin.services.media_buy_completion import resume_finalizing_media_buy
-        from src.core.tools.media_buy_create import execute_approved_media_buy
+        from src.core.tools.media_buy_create import adapter_supports_full_create_replay, execute_approved_media_buy
 
         try:
             with get_db_session() as session:
                 stranded = [
                     (mb.tenant_id, mb.media_buy_id)
-                    for mb in MediaBuyRepository.get_all_by_statuses(session, [MEDIA_BUY_FINALIZING_STATUS])
+                    for mb in MediaBuyRepository.get_finalizing_recoverable(session, datetime.now(UTC))
                 ]
         except Exception as e:
             logger.error(f"Failed to scan for stranded finalizing media buys: {e}", exc_info=True)
@@ -171,6 +174,7 @@ class MediaBuyStatusScheduler:
                         step_id=step_id,
                         step_data=step_data,
                         run_adapter=partial(execute_approved_media_buy, media_buy_id, tenant_id),
+                        adapter_supports_replay=partial(adapter_supports_full_create_replay, media_buy_id, tenant_id),
                     )
                 logger.info(f"Reconciled stranded finalizing media buy {media_buy_id}: {outcome}")
             except Exception as e:

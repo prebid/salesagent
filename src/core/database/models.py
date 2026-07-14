@@ -979,6 +979,21 @@ class MediaBuy(Base):
         nullable=True,
         comment="RFC 8785 JCS SHA-256 of the create request (excluded fields stripped); degraded-path IDEMPOTENCY_CONFLICT signal",
     )
+    # ── Crash-recoverable approval finalization state (#1637) ──────────────
+    # While status == "finalizing", exactly ONE owner (the worker/reconciler
+    # holding finalize_lease_id, unexpired) may run the external adapter and
+    # publish the serving status; every such mutation is a lease-CAS.
+    finalize_lease_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    finalize_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Committed IMMEDIATELY BEFORE the adapter is invoked: presence means
+    # "remote mutations may exist", so only fully-replayable adapters
+    # (AdapterCapabilities.supports_full_create_replay) may auto-resume past it.
+    finalize_adapter_invoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # NULL = automatic recovery; "manual_required" = the reconciler must not
+    # touch this buy again (a crash left a possibly-partial remote graph on a
+    # non-replayable adapter). Cleared by a successful publish (self-heal) or by
+    # an operator: UPDATE media_buys SET finalize_recovery_mode = NULL WHERE ...
+    finalize_recovery_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")

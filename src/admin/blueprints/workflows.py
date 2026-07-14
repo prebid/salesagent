@@ -278,6 +278,17 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
+                    if outcome is FinalizeOutcome.RETRYING:
+                        # #1637: approval claimed; the ad-server order completes
+                        # automatically via the reconciler.
+                        logger.info(f"[APPROVAL] Media buy {media_buy_id} finalization deferred: {error_msg}")
+                        return jsonify(
+                            {
+                                "success": True,
+                                "pending": True,
+                                "message": "Approval in progress — completes automatically",
+                            }
+                        ), 202
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")

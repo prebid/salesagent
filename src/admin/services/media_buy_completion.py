@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import os
 from collections.abc import Callable
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -20,6 +21,7 @@ from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from sqlalchemy.orm import Session
 
+from src.adapters.base import AdapterIdempotencyUncertain
 from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
@@ -40,14 +42,29 @@ class FinalizeOutcome(StrEnum):
     """Result of an approve/reject finalization, for single-winner orchestration. #1544.
 
     ``APPLIED`` — this request won the claim and applied the decision (order created /
-    rejected). ``ADAPTER_FAILED`` — won the claim but the adapter failed (buy marked
-    failed). ``NOT_CLAIMED`` — a competing request already decided the buy (or it
-    vanished): this request did NOTHING (no adapter, no terminalization, no emit).
+    rejected). ``ADAPTER_FAILED`` — won the claim but the adapter reported a handled
+    failure (buy marked failed). ``NOT_CLAIMED`` — a competing request/owner already
+    decided or took over the buy (or it vanished): this request did NOTHING further
+    (no adapter, no terminalization, no emit). ``RETRYING`` — the operation could not
+    complete NOW but the buy remains in the ``finalizing`` claim for the scheduler's
+    reconciler: either the adapter raised ``AdapterIdempotencyUncertain`` (nothing
+    remote happened; automatic retry) or a crash left a possibly-partial remote graph
+    on a non-replayable adapter (``manual_required`` — operator action). #1637.
     """
 
     APPLIED = "applied"
     ADAPTER_FAILED = "adapter_failed"
     NOT_CLAIMED = "not_claimed"
+    RETRYING = "retrying"
+
+
+# Phase-2 lease TTL (#1637): must cover the WORST-CASE full finalization — GAM order
+# create (60s timeout) + line items (up to 300s) + order approval (up to 620s) +
+# creative upload — ≈1300s worst case, so default 3600s (~2.5× margin). A worker that
+# somehow outlives even this cannot double-publish (every mutation is lease-CAS'd);
+# at worst the reconciler flags manual_required and the worker's eventual successful
+# publish self-heals it.
+FINALIZE_LEASE_TTL_SECONDS = int(os.getenv("MEDIA_BUY_FINALIZE_LEASE_TTL") or "3600")
 
 
 def build_media_buy_result(
@@ -240,23 +257,25 @@ def finalize_media_buy_approval(
     the scheduler's reconciliation pass re-drives any buy stranded in ``finalizing``.
     """
     repo = MediaBuyRepository(session, tenant_id)
-    # PHASE 1 — single-winner CLAIM to the transient ``finalizing`` status, committed
-    # BEFORE any external work. Bumps revision + stamps approved_at/approved_by. The
-    # buy is NOT yet seller-confirmed (finalizing is unconfirmed), so confirmed_at is
+    # PHASE 1 — single-winner CLAIM to the transient ``finalizing`` status + a fresh
+    # phase-2 LEASE, committed BEFORE any external work. Bumps revision (the
+    # approval's single token advance) + stamps approved_at/approved_by. The buy is
+    # NOT yet seller-confirmed (finalizing is unconfirmed), so confirmed_at is
     # deferred to the serving transition in phase 2 (stamped from this approved_at). #1637.
-    claimed = repo.update_status_computed(
+    claim = repo.claim_finalizing(
         media_buy_id,
-        lambda _mb: MEDIA_BUY_FINALIZING_STATUS,
+        expected_status=expected_status,
+        lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS,
         approved_at=approved_at,
         approved_by=approved_by,
-        expected_status=expected_status,
     )
-    if claimed is None:
+    if claim is None:
         # Lost the claim (another request decided this buy) or the buy vanished — do
         # NOTHING further, so no duplicate adapter order / notification. #1544.
         session.rollback()
         return FinalizeOutcome.NOT_CLAIMED, None
     session.commit()
+    _, lease_id = claim
 
     return _run_adapter_and_finalize(
         session,
@@ -266,6 +285,7 @@ def finalize_media_buy_approval(
         step_data=step_data,
         compute_target=compute_target,
         run_adapter=run_adapter,
+        lease_id=lease_id,
     )
 
 
@@ -289,32 +309,70 @@ def _run_adapter_and_finalize(
     step_data: dict[str, Any] | None,
     compute_target: Callable[[MediaBuy], str | None],
     run_adapter: Callable[[], tuple[bool, str | None]],
+    lease_id: str,
 ) -> tuple[FinalizeOutcome, str | None]:
-    """Phase 2 of the crash-recoverable approval: idempotent adapter + atomic publish.
+    """Phase 2 of the crash-recoverable approval: OWNED adapter run + atomic publish.
 
-    Precondition: the buy is claimed in ``finalizing``. Shared by the initial
-    finalizer and the scheduler's reconciliation pass, so a mid-finalize crash is
-    resumed WITHOUT a duplicate remote order:
+    Precondition: the caller holds the buy's phase-2 lease (``lease_id``) while the
+    buy is claimed in ``finalizing``. Shared by the initial finalizer and the
+    scheduler's reconciler, so a mid-finalize crash is resumed WITHOUT a duplicate
+    remote order and WITHOUT a stale worker clobbering a newer owner — every
+    mutation below is a lease-CAS whose result is CHECKED (``None`` → rollback →
+    ``NOT_CLAIMED``: never run the adapter further, mark failed, terminalize, or
+    emit on lost ownership):
 
-      1. Idempotency guard — if ``platform_order_id`` is already persisted, a prior
-         attempt got past the adapter; skip it.
-      2. Otherwise run the adapter. On a handled failure, mark the buy + step
-         ``failed`` (with a buyer-facing envelope) and commit — a permanent decision,
-         NOT resumed. (An *unexpected* adapter exception propagates, leaving the buy in
-         ``finalizing`` for the reconciler to resume.)
-      3. On success, transition ``finalizing`` -> the flight-derived serving status
-         (NO revision re-bump — the claim already bumped) AND terminalize the step in
-         ONE commit, so the serving status and the completion artifact become durable
-         together. Emit the webhook after commit (best-effort).
+      1. ``platform_order_id`` guard — a prior attempt already got past the adapter;
+         skip straight to publish.
+      2. Otherwise CAS-commit the adapter-invoked marker (durable "remote mutations
+         may exist" signal), then run the adapter:
+         - ``AdapterIdempotencyUncertain`` (contract: NOTHING remote happened) →
+           CAS-clear the marker + release the lease, return ``RETRYING`` — the buy
+           stays ``finalizing`` on the AUTOMATIC recovery path.
+         - handled failure ``(False, msg)`` → ``failed`` transition via lease-CAS
+           (+ step failed with a buyer-facing envelope), commit, ``ADAPTER_FAILED``.
+      3. Success publish: ``finalizing`` → flight-derived serving status via
+         lease-CAS with ``bump=False`` (the claim already advanced the revision) and
+         ``clear_finalize_state=True`` (lease/marker/recovery_mode cleared —
+         including the self-heal of a ``manual_required`` flag set while this slow
+         owner was still running). The step terminalization commits IN THE SAME
+         transaction, so the serving status and the completion artifact become
+         durable together; the webhook emits after commit (best-effort).
 
     ``step_id``/``step_data`` are ``None`` for the step-less creative-unblock path
     (no async buyer task): the serving transition is committed on its own. #1637.
     """
     repo = MediaBuyRepository(session, tenant_id)
     if not _remote_order_exists(repo, media_buy_id):
-        success, error_msg = run_adapter()
+        # Durable marker BEFORE the adapter: a crash after this commit means remote
+        # mutations may exist, so only full-replay adapters may auto-resume past it.
+        if not repo.set_finalize_adapter_invoked(media_buy_id, lease_id):
+            session.rollback()
+            return FinalizeOutcome.NOT_CLAIMED, None
+        session.commit()
+
+        try:
+            success, error_msg = run_adapter()
+        except AdapterIdempotencyUncertain as exc:
+            # Contract: no remote mutation happened. Return the buy to the clean
+            # automatic-retry state (marker cleared, lease released) — the
+            # reconciler re-attempts on its next pass.
+            logger.warning(f"Adapter idempotency uncertain for media buy {media_buy_id}; will retry: {exc}")
+            repo.clear_finalize_adapter_invoked(media_buy_id, lease_id)
+            repo.release_finalize_lease(media_buy_id, lease_id)
+            session.commit()
+            return FinalizeOutcome.RETRYING, str(exc)
         if not success:
-            repo.update_status_or_raise(media_buy_id, "failed")
+            failed = repo.update_status_computed(
+                media_buy_id,
+                lambda _mb: "failed",
+                expected_status=MEDIA_BUY_FINALIZING_STATUS,
+                expected_lease_id=lease_id,
+                clear_finalize_state=True,
+            )
+            if failed is None:
+                # Lost ownership while the adapter ran — a newer owner decides.
+                session.rollback()
+                return FinalizeOutcome.NOT_CLAIMED, error_msg
             if step_id is not None:
                 # Store a buyer-facing two-layer error envelope as the step's response_data
                 # (NOT just error_message): durable tasks/get rebuilds the failed Task's
@@ -328,18 +386,26 @@ def _run_adapter_and_finalize(
             session.commit()
             return FinalizeOutcome.ADAPTER_FAILED, error_msg
 
-    # Adapter succeeded (or the order already existed) — publish the serving status.
-    # ``expected_status=finalizing`` keeps it single-winner across a reconciler race;
-    # ``bump=False`` because the approval already bumped revision at the claim.
-    repo.update_status_computed(
-        media_buy_id, compute_target, expected_status=MEDIA_BUY_FINALIZING_STATUS, bump=False
+    # Publish the serving status — OWNERSHIP-CHECKED (#1637): a stale worker whose
+    # lease was taken over (or whose buy was already published/failed by the new
+    # owner) gets None and must do NOTHING — no terminalize, no second webhook.
+    published = repo.update_status_computed(
+        media_buy_id,
+        compute_target,
+        expected_status=MEDIA_BUY_FINALIZING_STATUS,
+        expected_lease_id=lease_id,
+        clear_finalize_state=True,
+        bump=False,
     )
+    if published is None:
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, None
     if step_id is not None and step_data is not None:
         # Commits the serving-status transition AND the terminal step artifact together.
         _terminalize_step_and_emit(
             session,
             tenant_id,
-            media_buy=repo.get_by_id_or_raise(media_buy_id),
+            media_buy=published,
             packages=repo.get_packages(media_buy_id),
             step_id=step_id,
             step_data=step_data,
@@ -359,13 +425,52 @@ def resume_finalizing_media_buy(
     step_id: str | None,
     step_data: dict[str, Any] | None,
     run_adapter: Callable[[], tuple[bool, str | None]],
+    adapter_supports_replay: Callable[[], bool],
 ) -> tuple[FinalizeOutcome, str | None]:
-    """Re-drive a buy stranded in ``finalizing`` by a mid-finalize crash.
+    """Re-drive a buy stranded in ``finalizing`` — the reconciler's single entry (#1637).
 
-    Called by the status scheduler's reconciliation pass. Runs phase 2 directly (the
-    buy is already claimed), so it resumes claimed-but-unterminated work idempotently
-    — the ``platform_order_id`` guard prevents a duplicate remote order. #1637.
+    Sequence:
+
+      1. Disposition (fail-closed): if the adapter-invoked marker is set and this
+         buy's adapter does NOT support full create replay, a crash may have left a
+         partial remote graph (order without line items / creatives / approval —
+         even a persisted ``platform_order_id`` doesn't prove completeness). Flag
+         ``manual_required`` (locked CAS that respects a live lease and never steals
+         it, so a slow-but-alive worker's eventual publish still self-heals), log
+         ONCE, return ``RETRYING``. The reconciler scan excludes flagged buys — no
+         hot loop.
+      2. Otherwise acquire the phase-2 lease via CAS (absent/expired only) — the
+         authoritative single-winner gate against concurrent reconcilers AND live
+         workers. Failure → ``NOT_CLAIMED``, touch nothing.
+      3. Run phase 2 with the new lease (marker absent ⇒ nothing remote happened ⇒
+         safe for EVERY adapter; marker set ⇒ only replay-capable adapters reach
+         here).
     """
+    repo = MediaBuyRepository(session, tenant_id)
+    stranded = repo.get_by_id(media_buy_id)
+    if stranded is None or stranded.status != MEDIA_BUY_FINALIZING_STATUS or stranded.finalize_recovery_mode:
+        return FinalizeOutcome.NOT_CLAIMED, None
+
+    if stranded.finalize_adapter_invoked_at is not None and not adapter_supports_replay():
+        if repo.set_finalize_recovery_manual(media_buy_id):
+            session.commit()
+            logger.error(
+                f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) crashed mid-finalization "
+                f"AFTER its adapter was invoked; the adapter does not support full create replay, so the "
+                f"remote state may be partial. Marked finalize_recovery_mode=manual_required — reconcile "
+                f"the remote order manually, then clear the flag (or re-approve) to resume."
+            )
+        else:
+            session.rollback()
+        return FinalizeOutcome.RETRYING, "manual reconciliation required"
+
+    lease_id = repo.acquire_finalize_lease(media_buy_id, lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS)
+    if lease_id is None:
+        # A live worker (unexpired lease) or a competing reconciler owns it.
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, None
+    session.commit()
+
     return _run_adapter_and_finalize(
         session,
         tenant_id,
@@ -374,6 +479,7 @@ def resume_finalizing_media_buy(
         step_data=step_data,
         compute_target=_flight_derived_status,
         run_adapter=run_adapter,
+        lease_id=lease_id,
     )
 
 
@@ -471,16 +577,20 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[Fin
         step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
         if step is None:
             # No workflow step (no async buyer task to notify) — still single-winner
-            # AND crash-recoverable: claim pending_creatives → finalizing BEFORE the
-            # adapter, commit, then run phase 2 (step-less). #1544 / #1637.
+            # AND crash-recoverable: claim pending_creatives → finalizing + phase-2
+            # lease BEFORE the adapter, commit, then run owned phase 2 (step-less).
+            # #1544 / #1637.
             repo = MediaBuyRepository(session, tenant_id)
-            claimed = repo.update_status_computed(
-                media_buy_id, lambda _mb: MEDIA_BUY_FINALIZING_STATUS, expected_status="pending_creatives"
+            claim = repo.claim_finalizing(
+                media_buy_id,
+                expected_status="pending_creatives",
+                lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS,
             )
-            if claimed is None:
+            if claim is None:
                 session.rollback()
                 return FinalizeOutcome.NOT_CLAIMED, None
             session.commit()
+            _, lease_id = claim
             return _run_adapter_and_finalize(
                 session,
                 tenant_id,
@@ -489,6 +599,7 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[Fin
                 step_data=None,
                 compute_target=_flight_derived_status,
                 run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+                lease_id=lease_id,
             )
 
         step_data = {

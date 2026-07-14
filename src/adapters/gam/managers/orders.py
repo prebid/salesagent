@@ -115,15 +115,17 @@ class GAMOrdersManager:
             return f"dry_run_order_{int(datetime.now(UTC).timestamp())}"
         else:
             order_service = self.client_manager.get_service("OrderService")
-            # Idempotency (#1637): a crash-recoverable approval resume may re-invoke
-            # order creation with the SAME deterministic order_name (the default
-            # template keys on media_buy_id). Reuse an existing non-archived order for
-            # this advertiser instead of creating a duplicate remote order — this
-            # closes the "adapter created the order, then the process died before
-            # platform_order_id was persisted" window that the DB-side guard cannot.
+            # createOrders-level dedup (#1637): order names are deterministic (the
+            # default template keys on media_buy_id), so an operator-driven
+            # re-approval reuses an existing non-archived order instead of creating
+            # a duplicate. NOTE this dedups ONLY the order object — line items /
+            # creative associations / approval are NOT covered, which is why GAM
+            # does NOT claim supports_full_create_replay.
             existing_order_id = self._find_existing_order_id(order_service, order_name)
             if existing_order_id is not None:
-                logger.info(f"✓ Reusing existing GAM Order ID {existing_order_id} for '{order_name}' (idempotent create)")
+                logger.info(
+                    f"✓ Reusing existing GAM Order ID {existing_order_id} for '{order_name}' (idempotent create)"
+                )
                 return existing_order_id
             created_orders = order_service.createOrders([order])
             if created_orders:
@@ -135,24 +137,41 @@ class GAMOrdersManager:
 
     def _find_existing_order_id(self, order_service, order_name: str) -> str | None:
         """Return the id of an existing non-archived order with this exact name for
-        this advertiser, or None. The idempotency lookup for crash-recoverable order
-        creation (#1637). A lookup failure must never block creation — it falls
-        through to ``createOrders`` (at worst reverting to the prior behaviour).
+        this advertiser, or None if verifiably absent.
+
+        FAIL CLOSED (#1637): a lookup failure raises ``AdapterIdempotencyUncertain``
+        — creation must NOT proceed when we cannot verify whether the order already
+        exists, or a transient GAM error could mint a duplicate remote order. The
+        exception's contract holds here: it is raised strictly BEFORE any remote
+        mutation, so the approval stays in the automatic-retry path (the buy remains
+        ``finalizing``; the reconciler re-attempts later).
         """
         if not self.advertiser_id:
+            return None
+        try:
+            advertiser_id_num = int(self.advertiser_id)
+        except ValueError:
+            # A non-numeric advertiser id is a LOCAL configuration artifact (real GAM
+            # advertiser ids are numeric) — no remote order can exist under it, so the
+            # lookup is skipped rather than classified as remote uncertainty;
+            # createOrders itself will surface the real configuration error.
             return None
         try:
             statement_builder = ad_manager.StatementBuilder()
             statement_builder.Where("name = :name AND advertiserId = :advertiserId")
             statement_builder.WithBindVariable("name", order_name)
-            statement_builder.WithBindVariable("advertiserId", int(self.advertiser_id))
+            statement_builder.WithBindVariable("advertiserId", advertiser_id_num)
             statement = statement_builder.ToStatement()
             result = order_service.getOrdersByStatement(statement)
-            for existing in (result or {}).get("results", []) or []:
-                if not existing.get("isArchived", False):
-                    return str(existing["id"])
         except Exception as e:
-            logger.warning(f"Idempotency lookup for order '{order_name}' failed; will create: {e}")
+            from src.adapters.base import AdapterIdempotencyUncertain
+
+            raise AdapterIdempotencyUncertain(
+                f"GAM order-existence lookup for '{order_name}' failed; refusing to create blindly: {e}"
+            ) from e
+        for existing in (result or {}).get("results", []) or []:
+            if not existing.get("isArchived", False):
+                return str(existing["id"])
         return None
 
     @timeout(seconds=30)  # 30 seconds timeout for status check

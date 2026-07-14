@@ -22,9 +22,9 @@ from src.admin.services.media_buy_completion import (
 )
 from src.core.context_manager import ContextManager
 from src.core.database.database_session import get_db_session
-from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
-from tests.integration.conftest import make_create_media_buy_step, make_media_buy
+from tests.integration.conftest import seed_pending_buy_and_step
 
 
 @pytest.mark.requires_db
@@ -34,18 +34,7 @@ class TestApprovalFinalizerRace:
         return ContextManager()
 
     def _seed_pending_buy_and_step(self, context_manager, tenant_id, principal_id, media_buy_id) -> tuple[str, dict]:
-        with MediaBuyUoW(tenant_id) as uow:
-            uow.media_buys.create(make_media_buy(tenant_id, principal_id, media_buy_id, status="pending_approval"))
-        step = make_create_media_buy_step(
-            context_manager, tenant_id, principal_id, media_buy_id=media_buy_id, status="in_progress"
-        )
-        step_data = {
-            "step_id": step.step_id,
-            "context_id": step.context_id,
-            "tool_name": "create_media_buy",
-            "request_data": {},
-        }
-        return step.step_id, step_data
+        return seed_pending_buy_and_step(context_manager, tenant_id, principal_id, media_buy_id)
 
     def test_two_concurrent_approvals_run_adapter_once(
         self, integration_db, sample_tenant, sample_principal, context_manager

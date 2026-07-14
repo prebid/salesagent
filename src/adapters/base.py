@@ -148,6 +148,34 @@ class AdapterCapabilities:
     supports_webhooks: bool = False  # Supports webhook notifications
     supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
 
+    # Crash-recovery contract (#1637): True ONLY if the adapter's ENTIRE create
+    # workflow — order creation, per-package line items, creative associations,
+    # AND order approval — is idempotent / safely re-invocable after a crash at
+    # any point. Order-name dedup alone does NOT qualify (a crash mid-graph would
+    # duplicate line items on re-invocation), so GAM and every other real ad
+    # server stay False: the approval reconciler will never auto-re-run their
+    # create after the adapter may have started mutating remote state (the buy is
+    # flagged for manual reconciliation instead). Upgrade path: a
+    # ``resume_or_reconcile_media_buy(operation_key, ...)`` adapter operation
+    # that finds/reuses the deterministic order, each package's deterministic
+    # line item, resumes missing creative associations, and makes approval
+    # repeatable — when an adapter implements and proves that, it may flip this
+    # to True. Only the mock adapter (simulated server, no real remote graph)
+    # currently qualifies.
+    supports_full_create_replay: bool = False
+
+
+class AdapterIdempotencyUncertain(Exception):
+    """The adapter could not determine whether remote state already exists (#1637).
+
+    STRICT CONTRACT: an adapter may raise this ONLY while it is still certain that
+    NO remote mutation has occurred (e.g. a pre-create existence lookup failed).
+    The approval finalizer relies on that guarantee to keep the media buy in the
+    AUTOMATIC recovery path — the claim stays ``finalizing`` with the
+    adapter-invoked marker cleared, and the reconciler simply re-attempts later.
+    Raising it after any remote write would break exactly-once recovery.
+    """
+
 
 class BaseConnectionConfig(BaseModel):
     """Base schema for adapter connection configuration."""

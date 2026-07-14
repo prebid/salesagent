@@ -54,12 +54,28 @@ def test_archived_order_is_not_reused():
     assert order_service.createOrders.call_count == 1
 
 
-def test_lookup_failure_falls_through_to_create():
+def test_lookup_failure_raises_uncertain_and_never_creates_blindly():
+    """FAIL CLOSED (#1637): an uncertain existence lookup must abort creation — a
+    transient GAM error must never mint a possibly-duplicate remote order. The typed
+    ``AdapterIdempotencyUncertain`` keeps the buy retryable in ``finalizing``."""
+    import pytest
+
+    from src.adapters.base import AdapterIdempotencyUncertain
+
     order_service = MagicMock()
     order_service.getOrdersByStatement.side_effect = RuntimeError("GAM lookup transient error")
-    order_service.createOrders.return_value = [{"id": 999}]
 
-    order_id = _manager(order_service).create_order("Camp - mb_4 - 2026", 5000.0, _START, _END)
+    with pytest.raises(AdapterIdempotencyUncertain):
+        _manager(order_service).create_order("Camp - mb_4 - 2026", 5000.0, _START, _END)
 
-    assert order_id == "999"  # a lookup failure must never block creation
-    assert order_service.createOrders.call_count == 1
+    order_service.createOrders.assert_not_called()
+
+
+def test_gam_does_not_claim_full_create_replay():
+    """Order-name dedup covers ONLY createOrders — line items / creative associations /
+    order approval can still duplicate on a mid-graph resume. GAM must therefore NOT
+    claim ``supports_full_create_replay`` until a full-graph
+    ``resume_or_reconcile_media_buy`` exists and is itself tested (#1637)."""
+    from src.adapters.google_ad_manager import GoogleAdManager
+
+    assert GoogleAdManager.capabilities.supports_full_create_replay is False

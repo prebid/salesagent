@@ -407,6 +407,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             return redirect(
                                 url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                             )
+                        if outcome is FinalizeOutcome.RETRYING:
+                            # #1637: the ad server could not be safely reached right now;
+                            # the approval is claimed and completes automatically.
+                            flash(
+                                "Media buy approval is in progress — the ad-server order will be "
+                                "created automatically shortly",
+                                "info",
+                            )
+                            return redirect(
+                                url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                            )
                         flash("Media buy approved and order created successfully", "success")
                     # Creatives not yet approved → hold at pending_creatives (a
                     # SELLER-CONFIRMED status so confirmed_at records THIS admin

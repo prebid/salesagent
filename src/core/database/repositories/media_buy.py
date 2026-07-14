@@ -14,14 +14,20 @@ from __future__ import annotations
 
 import datetime
 import logging
+import uuid
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, object_session
 
-from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
+from src.core.database.models import (
+    MEDIA_BUY_FINALIZING_STATUS,
+    MediaBuy,
+    MediaPackage,
+    is_media_buy_seller_confirmed,
+)
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
@@ -560,6 +566,7 @@ class MediaBuyRepository:
         *,
         expected_revision: int | None = None,
         expected_status: str | tuple[str, ...] | None = None,
+        expected_lease_id: str | None = None,
         context: ContextObject | dict[str, Any] | None = None,
         bump: bool = True,
     ) -> MediaBuy | None:
@@ -597,6 +604,11 @@ class MediaBuyRepository:
             allowed = (expected_status,) if isinstance(expected_status, str) else expected_status
             if media_buy.status not in allowed:
                 return None
+        # Phase-2 OWNERSHIP check (#1637): like ``expected_status``, a lost lease is a
+        # normal race outcome — a reconciler (or a competing worker) took over the
+        # finalization, so this caller must do NOTHING (no publish/fail/terminalize).
+        if expected_lease_id is not None and media_buy.finalize_lease_id != expected_lease_id:
+            return None
         if expected_revision is not None:
             from src.core.exceptions import media_buy_revision_conflict
 
@@ -669,6 +681,8 @@ class MediaBuyRepository:
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
         expected_status: str | tuple[str, ...] | None = None,
+        expected_lease_id: str | None = None,
+        clear_finalize_state: bool = False,
         bump: bool = True,
     ) -> MediaBuy | None:
         """Like :meth:`update_status`, but the destination status is COMPUTED under the lock.
@@ -701,8 +715,166 @@ class MediaBuyRepository:
                 media_buy.approved_at = approved_at
             if approved_by is not None:
                 media_buy.approved_by = approved_by
+            if clear_finalize_state:
+                # Successful publish (#1637): the finalization operation is over —
+                # drop the lease, the adapter-invoked marker, and any
+                # manual_required disposition set while this (slow) owner was
+                # still running (self-heal).
+                media_buy.finalize_lease_id = None
+                media_buy.finalize_lease_expires_at = None
+                media_buy.finalize_adapter_invoked_at = None
+                media_buy.finalize_recovery_mode = None
 
-        return self._locked_mutate_and_bump(media_buy_id, _apply, expected_status=expected_status, bump=bump)
+        return self._locked_mutate_and_bump(
+            media_buy_id, _apply, expected_status=expected_status, expected_lease_id=expected_lease_id, bump=bump
+        )
+
+    @staticmethod
+    def _new_finalize_lease() -> str:
+        return f"lease_{uuid.uuid4().hex[:12]}"
+
+    def claim_finalizing(
+        self,
+        media_buy_id: str,
+        *,
+        expected_status: str | tuple[str, ...],
+        lease_ttl_seconds: int,
+        approved_at: datetime.datetime | None = None,
+        approved_by: str | None = None,
+    ) -> tuple[MediaBuy, str] | None:
+        """Phase-1 single-winner CLAIM: eligible status → ``finalizing`` + fresh lease.
+
+        One locked mutate sets status=finalizing, a fresh lease (owner token +
+        expiry), stamps ``approved_at``/``approved_by`` when supplied, and RESETS the
+        adapter-invoked marker + recovery disposition — a fresh claim (e.g. an
+        operator re-approval after manual reconciliation) starts with a clean
+        operation state. Bumps revision (the approval's single token advance).
+        Returns ``(row, lease_id)`` for phase 2, or ``None`` on a lost claim. #1637.
+        """
+        lease_id = self._new_finalize_lease()
+
+        def _apply(media_buy: MediaBuy) -> None:
+            media_buy.status = MEDIA_BUY_FINALIZING_STATUS
+            media_buy.finalize_lease_id = lease_id
+            media_buy.finalize_lease_expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+                seconds=lease_ttl_seconds
+            )
+            media_buy.finalize_adapter_invoked_at = None
+            media_buy.finalize_recovery_mode = None
+            if approved_at is not None:
+                media_buy.approved_at = approved_at
+            if approved_by is not None:
+                media_buy.approved_by = approved_by
+
+        claimed = self._locked_mutate_and_bump(media_buy_id, _apply, expected_status=expected_status)
+        return (claimed, lease_id) if claimed is not None else None
+
+    def acquire_finalize_lease(self, media_buy_id: str, *, lease_ttl_seconds: int) -> str | None:
+        """Reconciler CAS: take over a ``finalizing`` buy whose lease is absent/expired.
+
+        Under the row lock, proceeds ONLY when status is ``finalizing``, the recovery
+        disposition is automatic (NULL), and the current lease is absent or expired —
+        an unexpired lease means a live worker owns phase 2. No revision bump (lease
+        churn is not a buyer-visible mutation). Returns the new lease id, or ``None``
+        (someone owns it / disposition is manual / buy moved on). #1637.
+        """
+        lease_id = self._new_finalize_lease()
+        now = datetime.datetime.now(datetime.UTC)
+
+        def _apply(media_buy: MediaBuy) -> None:
+            media_buy.finalize_lease_id = lease_id
+            media_buy.finalize_lease_expires_at = now + datetime.timedelta(seconds=lease_ttl_seconds)
+
+        media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
+        if media_buy is None or media_buy.status != MEDIA_BUY_FINALIZING_STATUS:
+            return None
+        if media_buy.finalize_recovery_mode is not None:
+            return None
+        if media_buy.finalize_lease_expires_at is not None and media_buy.finalize_lease_expires_at > now:
+            return None
+        _apply(media_buy)
+        self._session.flush()
+        return lease_id
+
+    def release_finalize_lease(self, media_buy_id: str, lease_id: str) -> bool:
+        """Clear the lease iff still owner (the RETRYING path — no TTL wait). #1637."""
+
+        def _apply(media_buy: MediaBuy) -> None:
+            media_buy.finalize_lease_id = None
+            media_buy.finalize_lease_expires_at = None
+
+        released = self._locked_mutate_and_bump(media_buy_id, _apply, expected_lease_id=lease_id, bump=False)
+        return released is not None
+
+    def set_finalize_adapter_invoked(self, media_buy_id: str, lease_id: str) -> bool:
+        """CAS-set the adapter-invoked marker (still owner + still finalizing). #1637.
+
+        Committed by the caller IMMEDIATELY BEFORE ``run_adapter``: presence means
+        "remote mutations may exist", gating which adapters may auto-resume past it.
+        """
+
+        def _apply(media_buy: MediaBuy) -> None:
+            media_buy.finalize_adapter_invoked_at = datetime.datetime.now(datetime.UTC)
+
+        marked = self._locked_mutate_and_bump(
+            media_buy_id,
+            _apply,
+            expected_status=MEDIA_BUY_FINALIZING_STATUS,
+            expected_lease_id=lease_id,
+            bump=False,
+        )
+        return marked is not None
+
+    def clear_finalize_adapter_invoked(self, media_buy_id: str, lease_id: str) -> bool:
+        """CAS-clear the adapter-invoked marker (the uncertain-before-mutation path). #1637."""
+
+        def _apply(media_buy: MediaBuy) -> None:
+            media_buy.finalize_adapter_invoked_at = None
+
+        cleared = self._locked_mutate_and_bump(media_buy_id, _apply, expected_lease_id=lease_id, bump=False)
+        return cleared is not None
+
+    def set_finalize_recovery_manual(self, media_buy_id: str) -> bool:
+        """Mark a stranded buy ``manual_required`` (fail-closed disposition). #1637.
+
+        CAS: only while still ``finalizing`` with an EXPIRED/absent lease and an
+        automatic disposition — a live owner or an already-flagged buy is left
+        alone. Does NOT take the lease, so a slow-but-alive worker's eventual
+        publish CAS (which checks its own lease) still succeeds and self-heals.
+        """
+        now = datetime.datetime.now(datetime.UTC)
+        media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
+        if media_buy is None or media_buy.status != MEDIA_BUY_FINALIZING_STATUS:
+            return False
+        if media_buy.finalize_recovery_mode is not None:
+            return False
+        if media_buy.finalize_lease_expires_at is not None and media_buy.finalize_lease_expires_at > now:
+            return False
+        media_buy.finalize_recovery_mode = "manual_required"
+        self._session.flush()
+        return True
+
+    @staticmethod
+    def get_finalizing_recoverable(session: Session, now: datetime.datetime) -> list[MediaBuy]:
+        """Cross-tenant reconciler scan: ``finalizing`` buys eligible for auto-recovery.
+
+        Excludes buys with an UNEXPIRED lease (a live worker owns phase 2) and buys
+        flagged ``manual_required`` (hot-loop prevention — the reconciler never
+        re-touches those). The per-buy ``acquire_finalize_lease`` CAS remains the
+        authoritative single-winner gate; this filter is noise reduction. #1637.
+        """
+        return list(
+            session.scalars(
+                select(MediaBuy).where(
+                    MediaBuy.status == MEDIA_BUY_FINALIZING_STATUS,
+                    MediaBuy.finalize_recovery_mode.is_(None),
+                    or_(
+                        MediaBuy.finalize_lease_expires_at.is_(None),
+                        MediaBuy.finalize_lease_expires_at < now,
+                    ),
+                )
+            ).all()
+        )
 
     def update_status_computed_or_raise(
         self,

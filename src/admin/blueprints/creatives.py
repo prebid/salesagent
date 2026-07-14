@@ -639,6 +639,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} successfully created in adapter")
             elif outcome is FinalizeOutcome.NOT_CLAIMED:
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} already finalized by another request")
+            elif outcome is FinalizeOutcome.RETRYING:
+                # #1637: claimed; the reconciler completes it automatically.
+                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} finalization deferred: {error_msg}")
             else:
                 logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
 

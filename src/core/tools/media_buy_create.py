@@ -100,6 +100,7 @@ def validate_agent_url(url: str | None) -> bool:
 
 
 # Tool-specific imports
+from src.adapters.base import AdapterIdempotencyUncertain
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
@@ -1244,6 +1245,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # stamped) recorded confirmed_at=created_at. See #1544.
         return True, None
 
+    except AdapterIdempotencyUncertain:
+        # #1637: the adapter could not verify remote state and guarantees NO remote
+        # mutation happened. This must NOT collapse into the (False, msg) handled
+        # failure below — that would mark the buy permanently ``failed``. Re-raise so
+        # the finalizer keeps the claim in ``finalizing`` for automatic retry.
+        raise
     except Exception as e:
         import traceback
 
@@ -1251,6 +1258,32 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         error_msg = f"Adapter creation failed: {str(e)}"
         logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
         return False, error_msg
+
+
+def adapter_supports_full_create_replay(media_buy_id: str, tenant_id: str) -> bool:
+    """True if this buy's adapter may safely RE-RUN its entire create workflow (#1637).
+
+    The reconciler's disposition check for a buy stranded in ``finalizing`` AFTER the
+    adapter-invoked marker was committed: only adapters whose whole create graph is
+    idempotent (``AdapterCapabilities.supports_full_create_replay`` — currently mock
+    only) may be auto-re-invoked; real ad servers go to manual reconciliation.
+    Conservative on any resolution failure (missing buy/principal → False).
+    """
+    from src.core.config_loader import get_tenant_by_id
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        media_buy = uow.media_buys.get_by_id(media_buy_id)
+        if media_buy is None:
+            return False
+        principal_id = media_buy.principal_id
+    tenant_config = get_tenant_by_id(tenant_id)
+    principal = get_principal_object(principal_id, tenant_id=tenant_id)
+    if principal is None or tenant_config is None:
+        return False
+    adapter = get_adapter(principal, dry_run=False, tenant=tenant_config)
+    return bool(adapter.capabilities.supports_full_create_replay)
 
 
 def push_creative_to_existing_buy(

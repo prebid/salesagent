@@ -92,6 +92,30 @@ def make_create_media_buy_step(
     )
 
 
+def seed_pending_buy_and_step(
+    context_manager, tenant_id: str, principal_id: str, media_buy_id: str
+) -> tuple[str, dict]:
+    """Seed a ``pending_approval`` buy + an in-progress create_media_buy step.
+
+    Shared by the approval finalizer race / crash-recovery suites (DRY): returns
+    ``(step_id, step_data)`` in the shape the finalizer entry points consume.
+    """
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        uow.media_buys.create(make_media_buy(tenant_id, principal_id, media_buy_id, status="pending_approval"))
+    step = make_create_media_buy_step(
+        context_manager, tenant_id, principal_id, media_buy_id=media_buy_id, status="in_progress"
+    )
+    step_data = {
+        "step_id": step.step_id,
+        "context_id": step.context_id,
+        "tool_name": "create_media_buy",
+        "request_data": {},
+    }
+    return step.step_id, step_data
+
+
 def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
     """Helper to construct a MediaPackage ORM object."""
     defaults = {

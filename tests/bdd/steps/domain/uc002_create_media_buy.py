@@ -728,9 +728,7 @@ def when_send_create_media_buy(ctx: dict) -> None:
       idempotency replay path runs end-to-end.
     """
     if ctx.get("full_create_request"):
-        from tests.bdd.steps.generic._dispatch import dispatch_request
-
-        dispatch_request(ctx, **ctx["request_kwargs"])
+        _dispatch_honoring_identity(ctx, **ctx["request_kwargs"])
         return
 
     if ctx.get("dispatch_mode") == "create_raw":
@@ -739,12 +737,27 @@ def when_send_create_media_buy(ctx: dict) -> None:
         _dispatch_full_create(ctx)
 
 
+def _dispatch_honoring_identity(ctx: dict, **kwargs) -> None:
+    """Dispatch, forwarding the scenario's identity override when one is staged.
+
+    No-auth scenarios (#1417 nfr-001) stash ``ctx["dispatch_identity"] = None`` so
+    each transport's REAL auth gate produces the wire rejection — EVERY create
+    dispatch path must honor it, or the request silently runs authenticated and
+    reaches business logic (the exact regression the nfr scenario pins).
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    if "dispatch_identity" in ctx:
+        dispatch_request(ctx, identity=ctx["dispatch_identity"], **kwargs)
+    else:
+        dispatch_request(ctx, **kwargs)
+
+
 def _dispatch_full_create(ctx: dict) -> None:
     """Build a typed CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
     from pydantic import ValidationError
 
     from src.core.schemas import CreateMediaBuyRequest
-    from tests.bdd.steps.generic._dispatch import dispatch_request
 
     kwargs = ctx.get("request_kwargs", {})
     try:
@@ -753,12 +766,7 @@ def _dispatch_full_create(ctx: dict) -> None:
         ctx["error"] = e
         return
 
-    # No-auth scenarios (#1417) stash an unauthenticated identity so the
-    # transport-boundary account-resolution guard is exercised on the wire.
-    if "dispatch_identity" in ctx:
-        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
-    else:
-        dispatch_request(ctx, req=req)
+    _dispatch_honoring_identity(ctx, req=req)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:
