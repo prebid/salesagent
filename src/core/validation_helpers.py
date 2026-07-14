@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def adcp_validation_boundary(context: str = "parameters") -> Iterator[None]:
+def adcp_validation_boundary(context: str = "parameters", field: str | None = None) -> Iterator[None]:
     """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
 
     Transport wrappers and skill handlers validate buyer parameters at the
@@ -35,13 +35,18 @@ def adcp_validation_boundary(context: str = "parameters") -> Iterator[None]:
     ``context`` names what was invalid in the message (e.g. ``"get_products
     request"``); the default renders the ``Invalid parameters`` prefix existing
     wire assertions rely on.
+
+    ``field`` pins the reported request field when the failing model is nested
+    under a named request field: coercing a ``BrandReference`` reports
+    ``field="brand"``, not the nested pydantic location (e.g. ``industries``).
+    When ``None`` (default) the field is derived from the validation error.
     """
     try:
         yield
     except ValidationError as e:
         raise AdCPValidationError(
             format_validation_error(e, context=context),
-            field=first_validation_error_field(e),
+            field=field if field is not None else first_validation_error_field(e),
             suggestion=suggest_validation_fix(e),
         ) from e
 
