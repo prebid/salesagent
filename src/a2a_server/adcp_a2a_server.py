@@ -554,13 +554,24 @@ class AdCPRequestHandler(RequestHandler):
             # For union types (CreateMediaBuyResponse, UpdateMediaBuyResponse),
             # determine which concrete class based on data content
             if skill_name == "create_media_buy":
-                # Success responses have media_buy_id, error responses have errors
+                # Success responses have media_buy_id, error responses have errors.
+                # No CreateMediaBuySubmitted branch on purpose: submitted results
+                # take the status=="submitted" early-return in on_message_send
+                # (Task state=SUBMITTED, no artifacts) BEFORE artifact/text
+                # reconstruction, so a submitted body can never reach here —
+                # same control-flow fact as update_media_buy (PR #1567 round-2 follow-up).
                 if "media_buy_id" in data:
                     return CreateMediaBuySuccess(**data)
                 else:
                     return CreateMediaBuyError(**data)
             elif skill_name == "update_media_buy":
-                # Success responses have media_buy_id, error responses have errors
+                # Success responses have media_buy_id, error responses have errors.
+                # No UpdateMediaBuySubmitted branch on purpose: submitted results
+                # take the status=="submitted" early-return in on_message_send
+                # (Task state=SUBMITTED, no artifacts) BEFORE artifact/text
+                # reconstruction, so a submitted body can never reach here
+                # (PR #1567 round-2 follow-up; same rationale as create_media_buy above).
+                # Guarded by test_a2a_update_media_buy_submitted_guard.py.
                 if "media_buy_id" in data:
                     return UpdateMediaBuySuccess(**data)
                 else:

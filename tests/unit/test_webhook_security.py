@@ -26,7 +26,9 @@ class TestValidateWebhookTaskType:
 
     @pytest.mark.parametrize(
         "invalid",
-        ["delivery_report", "media_buy_delivery", "unknown", "", "not_a_task"],
+        # media_buy_delivery is now a valid TaskType member (adcp 6.6 / spec 3.1.1), so it no
+        # longer coerces to the fallback — dropped from the invalid-label set.
+        ["delivery_report", "unknown", "", "not_a_task"],
     )
     def test_non_tasktype_coerced_to_fallback(self, invalid):
         """Non-members are coerced to the default fallback."""

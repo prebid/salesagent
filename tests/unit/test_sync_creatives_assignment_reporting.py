@@ -65,7 +65,7 @@ class TestSyncCreativesAssignmentReporting:
         result = SyncCreativeResult(
             creative_id="test_creative_4",
             action="created",
-            status="approved",
+            internal_status="approved",
             platform_id="platform_123",
             assigned_to=["pkg_1", "pkg_2", "pkg_3"],
         )

@@ -13,77 +13,24 @@ will pass once the queries are fixed.
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import extract_select_calls
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _extract_select_calls_in_function(file_path: str, func_name: str) -> list[dict]:
-    """Extract select() call info from a function using AST.
+    """Extract Creative-related select() call info from a function using AST.
 
     Returns list of dicts with:
     - model: the model name being selected (e.g., "Creative", "CreativeModel")
     - has_tenant_filter: whether .filter/.where includes tenant_id
     - lineno: line number of the select() call
     """
-    source_path = ROOT / file_path
-    tree = ast.parse(source_path.read_text())
-    results = []
-
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if node.name != func_name:
-            continue
-
-        # Walk the function body for select() calls
-        source_text = source_path.read_text()
-        for child in ast.walk(node):
-            if not isinstance(child, ast.Call):
-                continue
-
-            # Find select(Model) calls
-            func = child.func
-            if not (isinstance(func, ast.Name) and func.id == "select"):
-                continue
-            if not child.args:
-                continue
-
-            # Get the model name
-            model_arg = child.args[0]
-            model_name = None
-            if isinstance(model_arg, ast.Name):
-                model_name = model_arg.id
-            elif isinstance(model_arg, ast.Attribute):
-                model_name = model_arg.attr
-
-            if not model_name:
-                continue
-
-            # Check if this is a Creative/CreativeReview/CreativeModel query
-            if "Creative" not in model_name and "creative" not in model_name.lower():
-                continue
-
-            # Now walk UP the chain from this select() to find the full
-            # statement including .filter()/.where()/.filter_by() calls.
-            # We scan the function source lines around the select() call
-            # for tenant_id references.
-            select_line = child.lineno
-
-            # Get surrounding lines (the full statement can span multiple lines)
-            lines = source_text.splitlines()
-            # Look at lines from select() to the next statement (up to 10 lines)
-            stmt_text = "\n".join(lines[select_line - 1 : select_line + 10])
-
-            has_tenant_filter = "tenant_id" in stmt_text
-
-            results.append(
-                {
-                    "model": model_name,
-                    "has_tenant_filter": has_tenant_filter,
-                    "lineno": select_line,
-                }
-            )
-
-    return results
+    return extract_select_calls(
+        ROOT / file_path,
+        func_name,
+        model_predicate=lambda name: "creative" in name.lower(),
+    )
 
 
 def _function_calls_repo_get_by_ids(file_path: str, func_name: str) -> bool:

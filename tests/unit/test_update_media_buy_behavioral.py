@@ -35,6 +35,7 @@ from src.core.schemas import (
     Budget,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
+    UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
 from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -486,11 +487,13 @@ def test_manual_approval_path_through_impl():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        # Should return UpdateMediaBuySuccess (not error)
-        assert isinstance(result.response, UpdateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_manual"
-        # affected_packages should be empty (update not applied yet)
-        assert result.response.affected_packages == []
+        # Spec 3.1.1: a not-yet-applied (pending approval) update is the SUBMITTED variant,
+        # not a completed success. status="submitted" + task_id (the workflow step).
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert result.status == "submitted"
+        assert result.response.task_id == "step_001"
+        # Update not applied yet: the submitted variant carries no media_buy_id or
+        # affected_packages fields — the buyer polls task_id for the applied outcome.
 
         # Workflow step should be updated with requires_approval status
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
@@ -597,7 +600,7 @@ def test_manual_approval_creates_object_workflow_mapping():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
 
         # The DB session should have had an ObjectWorkflowMapping added via session.add()
         mock_session = env.mock["uow"].return_value.session
@@ -647,7 +650,7 @@ def test_manual_approval_stores_raw_request():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
 
         # The workflow step's response_data must contain enough information
         # to execute the update after approval. At minimum, the request data
@@ -939,7 +942,7 @@ class TestUC003PauseResume:
             req = UpdateMediaBuyRequest(media_buy_id="mb_pause_manual", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert len(result_calls) >= 1
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -1940,7 +1943,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_deferred", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
             # Adapter should NOT be called (deferred until seller approves)
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1959,7 +1962,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_reject_setup", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
             # Verify workflow step created with requires_approval (enables rejection)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -1980,7 +1983,9 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_poll")
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySuccess)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
+            # The buyer polls status via the returned task_id (the workflow step).
+            assert result.response.task_id == "step_001"
             # The workflow step was created (step_id="step_001")
             # and the response allows the buyer to track the status
             env.mock["ctx_mgr"].return_value.create_workflow_step.assert_called_once_with(

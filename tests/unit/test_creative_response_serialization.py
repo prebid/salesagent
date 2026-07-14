@@ -96,12 +96,13 @@ def test_sync_creative_result_excludes_internal_fields():
     result = SyncCreativeResult(
         creative_id="c_1",
         action=CreativeAction.created,
-        status="pending_review",
+        internal_status="pending_review",
         review_feedback="Looks good",
     )
     dumped = result.model_dump()
     assert dumped["creative_id"] == "c_1"
     assert "status" not in dumped
+    assert "internal_status" not in dumped
     assert "review_feedback" not in dumped
 
 
@@ -144,7 +145,7 @@ def test_sync_creative_result_model_dump_internal():
         creative_id="c_4",
         action=CreativeAction.created,
         changes=["name"],
-        status="approved",
+        internal_status="approved",
         review_feedback="Auto-approved",
     )
     internal = result.model_dump_internal()

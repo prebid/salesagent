@@ -6,7 +6,7 @@
 
 import re
 import warnings
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
@@ -45,11 +45,17 @@ from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
 from adcp.types.aliases import (
+    CreateMediaBuySubmittedResponse as AdCPCreateMediaBuySubmitted,
+)
+from adcp.types.aliases import (
     CreateMediaBuySuccessResponse as AdCPCreateMediaBuySuccess,
 )
 from adcp.types.aliases import Package as AdCPPackage
 from adcp.types.aliases import (
     UpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
+)
+from adcp.types.aliases import (
+    UpdateMediaBuySubmittedResponse as AdCPUpdateMediaBuySubmitted,
 )
 from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
@@ -76,7 +82,6 @@ from adcp.types import (
     FlatRatePricingOption,
     GeoCountry,
     GeoMetro,
-    GeoPostalArea,
     GeoRegion,
     TargetingOverlay,
     VcpmPricingOption,  # V3: consolidated from VcpmAuctionPricingOption/VcpmFixedRatePricingOption
@@ -89,6 +94,9 @@ from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
+from adcp.types import (
+    PostalArea as GeoPostalArea,  # adcp 6.6 renamed GeoPostalArea → PostalArea (spec 3.1.1 postal-area.json title)
+)
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
@@ -105,6 +113,7 @@ from adcp.types.generated_poc.core.collection_list_ref import (
 )
 from pydantic import (
     AnyUrl,
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -298,24 +307,41 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     ``SyncAccountsResponse``.
     """
 
-    # SDK 5.7 removed these from parent — declare locally
-    account: Any | None = None
-    sandbox: bool | None = None
-    # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
-    # it (adapters/base.py _build_create_success). Declare it for parity/typing so
-    # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
-    creative_deadline: datetime | None = None
-    # SDK 5.7 wrongly declares buyer_ref on the parent (removed from AdCP 3.1
-    # create-media-buy-response; pinned 04f59d2d5). Override to keep it off the
-    # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
-    buyer_ref: str | None = Field(default=None, exclude=True)
-    # SDK 5.7 also dropped valid_actions and context from the parent, but production
-    # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
-    # and survives a parent extra-mode change, not riding inherited extra='allow'.
-    # valid_actions_for_status() yields strings that are all valid MediaBuyValidAction
-    # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
-    valid_actions: list[MediaBuyValidAction] | None = None
-    context: ContextObject | None = None
+    # adcp 6.6 (spec 3.1.1) made these required on the success envelope. They are
+    # invariant for a synchronous committed success, so declare spec-correct defaults
+    # here rather than threading identical literals through every constructor:
+    #   status      — protocol-envelope TaskStatus; a sync create_media_buy that
+    #                 returns this type has, by definition, completed.
+    #   confirmed_at — seller commitment timestamp (stable after set).
+    #   revision     — initial revision number (schema minimum: 1).
+    # NOTE (SDK divergence): spec allows confirmed_at=null for provisional/manual-approval
+    # buys, but adcp 6.6 types it non-nullable AwareDatetime; that branch can't be modeled.
+    status: Literal["completed"] = "completed"
+    confirmed_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+    revision: int = 1
+
+    @classmethod
+    def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
+        """Construct a synchronous create_media_buy success.
+
+        The spec-3.1.1 envelope invariants (status/confirmed_at/revision) come from the
+        subclass field defaults above — that is the single source of truth. This factory
+        exists ONLY because mypy's pydantic plugin does not treat those subclass defaults
+        as satisfying the required parent fields (spurious ``call-arg``); callers route the
+        untyped ``**kwargs`` through here to dodge that. Do NOT re-default the fields here —
+        that would let the factory drift from the class defaults.
+        """
+        return cls(**kwargs)
+
+    # account/sandbox/creative_deadline/valid_actions/context: inherited from the
+    # adcp 6.6 parent, which re-added all five typed (Account, AwareDatetime,
+    # list[MediaBuyValidAction], ContextObject) — the SDK-5.7-era local
+    # redeclarations were deleted as stale (PR #1567 round-3; same cleanup
+    # Product/SyncCreativeResult got, exemplar 5a8953a46). Pinned by
+    # test_adcp_contract.py::test_create_media_buy_success_inherits_parent_typed_annotations.
+    # buyer_ref: the SDK-5.7 parent wrongly declared it (removed from AdCP 3.1
+    # create-media-buy-response; SDK bug adcontextprotocol/adcp-client-python#950,
+    # excluded here by #1417); adcp 6.6 no longer declares it, so no override needed.
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -397,7 +423,33 @@ class CreateMediaBuyError(AdCPCreateMediaBuyError):
             return "Media buy creation failed."
 
 
-# Union type for create_media_buy operation
+class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
+    """Async/pending create_media_buy response extending adcp v3.1.1 type.
+
+    Spec 3.1.1 ``create-media-buy-response.json`` models a buy that cannot be
+    confirmed before the response is emitted (e.g. one pending human approval)
+    as the ``CreateMediaBuySubmitted`` variant of the response ``oneOf``:
+    protocol-envelope ``status="submitted"`` (const) plus a required ``task_id``
+    the buyer polls for the outcome. ``media_buy_id`` and ``packages`` land on
+    the task's COMPLETION artifact, not this envelope. This is distinct from
+    ``CreateMediaBuySuccess``, whose adcp-6.6 defaults (``status="completed"``,
+    ``confirmed_at=<now>``, ``revision=1``) would falsely assert the seller
+    confirmed a buy that is not yet committed. Mirrors ``UpdateMediaBuySubmitted``.
+
+    ``status`` defaults to ``"submitted"`` on the library base; ``task_id`` is
+    required (the workflow step id the admin approval flow acts on).
+    """
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for the protocol envelope."""
+        return f"Media buy submitted for approval (task {self.task_id})."
+
+
+# Union type for the SYNCHRONOUS create_media_buy contract (adapter returns,
+# replay bodies of completed buys). Deliberately excludes CreateMediaBuySubmitted:
+# adapters execute synchronously and can only confirm or fail; the submitted
+# task envelope is produced by the tool's approval branches and lives on
+# CreateMediaBuyResult.response (Success | Error | Submitted).
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
@@ -428,19 +480,24 @@ class CreateMediaBuyResult(TaskResultEnvelope):
     with existing callers and tests.
     """
 
-    response: CreateMediaBuySuccess | CreateMediaBuyError
+    response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
     # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
-    # envelope / top of the structured result). Set True ONLY when this response
-    # is a verbatim replay of a previously cached success. Injected at response
-    # time, never stored in the cached body; omitted when False so fresh
-    # responses are byte-identical to before. Only valid on a successful result.
+    # envelope / top of the structured result). Wrapper-owned: set True ONLY when
+    # this response is a verbatim replay of a previously cached result (success
+    # OR submitted — the replay test asserts True on a submitted replay). Injected
+    # at response time, never stored in the cached body; omitted when False on
+    # EVERY variant so fresh responses are byte-identical across variants.
     replayed: bool = False
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
         result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
+        # The adcp 6.6 submitted base declares replayed=False as a FIELD, so it
+        # rides response.model_dump(); strip it — the wrapper is the marker's
+        # single source (PR #1567 round-3).
+        result.pop("replayed", None)
         if self.replayed:
             result["replayed"] = True
         return result
@@ -492,6 +549,14 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
     not yet compiled by the adapter.
     """
+
+    # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
+    # Invariant for a synchronous applied update, so declare spec-correct defaults here
+    # rather than threading identical literals through every constructor (see the twin
+    # note on CreateMediaBuySuccess). revision defaults to 1; real per-buy revision
+    # tracking is separate media-buy lifecycle work.
+    status: Literal["completed"] = "completed"
+    revision: int = 1
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
@@ -588,8 +653,30 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
             return "Media buy update failed."
 
 
+class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc]
+    """Async/pending update_media_buy response extending adcp v3.1.1 type.
+
+    Spec 3.1.1 ``update-media-buy-response.json`` models a not-yet-applied update
+    (e.g. one pending human approval) as the ``UpdateMediaBuySubmitted`` variant of
+    the response ``oneOf``: protocol-envelope ``status="submitted"`` (const) plus a
+    required ``task_id`` the buyer polls for the outcome. This is distinct from
+    ``UpdateMediaBuySuccess``, whose adcp-6.6 envelope ``status`` defaults to
+    ``"completed"`` and would falsely assert the update was applied.
+
+    The update transport wrappers serialize the returned model straight onto the
+    wire (``ToolResult(structured_content=response)`` / A2A / REST), so returning
+    this type from the manual-approval branch yields the spec-correct submitted
+    envelope on every transport. ``status`` defaults to ``"submitted"`` on the
+    library base; ``task_id`` is required.
+    """
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for the protocol envelope."""
+        return f"Media buy update submitted for approval (task {self.task_id})."
+
+
 # Union type for update_media_buy operation
-UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError
+UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError | UpdateMediaBuySubmitted
 
 
 class UpdateMediaBuyResult(TaskResultEnvelope):
@@ -599,7 +686,7 @@ class UpdateMediaBuyResult(TaskResultEnvelope):
     CreateMediaBuyResult so wire transports surface ProtocolEnvelope.status.
     """
 
-    response: UpdateMediaBuySuccess | UpdateMediaBuyError
+    response: UpdateMediaBuySuccess | UpdateMediaBuyError | UpdateMediaBuySubmitted
 
     def __str__(self) -> str:
         return str(self.response)
@@ -1075,7 +1162,7 @@ class Targeting(TargetingOverlay):
     geo_countries_exclude: list[GeoCountry] | None = None  # type: ignore[assignment]
     geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
     geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
-    geo_postal_areas_exclude: list[GeoPostalArea] | None = None  # type: ignore[assignment]
+    geo_postal_areas_exclude: list[GeoPostalArea] | None = None
 
     # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
     # TargetingOverlay (added natively in adcp 4.3). CollectionListReference is re-exported
@@ -1942,13 +2029,20 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         if not isinstance(values, dict):
             return values
 
-        # Unwrap RootModel packages (FastMCP produces library PackageUpdate RootModel,
-        # but JSON/dict input arrives as plain dicts — guard needed in pre-validator)
+        # Normalize package instances to dicts so the list[AdCPPackageUpdate] field
+        # validates them. FastMCP coerces the incoming param to its annotated type
+        # before the wrapper runs: on older adcp that was a PackageUpdate RootModel,
+        # on adcp 6.6 it is a plain BaseModel PackageUpdate (isinstance RootModel is
+        # False there — the else branch used to leak the typed instance through and
+        # fail as "not a valid dictionary or instance of AdCPPackageUpdate"). JSON/dict
+        # input (A2A/REST) already arrives as plain dicts and passes through untouched.
         if "packages" in values and values["packages"]:
             unwrapped = []
             for pkg in values["packages"]:
                 if isinstance(pkg, RootModel):
                     unwrapped.append(pkg.root.model_dump(mode="json"))
+                elif isinstance(pkg, BaseModel):
+                    unwrapped.append(pkg.model_dump(mode="json"))
                 else:
                     unwrapped.append(pkg)
             values["packages"] = unwrapped

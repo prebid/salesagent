@@ -113,10 +113,13 @@ class TestTimestamptzMigration:
         """Downgrade should revert TIMESTAMPTZ columns back to TIMESTAMP."""
         engine, db_url = migration_db
 
-        # Self-contained setup (#1572 fallout): migration_db is module-scoped,
-        # but xdist --dist load can put this test on a different worker than the
-        # upgrade test — a fresh, empty DB. Detect that and replay the upgrade
-        # test's setup instead of assuming its state.
+        # Normally the database is already at MIGRATION_REV, with test data, from the
+        # previous test in this module (they share the module-scoped migration_db).
+        # The integration tox env runs xdist with --dist loadfile so this whole file
+        # stays on one worker in order. Self-contained fallback (#1572 fallout): under
+        # xdist --dist load this test can land on a different worker than the upgrade
+        # test — a fresh, empty DB. Detect that and replay the upgrade test's setup
+        # instead of assuming its state.
         col_type = _get_column_type(engine, "tenants", "created_at")
         if col_type is None:
             run_alembic_upgrade(db_url, PRE_MIGRATION_REV)

@@ -771,11 +771,16 @@ class TestA2ASkillInvocation:
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-            # Mock adapter - must return UpdateMediaBuySuccessResponse, not dict
-            from adcp.types.aliases import UpdateMediaBuySuccessResponse
+            # Mock adapter — must return what real adapters return: our defaulted
+            # UpdateMediaBuySuccess subclass. adcp 6.6 (spec 3.1.1) made status/revision
+            # required on the raw library UpdateMediaBuySuccessResponse; every production
+            # construction site (mock/GAM/kevel adapters, the _impl, and the A2A server
+            # coercion) routes through this subclass which defaults status='completed'
+            # and revision, so the wire response is always spec-valid.
+            from src.core.schemas import UpdateMediaBuySuccess
 
             mock_adapter = MagicMock()
-            mock_adapter.update_media_buy.return_value = UpdateMediaBuySuccessResponse(
+            mock_adapter.update_media_buy.return_value = UpdateMediaBuySuccess(
                 media_buy_id="mb_test_123",
                 affected_packages=[],  # adcp 2.5.0 field (replaces packages/errors)
             )
@@ -797,6 +802,18 @@ class TestA2ASkillInvocation:
             assert isinstance(result, Task)
             assert result.metadata["invocation_type"] == "explicit_skill"
             assert "update_media_buy" in result.metadata["skills_requested"]
+
+            # adcp 6.6 (spec 3.1.1) guard: the A2A update_media_buy wire response must
+            # carry the now-required status/revision fields. This proves the defaulted
+            # UpdateMediaBuySuccess subclass reaches the wire (not the raw library type),
+            # which is the whole point of du92.
+            # Value-presence guard: status/revision must reach the wire. (Numbers are
+            # doubles on the A2A protobuf-Struct transport, so 1 arrives as 1.0 — a
+            # transport-wide representation detail, not du92's concern; assert on value.)
+            assert result.artifacts, "update_media_buy skill returned no artifacts"
+            payload = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
+            assert payload["status"] == "completed", f"missing/incorrect status on wire: {payload!r}"
+            assert payload["revision"] == 1, f"missing/incorrect revision on wire: {payload!r}"
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_skill(

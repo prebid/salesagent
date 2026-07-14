@@ -83,7 +83,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
     # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
-    ("tests/bdd/steps/generic/then_media_buy.py", "then_slack_notification_sent"),
     ("tests/integration/test_auth_header_propagation.py", "test_creative_agent_custom_auth_header_propagation"),
     ("tests/integration/test_auth_header_propagation.py", "test_signals_agent_custom_auth_header_propagation"),
     ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),

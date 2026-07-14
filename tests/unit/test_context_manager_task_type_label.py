@@ -90,7 +90,7 @@ def test_valid_tasktype_label_passes_through_unchanged():
     assert str(payload.task_type.value) == "create_media_buy"
 
 
-@pytest.mark.parametrize("tool_name", ["delivery_report", "media_buy_delivery", "totally_made_up"])
+@pytest.mark.parametrize("tool_name", ["delivery_report", "totally_made_up"])
 def test_invalid_labels_never_break_the_payload(tool_name):
     """Any non-TaskType label still produces a valid, sendable payload."""
     result = _capture_send(tool_name)

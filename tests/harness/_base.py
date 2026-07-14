@@ -303,22 +303,32 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
 
 
 class _TestClock:
-    """Simple clock for BDD date token resolution ({now}, {N days from now}, etc.)."""
+    """Minimal clock for BDD relative date-token resolution.
+
+    The media-buy Given steps resolve Gherkin tokens (``{now}``,
+    ``{30 days from now}``, ``{1 day ago}``) against ``ctx["env"].clock`` using
+    the ``now_iso`` / ``future_iso`` / ``past_iso`` interface. Emits the
+    ``YYYY-MM-DDTHH:MM:SSZ`` shape AdCP request validators accept.
+    """
+
+    @staticmethod
+    def _iso(dt: Any) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def now_iso(self) -> str:
         from datetime import UTC, datetime
 
-        return datetime.now(UTC).isoformat()
+        return self._iso(datetime.now(UTC))
 
     def future_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) + timedelta(days=days)).isoformat()
+        return self._iso(datetime.now(UTC) + timedelta(days=days))
 
     def past_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        return self._iso(datetime.now(UTC) - timedelta(days=days))
 
 
 class BaseTestEnv:
@@ -396,6 +406,11 @@ class BaseTestEnv:
         # A2A/MCP dispatchers. None unless such a path ran — REST builds its
         # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
         self._last_wire_response: dict[str, Any] | None = None
+        # Raw A2A Task returned by the last _run_a2a_handler call. The submitted
+        # (manual-approval) contract lives on the Task itself — state=SUBMITTED
+        # with NO artifacts — and the synthesized submitted wire above cannot
+        # prove artifact absence, so guards assert on this captured Task.
+        self._last_a2a_task: Any = None
 
     # -- Transport mode -----------------------------------------------------
 
@@ -556,6 +571,17 @@ class BaseTestEnv:
             f"{type(self).__name__} does not implement call_a2a(). Override to enable Transport.A2A dispatch."
         )
 
+    @property
+    def last_a2a_task(self) -> Any:
+        """Raw A2A Task from the last ``_run_a2a_handler`` dispatch (or None).
+
+        Public accessor for Task-level contract assertions — e.g. the submitted
+        (manual-approval) contract, where state=TASK_STATE_SUBMITTED with NO
+        artifacts IS the wire and the parsed response is a harness synthesis
+        that cannot prove artifact absence.
+        """
+        return self._last_a2a_task
+
     def call_mcp(self, **kwargs: Any) -> Any:
         """Call the async MCP wrapper with a mock Context.
 
@@ -690,6 +716,10 @@ class BaseTestEnv:
         if not isinstance(task_result, Task):
             raise TypeError(f"Expected Task, got {type(task_result).__name__}: {task_result}")
 
+        # Expose the raw Task so tests can pin Task-level contract facts
+        # (state, artifact absence) that the parsed response cannot prove.
+        self._last_a2a_task = task_result
+
         # AdCP-domain errors now surface as a failed Task with the two-layer
         # envelope in the artifact DataPart. Reconstruct the AdCPError so
         # callers can catch domain exceptions instead of getting
@@ -706,6 +736,16 @@ class BaseTestEnv:
                 if reconstructed is not None:
                     raise reconstructed
             raise AdCPError(f"A2A task failed: {task_result.status}")
+
+        if task_result.status.state == TaskState.TASK_STATE_SUBMITTED:
+            # Async manual-approval path: the server returns a submitted Task with NO
+            # artifacts (adcp_a2a_server.py:683) — the submitted envelope is conveyed by
+            # the Task state + id, not an artifact union. Reconstruct the submitted wire
+            # (protocol status="submitted" + the task_id the buyer polls) so success-path
+            # grading sees the real A2A wire.
+            submitted_wire = {"status": "submitted", "task_id": task_result.id}
+            self._last_wire_response = dict(submitted_wire)
+            return response_cls(**submitted_wire)
 
         if not task_result.artifacts:
             raise ValueError(f"Task has no artifacts. Status: {task_result.status}")
@@ -1251,7 +1291,7 @@ class IntegrationEnv(BaseTestEnv):
 
     use_real_db = True
 
-    def setup_default_data(self) -> tuple[Any, Any]:
+    def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Get-or-create default tenant + principal via factories.
 
         Must be called inside the ``with env:`` block (factories are bound
@@ -1261,6 +1301,13 @@ class IntegrationEnv(BaseTestEnv):
         and self._principal_id from constructor. Idempotent: reuses existing
         rows rather than re-creating, so it is safe to call after the e2e
         discovery-path auto-seed (``_seed_e2e_identity``) already created them.
+
+        Extra ``tenant_kwargs`` are tenant policy columns the live e2e_rest
+        server reads from the shared DB (e.g. ``human_review_required``).
+        Forwarded to ``TenantFactory`` on the create path; APPLIED to the
+        existing row on the get path — the __enter__ auto-seed creates the
+        tenant with model defaults, so the kwargs must win over those defaults
+        regardless of which call created the row.
         """
         from sqlalchemy import select
 
@@ -1269,7 +1316,11 @@ class IntegrationEnv(BaseTestEnv):
 
         tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
         if tenant is None:
-            tenant = TenantFactory(tenant_id=self._tenant_id)
+            tenant = TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
+        elif tenant_kwargs:
+            for column, value in tenant_kwargs.items():
+                setattr(tenant, column, value)
+            self._commit_factory_data()
 
         principal = self._session.scalars(
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
