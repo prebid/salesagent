@@ -27,16 +27,19 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
     typed-model constructor) would surface as an untyped error — and the outer
     dispatcher only builds the two-layer error envelope for ``AdCPError``
     subclasses, so the buyer would lose the real code/recovery. This boundary is
-    the SINGLE translation point (salesagent-ah98): every rejection carries the
+    the SINGLE translation point (#1417): every rejection carries the
     buyer-friendly ``format_validation_error`` message, the structured ``field``
     path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
     try/except copy.
 
     ``context`` names what was invalid in the message (e.g. ``"get_products
     request"``); the default renders the ``Invalid parameters`` prefix existing
-    wire assertions rely on. ``field`` pins the request-level field path when the
-    validated model is nested below it (e.g. ``field="brand"`` while validating a
-    ``BrandReference``); by default the path is derived from the error itself.
+    wire assertions rely on.
+
+    ``field`` pins the reported request field when the failing model is nested
+    under a named request field: coercing a ``BrandReference`` reports
+    ``field="brand"``, not the nested pydantic location (e.g. ``industries``).
+    When ``None`` (default) the field is derived from the validation error.
     """
     try:
         yield

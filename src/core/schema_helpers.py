@@ -168,26 +168,28 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
         return None
     if isinstance(brand, BrandReference):
         return brand
-    if isinstance(brand, str):
-        return BrandReference(domain=_coerce_domain_or_raise(brand))
-    if isinstance(brand, dict):
-        domain_raw = brand.get("domain")
-        if not isinstance(domain_raw, str):
-            raise AdCPValidationError(
-                "Invalid brand: domain is required",
-                field="brand",
-            )
-        allowed = BrandReference.model_fields.keys()
-        ref_data = {key: value for key, value in brand.items() if key in allowed}
-        ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
-        # field="brand" pins the request-level path (the buyer set `brand`,
-        # not a bare BrandReference), matching this function's other raises.
-        with adcp_validation_boundary(context="brand", field="brand"):
+    # Raise-capable coercion routes through the internal boundary (like
+    # ``coerce_creative_filters``/``_coerce_wire_object``) so a malformed brand
+    # rejects as a typed AdCPValidationError with field + top-level suggestion
+    # from every call site — no hand-rolled ValidationError translation (#1417).
+    with adcp_validation_boundary(context="brand", field="brand"):
+        if isinstance(brand, str):
+            return BrandReference(domain=_coerce_domain_or_raise(brand))
+        if isinstance(brand, dict):
+            domain_raw = brand.get("domain")
+            if not isinstance(domain_raw, str):
+                raise AdCPValidationError(
+                    "Invalid brand: domain is required",
+                    field="brand",
+                )
+            allowed = BrandReference.model_fields.keys()
+            ref_data = {key: value for key, value in brand.items() if key in allowed}
+            ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
             return BrandReference(**ref_data)
-    raise AdCPValidationError(
-        f"Invalid brand: expected dict, string, or BrandReference, got {type(brand).__name__}",
-        field="brand",
-    )
+        raise AdCPValidationError(
+            f"Invalid brand: expected dict, string, or BrandReference, got {type(brand).__name__}",
+            field="brand",
+        )
 
 
 def to_account_reference(account: dict[str, Any] | AccountReference | None) -> AccountReference | None:
