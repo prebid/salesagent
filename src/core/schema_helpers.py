@@ -30,7 +30,7 @@ from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
-from src.core.validation_helpers import adcp_validation_boundary, format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -180,13 +180,10 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
         allowed = BrandReference.model_fields.keys()
         ref_data = {key: value for key, value in brand.items() if key in allowed}
         ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
-        try:
+        # field="brand" pins the request-level path (the buyer set `brand`,
+        # not a bare BrandReference), matching this function's other raises.
+        with adcp_validation_boundary(context="brand", field="brand"):
             return BrandReference(**ref_data)
-        except ValidationError as e:
-            raise AdCPValidationError(
-                format_validation_error(e, context="brand"),
-                field="brand",
-            ) from e
     raise AdCPValidationError(
         f"Invalid brand: expected dict, string, or BrandReference, got {type(brand).__name__}",
         field="brand",
