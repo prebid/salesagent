@@ -113,3 +113,79 @@ class TestA2ATaskCorrelation:
 
         assert task is live
         mock_auth.assert_not_called()  # in-memory hit short-circuits before any auth/DB work
+
+    def test_approval_adapter_failure_stores_buyer_facing_error_artifact(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """P1 (#1544): an adapter failure during async approval must store a two-layer
+        error envelope on the step, so a durable tasks/get poll returns a FAILED task
+        WITH the failure details — not a bare FAILED task with no artifact."""
+        from datetime import UTC, datetime
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.admin.services.media_buy_completion import finalize_media_buy_approval
+        from src.core.database.repositories import MediaBuyUoW
+        from tests.integration.conftest import make_media_buy
+
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        external_task_id = "task_fail_xyz"
+
+        with MediaBuyUoW(tenant_id) as uow:
+            uow.media_buys.create(make_media_buy(tenant_id, principal_id, "mb_fail", status="pending_approval"))
+
+        context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
+        step = context_manager.create_workflow_step(
+            context_id=context.context_id,
+            step_type="media_buy_creation",
+            owner="system",
+            status="in_progress",
+            tool_name="create_media_buy",
+            request_data={"media_buy_id": "mb_fail"},
+            request_metadata={"protocol": "a2a", "external_task_id": external_task_id},
+        )
+        step_data = {
+            "step_id": step.step_id,
+            "context_id": step.context_id,
+            "tool_name": "create_media_buy",
+            "request_data": {"protocol": "a2a", "external_task_id": external_task_id},
+        }
+
+        with get_db_session() as session:
+            ok, err = finalize_media_buy_approval(
+                session,
+                tenant_id,
+                media_buy_id="mb_fail",
+                step_id=step.step_id,
+                step_data=step_data,
+                compute_target=lambda mb: "active",
+                run_adapter=lambda: (False, "GAM order creation failed"),
+                approved_by="admin@test",
+                approved_at=datetime.now(UTC),
+            )
+
+        assert ok is False
+        assert err == "GAM order creation failed"
+
+        # The step is failed AND carries a buyer-facing two-layer error envelope.
+        with get_db_session() as session:
+            failed = WorkflowRepository(session, tenant_id).get_by_step_id(step.step_id)
+            assert failed is not None
+            assert failed.status == "failed"
+            assert failed.response_data is not None
+            assert failed.response_data["errors"][0]["message"]  # non-empty failure detail
+
+        # A durable poll returns FAILED *with* the error artifact (named as an error).
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        handler.tasks = {}
+        identity = PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, protocol="a2a")
+        with (
+            patch.object(handler, "_get_auth_token", return_value="tok"),
+            patch.object(handler, "_resolve_a2a_identity", return_value=identity),
+        ):
+            task = asyncio.run(handler.on_get_task(GetTaskRequest(id=external_task_id), context=None))
+
+        assert task is not None
+        assert task.status.state == TaskState.TASK_STATE_FAILED
+        assert len(task.artifacts) == 1
+        assert task.artifacts[0].name == "media_buy_error"

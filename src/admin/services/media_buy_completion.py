@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.exceptions import AdCPAdapterError, build_two_layer_error_envelope
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas import CreateMediaBuySuccess, Package
 from src.core.webhook_validator import validate_webhook_task_type
@@ -223,7 +224,16 @@ def finalize_media_buy_approval(
         # The buy was just transitioned above, so it exists — *_or_raise (never a
         # discarded None) also satisfies the no-silent-skip guard.
         repo.update_status_or_raise(media_buy_id, "failed")
-        WorkflowRepository(session, tenant_id).update_status(step_id, status="failed", error_message=error_msg)
+        # Store a buyer-facing two-layer error envelope as the step's response_data
+        # (NOT just error_message): durable tasks/get rebuilds the failed Task's
+        # artifact from response_data, so without this the buyer polls a FAILED task
+        # with no failure details. #1544 (P1).
+        error_envelope = build_two_layer_error_envelope(
+            AdCPAdapterError(error_msg or "Adapter execution failed while creating the media buy")
+        )
+        WorkflowRepository(session, tenant_id).update_status(
+            step_id, status="failed", error_message=error_msg, response_data=error_envelope
+        )
         session.commit()
         return False, error_msg
 

@@ -1062,10 +1062,14 @@ class AdCPRequestHandler(RequestHandler):
             state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
             task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
             if step.response_data:
+                # A failed step stores a two-layer error envelope; a completed/rejected
+                # one stores the CreateMediaBuySuccess result. Name the artifact to
+                # match so the buyer can tell a failure payload from a result. #1544.
+                is_error = step.status == "failed"
                 task.artifacts.append(
                     Artifact(
-                        artifact_id=f"{task_id}_result",
-                        name="media_buy_result",
+                        artifact_id=f"{task_id}_{'error' if is_error else 'result'}",
+                        name="media_buy_error" if is_error else "media_buy_result",
                         parts=[Part(data=_dict_to_value(step.response_data))],
                     )
                 )
