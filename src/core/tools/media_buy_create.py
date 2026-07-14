@@ -4406,7 +4406,12 @@ async def create_media_buy(
     ] = None,
     paused: Annotated[
         bool | None,
-        Field(description="Create the media buy in a paused state (AdCP 3.1.1); delivery starts only once unpaused"),
+        Field(
+            description=(
+                "Accepted for AdCP 3.1.1 compatibility; pause-on-create is NOT yet honored — "
+                "the buy delivers as if paused=false. Tracked in #1619."
+            )
+        ),
     ] = None,
     ctx: Context | ToolContext | None = None,
 ):
