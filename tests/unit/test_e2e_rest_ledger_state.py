@@ -50,10 +50,8 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # (#1270 tripwires fired on the first in-network CI run — live server
         # validates start>=end now), partition twins at the origin/pr-1417 merge
         # (d4af23095, strict-xfail XPASS in-network).
-        # Merged-upstream account valid rows (main #1545 regen; live server resolves
-        # accounts for real, referenced account never seeded — see ledger comment).
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-valid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-natural_key-{"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}-valid]',
+        # Account valid rows graduated at the #1417 merge (jr5b seeded-account
+        # Given; XPASS in-network innet_140726_1516) — see ledger note.
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",

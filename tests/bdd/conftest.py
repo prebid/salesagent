@@ -1782,15 +1782,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="delivery account boundary: production gaps on this transport", strict=False
                     )
                 )
-            # e2e_rest: account fixture created in-process not visible to Docker DB
-            # Graduated: "not found", "both account_id", "empty object" pass on e2e_rest
-            if is_e2e_rest and any(s in nodeid for s in ("account exists", "single match")):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: account fixture not in Docker DB — lookup/validation fails",
-                        strict=False,
-                    )
-                )
+            # e2e_rest fully graduated: invalid rows ("not found", "both
+            # account_id", "empty object") passed first; the valid rows
+            # ("account exists", "single match") followed at the #1417 merge —
+            # the jr5b seeded-account Given is realized against the server DB,
+            # so the account fixture IS visible now (XPASS innet_140726_1516).
 
         # --- UC-004 boundary: selective xfail for graduated strong groups ---
         # Only the failing subset gets xfailed; clean-pass examples graduate to PASS.

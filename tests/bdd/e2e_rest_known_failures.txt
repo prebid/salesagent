@@ -51,15 +51,12 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_part
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
 
-# --- uc004 delivery account valid rows — referenced account not seeded (2) ---
-# MERGED-UPSTREAM surface (main's #1545 feature regen; first e2e run on this
-# branch's CI 2026-07-09): the valid account rows dispatch a delivery request
-# referencing acc_acme_001 / acme-corp.com, the live server resolves accounts
-# for real, and no uc004 step seeds them -> honest ACCOUNT_NOT_FOUND. Real fix
-# = seed the referenced account in the delivery Given (same family as the
-# in-process xfail rows in conftest's account selective lists).
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-natural_key-{"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}-valid]
+# --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---
+# Was: valid account rows referenced acc_acme_001 / acme-corp.com and no uc004
+# step seeded them -> honest ACCOUNT_NOT_FOUND. #1417's seeded-account Given
+# (salesagent-jr5b) now provisions the referenced accounts and the harness
+# realizes the seeding against the server DB; both rows XPASSed in-network
+# (innet_140726_1516) and are retired with the boundary siblings.
 
 # --- uc006 account billing-state resolution — GRADUATED (#1417 merge) ---
 # Was: ACCOUNT_PAYMENT_REQUIRED / ACCOUNT_SETUP_REQUIRED / ACCOUNT_SUSPENDED /
