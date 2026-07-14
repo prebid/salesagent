@@ -281,7 +281,7 @@ class TestA2AErrorPropagation:
             artifact_data,
             "VALIDATION_ERROR",
             recovery="correctable",
-            message_substr="Field required",
+            message_substr="Required field is missing",
         )
         assert "input_value" not in artifact_data["errors"][0]["message"]
         assert "errors.pydantic.dev" not in artifact_data["errors"][0]["message"]
