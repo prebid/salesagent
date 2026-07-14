@@ -299,20 +299,12 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         """
         return cls(**kwargs)
 
-    # SDK 5.7 removed these from parent — declare locally
-    account: Any | None = None
-    sandbox: bool | None = None
-    # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
-    # it (adapters/base.py _build_create_success). Declare it for parity/typing so
-    # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
-    creative_deadline: datetime | None = None
-    # SDK 5.7 also dropped valid_actions and context from the parent, but production
-    # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
-    # and survives a parent extra-mode change, not riding inherited extra='allow'.
-    # valid_actions_for_status() yields strings that are all valid MediaBuyValidAction
-    # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
-    valid_actions: list[MediaBuyValidAction] | None = None
-    context: ContextObject | None = None
+    # account/sandbox/creative_deadline/valid_actions/context: inherited from the
+    # adcp 6.6 parent, which re-added all five typed (Account, AwareDatetime,
+    # list[MediaBuyValidAction], ContextObject) — the SDK-5.7-era local
+    # redeclarations were deleted as stale (PR #1567 round-3; same cleanup
+    # Product/SyncCreativeResult got, exemplar 5a8953a46). Pinned by
+    # test_adcp_contract.py::test_create_media_buy_success_inherits_parent_typed_annotations.
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
