@@ -5,7 +5,9 @@
 Proposed 2026-07-09; **revised 2026-07-13** per [@ChrisHuie](https://github.com/ChrisHuie)
 review on [#1579](https://github.com/prebid/salesagent/pull/1579) (aligns with
 [@KonstantinMirin](https://github.com/KonstantinMirin) preference for ratchet over permanent amnesty);
-**honesty fix 2026-07-14** (C901 table → 186; drop inline stale counts from ratchet comments).
+**honesty fix 2026-07-14** (C901 table entry now defers to the baseline file;
+drop inline stale counts from ratchet comments);
+**vocabulary align 2026-07-14** (quote shipped `pyproject.toml` comment strings).
 Awaiting re-Accept on this PR.
 
 ## Context
@@ -45,9 +47,13 @@ already run that pattern for `.type-ignore-baseline` and `.duplication-baseline`
 - `PLR0912` — too-many-branches
 - `PLR0915` — too-many-statements
 
-These are where new code most needs a mechanical stop. Comments say **ratchet
-target (ADR-009)** — not "fix incrementally" and not "permanently accepted".
-Mechanical ceiling: [#1613](https://github.com/prebid/salesagent/pull/1613).
+These are where new code most needs a mechanical stop. Policy text lives in the
+section header
+(`--- Ratchet targets (count-ratcheted via .ruff-complexity-baseline; ADR-009) ---`);
+per-rule comments only carry the rule meaning (`# complexity`,
+`# too-many-branches`, `# too-many-statements`) — not "fix incrementally" and
+not "permanently accepted". Mechanical ceiling:
+[#1613](https://github.com/prebid/salesagent/pull/1613).
 
 **Permanently accepted** (linter is low-signal at current thresholds):
 
@@ -55,7 +61,9 @@ Mechanical ceiling: [#1613](https://github.com/prebid/salesagent/pull/1613).
 - `PLR0913` — too-many-arguments (wide spec-mirroring signatures)
 - `PLR2004` — magic-value comparisons (inline constants often readable)
 
-Comments must say **permanently accepted (ADR-009)**.
+Same pattern: policy text may live in the section header
+(`--- Permanently accepted (low-signal style; ADR-009) ---`); per-line comments
+only need the rule meaning (e.g. `guard-clause returns; low signal`).
 
 **Justified keep / boy-scout debt** (not a ratchet; clean up when touching):
 

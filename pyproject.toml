@@ -145,9 +145,9 @@ ignore = [
     # low-signal, no ceiling. "Boy-scout debt" = fix when touching.
     #
     # --- Ratchet targets (count-ratcheted via .ruff-complexity-baseline; ADR-009) ---
-    "C901",    # count-ratcheted via .ruff-complexity-baseline (ADR-009); not a hard gate
-    "PLR0912", # count-ratcheted via .ruff-complexity-baseline (ADR-009); not a hard gate
-    "PLR0915", # count-ratcheted via .ruff-complexity-baseline (ADR-009); not a hard gate
+    "C901",    # complexity
+    "PLR0912", # too-many-branches
+    "PLR0915", # too-many-statements
     #
     # --- Permanently accepted (low-signal style; ADR-009) ---
     "PLR0911", # too-many-return-statements — guard-clause returns; low signal
