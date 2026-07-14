@@ -1072,6 +1072,31 @@ def then_response_contains_task_id(ctx: dict) -> None:
     )
 
 
+def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
+    """Defense-in-depth for the A2A submitted case: grade the REAL protobuf Task.
+
+    On A2A a submitted outcome is conveyed via the Task state and the transport
+    clears artifacts (``del task.artifacts[:]``), so the NOT-contain checks over
+    the synthesized wire dict are architecturally vacuous on that transport.
+    Assert on ``env.last_a2a_task`` (the actual transport object, stashed by the
+    dispatcher) that no artifact leaked — mirroring the update path's guard
+    (test_a2a_update_media_buy_submitted_guard.py). PR #1567 round-3.
+    """
+    from tests.harness.transport import Transport
+
+    if ctx.get("transport") is not Transport.A2A:
+        return
+    if (ctx.get("wire_response") or {}).get("status") != "submitted":
+        return
+    env = ctx.get("env")
+    task = getattr(env, "last_a2a_task", None)
+    assert task is not None, "A2A submitted case must stash the real Task (env.last_a2a_task)"
+    assert not task.artifacts, (
+        f"A2A submitted Task must carry NO artifacts (submitted is conveyed via the Task "
+        f"state; an artifact would leak a premature result), got {task.artifacts!r}"
+    )
+
+
 @then(parsers.parse('the response should NOT contain "{field_name}" field'))
 def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     """Assert the response does NOT contain a given field.
@@ -1096,6 +1121,7 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
             f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
             f"but found: {data.get(field_name)!r}"
         )
+        _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
     # Error-path response (BR-RULE-018 INV-2)
     error_resp = ctx.get("error_response")
