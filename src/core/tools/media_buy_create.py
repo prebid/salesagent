@@ -3505,10 +3505,16 @@ async def _create_media_buy_impl(
             # buyer asked to SIMULATE the would-be outcome, which IS completion, so
             # "completed" is a truthful preview (unlike the pending-approval and reject paths, where the op
             # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
+            # Simulated lifecycle: a would-be-created buy starts before its flight,
+            # so pending_start — the SAME value must feed both the wire field and
+            # valid_actions (spec 3.1.1 pending_creatives_to_start.yaml grades
+            # media_buy_status alongside the envelope status; partial GH #1326).
+            simulated_lifecycle = MediaBuyStatus.pending_start.value
             simulated_response = CreateMediaBuySuccess.sync_success(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
                 packages=simulated_packages,
-                valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
+                media_buy_status=simulated_lifecycle,
+                valid_actions=valid_actions_for_status(simulated_lifecycle),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
@@ -4002,6 +4008,12 @@ async def _create_media_buy_impl(
         adcp_response = CreateMediaBuySuccess.sync_success(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
+            # Lifecycle on the wire, from the same single source that drives
+            # valid_actions (spec 3.1.1 create-media-buy-response.json;
+            # pending_creatives_to_start.yaml step create_buy_no_creatives
+            # grades media_buy_status == "pending_creatives" alongside
+            # envelope status == "completed"). Partial GH #1326.
+            media_buy_status=media_buy_status,
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
