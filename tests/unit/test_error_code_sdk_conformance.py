@@ -44,9 +44,12 @@ _INTERNAL_WIRE_CODES: frozenset[str] = frozenset(
 def _all_emitted_codes() -> set[str]:
     """Collect the ``_default_error_code`` every concrete AdCPError subclass emits.
 
-    Uses ``AdCPError.iter_concrete_subclasses`` — the single source of truth for
-    this walk — so it dedupes diamond inheritance and skips abstract bases that
-    are never emitted, which a hand-rolled ``__subclasses__`` stack does not.
+    Routes through ``AdCPError.iter_concrete_subclasses`` — the single source of
+    truth for this walk (it also backs the wire-code→status table) — which
+    dedupes diamond inheritance and would skip abstract bases if any were
+    introduced, rather than re-implementing the traversal here. Reads the
+    effective (inherited) code per concrete class and adds ``AdCPError``'s own
+    default, since the walk yields descendants only.
     """
     codes = {
         code
