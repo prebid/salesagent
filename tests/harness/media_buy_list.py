@@ -124,11 +124,9 @@ class MediaBuyCreateListEnv(MediaBuyCreateEnv):
         return _get_media_buys_impl(req=req, identity=identity, include_snapshot=include_snapshot)
 
     def _call_list_a2a(self, **kwargs: Any) -> Any:
-        from src.core.tools.media_buy_list import get_media_buys_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return get_media_buys_raw(**kwargs)
+        # Same real-pipeline dispatch as MediaBuyListEnv.call_a2a: the
+        # production A2A path is the skill handler, not the dead raw wrapper.
+        return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def _call_list_mcp(self, **kwargs: Any) -> Any:
         from src.core.tools.media_buy_list import get_media_buys

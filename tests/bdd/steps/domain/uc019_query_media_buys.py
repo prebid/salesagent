@@ -2588,7 +2588,15 @@ def then_response_schema_valid_get_media_buys(ctx: dict) -> None:
 
     wire = ctx.get("wire_response")
     if isinstance(wire, dict):
-        GetMediaBuysResponse.model_validate(wire)
+        # Transport framing adds envelope keys around the response object
+        # (the A2A skill result carries success/message alongside the
+        # response fields). The schema governs the RESPONSE, so validate the
+        # model's own fields as they appear on the wire — this still catches
+        # serialization regressions in every response field while tolerating
+        # the envelope.
+        payload = {k: v for k, v in wire.items() if k in GetMediaBuysResponse.model_fields}
+        assert "media_buys" in payload, f"wire payload carries no media_buys — keys: {sorted(wire)}"
+        GetMediaBuysResponse.model_validate(payload)
         return
     response = ctx.get("response")
     assert response is not None, f"No response captured — ctx error: {ctx.get('error')!r}"
