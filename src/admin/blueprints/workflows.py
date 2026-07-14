@@ -7,7 +7,10 @@ from datetime import UTC, datetime
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.services.media_buy_completion import finalize_media_buy_approval, finalize_media_buy_rejection
+from src.admin.services.media_buy_completion import (
+    finalize_media_buy_rejection,
+    finalize_pending_media_buy_approval,
+)
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -15,7 +18,6 @@ from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
-from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
 
@@ -245,29 +247,22 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                             db.commit()
                             return jsonify({"success": True}), 200
 
-                    # Creatives ready → finalize atomically via the shared seam: the
-                    # approval instant + flight-derived lifecycle status COMPUTED UNDER
-                    # THE ROW LOCK (compute_target callback), then the adapter, the
-                    # workflow-step terminal + response artifact, and the completion
-                    # webhook. The prior code stamped approved_at AFTER the adapter, so
-                    # confirmed_at recorded adapter-completion rather than the approval
-                    # instant, and left the step at "approved" with no artifact — the
-                    # finalizer fixes both. See #1544.
-                    from src.core.tools.media_buy_create import execute_approved_media_buy
-
+                    # Creatives ready → finalize atomically via the shared seam (same
+                    # helper the operations approve route uses): the approval instant +
+                    # flight-derived lifecycle status COMPUTED UNDER THE ROW LOCK, then
+                    # the adapter, the workflow-step terminal + response artifact, and
+                    # the completion webhook. The prior code stamped approved_at AFTER
+                    # the adapter (so confirmed_at recorded adapter-completion) and left
+                    # the step at "approved" with no artifact — the finalizer fixes
+                    # both. See #1544.
                     logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
-                    success, error_msg = finalize_media_buy_approval(
+                    success, error_msg = finalize_pending_media_buy_approval(
                         db,
                         tenant_id,
                         media_buy_id=media_buy_id,
                         step_id=step_id,
                         step_data=step_data,
-                        compute_target=lambda mb: lifecycle_status_for_window(
-                            datetime.now(UTC), *resolve_flight_window_utc(mb)
-                        ),
-                        run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
                         approved_by=user_email,
-                        approved_at=datetime.now(UTC),
                     )
 
                     if not success:

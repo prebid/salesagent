@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas import CreateMediaBuySuccess, Package
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -239,6 +240,46 @@ def finalize_media_buy_approval(
     return True, None
 
 
+def _flight_derived_status(media_buy: MediaBuy) -> str:
+    """Lifecycle status from the buy's flight window — the shared window→status decision.
+
+    Evaluated by the finalizer AFTER the row lock, so it reads the committed window.
+    """
+    return lifecycle_status_for_window(datetime.datetime.now(datetime.UTC), *resolve_flight_window_utc(media_buy))
+
+
+def finalize_pending_media_buy_approval(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str,
+    step_data: dict[str, Any],
+    approved_by: str | None,
+) -> tuple[bool, str | None]:
+    """finalize_media_buy_approval with the standard manual-approval callbacks.
+
+    The operations and workflow approve routes finalize a pending_approval buy
+    identically — flight-derived status computed UNDER THE LOCK, the shared adapter
+    execution, and the approval instant stamped now. Centralising those callbacks
+    here keeps the two routes from duplicating them (they differ only in how they
+    render the outcome). #1544.
+    """
+    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+    return finalize_media_buy_approval(
+        session,
+        tenant_id,
+        media_buy_id=media_buy_id,
+        step_id=step_id,
+        step_data=step_data,
+        compute_target=_flight_derived_status,
+        run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+        approved_by=approved_by,
+        approved_at=datetime.datetime.now(datetime.UTC),
+    )
+
+
 def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[bool, str | None]:
     """Finalize ONE media buy whose last blocking creative was just approved.
 
@@ -255,11 +296,7 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[boo
     notify). Returns ``(success, error_message)``. #1544.
     """
     from src.core.database.database_session import get_db_session
-    from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
     from src.core.tools.media_buy_create import execute_approved_media_buy
-
-    def _flight_status(media_buy: MediaBuy) -> str:
-        return lifecycle_status_for_window(datetime.datetime.now(datetime.UTC), *resolve_flight_window_utc(media_buy))
 
     with get_db_session() as session:
         wf_repo = WorkflowRepository(session, tenant_id)
@@ -269,7 +306,9 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[boo
             # No workflow step (no async buyer task to notify) — adapter + status only.
             success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
             if success:
-                MediaBuyRepository(session, tenant_id).update_status_computed_or_raise(media_buy_id, _flight_status)
+                MediaBuyRepository(session, tenant_id).update_status_computed_or_raise(
+                    media_buy_id, _flight_derived_status
+                )
                 session.commit()
             return success, error_msg
 
@@ -285,7 +324,7 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[boo
             media_buy_id=media_buy_id,
             step_id=step.step_id,
             step_data=step_data,
-            compute_target=_flight_status,
+            compute_target=_flight_derived_status,
             run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
         )
 

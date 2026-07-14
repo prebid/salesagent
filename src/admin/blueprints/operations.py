@@ -6,10 +6,12 @@ import logging
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.services.media_buy_completion import finalize_media_buy_approval, finalize_media_buy_rejection
+from src.admin.services.media_buy_completion import (
+    finalize_media_buy_rejection,
+    finalize_pending_media_buy_approval,
+)
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
 
@@ -376,28 +378,19 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         all_creatives_approved = False
 
                     if all_creatives_approved:
-                        # Creatives ready → finalize in one atomic seam: stamp the
-                        # approval instant + flight-derived status COMPUTED UNDER THE
-                        # ROW LOCK (compute_target callback), run the adapter, then
-                        # terminalize the workflow step with its artifact and emit the
-                        # completion webhook. The window→status decision stays in the
-                        # business layer (media_buy_flight); the route only supplies it
-                        # as a callback the finalizer evaluates post-lock. See #1544.
-                        from src.core.tools.media_buy_create import execute_approved_media_buy
-
+                        # Creatives ready → finalize in one atomic seam (shared with the
+                        # workflow approve route): stamp the approval instant + flight-
+                        # derived status COMPUTED UNDER THE ROW LOCK, run the adapter,
+                        # terminalize the workflow step with its artifact, and emit the
+                        # completion webhook. See #1544.
                         logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
-                        success, error_msg = finalize_media_buy_approval(
+                        success, error_msg = finalize_pending_media_buy_approval(
                             db_session,
                             tenant_id,
                             media_buy_id=media_buy_id,
                             step_id=step.step_id,
                             step_data=step_data,
-                            compute_target=lambda mb: lifecycle_status_for_window(
-                                datetime.now(UTC), *resolve_flight_window_utc(mb)
-                            ),
-                            run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
                             approved_by=user_email,
-                            approved_at=datetime.now(UTC),
                         )
                         if not success:
                             flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
