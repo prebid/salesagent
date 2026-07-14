@@ -27,12 +27,16 @@ _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 # lands in an already-known mechanism: it is a new item on the #1423 retirement
 # work-list, not branch-introduced e2e_rest debt, so it is ledgered with its siblings
 # rather than papered over in a step. Do NOT raise this for branch-authored
-# failures — fix or graduate those. 305 = current entry count exactly (no slack);
+# failures — fix or graduate those. 299 = current entry count exactly (no slack);
 # the branch's 3 uc002 creative entries and the upstream breakdown/roundtrip
 # entries are all mock-mechanism debt that retires with #1430. 307 -> 305: the
 # two uc004 invalid date-range entries graduated (the #1417 refactor made the
 # live server validate date ranges — confirmed by strict-xfail XPASS in-network).
-_LEDGER_CEILING = 305
+# 305 -> 299: the six get_products_inventory_profile entries graduated — the #1417
+# subdomain_for auth fix (given_tenant) removed the tenant-resolution 401 that
+# parked them; all six XPASS with real assertions over e2e_rest. They were
+# mis-filed under the formats mechanism but never depended on it (salesagent-rjc5).
+_LEDGER_CEILING = 299
 
 
 def _ledger_entries() -> list[str]:

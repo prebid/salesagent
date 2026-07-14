@@ -23,14 +23,6 @@
 # business rule -> use case -> siblings -> production), NOT a bulk delete: an XPASS
 # means "inspect why", never "stale, remove".
 
-# --- get_products_inventory_profile (6) ---
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_extra_metadata_fields_drops_nonspec_fields[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_invalid_property_ids_falls_back_to_selection_type_all[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_only_publisher_domain_infers_selection_type_all[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_ids_infers_selection_type_by_id[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_property_tags_infers_selection_type_by_tag[e2e_rest]
-tests/bdd/test_get_products_inventory_profile.py::test_profile_with_selection_type_already_present_passes_through[e2e_rest]
-
 # --- uc004_deliver_media_buy_metrics (120) ---
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-both windows with model=last_touch-{"post_click": {"interval": 14, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}, "model": "last_touch"}-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-empty object {}-{}-valid]
