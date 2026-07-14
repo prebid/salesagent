@@ -69,7 +69,7 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -201,7 +201,8 @@ class AdCPRequestHandler(RequestHandler):
         (``ValueError → AdCPValidationError``, ``PermissionError →
         AdCPAuthorizationError``, arbitrary ``Exception →
         AdCPError(INTERNAL_ERROR)``) so the wire output stays in
-        ``STANDARD_ERROR_CODES`` and the envelope shape never degrades to a
+        ``WIRE_STANDARD_CODES`` (SDK ``STANDARD_ERROR_CODES`` plus the
+        pinned-spec supplement) and the envelope shape never degrades to a
         flat ``{"error": "..."}`` dict the storyboard runner would synthesize
         as ``MCP_ERROR``.
         """
@@ -1574,9 +1575,15 @@ class AdCPRequestHandler(RequestHandler):
         # the manual-approval gate (gh-#1299).
         push_notification_config = params.pop("push_notification_config", None)
 
-        # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
-        if isinstance(params.get("brand"), str):
-            params["brand"] = {"domain": params["brand"]}
+        # Normalize explicit brand through the shared coercion funnel (#1324).
+        # Keep params JSON-serializable: raw_wire_payload falls back to params for
+        # direct handler callers, and idempotency hashes RFC 8785 over that dict.
+        # to_brand_reference returns None only for None input (excluded above); every
+        # other input returns BrandReference or raises typed AdCPValidationError.
+        if params.get("brand") is not None:
+            brand_ref = to_brand_reference(params["brand"])
+            assert brand_ref is not None  # None only for None input; excluded by guard
+            params["brand"] = brand_ref.model_dump(mode="json")
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).
         # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
@@ -1647,14 +1654,15 @@ class AdCPRequestHandler(RequestHandler):
         # Pre-process format_id: upgrade legacy strings to FormatId models.
         from src.core.format_cache import upgrade_legacy_format_id
 
-        creatives = []
-        for c in parameters["creatives"]:
-            if isinstance(c, dict) and "format_id" in c:
-                c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-            creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
+        with adcp_validation_boundary(context="sync_creatives request"):
+            creatives = []
+            for c in parameters["creatives"]:
+                if isinstance(c, dict) and "format_id" in c:
+                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
 
-        ctx_param = parameters.get("context")
-        context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
+            ctx_param = parameters.get("context")
+            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
         # Call core function with spec-compliant parameters (AdCP v2.5)
         response = core_sync_creatives_tool(

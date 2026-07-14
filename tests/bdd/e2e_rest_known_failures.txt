@@ -25,41 +25,45 @@
 # now-passing entries, 4 stale (renamed by #1370), and 98 format-injection
 # entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
 # entries remain, grouped by gap below.
+#
+# FINAL SET AFTER THE main MERGE: 17 entries =
+#   5  uc004 invalid-input rows the live server still accepts (spec-production gap)
+#   2  explicit inline-xfail production gaps (attribution default, push-notification ack)
+#   10 parallel-e2e_rest mock-injection artifacts (E2E_PER_WORKER, owner-approved)
+# The 4 uc004 date-range rows and the 2 uc004 account valid rows GRADUATED at the
+# #1417 merge and must never be re-added.
 
 # --- uc004 invalid-input validation — wire shape — GRADUATED (#1430 jdy1-M1) ---
 # Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
 # (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
-# --- uc004 invalid-input validation — accepted by live server (7) ---
+# --- uc004 invalid-input validation — accepted by live server (5) ---
 # GENUINE GAP: the live server accepts these inputs that the spec marks invalid
-# (start==end / start>end date ranges, owner-mismatch principal, out-of-enum sampling,
-# string "true" daily-breakdown, geo metro without system).
+# (owner-mismatch principal, out-of-enum sampling, string "true" daily-breakdown,
+# geo metro without system).
 # Production does not validate them — a real spec-production gap, tracked for src/ fix.
 # (campaign-unit interval!=1 GRADUATED at the main merge: upstream regenerated the
 # scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
 # the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
 # in-network on main — absent from main's ledger.)
-# date-range BOUNDARY rows GRADUATED (first in-network CI run 2026-07-09): the
-# #1270 strict tripwires FIRED — the live server now validates start>=end (the
-# merged #1417 validation embed). The partition twins below stay pending their
-# own positive evidence on the next in-network run.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-error "VALIDATION_ERROR" with suggestion]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_equals_end-error "VALIDATION_ERROR" with suggestion]
+# date-range rows GRADUATED on both sides: the BOUNDARY rows on this branch's
+# first in-network CI run 2026-07-09 (the #1270 strict tripwires FIRED — the
+# live server validates start>=end, the merged #1417 validation embed); the
+# partition twins (start_after_end / start_equals_end) on origin/pr-1417 itself
+# (d4af23095, strict-xfail XPASS in-network) — that is the positive evidence the
+# twins were waiting for, so all four date-range rows are off the ledger.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
 
-# --- uc004 delivery account valid rows — referenced account not seeded (2) ---
-# MERGED-UPSTREAM surface (main's #1545 feature regen; first e2e run on this
-# branch's CI 2026-07-09): the valid account rows dispatch a delivery request
-# referencing acc_acme_001 / acme-corp.com, the live server resolves accounts
-# for real, and no uc004 step seeds them -> honest ACCOUNT_NOT_FOUND. Real fix
-# = seed the referenced account in the delivery Given (same family as the
-# in-process xfail rows in conftest's account selective lists).
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-natural_key-{"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}-valid]
+# --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---
+# Was: valid account rows referenced acc_acme_001 / acme-corp.com and no uc004
+# step seeded them -> honest ACCOUNT_NOT_FOUND. #1417's seeded-account Given
+# (salesagent-jr5b) now provisions the referenced accounts and the harness
+# realizes the seeding against the server DB; both rows XPASSed in-network
+# (innet_140726_1516) and are retired with the boundary siblings.
 
 # --- uc006 account billing-state resolution — GRADUATED (#1417 merge) ---
 # Was: ACCOUNT_PAYMENT_REQUIRED / ACCOUNT_SETUP_REQUIRED / ACCOUNT_SUSPENDED /
@@ -92,11 +96,13 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partiti
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
 
-# --- uc004 roas/cpa aggregated_totals — RETIRED from the ledger (#1430 item 4) ---
-# The three Then steps are now defined (uc004_delivery.py) and the scenario is a
-# tag-declared production gap on ALL transports: T-UC-004-aggregated-roas-and-cpa in
-# conftest _UC004_XFAIL_ADDITIONAL (production computes neither roas nor
-# cost_per_acquisition nor conversion_value; src/ feature work).
+# --- uc004 roas/cpa aggregated_totals — RETIRED from the ledger (#1430 item 4),
+# --- then GRADUATED outright ---
+# The three Then steps are defined (uc004_delivery.py) and production now computes
+# conversions/conversion_value/roas/cost_per_acquisition in aggregated_totals
+# (media_buy_delivery.py DeliveryTotals aggregation, omit-on-zero quotients).
+# T-UC-004-aggregated-roas-and-cpa is marked Graduated in conftest (no longer in
+# _UC004_XFAIL_ADDITIONAL); the innet full-suite gate runs it green on all transports.
 
 # --- uc002 creative extension scenarios, newly wired by #1417 — GRADUATED ---
 # Imported from PR #1417's ledger at the media-buy-validation merge. ext-o/ext-p
@@ -113,7 +119,8 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # failed with 'asyncio.run() cannot be called from a running event loop').
 # Verified in-network: all 4 transports pass incl. e2e_rest.
 
-# --- Added 2026-07-09: surfaced when perf/parallelize-test-suite enabled parallel
+# --- parallel e2e_rest mock-injection artifacts (10) ---
+# Added 2026-07-09: surfaced when perf/parallelize-test-suite enabled parallel
 # e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
 # UC-004 set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
 # injected cross-principal creatives — none visible to the separate HTTP server.

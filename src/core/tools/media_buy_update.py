@@ -227,6 +227,9 @@ def _validate_creatives_for_assignment(
     found_by_id = {c.creative_id: c for c in creatives_list}
     missing_ids = [cid for cid in requested_ids if cid not in found_by_id]
     if missing_ids:
+        # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
+        # CREATIVE_NOT_FOUND uniformity MUST — the BR-UC-003 ext-i storyboard
+        # cell grades CREATIVE_REJECTED; deferred pending upstream reconciliation.
         raise AdCPCreativeRejectedError(
             f"Creative IDs not found: {', '.join(missing_ids)}",
             suggestion=(
@@ -311,8 +314,8 @@ def _verify_principal(
 
     Raises:
         AdCPAuthenticationError: Missing principal
-        ValueError: Media buy not found
-        PermissionError: Principal doesn't own media buy
+        AdCPMediaBuyNotFoundError: Media buy not found
+        AdCPAuthorizationError: Principal doesn't own media buy
     """
     principal_id = require_principal_id(identity, context=context)
 

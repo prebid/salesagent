@@ -11,7 +11,12 @@ rename. Two invariants, enforced in two places:
    or re-added entry fails there and must be justified in the same change. A
    separate count ceiling derived from that same pin could never fail
    independently, so this module no longer carries one (#1430 review: the old
-   ``count <= len(EXPECTED_LEDGER)`` ratchet was tautological).
+   ``count <= len(EXPECTED_LEDGER)`` ratchet was tautological). PR #1417's
+   branch carried the same shrink-only invariant as a monotonic
+   ``_LEDGER_CEILING`` ratchet (last at 305 against its pre-#1430-retirement
+   ledger); at the merge that ceiling is subsumed by the exact-set pin, and
+   its final graduations (the two uc004 date-range partition rows) are
+   reflected in ``EXPECTED_LEDGER``.
 2. **No stale entries** — every ledger nodeid must resolve to a currently
    collected test item. A param/feature rename that orphans a nodeid is caught
    here rather than silently masking a never-run scenario.

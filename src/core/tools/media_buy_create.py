@@ -128,7 +128,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_context_object, to_reporting_webhook
+from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -312,7 +312,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     name). The behavior — typed AdCPError propagates (transient agent failures
     keep their recovery semantics, #1430: transient-error taxonomy fix), untyped errors log and
     become None (unknown-format) — lives in the SINGLE shared fetch path,
-    format_resolver.fetch_format_spec (salesagent-mpo1).
+    format_resolver.fetch_format_spec (#1430 review).
     """
     from src.core.format_resolver import fetch_format_spec
 
@@ -371,6 +371,10 @@ def _validate_creatives_before_adapter_call(
     if missing_ids:
         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
         logger.error(log_safe(error_msg))
+        # FIXME(#1598): pinned enum says CREATIVE_NOT_FOUND MUST be uniform for
+        # unowned creative_ids, but this surface emits CREATIVE_REJECTED (the
+        # BR-UC-003 ext-i storyboard cell grades it) — deferred pending
+        # upstream reconciliation.
         raise AdCPCreativeRejectedError(
             error_msg,
             suggestion=(
@@ -518,7 +522,7 @@ def _pre_validate_package_creatives(
 
     try:
         with MediaBuyUoW(tenant_id) as pre_validate_uow:
-            # FIXME(salesagent-9f2): creative validation should use a repository
+            # FIXME(#1119): creative validation should use a repository
             assert pre_validate_uow.session is not None
             _validate_creatives_before_adapter_call(packages, tenant_id, principal_id, session=pre_validate_uow.session)
     except AdCPError:
@@ -664,7 +668,7 @@ def _build_adapter_asset_from_creative(
     # typed transient AdCPError from either fetch PROPAGATES — a rate-limited
     # agent must not be degraded into a missing-spec asset error, and the
     # fallback must not mask it by re-fetching from the same throttled agent
-    # (salesagent-mpo1). AdCPFormatNotFoundError from the resolver = genuinely
+    # (#1430 review). AdCPFormatNotFoundError from the resolver = genuinely
     # unknown -> proceed without a spec (extraction falls back to raw data).
     if creative.format:
         format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
@@ -1079,7 +1083,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # FIXME(salesagent-9f2): creative handling should use repository methods
             assert uow2.session is not None
             session = uow2.session
-            from src.core.database.models import Creative as CreativeModel
             from src.core.database.models import CreativeAssignment
 
             # Import adapter helper here (used for both creative upload and order approval)
@@ -1111,12 +1114,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 # under two principals — a tenant-only load keyed by bare creative_id
                 # could upload the wrong principal's creative to the ad server.
                 all_creative_ids = list(packages_by_creative.keys())
-                stmt_creatives = select(CreativeModel).filter(
-                    CreativeModel.tenant_id == tenant_id,
-                    CreativeModel.principal_id == buy_principal_id,
-                    CreativeModel.creative_id.in_(all_creative_ids),
-                )
-                creatives = session.scalars(stmt_creatives).all()
+                creatives = CreativeRepository(session, tenant_id).get_by_ids(all_creative_ids, buy_principal_id)
 
                 # Create creative map
                 creative_map = {c.creative_id: c for c in creatives}
@@ -2166,6 +2164,7 @@ async def _create_media_buy_impl(
                 budget_err,
                 suggestion="Set each package budget to a positive amount.",
                 field=package_field_path("budget"),
+                context=req.context,
             )
 
         # 2. DateTime validation
@@ -3790,6 +3789,9 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
+                        # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
+                        # CREATIVE_NOT_FOUND uniformity MUST — deferred pending
+                        # upstream reconciliation.
                         raise AdCPCreativeRejectedError(
                             error_msg,
                             suggestion=(
@@ -4314,7 +4316,7 @@ async def _create_media_buy_impl(
 
 def _build_create_media_buy_request(
     *,
-    brand: BrandReference | str | None,
+    brand: BrandReference | dict[str, Any] | str | None,
     # The MCP wrapper receives the internal PackageRequest subtype; the raw
     # wrapper the library type or wire dicts (A2A/REST) — CreateMediaBuyRequest
     # validates any of them.
@@ -4335,15 +4337,17 @@ def _build_create_media_buy_request(
     idempotency omit-when-absent splat, and the ValidationError translation —
     a future request field lands here once instead of in wrapper lockstep.
     Transport-specific input coercions (A2A's ``to_reporting_webhook`` /
-    ``to_context_object``) happen at the call site; this builder receives
-    already-typed values.
+    ``to_context_object``) happen at the call site. ``brand`` is the exception:
+    string/dict shorthand is normalized here via ``to_brand_reference`` so MCP,
+    A2A, and REST share one funnel.
     """
-    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
-    if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
+    # brand string/dict/URL shorthand is normalized via ``to_brand_reference``
+    # (#1537). The validation boundary (#1417) is the SINGLE translation point:
+    # it turns a Pydantic ValidationError into a typed AdCPValidationError
+    # carrying the field path + suggestion.
     with adcp_validation_boundary(context="request"):
         return CreateMediaBuyRequest(
-            brand=brand,
+            brand=to_brand_reference(brand),
             packages=packages,
             start_time=start_time,
             end_time=end_time,
@@ -4363,8 +4367,13 @@ def _build_create_media_buy_request(
 
 async def create_media_buy(
     brand: Annotated[
-        BrandReference | str | None,
-        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+        BrandReference | dict[str, Any] | str | None,
+        Field(
+            description=(
+                "Brand reference (object with domain), domain/URL string shorthand "
+                "(e.g. 'acme.com' / 'https://acme.com'), or equivalent dict"
+            )
+        ),
     ] = None,
     packages: list[PackageRequest] | None = None,
     start_time: Annotated[
@@ -4412,7 +4421,7 @@ async def create_media_buy(
 
     Args:
         brand: Brand reference with domain field per AdCP v3 spec.
-            String shorthand accepted: "acme.com" is coerced to BrandReference(domain="acme.com").
+            String or dict shorthand accepted and normalized via ``to_brand_reference``.
         packages: Array of packages with products, budgets, targeting_overlay, and
             creatives (REQUIRED per AdCP spec)
         start_time: Campaign start time ISO 8601 or 'asap' (REQUIRED)

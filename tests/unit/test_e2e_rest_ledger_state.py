@@ -22,8 +22,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 11 genuine-gap e2e_rest nodeids remaining (2 date-range boundary graduated
-# + 2 merged-upstream account rows added on the first in-network CI run, 2026-07-09) (47 after Wave 3 triage; jdy1
+# The 17 e2e_rest nodeids remaining: 7 genuine gaps + 10 parallel-e2e_rest
+# mock-injection artifacts (owner-approved, added on the adcp-6.6 /
+# perf/parallelize-test-suite work — see the block comment inside the set).
+# Graduated on the way here: the 2 date-range boundary rows (2026-07-09, first
+# in-network CI run), the 2 date-range partition twins (origin/pr-1417 merge,
+# d4af23095 — strict-xfail XPASS in-network), and the 2 uc004 account valid rows
+# (#1417 merge, jr5b seeded-account Given, XPASS innet_140726_1516).
+# (47 after Wave 3 triage; jdy1
 # graduated M3 6 get_products tenant-duplicate, M1 6 uc004 REST-422 wire-shape,
 # M4 4 uc004 webhook-observability entries [now tag-declared in conftest]; the
 # uc004 attribution campaign-interval boundary graduated at the main merge after
@@ -43,14 +49,12 @@ from pathlib import Path
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
-        # date-range boundary rows graduated 2026-07-09 (#1270 tripwires fired on
-        # the first in-network CI run — live server validates start>=end now).
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-error "VALIDATION_ERROR" with suggestion]',
-        # Merged-upstream account valid rows (main #1545 regen; live server resolves
-        # accounts for real, referenced account never seeded — see ledger comment).
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-valid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-natural_key-{"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}-valid]',
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_equals_end-error "VALIDATION_ERROR" with suggestion]',
+        # All four date-range invalid rows graduated: boundary rows 2026-07-09
+        # (#1270 tripwires fired on the first in-network CI run — live server
+        # validates start>=end now), partition twins at the origin/pr-1417 merge
+        # (d4af23095, strict-xfail XPASS in-network).
+        # Account valid rows graduated at the #1417 merge (jr5b seeded-account
+        # Given; XPASS in-network innet_140726_1516) — see ledger note.
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
@@ -63,7 +67,7 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # mock-injection-incompatible artifacts, not regressions — UC-004
         # set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
         # injected cross-principal creatives are invisible to the separate HTTP
-        # server. Preserved through the adcp-6.6 merge.
+        # server. Preserved through the main merge.
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]",

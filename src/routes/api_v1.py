@@ -25,6 +25,7 @@ from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
     coerce_creative_filters,
     to_account_reference,
+    to_brand_reference,
     to_context_object,
     to_push_notification_config,
     to_reporting_webhook,
@@ -66,13 +67,16 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 class GetProductsBody(SalesAgentBaseModel):
     brief: str = ""
-    brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
+    # dict BrandReference or string domain/URL shorthand (#1324)
+    brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
 class CreateMediaBuyBody(SalesAgentBaseModel):
-    brand: BrandReference | str | None = None  # adcp 3.6.0: BrandReference with domain field
+    # dict BrandReference or string domain/URL shorthand (#1324); coerced to
+    # BrandReference at the boundary via to_brand_reference.
+    brand: BrandReference | dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
     packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
     end_time: str | None = None
@@ -307,13 +311,16 @@ async def create_media_buy(
     # Coerce wire dicts to the SDK types the raw wrapper declares, inside the
     # shared boundary so a malformed object rejects with the two-layer envelope
     # (top-level suggestion + field) instead of a raw-ValidationError leak.
+    # The string/dict brand shorthand (#1324/#1537) is coerced here too, so an
+    # invalid brand yields the same boundary-translated envelope.
     with adcp_validation_boundary(context="create_media_buy request"):
         account_ref = to_account_reference(body.account)
+        brand_ref = to_brand_reference(body.brand)
         reporting_webhook = to_reporting_webhook(body.reporting_webhook)
         push_notification_config = to_push_notification_config(body.push_notification_config)
         context = to_context_object(body.context)
     response = await media_buy_create_module.create_media_buy_raw(
-        brand=body.brand,
+        brand=brand_ref,
         # packages stay wire dicts: CreateMediaBuyRequest validates them as the
         # request's packages[] field, preserving full-request error field paths.
         packages=body.packages,

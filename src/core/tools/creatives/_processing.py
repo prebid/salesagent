@@ -41,8 +41,10 @@ def _failed_sync_result(
     it). The wire code defaults to the standard ``SERVICE_UNAVAILABLE``
     (``CONFIGURATION_ERROR`` is internal-only and would leak verbatim in an
     advisory); ``recovery`` is the structured retry signal. Buyer-correctable
-    per-item failures (e.g. an assignment referencing an unknown creative_id)
-    pass ``code="VALIDATION_ERROR"``, matching the strict-mode raise.
+    per-item failures pass the condition-specific code: ``CREATIVE_NOT_FOUND``
+    for an assignment referencing an unknown creative_id (matching the
+    strict-mode ``AdCPCreativeNotFoundError`` raise since 287c93099),
+    ``VALIDATION_ERROR`` for other correctable causes.
     """
     return SyncCreativeResult(
         creative_id=creative_id,

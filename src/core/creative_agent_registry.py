@@ -924,8 +924,10 @@ class CreativeAgentRegistry:
                     # host tolerated a bare string, which masked this mismatch
                     # until connections were pinned in-network (salesagent-9qe2).
                     # The identity keeps the CANONICAL agent_url, not the
-                    # connection alias.
-                    "format_id": {"agent_url": agent_url, "id": format_id},
+                    # connection alias. AnyUrl serialization yields the
+                    # trailing-slash form for path-less URLs — verified tolerated
+                    # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
+                    "format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json"),
                     "creative_manifest": creative_manifest,
                 },
             )

@@ -492,6 +492,11 @@ def test_manual_approval_path_through_impl():
         assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         assert result.task_id == "step_001"
+        # The submitted envelope carries no applied-change fields: the update is deferred
+        # until approval (the pre-3.1.1 success shape asserted `affected_packages == []`).
+        dumped = result.model_dump()
+        assert "affected_packages" not in dumped
+        assert "media_buy_id" not in dumped
 
         # Workflow step should be updated with requires_approval status
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
