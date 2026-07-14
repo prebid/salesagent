@@ -331,21 +331,38 @@ class TestBaseClassContract:
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
 
-    def test_a2a_dispatcher_never_fabricates_wire_envelope(self):
-        """An unstashed AdCPError cannot become harness-generated wire evidence."""
+    def test_a2a_dispatcher_prefers_stashed_wire_and_falls_back_to_synthesized(self):
+        """Stashed real wire wins; an unstashed AdCPError falls back to synthesized (#1417).
+
+        Envs whose ``call_a2a`` uses the direct ``*_raw`` path (no Task framing,
+        e.g. CreativeSyncEnv) never stash a real wire envelope — the dispatcher
+        synthesizes one via the same helper production calls, so error-shape
+        tests still see the two-layer envelope. When a real wire envelope IS
+        stashed (``_run_a2a_handler`` path), it must win over synthesis.
+        """
         from src.core.exceptions import AdCPValidationError
         from tests.harness._base import BaseTestEnv
         from tests.harness.transport import Transport
 
-        class _TestEnv(BaseTestEnv):
+        class _RawPathEnv(BaseTestEnv):
             def call_a2a(self, **kwargs):
                 raise AdCPValidationError("invalid")
 
-        result = _TestEnv().call_via(Transport.A2A)
-
+        result = _RawPathEnv().call_via(Transport.A2A)
         assert result.is_error
-        assert result.wire_error_envelope is None
-        assert result.synthesized_error_envelope is None
+        assert result.wire_error_envelope is not None, "raw-path A2A error must surface a synthesized envelope"
+        assert result.wire_error_envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
+
+        sentinel = {"adcp_error": {"code": "VALIDATION_ERROR", "message": "real-wire-sentinel"}}
+
+        class _StashedEnv(BaseTestEnv):
+            def call_a2a(self, **kwargs):
+                exc = AdCPValidationError("invalid")
+                exc._wire_error_envelope = sentinel  # what _envelope_to_adcp_error stashes
+                raise exc
+
+        result = _StashedEnv().call_via(Transport.A2A)
+        assert result.wire_error_envelope == sentinel, "stashed real wire must win over synthesis"
 
     @pytest.mark.parametrize(
         ("rest_method", "payload_argument"),

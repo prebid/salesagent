@@ -180,7 +180,7 @@ async def _version_after_require(request: Request, _identity=require_auth) -> st
     """Version negotiation AFTER auth ENFORCEMENT (auth-required routes).
 
     AUTH before VERSION (#1546): ``require_auth`` is a sub-dependency, so an
-    unauthenticated caller is rejected with AUTH_TOKEN_INVALID before the version
+    unauthenticated caller is rejected with AUTH_REQUIRED before the version
     check runs — you don't disclose ``supported_versions`` (a VERSION_UNSUPPORTED
     body) to a caller who hasn't authenticated. Parity with the MCP auth
     middleware and the A2A ``on_message_send`` auth gate, which enforce the same

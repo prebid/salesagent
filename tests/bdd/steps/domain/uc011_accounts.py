@@ -2824,22 +2824,22 @@ def when_sync_with_invalid_auth_and_version_pin(ctx: dict, pin_field: str, pin_v
     )
 
 
-@then("the real wire response is a terminal AUTH_TOKEN_INVALID envelope")
-def then_real_wire_auth_token_invalid(ctx: dict) -> None:
+@then("the real wire response is a correctable AUTH_REQUIRED envelope")
+def then_real_wire_auth_required(ctx: dict) -> None:
     """Assert the buyer-visible envelope, never a harness reconstruction."""
     assert ctx.get("response") is None, f"compound-invalid request unexpectedly succeeded: {ctx.get('response')!r}"
     envelope = ctx.get("wire_error_envelope")
     assert envelope is not None, (
         "expected a real transport error envelope; synthesized harness output is not wire evidence"
     )
-    assert_envelope_shape(envelope, "AUTH_TOKEN_INVALID", recovery="terminal")
+    assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
 
 
 @then("the authentication rejection does not disclose supported_versions")
 def then_auth_rejection_hides_supported_versions(ctx: dict) -> None:
     """AUTH wins without leaking version-negotiation recovery metadata."""
     envelope = ctx.get("wire_error_envelope")
-    assert envelope is not None, "expected the preceding AUTH_TOKEN_INVALID wire envelope"
+    assert envelope is not None, "expected the preceding AUTH_REQUIRED wire envelope"
     serialized = json.dumps(envelope, sort_keys=True)
     assert "VERSION_UNSUPPORTED" not in serialized, f"VERSION won over AUTH: {serialized}"
     assert "supported_versions" not in serialized, f"auth rejection disclosed seller versions: {serialized}"

@@ -36,7 +36,7 @@ Feature: BR-UC-011 Account Validation (hand-authored companion)
   Scenario Outline: Invalid authentication wins over an unsupported <pin_field> pin
     Given the Buyer Agent presents an invalid bearer token
     When the Buyer Agent sends a sync_accounts request with unsupported <pin_field> "<pin_value>"
-    Then the real wire response is a terminal AUTH_TOKEN_INVALID envelope
+    Then the real wire response is a correctable AUTH_REQUIRED envelope
     And the authentication rejection does not disclose supported_versions
 
     Examples:

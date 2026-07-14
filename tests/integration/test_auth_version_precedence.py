@@ -39,7 +39,7 @@ def _assert_no_version_disclosure(target: Any) -> None:
 
 def _assert_auth_without_version_disclosure(target: Any) -> None:
     """Assert canonical AUTH rejection without leaking negotiation metadata."""
-    assert_envelope_shape(target, "AUTH_TOKEN_INVALID", recovery="terminal")
+    assert_envelope_shape(target, "AUTH_REQUIRED", recovery="correctable")
     envelope = target.envelope if hasattr(target, "envelope") else target
     _assert_no_version_disclosure(envelope)
 

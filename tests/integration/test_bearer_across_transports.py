@@ -134,8 +134,8 @@ class TestBearerAuthenticatesOnRestWire:
             )
 
             assert response.status_code == 401
-            # AdCPAuthenticationError carries the project's AUTH_TOKEN_INVALID wire code.
-            assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID", recovery="terminal")
+            # AdCPAuthenticationError carries the canonical AUTH_REQUIRED wire code (#1417).
+            assert_envelope_shape(response.json(), "AUTH_REQUIRED", recovery="correctable")
 
 
 @pytest.mark.requires_db
@@ -192,7 +192,7 @@ class TestBearerAuthenticatesOnA2AWire:
             body = response.json()
             assert _is_auth_rejection(body), "Auth-required A2A skill accepted a request with no token"
             assert "data" in body["error"], f"A2A auth error omitted its AdCP envelope: {body}"
-            assert_envelope_shape(body["error"]["data"], "AUTH_TOKEN_INVALID", recovery="terminal")
+            assert_envelope_shape(body["error"]["data"], "AUTH_REQUIRED", recovery="correctable")
 
 
 @pytest.mark.requires_db

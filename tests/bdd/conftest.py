@@ -2054,9 +2054,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
             # Extension errors — error code mismatches / not implemented.
-            # ext-a (no-auth get_media_buys): once wired, the missing-credentials
-            # path emits AUTH_TOKEN_INVALID, not the spec's AUTH_REQUIRED — a
-            # pre-existing auth-code gap unrelated to this PR's status work.
+            # ext-a (no-auth get_media_buys): not wired yet. (The former
+            # AUTH_TOKEN_INVALID-vs-AUTH_REQUIRED code gap was resolved by the
+            # #1417 reconciliation — the path now emits the spec's AUTH_REQUIRED.)
             "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",

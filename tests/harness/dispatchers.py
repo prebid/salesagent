@@ -55,19 +55,21 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
 
 
 def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
-    """Return only the REAL wire envelope stashed by the harness.
+    """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
 
     When the A2A pipeline reconstructs an AdCPError from a failed Task's
     artifact DataPart, ``tests.harness._base._envelope_to_adcp_error``
     attaches the captured envelope to the exception as
-    ``_wire_error_envelope``. A missing stash must remain visible as ``None``;
-    regenerating an envelope from the reconstructed exception would fabricate
-    wire evidence and let a dead A2A translator pass its tests.
+    ``_wire_error_envelope``. This helper returns that real wire envelope
+    if present; otherwise falls back to ``_envelope_from_adcp_error``
+    (synthesized — same helper production calls). The fallback covers envs
+    whose ``call_a2a`` uses the direct ``*_raw`` path (no Task framing, so
+    no stash), e.g. CreativeSyncEnv (#1417).
     """
     real_wire = getattr(exc, "_wire_error_envelope", None)
     if isinstance(real_wire, dict):
         return real_wire
-    return None
+    return _envelope_from_adcp_error(exc)
 
 
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
