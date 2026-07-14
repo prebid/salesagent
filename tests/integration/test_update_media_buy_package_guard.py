@@ -39,9 +39,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select
 
-from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
 from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -81,8 +79,8 @@ def _seeded(integration_db):
     """
     from tests.harness._base import IntegrationEnv
 
-    with IntegrationEnv():
-        yield seed_error_test_tenant(
+    with IntegrationEnv() as env:
+        seeded = seed_error_test_tenant(
             tenant_id="pkg_guard_test",
             principal_id="pkg_guard_principal",
             access_token="pkg_guard_token",
@@ -91,6 +89,10 @@ def _seeded(integration_db):
             tenant_name="Package Guard Test Tenant",
             protocol="mcp",
         )
+        # Read-back assertions go through the env-bound session (env.query /
+        # env.get_one) per the no-get_db_session-in-tests guard.
+        seeded["env"] = env
+        yield seeded
 
 
 def _seed_creatives(seeded: dict, creative_ids: list[str]) -> None:
@@ -138,14 +140,13 @@ class TestPackageGuardRealCreateFlow:
         media_buy_id = create_result.response.media_buy_id
 
         # Reference the package exactly as a buyer would: from the create flow.
-        with get_db_session() as session:
-            rows = session.scalars(select(MediaPackage).where(MediaPackage.media_buy_id == media_buy_id)).all()
-            assert rows, (
-                "create_media_buy wrote no media_packages rows for a mock-adapter "
-                "buy — the dual-write regressed, and the package guard below "
-                "would now be exercising the raw_request fallback instead of rows"
-            )
-            package_id = rows[0].package_id
+        rows = _seeded["env"].query(MediaPackage, media_buy_id=media_buy_id)
+        assert rows, (
+            "create_media_buy wrote no media_packages rows for a mock-adapter "
+            "buy — the dual-write regressed, and the package guard below "
+            "would now be exercising the raw_request fallback instead of rows"
+        )
+        package_id = rows[0].package_id
 
         update_req = UpdateMediaBuyRequest(
             media_buy_id=media_buy_id,
@@ -190,14 +191,8 @@ class TestPackageGuardRawRequestFallback:
 
         # The assignment actually landed — the fallback admitted a real
         # package, it did not just suppress an error.
-        with get_db_session() as session:
-            assignments = session.scalars(
-                select(DBAssignment).where(
-                    DBAssignment.tenant_id == "pkg_guard_test",
-                    DBAssignment.media_buy_id == "mb_raw_request_only",
-                )
-            ).all()
-            assert assignments, "expected creative assignment on the raw_request-only buy"
+        assignments = _seeded["env"].query(DBAssignment, tenant_id="pkg_guard_test", media_buy_id="mb_raw_request_only")
+        assert assignments, "expected creative assignment on the raw_request-only buy"
 
     def test_targeting_overlay_update_succeeds_on_raw_request_only_buy(self, _seeded):
         """The ROW-NEEDING path (targeting_overlay mutates package_config) also
@@ -206,7 +201,6 @@ class TestPackageGuardRawRequestFallback:
         to raise a spurious PACKAGE_NOT_FOUND after the guard passed now
         yields a mutable row. This path runs past the dry_run gate, where
         writing is allowed."""
-        from sqlalchemy import select
 
         from src.core.database.models import MediaBuy, MediaPackage
 
@@ -234,15 +228,9 @@ class TestPackageGuardRawRequestFallback:
         assert not isinstance(result, UpdateMediaBuyError), f"update failed: {result}"
 
         # The canonical row was materialized AND carries the mutation.
-        with get_db_session() as session:
-            row = session.scalars(
-                select(MediaPackage).where(
-                    MediaPackage.media_buy_id == media_buy.media_buy_id,
-                    MediaPackage.package_id == "pkg_legacy_t",
-                )
-            ).first()
-            assert row is not None, "expected the raw_request package materialized as a canonical row"
-            assert row.package_config.get("targeting_overlay") is not None
+        row = _seeded["env"].get_one(MediaPackage, media_buy_id=media_buy.media_buy_id, package_id="pkg_legacy_t")
+        assert row is not None, "expected the raw_request package materialized as a canonical row"
+        assert row.package_config.get("targeting_overlay") is not None
 
     def test_dry_run_on_raw_request_only_buy_persists_no_row(self, _seeded):
         """dry_run must not write: a dry_run update referencing a
@@ -275,14 +263,8 @@ class TestPackageGuardRawRequestFallback:
         result = _update_media_buy_impl(req=update_req, identity=identity)
         assert not isinstance(result, UpdateMediaBuyError), f"dry_run update failed: {result}"
 
-        with get_db_session() as session:
-            row = session.scalars(
-                select(MediaPackage).where(
-                    MediaPackage.media_buy_id == media_buy.media_buy_id,
-                    MediaPackage.package_id == "pkg_legacy_d",
-                )
-            ).first()
-            assert row is None, (
-                "dry_run persisted a materialized media_packages row — the "
-                "pre-dry_run guard wrote to the session and the UoW committed it"
-            )
+        row = _seeded["env"].get_one(MediaPackage, media_buy_id=media_buy.media_buy_id, package_id="pkg_legacy_d")
+        assert row is None, (
+            "dry_run persisted a materialized media_packages row — the "
+            "pre-dry_run guard wrote to the session and the UoW committed it"
+        )
