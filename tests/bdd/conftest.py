@@ -503,7 +503,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if is_e2e_rest and (marker_names & _UC003_E2E_MANUAL_APPROVAL_TAGS):
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="RestE2EDispatcher lacks update-endpoint support (salesagent-3aec)",
+                    reason="RestE2EDispatcher lacks update-endpoint support (PR #1567 follow-up)",
                     strict=True,
                 )
             )
@@ -2916,10 +2916,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-003":
-        # BOUNDED (salesagent-8hu9): only the 3 manual-approval submitted-envelope
+        # BOUNDED (PR #1567): only the 3 manual-approval submitted-envelope
         # scenarios are graded (they exercise UpdateMediaBuySubmitted cross-transport).
         # Every other UC-003 scenario stays dormant exactly as before this ticket —
-        # graduating the full UC-003 file is tracked by salesagent-x5le. This guard is
+        # graduating the full UC-003 file is a tracked PR #1567 follow-up. This guard is
         # what keeps un-dormanting UC-003 from turning the suite red.
         marker_names = {m.name for m in request.node.iter_markers()}
         _UC003_WIRED_TAGS = {
@@ -2928,7 +2928,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-adapter",
         }
         if not (marker_names & _UC003_WIRED_TAGS):
-            pytest.xfail("UC-003 harness graduation pending (salesagent-x5le)")
+            pytest.xfail("UC-003 harness graduation pending (PR #1567 follow-up)")
 
         # UpdateMediaBuy manual-approval scenarios. MediaBuyDualEnv (an IntegrationEnv)
         # routes an UpdateMediaBuyRequest through IMPL/A2A/MCP/REST. Seed the full create

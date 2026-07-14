@@ -348,7 +348,7 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
 # UC-004 set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
 # injected cross-principal creatives — none visible to the separate HTTP server.
-# Ledger: salesagent-5p68 / e2e_rest retirement epic salesagent-rlgl.
+# Ledger: e2e_rest retirement epic #1418.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]

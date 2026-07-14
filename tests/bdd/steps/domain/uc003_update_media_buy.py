@@ -236,7 +236,7 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
 # "the request does NOT include an idempotency_key" is owned by
 # uc002_create_media_buy (canonical) to avoid a cross-module shadow now that this
 # module is registered. No graded UC-003 scenario uses that text; when the dormant
-# UC-003 idempotency scenarios graduate (salesagent-x5le) they need an update-kwargs
+# UC-003 idempotency scenarios graduate (PR #1567 follow-up) they need an update-kwargs
 # strip under a distinct step text (create/update behaviours genuinely differ).
 
 

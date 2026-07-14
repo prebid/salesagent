@@ -1,6 +1,6 @@
 """get_products emits placements that validate against AdCP placement.json v3.1.1.
 
-Regression for salesagent-au0o (PR #1567, adcp 5.7->6.6 bump). adcp 6.6 / spec
+Regression for PR #1567 (adcp 5.7->6.6 bump). adcp 6.6 / spec
 3.1.1 made Placement.kind and Placement.mode required and added an allOf
 conditional: `if kind == "publisher_ref" then required: [publisher_domain]`
 (and `if kind == "seller_inline" then required: [name]`). Legacy placement rows

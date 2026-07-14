@@ -32,7 +32,7 @@ _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 # reasons (mock-injection invisible, e2e_rest auth/tenant-context, wire not stashed)
 # unrelated to the adcp 6.6 bump — the run surface expanded, so this is a genuinely
 # new baseline, not a re-add of a graduated scenario. Deferred to the e2e_rest
-# retirement epic salesagent-rlgl (tracked: salesagent-5p68); the ceiling drops as
+# retirement epic #1418; the ceiling drops as
 # those scenarios are retired.
 # (The 2 date-range boundary nodeids were NOT added here — they carry a pre-existing
 # non-strict ledger entry already, and their strict #1270 tripwire was graduated.)

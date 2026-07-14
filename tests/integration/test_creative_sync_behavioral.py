@@ -755,7 +755,7 @@ class TestSchemaCompleteness:
         assert len(response.creatives) == 1
         result = response.creatives[0]
         # warnings is inherited from the adcp 6.6 parent as an OPTIONAL list[str] | None
-        # (salesagent-qj0p): None when there are no warnings (omitted on the wire), a list
+        # (PR #1567): None when there are no warnings (omitted on the wire), a list
         # when populated — never any other type.
         assert hasattr(result, "warnings")
         assert result.warnings is None or isinstance(result.warnings, list)
@@ -771,7 +771,7 @@ class TestSchemaCompleteness:
         result = response.creatives[0]
         assert result.creative_id == "c_fields"
         assert result.action in [a.value for a in CreativeAction]
-        # changes/errors are inherited optional list[str] | None (salesagent-qj0p): None when
+        # changes/errors are inherited optional list[str] | None (PR #1567): None when
         # empty (omitted on the wire), a list when populated.
         assert result.changes is None or isinstance(result.changes, list)
         assert result.errors is None or isinstance(result.errors, list)

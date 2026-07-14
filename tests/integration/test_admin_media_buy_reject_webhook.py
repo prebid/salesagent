@@ -1,6 +1,6 @@
 """Integration regression: admin reject of a media buy must still fire the buyer webhook.
 
-Bug: salesagent-ihxu (adcp 6.6 / spec 3.1.1).
+Bug found in PR #1567 review (adcp 6.6 / spec 3.1.1).
 src/admin/blueprints/operations.py approve_media_buy() used to construct the RAW
 library adcp.types.CreateMediaBuySuccessResponse in the reject webhook branch. Under
 adcp 6.6 that raw type requires ``confirmed_at`` AND ``revision``; constructing it with
@@ -208,7 +208,7 @@ class TestAdminMediaBuyRejectWebhook:
     def test_reject_fires_buyer_webhook(self, authenticated_admin_session, pending_reject_media_buy, webhook_capture):
         """POST reject -> 302 and the webhook service's send_notification is awaited once.
 
-        Regression for salesagent-ihxu: before the fix, the raw CreateMediaBuySuccessResponse
+        Regression (PR #1567): before the fix, the raw CreateMediaBuySuccessResponse
         construction ValidationErrors before send_notification is reached, and the swallowing
         try/except hides it — so send_notification is never called.
         """
@@ -239,7 +239,7 @@ class TestAdminMediaBuyRejectWebhook:
     ):
         """The rejected media buy webhook body must not embed a completed success result.
 
-        Regression for salesagent-88e2 (adcp 6.6 / spec 3.1.1): the reject branch built the
+        Regression (PR #1567, adcp 6.6 / spec 3.1.1): the reject branch built the
         embedded ``result`` as CreateMediaBuySuccess, which now defaults status="completed",
         confirmed_at=now, revision=1. So the outbound body had a correct OUTER status="rejected"
         but an embedded result asserting the buy COMPLETED — a Success envelope cannot represent

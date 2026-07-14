@@ -2,14 +2,14 @@
 
 UC-026 scenarios use both create and update flows within the same test:
 Given steps create a media buy (create path), then When steps update it
-(update path). UC-003 (salesagent-8hu9) drives the update path directly against
+(update path). UC-003 (PR #1567) drives the update path directly against
 a pre-seeded media buy to grade the manual-approval UpdateMediaBuySubmitted
 envelope cross-transport. This env extends MediaBuyCreateEnv with update-module
 patches and delegates update requests to the appropriate production code —
 A2A/MCP go through the real on_message_send / FastMCP Client pipelines so the
 serialized wire (and the A2A submitted reconstruction) are genuinely exercised.
 
-beads: salesagent-a3xo, salesagent-8hu9
+Introduced by PR #1567.
 """
 
 from __future__ import annotations

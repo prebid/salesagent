@@ -1,6 +1,6 @@
 """A pending-approval update_media_buy reports the SUBMITTED envelope, not completed.
 
-Regression for salesagent-5dxc (PR #1567, adcp 5.7->6.6 bump). adcp 6.6 gave
+Regression for PR #1567 (adcp 5.7->6.6 bump). adcp 6.6 gave
 UpdateMediaBuySuccess a default status="completed" (the same _base.py mechanism
 as CreateMediaBuySuccess). The manual-approval branch of _update_media_buy_impl
 (src/core/tools/media_buy_update.py) constructs UpdateMediaBuySuccess directly for
