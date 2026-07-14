@@ -1,8 +1,9 @@
-"""Guard: all wire error codes must be in SDK STANDARD_ERROR_CODES.
+"""Guard: all wire error codes must be in WIRE_STANDARD_CODES.
 
 AST-scans Error(code=...) construction sites in src/core/tools/ and
 src/adapters/ to verify every string-literal error code is either in
-STANDARD_ERROR_CODES or in the justified INTERNAL_CODES set.
+WIRE_STANDARD_CODES (SDK STANDARD_ERROR_CODES + the pinned-spec supplement)
+or in the justified INTERNAL_CODES set.
 
 Also verifies that AdCPError subclass error_code class attributes are
 standard or internal (complementing test_error_code_mapping.py).
@@ -15,15 +16,15 @@ import logging
 from pathlib import Path
 
 import pytest
-from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import INTERNAL_CODES, SPEC_CODES
+from src.core.exceptions import INTERNAL_CODES, SPEC_CODES, WIRE_STANDARD_CODES
 
 logger = logging.getLogger(__name__)
 
-# All acceptable codes: SDK standard + justified internal + spec-required
-# (SPEC_CODES is the single source of truth in src/core/exceptions.py).
-_ALLOWED_CODES = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | SPEC_CODES
+# All acceptable codes: wire-standard (SDK + spec supplement) + justified
+# internal + spec-required passthroughs (SPEC_CODES is the single source of
+# truth for the latter in src/core/exceptions.py).
+_ALLOWED_CODES = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | SPEC_CODES
 
 # Anchor scan paths on the test file's location so they resolve correctly
 # regardless of pytest's working directory (CI runs from the repo root;

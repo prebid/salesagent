@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core.exceptions import AdCPError
+from src.core.exceptions import ERROR_CODE_MAPPING, AdCPError, translate_error_code
 
 _PINNED_ENUM_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
 
@@ -68,6 +68,49 @@ def test_default_recovery_matches_pinned_enum(cls: type[AdCPError]) -> None:
         f"{cls.__name__} (code {code!r}) declares recovery={cls._default_recovery!r} "
         f"but the pinned error-code.json enumMetadata says {expected!r}. The enumMetadata "
         f"recovery is normative (xc2j): fix the class, or advance the pin if the spec changed."
+    )
+
+
+# Classes whose _default_error_code is rewritten by ERROR_CODE_MAPPING before it
+# reaches the wire. Base AdCPError is included explicitly: iter_concrete_subclasses
+# yields descendants only, yet the base class is live on the wire via the
+# normalize_to_adcp_error crash-wrap path at every transport boundary.
+_REMAPPED_CLASSES = sorted(
+    (c for c in [AdCPError, *AdCPError.iter_concrete_subclasses()] if c._default_error_code in ERROR_CODE_MAPPING),
+    key=lambda c: c.__name__,
+)
+
+
+def test_remapped_classes_enumerated() -> None:
+    """Meta-guard: every ERROR_CODE_MAPPING target is present in the pinned
+    enumMetadata, so fixture drift can never silently un-grade the wire-recovery
+    oracle below (a target missing from _RECOVERY_BY_CODE would KeyError, but
+    only for classes that carry it — this pins the full target set)."""
+    missing = sorted(set(ERROR_CODE_MAPPING.values()) - set(_RECOVERY_BY_CODE))
+    assert not missing, (
+        f"ERROR_CODE_MAPPING target(s) {missing} are absent from the pinned "
+        f"error-code.json enumMetadata, so the wire-recovery oracle cannot grade "
+        f"them. Advance the pinned fixture (the enum defines these codes upstream) "
+        f"or fix the mapping."
+    )
+    assert len(_REMAPPED_CLASSES) >= 10, f"Expected to grade many remapped classes, got {len(_REMAPPED_CLASSES)}"
+
+
+@pytest.mark.parametrize("cls", _REMAPPED_CLASSES, ids=lambda c: c.__name__)
+def test_wire_recovery_matches_pinned_enum(cls: type[AdCPError]) -> None:
+    """For every class whose default code is remapped by ERROR_CODE_MAPPING, the
+    class's ``_default_recovery`` must equal the pinned enum's normative recovery
+    for the code actually emitted on the wire (post-translation). The envelope
+    builder emits ``exc.wire_error_code`` alongside ``exc.recovery`` — recovery
+    follows the wire code, never the internal class taxonomy."""
+    wire_code = translate_error_code(cls._default_error_code)
+    expected = _RECOVERY_BY_CODE[wire_code]
+    assert cls._default_recovery == expected, (
+        f"{cls.__name__} (code {cls._default_error_code!r} -> wire {wire_code!r}) "
+        f"declares recovery={cls._default_recovery!r} but the pinned error-code.json "
+        f"enumMetadata says the wire code {wire_code!r} is {expected!r}. The envelope "
+        f"emits the wire code with the class recovery, so this pair is spec-nonconformant "
+        f"(nr2q): fix the class recovery or the mapping, or advance the pin if the spec changed."
     )
 
 

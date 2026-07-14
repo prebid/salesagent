@@ -66,6 +66,13 @@ services:
       # Per-run secret for narrowly scoped live-server test controls. Empty in
       # normal compose usage, which keeps those controls undiscoverable.
       ADCP_TEST_CONTROL_TOKEN: ${ADCP_TEST_CONTROL_TOKEN:-}
+      # The SERVER must know about the pinned in-network creative agent: sync/
+      # create flows resolve format specs server-side, and references carry the
+      # PUBLIC canonical agent_url — without this, the registry's connection
+      # alias has nothing to route to and the server calls the LIVE public host,
+      # which rate-limits under CI load (salesagent-9qe2). The runner service
+      # already sets the same value for the direct integration tests.
+      CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
       CREATE_DEMO_TENANT: "true"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
@@ -78,6 +85,12 @@ services:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # BLACKHOLE the live public creative agent: tests must NEVER depend on it
+      # (its catalog drifts and it rate-limits under CI load — salesagent-9qe2,
+      # salesagent-kczg). The registry aliases this host to the pinned in-network
+      # agent; if any code path regresses and connects to it verbatim, this makes
+      # it fail INSTANTLY (connection refused) instead of flaking on a 429.
+      - "creative.adcontextprotocol.org:127.0.0.1"
     # Same Docker embedded-DNS concurrent-lookup race fix as the runner — the
     # server resolves postgres/creative-agent and the webhook callback host.
     dns_opt:
@@ -203,6 +216,10 @@ services:
         condition: service_healthy
       creative-agent:
         condition: service_healthy
+    extra_hosts:
+      # BLACKHOLE the live public creative agent (see the adcp-server entry):
+      # a runner-side leak fails instantly instead of flaking on a 429.
+      - "creative.adcontextprotocol.org:127.0.0.1"
     # Fix the Docker embedded-DNS concurrent-lookup race (moby/moby#22142): under
     # the e2e suite's connection churn, glibc fires the A and AAAA queries in
     # parallel over one UDP socket to 127.0.0.11 and one response gets dropped,
@@ -226,11 +243,12 @@ services:
   # NO published host port. The host path runs that script standalone (creative-net,
   # :9999); in-network we reuse the SAME pre-built image (`adcp-creative-agent`,
   # adcp@ca70dd1e2a6c) so CI/host/in-network cannot diverge on the pin. The
-  # image is built by `scripts/creative-agent-stack.sh build` (called from
-  # run_all_tests.sh) before `up`. Gated behind the runner profile so a
-  # normal e2e `up` never pulls it.
+  # image is built by `scripts/creative-agent-stack.sh build` before `up`
+  # (run_all_tests.sh for the in-network path; tests/e2e/conftest.py for the
+  # host-side standalone path). NOT profile-gated: the SERVER resolves format
+  # specs against this agent (CREATIVE_AGENT_URL) and the live public host is
+  # blackholed, so every e2e `up` needs it (salesagent-9qe2).
   creative-pg:
-    profiles: ["runner"]
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: adcp_registry
@@ -245,7 +263,6 @@ services:
       retries: 10
 
   creative-agent:
-    profiles: ["runner"]
     image: adcp-creative-agent  # built by scripts/creative-agent-stack.sh build
     environment:
       NODE_ENV: production

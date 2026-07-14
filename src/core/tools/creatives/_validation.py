@@ -7,9 +7,8 @@ from typing import Any
 
 from adcp.types import CreativeAsset
 
-from src.core.exceptions import AdCPAdapterError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
-from src.core.validation_helpers import run_async_in_sync_context
 
 logger = logging.getLogger(__name__)
 
@@ -117,28 +116,17 @@ def _validate_creative_input(
     is_adapter_format = not agent_url.startswith(("http://", "https://"))
 
     if not is_adapter_format:
-        # Check if format exists (uses in-memory cache with 1-hour TTL)
-        # Use run_async_in_sync_context to handle both sync and async contexts
-        format_spec = None
-        validation_error = None
+        # Check if the format exists via the SINGLE shared fetch path
+        # (format_resolver.fetch_format_spec): a typed AdCPError from the
+        # registry (429 -> RATE_LIMITED, 5xx/timeout -> SERVICE_UNAVAILABLE)
+        # PROPAGATES with its own recovery semantics — the old bare-except
+        # rewrap into AdCPAdapterError made a rate-limited agent look like a
+        # creative problem (salesagent-mpo1). None = the agent genuinely
+        # doesn't expose the format.
+        from src.core.format_resolver import fetch_format_spec
 
-        try:
-            format_spec = run_async_in_sync_context(registry.get_format(agent_url, format_id))
-        except Exception as e:
-            # Network error, agent unreachable, etc.
-            validation_error = e
-            logger.warning(
-                f"Failed to fetch format '{format_id}' from agent {agent_url}: {e}",
-                exc_info=True,
-            )
-
-        if validation_error:
-            raise AdCPAdapterError(
-                f"Cannot validate format '{format_id}': Creative agent at {agent_url} "
-                f"is unreachable or returned an error. Please verify the agent URL is correct "
-                f"and the agent is running. Error: {str(validation_error)}"
-            ) from validation_error
-        elif not format_spec:
+        format_spec = fetch_format_spec(agent_url, format_id)
+        if not format_spec:
             raise AdCPValidationError(
                 f"Unknown format '{format_id}' from agent {agent_url}. "
                 f"Format must be registered with the creative agent. "

@@ -576,3 +576,29 @@ class TestEnvMethodNamingConsistency:
             "CreativeSyncEnv should NOT have set_registry_formats — "
             "that name belongs to CreativeFormatsEnv (different mechanic)"
         )
+
+
+class TestIsE2EProperty:
+    """BaseTestEnv.is_e2e keys on e2e_config, not database_url."""
+
+    def test_is_e2e_true_when_e2e_config_set(self):
+        """e2e_config set -> is_e2e True."""
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import E2EConfig
+
+        env = BaseTestEnv(e2e_config=E2EConfig(base_url="http://unused", postgres_url="postgresql://x/y"))
+        assert env.is_e2e is True
+
+    def test_is_e2e_false_with_database_url_only(self):
+        """database_url alone rebinds the DB but is NOT e2e mode."""
+        from tests.harness._base import BaseTestEnv
+
+        env = BaseTestEnv(database_url="postgresql://x/y")
+        assert env.is_e2e is False
+
+    def test_is_e2e_false_when_neither_set(self):
+        """No e2e_config, no database_url -> in-process mode."""
+        from tests.harness._base import BaseTestEnv
+
+        env = BaseTestEnv()
+        assert env.is_e2e is False

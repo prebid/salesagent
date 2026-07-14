@@ -397,6 +397,20 @@ class BaseTestEnv:
         # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
         self._last_wire_response: dict[str, Any] | None = None
 
+    # -- Transport mode -----------------------------------------------------
+
+    @property
+    def is_e2e(self) -> bool:
+        """True when this env dispatches over the live HTTP server (e2e mode).
+
+        Keys on ``e2e_config`` — the same signal ``conftest`` uses to thread the
+        live-stack config and ``RestE2EDispatcher`` uses to select HTTP
+        dispatch. A bare ``database_url`` rebinds factories to another DB but is
+        NOT e2e mode (no server-surface realization needed). Mock-setup methods
+        dispatch on this via :func:`tests.harness._realize.realize_e2e`.
+        """
+        return self.e2e_config is not None
+
     # -- Identity (one function, all transports) ----------------------------
 
     def identity_for(self, transport: Transport) -> ResolvedIdentity:
@@ -467,6 +481,18 @@ class BaseTestEnv:
         """
         self._identity_cache.clear()
         self._principal_id = principal_id
+
+    def switch_tenant(self, tenant_id: str) -> None:
+        """Re-point the env at *tenant_id*, clearing cached identity.
+
+        Sibling of ``switch_principal``: step functions that seed a scenario
+        into its own fresh tenant (isolation in the shared e2e_rest live DB)
+        must not reach into the private ``_identity_cache`` / ``_tenant_id``.
+        Clearing the cache forces the next identity build to resolve the auth
+        token against the new tenant's principal rows.
+        """
+        self._identity_cache.clear()
+        self._tenant_id = tenant_id
 
     @property
     def identity(self) -> ResolvedIdentity:
@@ -1002,6 +1028,12 @@ class BaseTestEnv:
         recoverable from the body.
         """
         message = data.get("message", data.get("error", str(data)))
+        # FastAPI request-validation failures use a {"detail": [...]} envelope
+        # with no error_code; surface a readable message from the first detail.
+        if "message" not in data and "error" not in data and isinstance(data.get("detail"), list) and data["detail"]:
+            first = data["detail"][0]
+            if isinstance(first, dict) and first.get("msg"):
+                message = first["msg"]
 
         reconstructed = _envelope_to_adcp_error(data, fallback_message=message)
         if reconstructed is not None:
@@ -1022,6 +1054,7 @@ class BaseTestEnv:
             401: AdCPAuthenticationError,
             403: AdCPAuthorizationError,
             404: AdCPNotFoundError,
+            422: AdCPValidationError,  # FastAPI request-validation envelope ({"detail": [...]})
             429: AdCPRateLimitError,
             502: AdCPAdapterError,
         }
@@ -1046,6 +1079,31 @@ class BaseTestEnv:
         Called automatically by call_impl() before each test execution.
         """
         if self._session:
+            self._session.commit()
+
+    def _seed_e2e_identity(self) -> None:
+        """Seed tenant + principal into the server DB for discovery scenarios (e2e).
+
+        Discovery scenarios (list_creative_formats, get_products) never run a
+        Given step that creates a tenant/principal — in-process they don't need
+        one (identity is a mock). Over e2e the live HTTP server authenticates the
+        request against its own DB, so the buyer's tenant/principal/token MUST
+        exist there or auth fails before the handler runs.
+
+        Called from ``__enter__`` in e2e mode. Delegates to the idempotent
+        ``setup_default_data`` (get-or-create) so it shares ONE seeding path and
+        envs that also call ``setup_default_data()`` themselves don't
+        double-create. Seeds the SAME ``tenant_id`` / ``principal_id`` the env's
+        identity uses, so the token ``identity_for`` later resolves matches the
+        seeded row.
+        """
+        if not self._session:
+            return
+        # Only IntegrationEnv exposes setup_default_data; e2e mode is always
+        # an IntegrationEnv (use_real_db=True), so this is the seeding path.
+        setup = getattr(self, "setup_default_data", None)
+        if setup is not None:
+            setup()
             self._session.commit()
 
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
@@ -1117,6 +1175,13 @@ class BaseTestEnv:
             self._patchers.append(patcher)
 
         self._configure_mocks()
+
+        # 3. E2E discovery-path seeding: the live server authenticates against
+        #    its own DB, so seed tenant/principal even for scenarios that never
+        #    run a tenant-creating Given step. Idempotent; no-op in-process.
+        if self.use_real_db and self.is_e2e:
+            self._seed_e2e_identity()
+
         return self
 
     def __exit__(self, *exc: object) -> bool:
@@ -1149,6 +1214,17 @@ class BaseTestEnv:
             except Exception as e:
                 errors.append(e)
 
+            # Dispose the per-scenario e2e engine — closing the session alone
+            # leaves its pool's connections open, and with the ledger retirement
+            # ~300 more scenarios build e2e envs per run, accumulating toward
+            # the server's max_connections (PR #1430 review).
+            try:
+                if self._e2e_engine is not None:
+                    self._e2e_engine.dispose()
+                    self._e2e_engine = None
+            except Exception as e:
+                errors.append(e)
+
         # 3. Stop patches — each in its own try block
         for patcher in reversed(self._patchers):
             try:
@@ -1176,18 +1252,30 @@ class IntegrationEnv(BaseTestEnv):
     use_real_db = True
 
     def setup_default_data(self) -> tuple[Any, Any]:
-        """Create default tenant + principal via factories.
+        """Get-or-create default tenant + principal via factories.
 
         Must be called inside the ``with env:`` block (factories are bound
         to the session during ``__enter__``).
 
         Returns (tenant, principal) ORM instances. Uses self._tenant_id
-        and self._principal_id from constructor.
+        and self._principal_id from constructor. Idempotent: reuses existing
+        rows rather than re-creating, so it is safe to call after the e2e
+        discovery-path auto-seed (``_seed_e2e_identity``) already created them.
         """
+        from sqlalchemy import select
+
+        from src.core.database.models import Principal, Tenant
         from tests.factories import PrincipalFactory, TenantFactory
 
-        tenant = TenantFactory(tenant_id=self._tenant_id)
-        principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        if tenant is None:
+            tenant = TenantFactory(tenant_id=self._tenant_id)
+
+        principal = self._session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+        ).first()
+        if principal is None:
+            principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
 
     # -- Public query API (step functions must use these, not env._session) ----

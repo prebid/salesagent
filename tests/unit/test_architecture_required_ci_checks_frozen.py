@@ -28,6 +28,9 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / BDD Tests (Shard 1/2)",
     "CI / BDD Tests (Shard 2/2)",
     "CI / BDD Tests",
+    # In-network bdd (e2e_rest transport) — grades the known-failures ledger
+    # (PR #1430 review). Mirror this into branch protection's required checks.
+    "CI / BDD In-Network (e2e_rest)",
     "CI / Migration Roundtrip",
     "CI / Coverage",
     "CI / Summary",

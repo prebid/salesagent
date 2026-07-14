@@ -240,7 +240,8 @@ class AdCPRequestHandler(RequestHandler):
         (``ValueError → AdCPValidationError``, ``PermissionError →
         AdCPAuthorizationError``, arbitrary ``Exception →
         AdCPError(INTERNAL_ERROR)``) so the wire output stays in
-        ``STANDARD_ERROR_CODES`` and the envelope shape never degrades to a
+        ``WIRE_STANDARD_CODES`` (SDK ``STANDARD_ERROR_CODES`` plus the
+        pinned-spec supplement) and the envelope shape never degrades to a
         flat ``{"error": "..."}`` dict the storyboard runner would synthesize
         as ``MCP_ERROR``.
         """

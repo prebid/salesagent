@@ -1,7 +1,8 @@
 """Factory_boy factories for core tenant-related models.
 
 Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
-Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig)
+Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig),
+get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios)
 """
 
 from __future__ import annotations
@@ -24,17 +25,46 @@ from src.core.database.models import (
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 
-def subdomain_for(tenant_id: str) -> str:
-    """Single source of truth for a tenant's DNS subdomain.
+def get_or_create(env: Any, model: type, filters: dict[str, Any], create: Any):
+    """Idempotent factory seeding for shared-DB (e2e_rest) BDD scenarios.
 
-    DNS labels cannot contain underscores, so tenant_id underscores map to
-    hyphens. This MUST be the only derivation: the persisted ``Tenant.subdomain``
-    (ORM factory) and the ``ResolvedIdentity`` tenant dict (``make_tenant``) have
-    to agree, because the e2e_rest transport authenticates by sending this
-    subdomain as the ``x-adcp-tenant`` header and the live server resolves the
-    tenant from it. A mismatch (underscore in the DB row vs hyphen on the wire)
-    makes the server fail to resolve the tenant and return 401 — which silently
-    parked every e2e_rest delivery scenario on the known-failures ledger.
+    Over e2e_rest all scenarios share one live-server database, so a prior
+    scenario's row (same PK) can survive into this one — the per-scenario
+    ``_reset_e2e_db`` and the env's factory session don't reliably target the
+    same connection — and a plain factory insert hits a UniqueViolation
+    (jdy1-M3, #1418). Look the row up on the env's factory session first and
+    reuse it. On in-process transports each test gets a rolled-back DB, the
+    lookup misses, and this behaves exactly like calling the factory.
+
+    ``create`` is a zero-arg callable running the factory, so lookup keys and
+    factory kwargs stay independent (e.g. Principal filters use ``tenant_id``
+    while ``PrincipalFactory`` takes the ``tenant`` object).
+    """
+    from sqlalchemy import select
+
+    session = getattr(env, "_session", None)
+    if session is not None:
+        existing = session.scalars(select(model).filter_by(**filters)).first()
+        if existing is not None:
+            return existing
+    return create()
+
+
+def tenant_subdomain(tenant_id: str) -> str:
+    """Derive a tenant's subdomain from its tenant_id.
+
+    Single source of truth for subdomain derivation (#1418). DNS labels cannot
+    contain underscores, so tenant_id underscores map to hyphens; the
+    normalization is also required because subdomains feed publisher_domain
+    (``f"{subdomain}.example.com"``) and the AdCP domain regex rejects
+    underscores. This MUST be the only derivation: the persisted
+    ``Tenant.subdomain`` (ORM factory) and the ``ResolvedIdentity`` tenant dict
+    (``make_tenant``) have to agree, because the e2e_rest transport
+    authenticates by sending this subdomain as the ``x-adcp-tenant`` header and
+    the live server resolves the tenant from it. A mismatch (underscore in the
+    DB row vs hyphen on the wire) makes the server fail to resolve the tenant
+    and return 401 — which silently parked every e2e_rest delivery scenario on
+    the known-failures ledger.
     """
     return f"pub-{tenant_id}".replace("_", "-")
 
@@ -47,7 +77,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     tenant_id = Sequence(lambda n: f"tenant_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Publisher {o.tenant_id}")
-    subdomain = LazyAttribute(lambda o: subdomain_for(o.tenant_id))
+    subdomain = LazyAttribute(lambda o: tenant_subdomain(o.tenant_id))
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"
@@ -61,7 +91,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         Uses same defaults as TenantFactory fields.
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
-        subdomain = subdomain_for(tenant_id)
+        subdomain = tenant_subdomain(tenant_id)
         tenant: dict[str, Any] = {
             "tenant_id": tenant_id,
             "name": f"Test Publisher {tenant_id}",

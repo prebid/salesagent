@@ -51,9 +51,12 @@ class TestErrorCodeMapping:
         salesagent-fnk9). The public ``error_code`` is an instance attribute
         set in ``__init__`` and is not present on the class object.
         """
-        # Spec-required codes not yet in SDK STANDARD_ERROR_CODES (single source
-        # of truth in src/core/exceptions.py).
-        allowed = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | SPEC_CODES
+        from src.core.exceptions import WIRE_STANDARD_CODES
+
+        # Spec-required passthrough codes not yet in WIRE_STANDARD_CODES'
+        # supplement (SPEC_CODES is the single source of truth in
+        # src/core/exceptions.py).
+        allowed = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | SPEC_CODES
         violations = []
         for cls in AdCPError.iter_concrete_subclasses():
             code = cls._default_error_code
