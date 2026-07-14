@@ -10,15 +10,23 @@ Enforces a ratcheting approach — the duplication count can only go down, never
 Uses pylint R0801 (duplicate-code) with these filters:
 - Ignores imports, docstrings, comments, and function signatures
 - Minimum 6 similar lines to trigger (catches copy-paste-modify patterns)
+
+Uses shared ``count_ratchet.run_count_ratchet`` for the create/compare/auto-lower
+skeleton; this module owns the pylint count method + JSON baseline path only.
 """
 
+from __future__ import annotations
+
 import argparse
-import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
+from count_ratchet import read_json_baseline, run_count_ratchet, write_json_baseline
+
 BASELINE_FILE = ".duplication-baseline"
+SCOPES = ("src", "tests", "scripts")
 
 
 def count_duplications(directory: str) -> int:
@@ -48,20 +56,12 @@ def count_duplications(directory: str) -> int:
     return count
 
 
-def read_baseline(baseline_file: Path) -> dict[str, int] | None:
-    """Read baseline counts from the baseline file (JSON format)."""
-    if not baseline_file.exists():
-        return None
-    try:
-        return json.loads(baseline_file.read_text())
-    except (ValueError, OSError) as e:
-        print(f"Warning: Could not read baseline from {baseline_file}: {e}", file=sys.stderr)
-        return None
+def _read_baseline(baseline_file: Path) -> dict[str, int] | None:
+    return read_json_baseline(baseline_file, SCOPES)
 
 
-def write_baseline(baseline_file: Path, counts: dict[str, int]) -> None:
-    """Write baseline counts to the baseline file."""
-    baseline_file.write_text(json.dumps(counts, indent=2) + "\n")
+def _write_baseline(baseline_file: Path, counts: Mapping[str, int]) -> None:
+    write_json_baseline(baseline_file, counts, SCOPES)
 
 
 def main() -> int:
@@ -72,70 +72,31 @@ def main() -> int:
     repo_root = Path(__file__).parent.parent
     baseline_file = repo_root / BASELINE_FILE
 
-    # Count current duplications
     print("Scanning for code duplication (pylint R0801)...")
-    src_count = count_duplications("src/")
-    tests_count = count_duplications("tests/")
-    scripts_count = count_duplications("scripts/")
-    current = {"src": src_count, "tests": tests_count, "scripts": scripts_count}
+    current = {
+        "src": count_duplications("src/"),
+        "tests": count_duplications("tests/"),
+        "scripts": count_duplications("scripts/"),
+    }
 
-    # Read baseline
-    baseline = read_baseline(baseline_file)
-
-    # Handle missing baseline
-    if baseline is None:
-        print(f"No baseline found. Creating {BASELINE_FILE}:")
-        print(f"  src/   = {src_count} duplicate blocks")
-        print(f"  scripts/ = {scripts_count} duplicate blocks")
-        write_baseline(baseline_file, current)
-        return 0
-
-    # Handle --update-baseline flag
-    if args.update_baseline:
-        print(
-            f"Updating baseline: src/ {baseline.get('src', '?')} -> {src_count}, tests/ {baseline.get('tests', '?')} -> {tests_count}, scripts/ {baseline.get('scripts', '?')} -> {scripts_count}"
-        )
-        write_baseline(baseline_file, current)
-        return 0
-
-    # Compare counts
-    failed = False
-    for scope in ("src", "tests", "scripts"):
-        baseline_count = baseline.get(scope, 0)
-        current_count = current[scope]
-
-        if current_count > baseline_count:
-            increase = current_count - baseline_count
-            print(f"  {scope}/:  {current_count} duplicate blocks (+{increase} NEW)", file=sys.stderr)
-            failed = True
-        elif current_count < baseline_count:
-            decrease = baseline_count - current_count
-            print(f"  {scope}/:  {current_count} duplicate blocks (-{decrease} fixed)")
-        else:
-            print(f"  {scope}/:  {current_count} duplicate blocks (unchanged)")
-
-    if failed:
-        print("", file=sys.stderr)
-        print("Code duplication increased! DRY is a non-negotiable invariant.", file=sys.stderr)
-        print("Extract repeated logic into shared helper functions.", file=sys.stderr)
-        print("", file=sys.stderr)
-        print("To inspect violations:", file=sys.stderr)
-        print(
+    return run_count_ratchet(
+        keys=SCOPES,
+        current=current,
+        baseline_file=baseline_file,
+        update_baseline=args.update_baseline,
+        read_baseline=_read_baseline,
+        write_baseline=_write_baseline,
+        increase_header="Code duplication increased! DRY is a non-negotiable invariant.",
+        increase_hints=(
+            "Extract repeated logic into shared helper functions.",
+            "",
+            "To inspect violations:",
             "  uv run pylint --disable=all --enable=R0801 src/",
-            file=sys.stderr,
-        )
-        print(
             "  uv run pylint --disable=all --enable=R0801 tests/",
-            file=sys.stderr,
-        )
-        return 1
-
-    # Auto-update baseline if any count decreased
-    if current != {k: baseline.get(k, 0) for k in current}:
-        print(f"Automatically updating {BASELINE_FILE}...")
-        write_baseline(baseline_file, current)
-
-    return 0
+        ),
+        format_key=lambda scope: f"{scope}/",
+        unit="duplicate blocks",
+    )
 
 
 if __name__ == "__main__":
