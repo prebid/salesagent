@@ -52,7 +52,10 @@ from tests.integration.media_buy_helpers import _make_create_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-DEFAULT_FORMAT_ID = "display_300x250"
+# Matches ProductFactory's default format_ids (registry-canonical since #1430);
+# CreativeFactory's default format is still the legacy pre-registry id, so
+# seeded creatives must pin this explicitly to stay product-compatible.
+DEFAULT_FORMAT_ID = "display_300x250_image"
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +99,7 @@ def _seed_creatives(seeded: dict, creative_ids: list[str]) -> None:
             tenant=seeded["tenant"],
             principal=seeded["principal"],
             creative_id=cid,
+            format=DEFAULT_FORMAT_ID,
             status="ready",
             data={
                 "url": "https://example.com/creative.jpg",
