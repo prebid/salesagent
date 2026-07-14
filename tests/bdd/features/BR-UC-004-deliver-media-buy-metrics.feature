@@ -307,17 +307,25 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   # NOTE: this comment MUST stay ABOVE the tag line — a comment between the tag
   # line and Scenario: makes the compiler parse tags=[]/id=None -> LEGACY-DELETE.
   @T-UC-004-webhook-scheduler-derivation @alternative @polling @invariant @BR-RULE-029 @hand-edited
-  Scenario: Delivery webhook scheduler derives notification_type and sequence from production state
+  Scenario Outline: Delivery webhook scheduler derives <type> from the buy's real delivery status
     # Drives the REAL DeliveryWebhookScheduler — not the WebhookDeliveryService
     # is_final/is_adjusted flags: notification_type comes from
     # derive_notification_type() over the buy's resolved delivery status, and
     # sequence_number from the success-only WebhookDeliveryLog counter (#1570).
     # NOT tagged @webhook so the polling harness (DeliveryPollEnv) is active — it
     # exposes send_delivery_webhook / set_adapter_response.
-    Given a media buy "mb-100" with a reporting_webhook and fresh delivery data
+    Given a media buy "mb-100" with a reporting_webhook and a "<flight>" flight
     When the delivery webhook scheduler sends a report for "mb-100"
-    Then the scheduler webhook payload notification_type should be "scheduled"
+    Then the scheduler webhook payload notification_type should be "<type>"
     And the scheduler webhook payload sequence_number should be 1
+    And the scheduler webhook payload <next_expected> include next_expected_at
+
+    # A completed (flight-ended) buy resolves to "completed" -> derive_notification_type
+    # returns "final", which must OMIT next_expected_at; an in-flight buy -> "scheduled".
+    Examples: notification_type derived from the buy's resolved delivery status
+      | flight    | type      | next_expected |
+      | live      | scheduled | should        |
+      | completed | final     | should not    |
 
   # HAND-EDITED: salesagent-local scenario (not in adcp-req). See the
   # @hand-edited note on the scheduler-derivation scenario above (comment stays

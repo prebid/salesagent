@@ -59,6 +59,12 @@ logger = logging.getLogger(__name__)
 # date-refined (pending_start before flight, active within, completed after).
 CANONICAL_SERVING = "active"
 
+# Canonical status for a flight that has ended. A serving buy is date-refined to
+# this once ``now`` passes the flight window; it is the one terminal status that
+# still carries delivery data (so it, with CANONICAL_SERVING, is what the
+# delivery impl reports on — see REPORTABLE_CANONICAL_STATUSES).
+CANONICAL_COMPLETED = "completed"
+
 # Terminal / explicit lifecycle decisions. These are authoritative and are
 # NEVER re-derived from flight dates — a canceled buy inside its flight window
 # is canceled, not active. ``paused`` is grouped here because it is likewise an

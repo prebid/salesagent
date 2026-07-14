@@ -25,6 +25,7 @@ from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.helpers import enum_value
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools._media_buy_status import (
+    CANONICAL_COMPLETED,
     CANONICAL_SERVING,
     SERVING_PERSISTED_STATUSES,
     derive_notification_type,
@@ -45,7 +46,7 @@ SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
 # selected buy resolving outside this set (pre-flight pending_start, paused)
 # has no delivery data, and asking the impl for it produces a
 # MEDIA_BUY_NOT_FOUND advisory for a buy that exists.
-REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, "completed"})
+REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CANONICAL_COMPLETED})
 
 
 class DeliveryWebhookScheduler:

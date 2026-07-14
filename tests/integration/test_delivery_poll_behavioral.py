@@ -480,7 +480,7 @@ class TestDedupSuppressesPriorFinalWebhook:
 
 @pytest.mark.requires_db
 class TestBatchContinuesPastFailedSend:
-    """A failed send is counted as an error and does NOT abort the batch.
+    """A failed send does NOT abort the batch — the loop continues to the rest.
 
     ``_send_reports`` catches a per-item failure and continues to the remaining
     buys. Dropping the per-item try/except (delivery_webhook_scheduler.py:119-145)
@@ -488,6 +488,11 @@ class TestBatchContinuesPastFailedSend:
     the remaining buys. This drives the real batch loop (only the outbound send
     is mocked), unlike the other tests that mock _send_report_for_media_buy or
     check the delivery response directly.
+
+    Scope: this pins *continuation* only. The batch tally itself — that a failed
+    send increments ``errors`` rather than ``reports_sent`` — is log-only today
+    and asserted by the return-value change tracked in #1635 (make
+    ``_send_reports`` return ``(reports_sent, errors)``).
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """

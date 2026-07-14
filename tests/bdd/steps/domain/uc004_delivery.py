@@ -1659,9 +1659,14 @@ def then_first_sequence(ctx: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-@given(parsers.parse('a media buy "{mb_id}" with a reporting_webhook and fresh delivery data'))
-def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str) -> None:
-    """Create an in-flight serving buy with a daily reporting_webhook + adapter data.
+@given(parsers.parse('a media buy "{mb_id}" with a reporting_webhook and a "{flight}" flight'))
+def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str, flight: str) -> None:
+    """Create a serving buy (status="active") with a daily reporting_webhook + adapter data.
+
+    ``flight`` selects the window so the real scheduler derives the right
+    notification_type from the buy's *resolved* delivery status:
+      - "live"      -> in-flight, resolves to "active"    -> notification_type "scheduled"
+      - "completed" -> flight ended, date-refines to "completed" -> notification_type "final"
 
     Requires the polling harness (DeliveryPollEnv) — the scenario must NOT be
     tagged @webhook (that routes to CircuitBreakerEnv, which has no
@@ -1671,6 +1676,10 @@ def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str) -> None:
 
     from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
 
+    windows = {"live": (-30, 30), "completed": (-60, -30)}
+    assert flight in windows, f"unknown flight phase {flight!r}; expected one of {sorted(windows)}"
+    start_days, end_days = windows[flight]
+
     env = ctx["env"]
     owner = ctx.get("principal_id", "buyer-001")
     if "db_tenant" not in ctx:
@@ -1679,13 +1688,14 @@ def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str) -> None:
     if principal_key not in ctx:
         ctx[principal_key] = PrincipalFactory(tenant=ctx["db_tenant"], principal_id=owner)
 
+    today = datetime.now(UTC).date()
     buy = MediaBuyFactory(
         tenant=ctx["db_tenant"],
         principal=ctx[principal_key],
         media_buy_id=mb_id,
         status="active",
-        start_date=datetime.now(UTC).date() - timedelta(days=30),
-        end_date=datetime.now(UTC).date() + timedelta(days=30),
+        start_date=today + timedelta(days=start_days),
+        end_date=today + timedelta(days=end_days),
         raw_request={"reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"}},
     )
     ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": owner, "status": "active"}
@@ -1722,6 +1732,23 @@ def then_scheduler_sequence_number(ctx: dict, n: int) -> None:
     assert result.get("sequence_number") == n, (
         f"Expected scheduler-computed sequence_number={n}, got {result.get('sequence_number')!r}"
     )
+
+
+@then(parsers.re(r"the scheduler webhook payload (?P<next_expected>.+) include next_expected_at"))
+def then_scheduler_next_expected(ctx: dict, next_expected: str) -> None:
+    """Assert next_expected_at presence on the real scheduler wire (under ``result``).
+
+    A "final" notification must OMIT next_expected_at — the schema types it as a
+    non-nullable date-time "only present ... when notification_type is not
+    'final'" (get-media-buy-delivery-response.json @ v3.1-04f59d2d5). Mirrors
+    ``then_next_expected`` but reads the scheduler wire, not env.mock["post"].
+    """
+    result = _require(ctx, "scheduler_wire", hint="The scheduler send may have been skipped or errored.")["result"]
+    has_key = "next_expected_at" in result
+    if "should not" in next_expected:
+        assert not has_key, f"a final notification must omit next_expected_at, got {result.get('next_expected_at')!r}"
+    else:
+        assert has_key, f"a non-final notification must include next_expected_at; keys={list(result.keys())}"
 
 
 @then("the response omits notification_type, sequence_number, and next_expected_at")
