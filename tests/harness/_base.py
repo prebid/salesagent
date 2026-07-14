@@ -405,8 +405,6 @@ class BaseTestEnv:
         # A2A/MCP dispatchers. None unless such a path ran — REST builds its
         # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
         self._last_wire_response: dict[str, Any] | None = None
-        # Relative date-token resolver for media-buy Given steps (env.clock).
-        self.clock = _TestClock()
 
     # -- Transport mode -----------------------------------------------------
 

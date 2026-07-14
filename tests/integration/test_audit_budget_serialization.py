@@ -7,22 +7,25 @@ Regression coverage for #1417 (PR #1417 re-review, @e1280b368).
 - the DB ``AuditLog.details`` JSONType column, and
 - the ``.jsonl`` structured backup log.
 
-A ``Decimal`` budget (what ``get_total_budget()`` returns — float is wrong for
-money) currently serializes DIVERGENTLY: the DB path runs through the engine-wide
-``_pydantic_json_serializer`` (``pydantic_core.to_json`` with ``fallback=str``),
-which stringifies a bare ``Decimal`` -> the budget is stored as a JSON STRING
-("12345.67"). The ``.jsonl`` path runs through ``_audit_json_default``
-(``Decimal`` -> ``float``) -> the budget is written as a JSON NUMBER (12345.67).
+Before #1417, a ``Decimal`` budget (what ``get_total_budget()`` returns — float
+is wrong for money) serialized DIVERGENTLY: the DB path ran through the
+engine-wide ``_pydantic_json_serializer`` (``pydantic_core.to_json`` with
+``fallback=str``), which stringified a bare ``Decimal`` -> the budget was stored
+as a JSON STRING ("12345.67"). The ``.jsonl`` path ran through
+``_audit_json_default`` (``Decimal`` -> ``float``) -> the budget was written as
+a JSON NUMBER (12345.67).
 
 The two sinks MUST agree: both should carry a JSON number. The DB string form
-also breaks admin readers (activity_stream.py:80,
+also broke admin readers (activity_stream.py:80,
 business_activity_service.py:192) which format the budget with ``:,.0f`` — that
 format spec raises ``ValueError`` on a str.
 
-This test calls the REAL production ``log_operation()`` with a ``Decimal`` budget,
-reads the persisted row back through a fresh DB session, and asserts the stored
-budget is a JSON number (matching the ``.jsonl`` sink). It FAILS against current
-production, which persists the string form.
+#1417 fixed this with ``_normalize_audit_details`` (src/core/audit_logger.py):
+``log_operation()`` normalizes ``Decimal`` -> ``float`` once, before fan-out to
+both sinks. This test guards that invariant: it calls the REAL production
+``log_operation()`` with a ``Decimal`` budget, reads the persisted row back
+through a fresh DB session, and asserts the stored budget is a JSON number
+(matching the ``.jsonl`` sink).
 """
 
 from __future__ import annotations
@@ -89,7 +92,8 @@ class TestDecimalBudgetSerializesAsNumberInDB:
             budget = persisted["budget"]
 
             # The .jsonl sink emits a JSON number (Decimal -> float). The DB sink
-            # must match. Current production stores the string "12345.67".
+            # must match; before #1417's _normalize_audit_details it stored the
+            # string "12345.67".
             assert type(budget) is not str, (
                 f"DB audit details budget persisted as a string {budget!r} "
                 f"(type {type(budget).__name__}); the .jsonl sink emits a JSON "
@@ -103,8 +107,8 @@ class TestDecimalBudgetSerializesAsNumberInDB:
         admin/blueprints/activity_stream.py:80 and
         admin/services/business_activity_service.py:192 do
         ``f"...${details['budget']:,.0f}"``. ``:,.0f`` raises ValueError on a
-        str, so high-value create rows the DB stored as strings already break
-        the admin activity stream. Grounds the reviewer's admin-reader finding.
+        str, so string-persisted budgets (the pre-#1417 behavior) broke the
+        admin activity stream. Grounds the reviewer's admin-reader finding.
         """
         from src.core.audit_logger import get_audit_logger
 

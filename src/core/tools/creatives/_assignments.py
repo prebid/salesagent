@@ -40,6 +40,7 @@ def _process_assignments(
     # Track assignments per creative for response population
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
+    not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
@@ -98,6 +99,7 @@ def _process_assignments(
                 creative_row = assignment_repo.get_creative_by_id(creative_id, principal_id)
                 if creative_row is None:
                     error_msg = f"Creative not found: {creative_id}"
+                    not_found_creative_ids.add(creative_id)
                     for package_id in package_ids:
                         assignment_errors_by_creative[creative_id][package_id] = error_msg
                     if validation_mode == "strict":
@@ -308,11 +310,16 @@ def _process_assignments(
                 assignment_errors=errors or None,
             )
         else:
-            # Nothing assigned: every referenced package failed (creative not
-            # found, package not found, ...). Buyer-correctable — same
-            # VALIDATION_ERROR the strict-mode raise carries.
+            # Nothing assigned: every referenced package failed. Buyer-correctable.
+            # Creative-not-found entries carry CREATIVE_NOT_FOUND — the same code
+            # the strict-mode AdCPCreativeNotFoundError raise emits (287c93099);
+            # the continue in the not-found branch means such an entry can never
+            # also carry package causes. Other synthesized causes still ride
+            # VALIDATION_ERROR — a known residual (strict package-not-found emits
+            # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
             message = "; ".join(sorted(set(errors.values())))
-            entry = _failed_sync_result(creative_id, message, recovery="correctable", code="VALIDATION_ERROR")
+            code = "CREATIVE_NOT_FOUND" if creative_id in not_found_creative_ids else "VALIDATION_ERROR"
+            entry = _failed_sync_result(creative_id, message, recovery="correctable", code=code)
             entry.assignment_errors = errors
         results.append(entry)
 

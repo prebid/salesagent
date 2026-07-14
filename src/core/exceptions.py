@@ -37,11 +37,14 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # adcp 5.7's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
 # cross-check, not the authority. CREATIVE_NOT_FOUND per the enum: correctable,
 # and "Sellers MUST return this code uniformly for any creative_id not owned by
-# the calling account" (#1430 review). The two further demoted spec codes
-# (CONFIGURATION_ERROR, BILLING_NOT_SUPPORTED) are tracked for the same
-# treatment in a follow-up.
+# the calling account" (#1430 review). CONFIGURATION_ERROR per the enum:
+# terminal — "the buyer cannot resolve a seller-side deployment
+# misconfiguration and MUST NOT auto-retry" (#1430 review). The remaining
+# demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same treatment
+# in #1602.
 _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
+    "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
 }
 
 # The authoritative wire-code table: SDK baseline + pinned-spec supplement.
@@ -62,7 +65,6 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "FORMAT_NOT_FOUND": "INVALID_REQUEST",
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
-    "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
@@ -120,7 +122,6 @@ INTERNAL_CODES: frozenset[str] = frozenset(
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
         "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
         "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
-        "CONFIGURATION_ERROR",  # Server-side config; needs admin, not buyer
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
         "LINE_ITEM_CREATION_FAILED",  # GAM line-item creation detail
@@ -153,8 +154,9 @@ def translate_error_code(code: str) -> str:
 def to_wire_error_code(code: str) -> str:
     """Normalize a hand-built advisory code to a guaranteed-standard wire code.
 
-    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in the
-    spec's ``STANDARD_ERROR_CODES``: an internal-only code that has no mapping
+    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in
+    ``WIRE_STANDARD_CODES`` (the SDK's ``STANDARD_ERROR_CODES`` plus the
+    pinned-spec supplement): an internal-only code that has no mapping
     entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would otherwise pass through
     ``translate_error_code`` verbatim and leak. Use this for ``errors[]``
     advisories, which serialize verbatim and never pass through the boundary
@@ -231,9 +233,18 @@ class AdCPError(Exception):
     """
 
     # Class-level identity defaults. Subclasses override these.
+    # Recovery follows the WIRE code, not the internal taxonomy: the base
+    # INTERNAL_ERROR maps to SERVICE_UNAVAILABLE on the wire, whose pinned
+    # enumMetadata classification is transient (#1430 review). Subclasses
+    # whose wire code is pinned terminal declare terminal explicitly.
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    _default_recovery: ClassVar[RecoveryHint] = "transient"
+    # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
+    # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
+    # "provide valid credentials") sets this so no raise site can forget the
+    # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
+    _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     error_code: str
@@ -261,7 +272,7 @@ class AdCPError(Exception):
         self.message = message
         self.details = details
         self.field = field
-        self.suggestion = suggestion
+        self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
         self.retry_after = retry_after
         self.context = context
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
@@ -376,7 +387,7 @@ class AdCPError(Exception):
         """Serialize to AdCP spec-compliant ``{"errors": [...]}`` format.
 
         Uses ``adcp_error()`` from the SDK to produce the canonical error
-        envelope. Translation to ``STANDARD_ERROR_CODES`` happens at transport
+        envelope. Translation to ``WIRE_STANDARD_CODES`` happens at transport
         boundaries via ``translate_error_code()`` — this method preserves the
         raw ``error_code`` so internal callers retain the source classification.
 
@@ -427,6 +438,9 @@ class AdCPInvalidRequestError(AdCPValidationError):
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
 
 
+AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
@@ -448,6 +462,10 @@ class AdCPAuthenticationError(AdCPError):
     _default_status_code: ClassVar[int] = 401
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    # Every authentication rejection shares one buyer fix hint, so the graded
+    # top-level suggestion (error.json) can never be forgotten at a raise site
+    # (#1417 round-8 review item 4: 11 of 12 raise sites emitted an empty suggestion).
+    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
@@ -485,16 +503,28 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
 
 
 class AdCPNotFoundError(AdCPError):
-    """Requested resource does not exist (404)."""
+    """Requested resource does not exist (404).
+
+    Recovery=correctable: the wire code is INVALID_REQUEST (via
+    ERROR_CODE_MAPPING), whose pinned enumMetadata classification is
+    correctable — recovery follows the wire code (#1430 review).
+    """
 
     _default_status_code: ClassVar[int] = 404
     _default_error_code: ClassVar[str] = "NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
-    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
+    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND).
+
+    Recovery=terminal per the pinned enumMetadata for ACCOUNT_NOT_FOUND —
+    declared explicitly (the AdCPNotFoundError parent is correctable to
+    match its INVALID_REQUEST wire code).
+    """
 
     _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPAccountSetupRequiredError(AdCPError):
@@ -506,23 +536,30 @@ class AdCPAccountSetupRequiredError(AdCPError):
 
 
 class AdCPAccountSuspendedError(AdCPError):
-    """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED)."""
+    """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED).
+
+    Recovery=terminal per the pinned enumMetadata — declared explicitly
+    (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
+    """
 
     _default_status_code: ClassVar[int] = 403
     _default_error_code: ClassVar[str] = "ACCOUNT_SUSPENDED"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPAccountPaymentRequiredError(AdCPError):
     """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
 
-    Recovery=terminal (inherited): from the sales agent's perspective there is
+    Recovery=terminal: from the sales agent's perspective there is
     no in-band remediation — the buyer must settle the outstanding balance
     externally before resubmitting. Matches the BDD storyboard contract for
-    UC-002 account-reference partition/boundary rows.
+    UC-002 account-reference partition/boundary rows. Declared explicitly
+    (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
     """
 
     _default_status_code: ClassVar[int] = 402
     _default_error_code: ClassVar[str] = "ACCOUNT_PAYMENT_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPConflictError(AdCPError):
@@ -597,11 +634,15 @@ class AdCPConfigurationError(AdCPError):
     Raised when encrypted secrets cannot be decrypted (key rotation,
     corruption, missing ENCRYPTION_KEY). Callers should NOT silently
     fall back — the configuration needs admin intervention, so recovery is
-    ``terminal`` (inherited): the buyer has no lever to fix server config.
+    ``terminal``: the buyer has no lever to fix server config and per the
+    pinned enum "MUST NOT auto-retry". CONFIGURATION_ERROR is a
+    _SPEC_SUPPLEMENT_CODES pass-through — it reaches the wire untranslated
+    (#1430 review).
     """
 
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPServiceUnavailableError(AdCPError):
@@ -620,7 +661,8 @@ class AdCPServiceUnavailableError(AdCPError):
 # ---------------------------------------------------------------------------
 # Typed subclasses for spec-compliant error codes.
 # ---------------------------------------------------------------------------
-# Each subclass pins its wire error_code to a STANDARD_ERROR_CODES entry, so
+# Each subclass pins its wire error_code to a WIRE_STANDARD_CODES entry (SDK
+# STANDARD_ERROR_CODES plus the pinned-spec supplement), so
 # raise sites can use semantic names (AdCPMediaBuyNotFoundError) instead of
 # constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary
 # translator runs build_two_layer_error_envelope() on the raised exception.
@@ -958,7 +1000,9 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
             }
 
     Both codes pass through ``ERROR_CODE_MAPPING`` via ``exc.wire_error_code``
-    so they always land in ``STANDARD_ERROR_CODES``.
+    so they always land in ``WIRE_STANDARD_CODES`` (the SDK's
+    ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement, e.g.
+    ``CREATIVE_NOT_FOUND``).
     """
     payload = adcp_error(
         exc.wire_error_code,

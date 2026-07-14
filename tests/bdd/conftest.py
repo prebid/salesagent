@@ -72,6 +72,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
+    "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
 ]
 
@@ -1854,15 +1855,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="delivery account boundary: production gaps on this transport", strict=False
                     )
                 )
-            # e2e_rest: account fixture created in-process not visible to Docker DB
-            # Graduated: "not found", "both account_id", "empty object" pass on e2e_rest
-            if is_e2e_rest and any(s in nodeid for s in ("account exists", "single match")):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: account fixture not in Docker DB — lookup/validation fails",
-                        strict=False,
-                    )
-                )
+            # e2e_rest fully graduated: invalid rows ("not found", "both
+            # account_id", "empty object") passed first; the valid rows
+            # ("account exists", "single match") followed at the #1417 merge —
+            # the jr5b seeded-account Given is realized against the server DB,
+            # so the account fixture IS visible now (XPASS innet_140726_1516).
 
         # --- UC-004 boundary: selective xfail for graduated strong groups ---
         # Only the failing subset gets xfailed; clean-pass examples graduate to PASS.
@@ -2844,6 +2841,12 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-missing",
 }
 
+
+def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
+    """True when a brand_shorthand scenario targets create_media_buy (UC-002 harness)."""
+    return "brand_shorthand" in marker_names and "create_media_buy" in marker_names
+
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -3111,8 +3114,12 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
-    if "inventory_profile" in marker_names:
+    if "inventory_profile" in marker_names or (
+        "brand_shorthand" in marker_names and not _is_brand_shorthand_media_buy(marker_names)
+    ):
         return "UC-GET-PRODUCTS"
+    if _is_brand_shorthand_media_buy(marker_names):
+        return "UC-002"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
     return None
@@ -3301,7 +3308,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_pricing_option"] = pricing_option
                 ctx["dispatch_mode"] = "create"
                 yield
-        elif marker_names & _UC002_IDEMPOTENCY_WIRED:
+        elif marker_names & _UC002_IDEMPOTENCY_WIRED or _is_brand_shorthand_media_buy(marker_names):
             # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
             # real create_media_buy through every transport (the replay scenario
             # creates once, then sends the same key again to exercise the

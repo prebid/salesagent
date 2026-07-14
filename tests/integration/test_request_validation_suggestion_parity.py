@@ -395,6 +395,62 @@ class TestCreateMediaBuyA2AWebhookSuggestionParity:
 
 
 @pytest.mark.requires_db
+class TestSyncCreativesA2ASuggestionParity:
+    """A2A sync_creatives request-validation must carry a top-level suggestion.
+
+    ``_handle_sync_creatives_skill`` constructs ``CreativeAsset(**c)`` from the
+    raw wire dict. Bare construction leaks the pydantic ValidationError to
+    ``normalize_to_adcp_error`` and the envelope loses its suggestion — the
+    exact #1417 disease; this site escaped the sweep because the boundary
+    guard matched only ``*Request``-suffixed names (#1417 round-8 review item 3).
+
+    Drives the REAL A2A wire (``on_message_send`` →
+    ``_handle_sync_creatives_skill``). ``CreativeSyncEnv.call_a2a`` routes to
+    ``sync_creatives_raw`` (zero production callers — pre-existing harness
+    debt noted at its definition), so this class overrides it to dispatch
+    through the real handler.
+
+    The sibling bare construction, ``ContextObject(**ctx_param)``, has no
+    behavioral reproduction: the pinned SDK model declares zero fields with
+    ``extra="allow"``, so no dict input can make it raise. It is wrapped in
+    the same boundary for guard-consistency (and future SDK field additions).
+    """
+
+    def test_invalid_creative_a2a_envelope_carries_suggestion(self, integration_db):
+        """A creative entry missing the required ``format_id`` rejected on the
+        A2A wire must produce the AdCP two-layer VALIDATION_ERROR envelope WITH
+        a top-level ``suggestion`` (error.json @v3.1-04f59d2d5) — parity with
+        the nine wrapped skill handlers in the same file.
+        """
+        from src.core.schemas import SyncCreativesResponse
+        from tests.harness.creative_sync import CreativeSyncEnv
+        from tests.harness.transport import Transport
+
+        class _RealA2AWireCreativeSyncEnv(CreativeSyncEnv):
+            def call_a2a(self, **kwargs):
+                return self._run_a2a_handler("sync_creatives", SyncCreativesResponse, **kwargs)
+
+        with _RealA2AWireCreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(
+                Transport.A2A,
+                creatives=[{"creative_id": "cr-invalid-1", "name": "No format"}],
+            )
+
+            assert result.is_error, (
+                "A creative missing format_id must be rejected on the A2A wire, "
+                f"got success payload: {result.payload!r}"
+            )
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+                message_substr="format_id",
+            )
+
+
+@pytest.mark.requires_db
 class TestListAccountsRestSuggestionParity:
     """REST list_accounts request-validation must carry a top-level suggestion."""
 

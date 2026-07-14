@@ -60,8 +60,9 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import find_principal, require_identity, require_tenant
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
@@ -464,38 +465,45 @@ def _resolve_status_filter(
         ) from e
 
 
-def _canonical_to_media_buy_status(canonical: str) -> MediaBuyStatus:
-    """Adapt a canonical status string to the AdCP lifecycle ``MediaBuyStatus``.
-
-    The canonical vocabulary's delivery-only ``failed`` has no AdCP lifecycle
-    equivalent, so it collapses to the closest terminal state, ``rejected``
-    (enums/media-buy-status.json). Shared by the list read path and the
-    create/update dual-emit coercion so the collapse cannot drift.
-    """
-    if canonical == "failed":
-        return MediaBuyStatus.rejected
-    return MediaBuyStatus(canonical)
+# Persisted MediaBuy.status -> AdCP MediaBuyStatus wire enum, DERIVED from the
+# authoritative ``PERSISTED_STATUS_TO_CANONICAL`` (#1417 round-8 review nit: the
+# former hand-written literal drifted from the canonical map on ``draft``/
+# ``scheduled`` and omitted ``ready``/``pending_activation`` entirely). This is
+# the LIFECYCLE-surface projection consumed by the #1417 dual-emit of
+# ``media_buy_status`` on the update responses, used only by
+# ``normalize_persisted_media_buy_status`` on the no-DB-row fallback path — a
+# pure column coercion with NO flight-window refinement. Two sanctioned
+# adaptations of the canonical values (pinned row-by-row by
+# ``tests/unit/test_media_buy_status_consistency.py``):
+#   - "failed" -> "rejected": the lifecycle enum has no ``failed``; the same
+#     collapse ``_compute_status`` applies below.
+#   - "ready"/"scheduled" -> "pending_start": canonically the date-gated generic
+#     serving state, but this path has no DB row (hence no dates) to refine
+#     against, so pre-flight is the truthful unrefined reading.
+_UNREFINED_PRE_FLIGHT_OVERRIDES = {"ready": "pending_start", "scheduled": "pending_start"}
+_PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
+    persisted: MediaBuyStatus(
+        "rejected" if canonical == "failed" else _UNREFINED_PRE_FLIGHT_OVERRIDES.get(persisted, canonical)
+    )
+    for persisted, canonical in PERSISTED_STATUS_TO_CANONICAL.items()
+}
 
 
 def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
     """Map a persisted ``MediaBuy.status`` string to its AdCP ``MediaBuyStatus``.
 
-    Date-free coercion for the create/update dual-emit of ``media_buy_status``,
-    so a non-enum DB value (e.g. legacy ``pending_approval``) cannot be injected
-    into the typed response field (#1417). Built on the shared
-    ``PERSISTED_STATUS_TO_CANONICAL`` map (single source of truth, #1545) with
-    the same lifecycle-surface adaptation as ``_compute_status`` (delivery-only
-    ``failed`` collapses to ``rejected``). Returns ``None`` for an empty/unknown
-    status so callers omit the field rather than emit a non-spec value. Unlike
-    ``_compute_status`` there is no flight-window refinement — the write paths
-    emit the state the action just persisted.
+    DB-status → AdCP-status coercion via ``_PERSISTED_STATUS_TO_ADCP`` (derived
+    from ``PERSISTED_STATUS_TO_CANONICAL`` — the single authoritative
+    persisted-status map — with the two sanctioned adaptations documented above),
+    so the create/update dual-emit of ``media_buy_status`` cannot inject a non-enum DB
+    value (e.g. legacy ``pending_approval``) into the typed response field (#1417). This is a
+    pure column coercion with NO flight-window refinement — the update-response status pair
+    reflects the persisted lifecycle decision, not a date-derived state. Returns ``None`` for
+    an empty/unknown status so callers omit the field rather than emit a non-spec value.
     """
     if not status:
         return None
-    canonical = PERSISTED_STATUS_TO_CANONICAL.get(status.lower())
-    if canonical is None:
-        return None
-    return _canonical_to_media_buy_status(canonical)
+    return _PERSISTED_STATUS_TO_ADCP.get(status.lower())
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
@@ -514,7 +522,10 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     coercion with no date refinement, so the two surfaces read the same column
     but only the read path refines against the flight window (#1417 / #1545).
     """
-    return _canonical_to_media_buy_status(resolve_canonical_status(buy, today))
+    canonical = resolve_canonical_status(buy, today)
+    if canonical == "failed":
+        return MediaBuyStatus.rejected
+    return MediaBuyStatus(canonical)
 
 
 def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:
@@ -565,12 +576,9 @@ def _fetch_creative_approvals(
     # tenant_id, principal_id) — a tenant-only load could resolve a colliding id
     # to ANOTHER principal's row and show their approval status to this buyer.
     creative_ids = [a.creative_id for a in assignments]
-    creative_stmt = select(Creative).where(
-        Creative.tenant_id == tenant_id,
-        Creative.principal_id == principal_id,
-        Creative.creative_id.in_(creative_ids),
-    )
-    creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
+    creatives = {
+        c.creative_id: c for c in CreativeRepository(session, tenant_id).get_by_ids(creative_ids, principal_id)
+    }
 
     # Build approval objects grouped by (media_buy_id, package_id)
     result: dict[tuple[str, str], list[CreativeApproval]] = {}

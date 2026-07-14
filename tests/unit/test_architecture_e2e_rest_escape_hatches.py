@@ -83,7 +83,6 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and 'T-UC-004-daterange-end-only' in marker_names",
     "is_e2e_rest and 'T-UC-005-empty-catalog' in marker_names",
     "is_e2e_rest and 'Unknown string not in enum' in nodeid",
-    "is_e2e_rest and any((s in nodeid for s in ('account exists', 'single match')))",
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",

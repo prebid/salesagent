@@ -25,6 +25,18 @@ Scope is ``src/routes/`` (the REST boundary layer) and ``src/a2a_server/``
 skill handlers were found constructing requests bare — the exact disease this
 guard exists to catch). Ships with ZERO violations; no allowlist (repo hard
 rule: allowlists never grow).
+
+Widened by #1417 round-8 review (item 3) after ``CreativeAsset(**c)`` escaped the
+``*Request``-suffix matcher: the guard now also derives, per scanned module,
+the set of wire-model names imported from ``adcp*`` / ``src.core.schemas*``
+and flags any ``Name(**splat)`` construction or ``Name.model_validate*`` call
+on them outside the boundary. Names suffixed ``Response``/``Success``/``Error``
+are excluded — those are response-direction models built from INTERNAL data
+(the deserialization helper), where a ValidationError is a server bug, not
+buyer-correctable input; wrapping them would mislabel INTERNAL failures as
+VALIDATION_ERROR/correctable. ``Submitted`` is in that same set: it is the
+pending-approval variant of the update_media_buy response union, reconstructed
+from an internal result dict alongside ``*Success``/``*Error``.
 """
 
 from __future__ import annotations
@@ -37,6 +49,31 @@ SCAN_ROOTS = [REPO_ROOT / "src" / "routes", REPO_ROOT / "src" / "a2a_server"]
 SCHEMA_HELPERS = REPO_ROOT / "src" / "core" / "schema_helpers.py"
 
 _VALIDATE_METHODS = {"model_validate", "model_validate_json", "parse_obj"}
+
+# Response-direction suffixes: models built from INTERNAL data at the boundary
+# (deserializing core-tool results), where a ValidationError is a server bug —
+# wrapping would mislabel it as buyer-correctable VALIDATION_ERROR.
+_RESPONSE_SUFFIXES = ("Response", "Success", "Error", "Submitted")
+
+_WIRE_MODEL_MODULE_PREFIXES = ("adcp", "src.core.schemas")
+
+
+def wire_model_imports(tree: ast.AST) -> frozenset[str]:
+    """Names imported (at any level) from adcp* / src.core.schemas* in *tree*.
+
+    These are the strict wire-model classes a boundary module can construct
+    from buyer input. Response-direction names (``*Response``/``*Success``/
+    ``*Error``) are excluded — see module docstring.
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module.startswith(_WIRE_MODEL_MODULE_PREFIXES):
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    if not bound.endswith(_RESPONSE_SUFFIXES):
+                        names.add(bound)
+    return frozenset(names)
 
 
 def _has_boundary_with(node: ast.AST) -> bool:
@@ -85,7 +122,11 @@ def _boundary_with(node: ast.With) -> bool:
     )
 
 
-def _request_construction_name(node: ast.Call, coercion_helpers: frozenset[str] = frozenset()) -> str | None:
+def _request_construction_name(
+    node: ast.Call,
+    coercion_helpers: frozenset[str] = frozenset(),
+    wire_models: frozenset[str] = frozenset(),
+) -> str | None:
     """Name of the strict-request construction this call performs, or None.
 
     Matches:
@@ -97,6 +138,11 @@ def _request_construction_name(node: ast.Call, coercion_helpers: frozenset[str] 
       helpers that construct the request internally (the get_products form)
     - a call to any name in ``coercion_helpers`` — the boundary-less ``to_*``
       schema_helpers coercions (#1417)
+    - a ``Name(**splat)`` construction or ``Name.model_validate*`` call where
+      ``Name`` is in ``wire_models`` — any imported wire-model class fed a raw
+      dict, regardless of suffix (#1417 round-8 review item 3: the ``CreativeAsset(**c)``
+      escape). Keyword-only construction of these names is NOT matched: that
+      is internal typed assembly, not wire-dict parsing.
     """
     fn = node.func
     if isinstance(fn, ast.Name):
@@ -107,11 +153,14 @@ def _request_construction_name(node: ast.Call, coercion_helpers: frozenset[str] 
             return name
         if name in coercion_helpers:
             return name
+        if name in wire_models and any(kw.arg is None for kw in node.keywords):
+            return f"{name}(**...)"
     if isinstance(fn, ast.Attribute):
         if fn.attr in _VALIDATE_METHODS:
             base = fn.value
-            if isinstance(base, ast.Name) and base.id.endswith("Request") and base.id != "Request":
-                return f"{base.id}.{fn.attr}"
+            if isinstance(base, ast.Name) and base.id != "Request":
+                if base.id.endswith("Request") or base.id in wire_models:
+                    return f"{base.id}.{fn.attr}"
         name = fn.attr
         if (name.startswith("create_") or name.startswith("build_")) and name.endswith("_request"):
             return name
@@ -121,9 +170,14 @@ def _request_construction_name(node: ast.Call, coercion_helpers: frozenset[str] 
 
 
 class _UnboundedRequestFinder(ast.NodeVisitor):
-    def __init__(self, coercion_helpers: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        coercion_helpers: frozenset[str] = frozenset(),
+        wire_models: frozenset[str] = frozenset(),
+    ) -> None:
         self.boundary_depth = 0
         self.coercion_helpers = coercion_helpers
+        self.wire_models = wire_models
         self.offenders: list[tuple[int, str]] = []
 
     def visit_With(self, node: ast.With) -> None:
@@ -135,16 +189,18 @@ class _UnboundedRequestFinder(ast.NodeVisitor):
             self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        name = _request_construction_name(node, self.coercion_helpers)
+        name = _request_construction_name(node, self.coercion_helpers, self.wire_models)
         if name and self.boundary_depth == 0:
             self.offenders.append((node.lineno, name))
         self.generic_visit(node)
 
 
 def find_unbounded_request_constructions(
-    tree: ast.AST, coercion_helpers: frozenset[str] = frozenset()
+    tree: ast.AST,
+    coercion_helpers: frozenset[str] = frozenset(),
+    wire_models: frozenset[str] = frozenset(),
 ) -> list[tuple[int, str]]:
-    finder = _UnboundedRequestFinder(coercion_helpers)
+    finder = _UnboundedRequestFinder(coercion_helpers, wire_models)
     finder.visit(tree)
     return finder.offenders
 
@@ -155,7 +211,7 @@ def test_no_unbounded_request_construction_at_transport_boundaries():
     for root in SCAN_ROOTS:
         for path in sorted(root.rglob("*.py")):
             tree = ast.parse(path.read_text(), filename=str(path))
-            for lineno, name in find_unbounded_request_constructions(tree, coercion_helpers):
+            for lineno, name in find_unbounded_request_constructions(tree, coercion_helpers, wire_model_imports(tree)):
                 violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {name}")
     assert not violations, (
         "Strict request construction or raise-capable to_* coercion outside "
@@ -244,6 +300,63 @@ class TestGuardDetector:
         # A to_* name outside the derived set (e.g. one with an internal
         # boundary) is not matched.
         assert not _detect("ctx = to_context_object(body.context)")
+
+    # -- #1417 round-8 item 3: imported wire-model **splat constructions --
+
+    def test_positive_wire_model_splat_construction(self):
+        # The CreativeAsset(**c) escape: no Request suffix, raw-dict splat.
+        wire = frozenset({"CreativeAsset"})
+        assert find_unbounded_request_constructions(ast.parse("a = CreativeAsset(**c)"), wire_models=wire)
+
+    def test_positive_wire_model_model_validate(self):
+        wire = frozenset({"CreativeAsset"})
+        assert find_unbounded_request_constructions(ast.parse("a = CreativeAsset.model_validate(c)"), wire_models=wire)
+
+    def test_negative_wire_model_keyword_construction(self):
+        # Keyword-only construction is internal typed assembly, not wire parsing.
+        wire = frozenset({"CreativeAsset"})
+        assert not find_unbounded_request_constructions(
+            ast.parse("a = CreativeAsset(creative_id=cid, name=name)"), wire_models=wire
+        )
+
+    def test_negative_wire_model_splat_inside_boundary(self):
+        wire = frozenset({"CreativeAsset"})
+        assert not find_unbounded_request_constructions(
+            ast.parse("with adcp_validation_boundary(context='sync_creatives request'):\n    a = CreativeAsset(**c)"),
+            wire_models=wire,
+        )
+
+    def test_negative_splat_on_name_not_in_wire_set(self):
+        assert not _detect("a = SomeLocalThing(**c)")
+
+
+class TestWireModelImportDerivation:
+    def test_adcp_and_schema_imports_included(self):
+        tree = ast.parse(
+            "from adcp.types import CreativeAsset, ContextObject\nfrom src.core.schemas import SyncCreativesRequest"
+        )
+        assert wire_model_imports(tree) == frozenset({"CreativeAsset", "ContextObject", "SyncCreativesRequest"})
+
+    def test_response_direction_names_excluded(self):
+        # Response/Success/Error models are built from INTERNAL data at the
+        # boundary; a ValidationError there is a server bug, not buyer input.
+        tree = ast.parse("from src.core.schemas import CreateMediaBuySuccess, CreateMediaBuyError, GetProductsResponse")
+        assert wire_model_imports(tree) == frozenset()
+
+    def test_submitted_variant_excluded(self):
+        # UpdateMediaBuySubmitted is the pending-approval member of the
+        # update_media_buy response union — reconstructed from an internal
+        # result dict in the A2A deserialization helper, same as *Success/*Error.
+        tree = ast.parse("from src.core.schemas import UpdateMediaBuySubmitted")
+        assert wire_model_imports(tree) == frozenset()
+
+    def test_unrelated_imports_ignored(self):
+        tree = ast.parse("from fastapi import Request\nfrom src.core.auth import require_tenant")
+        assert wire_model_imports(tree) == frozenset()
+
+    def test_asname_binding_used(self):
+        tree = ast.parse("from adcp.types import Product as LibraryProduct")
+        assert wire_model_imports(tree) == frozenset({"LibraryProduct"})
 
 
 class TestUnguardedCoercionHelperDerivation:

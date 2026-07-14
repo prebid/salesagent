@@ -12,10 +12,15 @@ from adcp.types import FormatId as AdcpFormatId
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
 from tests.harness import CreativeSyncEnv
+from tests.harness.transport import Transport
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+# Wire transports only — IMPL has no wire envelope by definition. A transient
+# swallow at the MCP/A2A boundary must fail this matrix, not just REST.
+_WIRE_TRANSPORTS = [Transport.REST, Transport.MCP, Transport.A2A]
 
 
 def _make_creative_asset(**overrides):
@@ -49,9 +54,9 @@ class TestFormatFetchTransientErrors:
             ("service_unavailable", "SERVICE_UNAVAILABLE"),
         ],
     )
-    def test_typed_transient_registry_error_reaches_wire(self, integration_db, raised, wire_code):
+    @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
+    def test_typed_transient_registry_error_reaches_wire(self, integration_db, raised, wire_code, transport):
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
-        from tests.harness.transport import Transport
         from tests.helpers import assert_envelope_shape
 
         exc = (
@@ -68,7 +73,7 @@ class TestFormatFetchTransientErrors:
             env.mock["registry"].return_value.get_format.side_effect = exc
 
             result = env.call_via(
-                Transport.REST,
+                transport,
                 creatives=[_make_creative_asset(creative_id="c_transient", name="Transient")],
             )
 
@@ -97,11 +102,11 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
             ("service_unavailable", "SERVICE_UNAVAILABLE"),
         ],
     )
-    def test_typed_transient_fetch_error_reaches_wire(self, integration_db, raised, wire_code):
+    @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
+    def test_typed_transient_fetch_error_reaches_wire(self, integration_db, raised, wire_code, transport):
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
         from tests.factories import CreativeFactory
         from tests.harness.media_buy_create import MediaBuyCreateEnv
-        from tests.harness.transport import Transport
         from tests.helpers import assert_envelope_shape
         from tests.integration.media_buy_helpers import _make_create_request
 
@@ -124,7 +129,7 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
             env.mock["format_spec"].side_effect = exc
 
             result = env.call_via(
-                Transport.REST,
+                transport,
                 req=_make_create_request(
                     packages=[
                         {

@@ -84,7 +84,11 @@ fi
 # E2E_WORKERS the plain serial `bdd` runs unchanged, so CI and small runners are
 # unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
-    SUITES="${SUITES/bdd/bdd_inprocess,bdd_e2e}"
+    # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
+    # explicit bdd_inprocess/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
+    SUITES=",$SUITES,"
+    SUITES="${SUITES/,bdd,/,bdd_inprocess,bdd_e2e,}"
+    SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
     # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
     # so the in-process bulk only parallelizes if we export a worker count here.
     # Default to `auto` (PYTEST_XDIST_AUTO_NUM_WORKERS) so the swap is actually

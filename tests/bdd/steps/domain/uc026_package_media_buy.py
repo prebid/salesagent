@@ -2032,9 +2032,16 @@ def then_pkg_has_keyword(ctx: dict, keyword: str) -> None:
 
 @then(parsers.parse('the response should contain keyword "{keyword}" with match_type "{match_type}"'))
 def then_keyword_with_match_type(ctx: dict, keyword: str, match_type: str) -> None:
-    """Assert response contains keyword with specific match_type."""
+    """Assert response contains keyword with specific match_type (no-error invariant first).
+
+    Merged with the former ``then_contains_keyword_match`` (#1417 round-8 review item 8):
+    both registered this exact literal — first-wins made the later def dead —
+    and the later body was stronger (asserted no error before inspecting
+    packages), so that body survives here.
+    """
     import pytest
 
+    _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
@@ -2181,24 +2188,6 @@ def then_updated_keyword_and_negative(ctx: dict) -> None:
     neg_values = [_keyword_field(nk, "keyword") for nk in neg_keywords]
     assert any(v for v in kw_values), f"keyword_targets present but all keywords empty: {kw_values}"
     assert any(v for v in neg_values), f"negative_keywords present but all keywords empty: {neg_values}"
-
-
-@then(parsers.parse('the response should contain keyword "{keyword}" with match_type "{match_type}"'))
-def then_contains_keyword_match(ctx: dict, keyword: str, match_type: str) -> None:
-    """Assert response contains keyword with match_type (invariant check)."""
-    import pytest
-
-    _assert_no_error(ctx)
-    pkgs = _assert_has_packages(ctx)
-    pkg = pkgs[0]
-    kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
-    if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME(salesagent-9vgz.1)")
-    found = _find_keyword(kw_targets, keyword, match_type)
-    assert found is not None, (
-        f"Keyword '{keyword}' with match_type '{match_type}' not found in targeting_overlay. "
-        f"Present: {[(str(_keyword_field(k, 'keyword')), str(_keyword_field(k, 'match_type'))) for k in kw_targets]}"
-    )
 
 
 @then(parsers.parse("the keyword bid_price {price} should be interpreted as ceiling (max_bid=true)"))
