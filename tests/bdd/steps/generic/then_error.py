@@ -252,22 +252,12 @@ def then_error_code(ctx: dict, code: str) -> None:
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
-@then(parsers.parse('the wire error code should be "{code}"'))
-def then_wire_error_code(ctx: dict, code: str) -> None:
-    """Assert the error code ON THE WIRE equals the expected value.
-
-    The load-bearing variant of ``then_error_code`` for error-path grading:
-    per the Error Verification Policy (tests/CLAUDE.md), the code the buyer
-    actually receives must be asserted on the captured two-layer envelope
-    (real wire bytes on A2A/MCP/REST; the production builder's output on
-    IMPL) — never on the lossy reconstructed exception. Also pins the
-    two-layer invariant: ``adcp_error.code`` and ``errors[0].code`` agree.
-    """
-    from tests.helpers import assert_envelope_shape
-
-    envelope = _resolve_wire_envelope(ctx)
-    recovery = envelope["errors"][0].get("recovery")
-    assert_envelope_shape(envelope, code, recovery=recovery)
+# NOTE: error-path scenarios must grade the WIRE code (Error Verification
+# Policy, tests/CLAUDE.md) — the reconstructed exception collapses distinct
+# wire codes onto one exception class. UC-003 does this via a module-local
+# override of the step above (test_uc003_update_media_buy.py) so the
+# generated feature text stays canonical; #1417 generalizes wire-first
+# semantics into the generic step itself.
 
 
 # ── Error message content (generic) ───────────────────────────────────
