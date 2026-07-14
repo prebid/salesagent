@@ -95,7 +95,7 @@ Feature: BR-UC-007 Discover Publisher Properties
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a list_authorized_properties task
     Then the operation should fail
-    And the error code should be "AUTH_TOKEN_INVALID"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "tenant"
     # POST-F1: System state unchanged (read-only)
     # POST-F2: Error code TENANT_ERROR explains what failed
@@ -105,7 +105,7 @@ Feature: BR-UC-007 Discover Publisher Properties
     Given no tenant can be resolved from the request context
     When the Buyer Agent calls list_authorized_properties MCP tool
     Then the operation should fail
-    And the error code should be "AUTH_TOKEN_INVALID"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "tenant"
     # POST-F1: System state unchanged (read-only)
     # POST-F2: Error code TENANT_ERROR explains what failed

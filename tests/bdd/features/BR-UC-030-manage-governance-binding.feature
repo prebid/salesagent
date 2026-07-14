@@ -161,7 +161,7 @@ Feature: BR-UC-030 Manage Governance Binding
     # PRE-B3
 
   @T-UC-030-sync-unauth @sync @auth @partition
-  Scenario: sync_governance without authentication returns AUTH_TOKEN_INVALID
+  Scenario: sync_governance without authentication returns AUTH_REQUIRED
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_governance request via MCP without an authentication token and one account "acct-social-001"
     Then the response variant is error

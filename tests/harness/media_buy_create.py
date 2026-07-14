@@ -169,12 +169,25 @@ class MediaBuyCreateEnv(IntegrationEnv):
             kwargs.setdefault("tool_name", tool_name)
             return real.create_workflow_step(**kwargs)
 
+        def _get_or_create_context(*_args: Any, **kwargs: Any):
+            # The async update path calls get_or_create_context (not
+            # create_context) to obtain a persistent Context whose real
+            # context_id backs the workflow_steps FK. Delegate to the real
+            # manager so the persisted context_id is a string, not a MagicMock.
+            return real.get_or_create_context(
+                tenant_id=kwargs.get("tenant_id", self._tenant_id),
+                principal_id=kwargs.get("principal_id", self._principal_id),
+                context_id=kwargs.get("context_id"),
+                is_async=kwargs.get("is_async", True),
+            )
+
         def _link_workflow_to_object(*_args: Any, **kwargs: Any):
             return real.link_workflow_to_object(**kwargs)
 
         mgr.create_context.side_effect = _create_context
         mgr.get_context.return_value = None
         mgr.create_workflow_step.side_effect = _create_workflow_step
+        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
         mgr.update_workflow_step.return_value = None
         mgr.add_message.return_value = None
@@ -295,6 +308,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
         """Call _create_media_buy_impl with real DB."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.transport_helpers import enrich_identity_with_account
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
@@ -304,6 +318,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         if req is None:
             req = CreateMediaBuyRequest(**_ensure_idempotency_key(kwargs))
 
+        identity = enrich_identity_with_account(identity, req.account)
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
 
     def _flatten_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -317,7 +332,10 @@ class MediaBuyCreateEnv(IntegrationEnv):
         if req is None:
             return _ensure_idempotency_key(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
-        for key in ("account", "proposal_id", "total_budget"):
+        # Keep ``account``: the create_media_buy wrappers declare it and resolve it
+        # at the transport boundary (998ad1be2). Stripping it here regresses
+        # account-not-found scenarios to a successful create.
+        for key in ("proposal_id", "total_budget"):
             flat.pop(key, None)
         _restore_creative_ids(req, flat)
         flat.update(kwargs)

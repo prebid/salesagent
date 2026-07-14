@@ -22,13 +22,20 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     ReportingDimensions,
 )
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
 
 from src.core.adcp_version import validate_adcp_version_pins
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.exceptions import AdCPValidationError
 from src.core.request_compat import ADCP_NEGOTIATION_FIELDS
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference
+from src.core.schema_helpers import (
+    coerce_creative_filters,
+    to_account_reference,
+    to_brand_reference,
+    to_context_object,
+    to_push_notification_config,
+    to_reporting_webhook,
+)
+from src.core.schemas import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -40,6 +47,7 @@ from src.core.tools import products as products_module
 from src.core.tools import properties as properties_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
+from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
 
 logger = logging.getLogger(__name__)
@@ -196,35 +204,54 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # Request models
 # ---------------------------------------------------------------------------
 #
-# FIXME(#1442): The *Body REST request models below inherit bare
-# pydantic.BaseModel and so lack the Pattern #7 environment-based extra-field
-# policy (extra="forbid" in dev/CI, extra="ignore" in prod). They parse buyer
-# REST input and should extend SalesAgentBaseModel. Migrating them changes
-# extra-field handling on the REST boundary, a behavioral change that needs
-# REST integration coverage before flipping -- tracked as a follow-up. Until
-# then they are allowlisted in tests/unit/test_architecture_no_bare_basemodel.py.
+# These REST request models extend SalesAgentBaseModel so they inherit the
+# Pattern #7 environment-based extra-field policy (extra="forbid" in dev/CI,
+# extra="ignore" in prod) — the same validation the MCP/A2A request models get.
 
 
-class GetProductsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class _VersionedBody(SalesAgentBaseModel):
+    """Shared AdCP version-negotiation pins accepted on every REST body.
+
+    ``adcp_major_version`` is the deprecated integer pin; it is declared (not
+    read by handlers) so the strict dev-mode base (``extra="forbid"``) does not
+    reject a buyer that sends it — negotiation itself reads the RAW body in
+    ``_validate_version_pins`` before Pydantic parsing (#1546).
+    """
+
+    adcp_version: str = "1.0.0"
+    adcp_major_version: int | None = None
+
+
+# Negotiation pins are protocol framing, not tool params — strip them before
+# building the request models handed to the shared _impl/_raw functions.
+_NEGOTIATION_EXCLUDE = frozenset({"adcp_version", "adcp_major_version"})
+
+
+class GetProductsBody(_VersionedBody):
     brief: str = ""
-    brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
+    # dict BrandReference or string domain/URL shorthand (#1324)
+    brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
     context: dict[str, Any] | None = None  # adcp application-level context, echoed on the response (#1512)
-    adcp_version: str = "1.0.0"
 
 
-class CreateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
-    brand: BrandReference | str | None = None  # adcp 3.6.0: BrandReference with domain field
+class CreateMediaBuyBody(_VersionedBody):
+    # dict BrandReference or string domain/URL shorthand (#1324); coerced to
+    # BrandReference at the boundary via to_brand_reference.
+    brand: BrandReference | dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
     packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
     end_time: str | None = None
     po_number: str | None = None
-    account: dict[str, Any] | None = None  # AccountReference; coerced by CreateMediaBuyRequest
+    account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
+    reporting_webhook: dict[str, Any] | None = None
+    push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
-    adcp_version: str = "1.0.0"
 
 
-class UpdateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class UpdateMediaBuyBody(_VersionedBody):
     paused: bool | None = None
     flight_start_date: str | None = None
     flight_end_date: str | None = None
@@ -232,10 +259,22 @@ class UpdateMediaBuyBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
-    adcp_version: str = "1.0.0"
+    # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
+    # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).
+    # NOTE: top-level targeting_overlay/creatives are intentionally omitted — the raw
+    # wrapper accepts them in its signature but drops them before _build_update_request,
+    # so declaring them here would be a silent no-op (see #1417).
+    packages: list[dict[str, Any]] | None = None
+    pacing: str | None = None
+    daily_budget: float | None = None
+    push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    reporting_webhook: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
+    idempotency_key: str | None = None
 
 
-class GetMediaBuyDeliveryBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class GetMediaBuyDeliveryBody(_VersionedBody):
     media_buy_ids: list[str] | None = None
     status_filter: Any = None
     start_date: str | None = None
@@ -244,38 +283,52 @@ class GetMediaBuyDeliveryBody(BaseModel):  # FIXME(#1442): extend SalesAgentBase
     attribution_window: AttributionWindow | None = None
     include_package_daily_breakdown: bool | None = None
     account: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+    context: dict[str, Any] | None = None
 
 
-class SyncCreativesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class SyncCreativesBody(_VersionedBody):
     creatives: list[dict[str, Any]] = []
     assignments: dict[str, Any] | None = None
     creative_ids: list[str] | None = None
     delete_missing: bool = False
     dry_run: bool = False
     validation_mode: str = "strict"
-    adcp_version: str = "1.0.0"
+    push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
 
 
-class ListCreativesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class ListCreativesBody(_VersionedBody):
     media_buy_id: str | None = None
     media_buy_ids: list[str] | None = None
     status: str | None = None
     format: str | None = None
-    # Structured AdCP CreativeFilters object (statuses, concept_ids, format_ids,
-    # tags, date ranges, …). Coerced to a typed CreativeFilters in the handler so
-    # REST honours the same structured filters as MCP/A2A instead of dropping them.
+    tags: list[str] | None = None
+    created_after: str | None = None
+    created_before: str | None = None
+    search: str | None = None
+    # Structured AdCP CreativeFilters object (statuses, concept_ids, format_ids, …);
+    # coerced at the route via coerce_creative_filters so REST honours the same
+    # structured filters as MCP/A2A (concept_ids threaded into the DB query, #1493).
     filters: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+    fields: list[str] | None = None
+    include_performance: bool = False
+    include_assignments: bool = False
+    include_sub_assets: bool = False
+    page: int = 1
+    limit: int = 50
+    sort_by: str = "created_date"
+    sort_order: str = "desc"
+    context: dict[str, Any] | None = None
 
 
-class UpdatePerformanceIndexBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class UpdatePerformanceIndexBody(_VersionedBody):
     media_buy_id: str
     performance_data: list[dict[str, Any]] = []
-    adcp_version: str = "1.0.0"
+    context: dict[str, Any] | None = None
 
 
-class ListCreativeFormatsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class ListCreativeFormatsBody(_VersionedBody):
     format_ids: list[dict[str, Any]] | None = None
     name_search: str | None = None
     is_responsive: bool | None = None
@@ -289,33 +342,30 @@ class ListCreativeFormatsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBase
     disclosure_persistence: list[str] | None = None
     output_format_ids: list[dict[str, Any]] | None = None
     input_format_ids: list[dict[str, Any]] | None = None
-    adcp_version: str = "1.0.0"
 
 
-class ListAuthorizedPropertiesBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class ListAuthorizedPropertiesBody(_VersionedBody):
     property_tags: list[str] | None = None
     publisher_domains: list[str] | None = None
-    adcp_version: str = "1.0.0"
 
 
-class ListAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class ListAccountsBody(_VersionedBody):
     status: str | None = None
     sandbox: bool | None = None
     pagination: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
 
 
-class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (Pattern #7)
+class SyncAccountsBody(_VersionedBody):
     accounts: list[dict[str, Any]] = []
     delete_missing: bool = False
     dry_run: bool = False
     push_notification_config: dict[str, Any] | None = None
-    # Declared so extra="ignore" does not silently drop a REST buyer's key — REST must
-    # preserve it like the MCP/A2A siblings do (#1512), not be the transport that loses it.
+    # Declared so the body model never drops a REST buyer's key (forbidden as an
+    # undeclared extra in dev, silently ignored in prod) — REST must preserve it
+    # like the MCP/A2A siblings do (#1512), not be the transport that loses it.
     idempotency_key: str | None = None
     context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -334,15 +384,16 @@ async def get_products(
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
-    req = products_module.create_get_products_request(
-        brief=body.brief,
-        brand=body.brand,
-        filters=body.filters,
-        # Forward the buyer's application context so _get_products_impl echoes it
-        # back unchanged on the response — REST was the only transport missing this
-        # (MCP/A2A already forward it, the impl already echoes it) (#1512).
-        context=body.context,
-    )
+    with adcp_validation_boundary(context="get_products request"):
+        req = products_module.create_get_products_request(
+            brief=body.brief,
+            brand=body.brand,
+            filters=body.filters,
+            # Forward the buyer's application context so _get_products_impl echoes it
+            # back unchanged on the response — REST was the only transport missing this
+            # (MCP/A2A already forward it, the impl already echoes it) (#1512).
+            context=body.context,
+        )
     response = await products_module._get_products_impl(req, identity)
     # Gate response compatibility on the release the buyer actually negotiated
     # (query or body, adcp_version or adcp_major_version), returned by the
@@ -376,8 +427,9 @@ async def list_creative_formats(body: ListCreativeFormatsBody, identity: Resolve
     """List available creative formats (auth-optional discovery skill)."""
     from src.core.schemas import ListCreativeFormatsRequest
 
-    body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
-    req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
+    body_fields = body.model_dump(exclude=_NEGOTIATION_EXCLUDE, exclude_none=True)
+    with adcp_validation_boundary(context="list_creative_formats request"):
+        req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
 
     response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -390,8 +442,9 @@ async def list_authorized_properties(
     """List authorized properties (auth-optional discovery skill)."""
     from src.core.schemas import ListAuthorizedPropertiesRequest
 
-    body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
-    req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
+    body_fields = body.model_dump(exclude=_NEGOTIATION_EXCLUDE, exclude_none=True)
+    with adcp_validation_boundary(context="list_authorized_properties request"):
+        req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
 
     response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -434,14 +487,30 @@ async def create_media_buy(
     Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    account_ref = to_account_reference(body.account)
+    # Coerce wire dicts to the SDK types the raw wrapper declares, inside the
+    # shared boundary so a malformed object rejects with the two-layer envelope
+    # (top-level suggestion + field) instead of a raw-ValidationError leak.
+    # The string/dict brand shorthand (#1324/#1537) is coerced here too, so an
+    # invalid brand yields the same boundary-translated envelope.
+    with adcp_validation_boundary(context="create_media_buy request"):
+        account_ref = to_account_reference(body.account)
+        brand_ref = to_brand_reference(body.brand)
+        reporting_webhook = to_reporting_webhook(body.reporting_webhook)
+        push_notification_config = to_push_notification_config(body.push_notification_config)
+        context = to_context_object(body.context)
     response = await media_buy_create_module.create_media_buy_raw(
-        brand=body.brand,
-        packages=body.packages,  # type: ignore[arg-type]  # REST sends raw dicts; coerced by CreateMediaBuyRequest
+        brand=brand_ref,
+        # packages stay wire dicts: CreateMediaBuyRequest validates them as the
+        # request's packages[] field, preserving full-request error field paths.
+        packages=body.packages,
         start_time=body.start_time,
         end_time=body.end_time,
         po_number=body.po_number,
         account=account_ref,
+        reporting_webhook=reporting_webhook,
+        push_notification_config=push_notification_config,
+        context=context,
+        ext=body.ext,
         idempotency_key=body.idempotency_key,
         identity=identity,
         raw_wire_payload=raw_wire_payload,
@@ -452,6 +521,12 @@ async def create_media_buy(
 @router.put("/media-buys/{media_buy_id}", dependencies=[Depends(_version_after_require)])
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
+    # Same context string as _build_update_request's boundary, so a malformed
+    # object rejects with an identical message prefix wherever it validates.
+    with adcp_validation_boundary(context="update_media_buy request"):
+        push_notification_config = to_push_notification_config(body.push_notification_config)
+        context = to_context_object(body.context)
+        reporting_webhook = to_reporting_webhook(body.reporting_webhook)
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
         paused=body.paused,
@@ -461,6 +536,16 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         currency=body.currency,
         start_time=body.start_time,
         end_time=body.end_time,
+        pacing=body.pacing,
+        daily_budget=body.daily_budget,
+        # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
+        # request's packages[] field, preserving full-request error field paths.
+        packages=body.packages,
+        push_notification_config=push_notification_config,
+        context=context,
+        reporting_webhook=reporting_webhook,
+        ext=body.ext,
+        idempotency_key=body.idempotency_key,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -472,7 +557,8 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
     if body.account is not None:
         from src.core.transport_helpers import enrich_identity_with_account
 
-        account_ref = to_account_reference(body.account)
+        with adcp_validation_boundary(context="get_media_buy_delivery request"):
+            account_ref = to_account_reference(body.account)
         enriched = enrich_identity_with_account(identity, account_ref)
         assert enriched is not None  # identity is non-None (from require_auth)
         identity = enriched
@@ -485,6 +571,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
         reporting_dimensions=body.reporting_dimensions,
         attribution_window=body.attribution_window,
         include_package_daily_breakdown=body.include_package_daily_breakdown,
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -493,13 +580,26 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
 @router.post("/creatives/sync", dependencies=[Depends(_version_after_require)])
 async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
+    # Coerce the raw account dict into an AccountReference so sync_creatives_raw
+    # resolves it at the transport boundary (mirror create_media_buy / the sibling
+    # handlers above — #1417).
+    with adcp_validation_boundary(context="sync_creatives request"):
+        account_ref = to_account_reference(body.account)
+        push_notification_config = to_push_notification_config(body.push_notification_config)
+        context = to_context_object(body.context)
+
     response = creatives_sync_module.sync_creatives_raw(
-        creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
+        # creatives stay wire dicts: _sync_creatives_impl validates each entry
+        # individually (partial-success semantics with per-creative results).
+        creatives=body.creatives,
         assignments=body.assignments,
         creative_ids=body.creative_ids,
         delete_missing=body.delete_missing,
         dry_run=body.dry_run,
         validation_mode=body.validation_mode,
+        push_notification_config=push_notification_config,
+        context=context,
+        account=account_ref,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -508,13 +608,29 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
 @router.post("/creatives", dependencies=[Depends(_version_after_require)])
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
+    # Coerce the raw wire filters dict into a typed CreativeFilters here (#1493): the
+    # merged list_creatives_raw expects a typed object (it calls .model_dump()), and
+    # this is where an empty concept_ids etc. surfaces the VALIDATION_ERROR envelope.
     filters = coerce_creative_filters(body.filters)
     response = creatives_listing_module.list_creatives_raw(
         media_buy_id=body.media_buy_id,
         media_buy_ids=body.media_buy_ids,
         status=body.status,
         format=body.format,
+        tags=body.tags,
+        created_after=body.created_after,
+        created_before=body.created_before,
+        search=body.search,
         filters=filters,
+        fields=body.fields,
+        include_performance=body.include_performance,
+        include_assignments=body.include_assignments,
+        include_sub_assets=body.include_sub_assets,
+        page=body.page,
+        limit=body.limit,
+        sort_by=body.sort_by,
+        sort_order=body.sort_order,
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -526,6 +642,7 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
     response = performance_module.update_performance_index_raw(
         media_buy_id=body.media_buy_id,
         performance_data=body.performance_data,
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -536,7 +653,8 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
     """List accounts accessible to the authenticated agent (auth required)."""
     from src.core.schemas.account import ListAccountsRequest
 
-    req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    with adcp_validation_boundary(context="list_accounts request"):
+        req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude=_NEGOTIATION_EXCLUDE))
     response = accounts_module.list_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -546,7 +664,8 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
-    req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    with adcp_validation_boundary(context="sync_accounts request"):
+        req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude=_NEGOTIATION_EXCLUDE))
     # Preserve the buyer's idempotency_key; synthesize only when omitted (#1512), matching
     # the MCP/A2A siblings so a retry carrying the same key is not fabricated a fresh UUID.
     req.idempotency_key = req.idempotency_key or str(uuid.uuid4())

@@ -170,7 +170,7 @@ class TestMCPAuthMiddlewareBehavior:
                 await middleware.on_call_tool(mock_context, call_next)
 
         # Wire envelope carries the auth code — not a code-less error.
-        assert exc.value.envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
+        assert exc.value.envelope["errors"][0]["code"] == "AUTH_REQUIRED"
         # Tool was NOT called
         call_next.assert_not_awaited()
 
@@ -182,7 +182,7 @@ class TestMCPAuthMiddlewareBehavior:
         but returns a principal-less identity for a MISSING one. Without the
         middleware guard the request would fall through to the version check and
         flip the error ordering on missing-vs-invalid. The middleware rejects the
-        principal-less identity, translating it to the same AUTH_TOKEN_INVALID
+        principal-less identity, translating it to the same AUTH_REQUIRED
         envelope, so the order and wire shape are stable across both cases.
         """
         from src.core.tool_error_logging import AdCPToolError
@@ -201,7 +201,7 @@ class TestMCPAuthMiddlewareBehavior:
             with pytest.raises(AdCPToolError) as exc:
                 await middleware.on_call_tool(mock_context, call_next)
 
-        assert exc.value.envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
+        assert exc.value.envelope["errors"][0]["code"] == "AUTH_REQUIRED"
         call_next.assert_not_awaited()
 
     @pytest.mark.asyncio

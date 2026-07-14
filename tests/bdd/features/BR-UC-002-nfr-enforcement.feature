@@ -33,6 +33,13 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     But the request has no valid authentication
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail with authentication error
+    # Strict wire conformance (salesagent-b0kx): pin the canonical code and the
+    # top-level error.json suggestion (POST-F3 — buyer knows how to recover),
+    # matching the 13 sibling UCs that already assert the suggestion on auth
+    # errors. Routes through each transport's REAL auth gate (A2A
+    # on_message_send no-token gate, REST _require_auth_dep, MCP boundary).
+    And the error code should be "AUTH_REQUIRED"
+    And the suggestion should contain "credentials"
     And no adapter calls should have been made
 
   # Replaces nfr-006 "Then the system should validate budget against minimum order requirements"
@@ -47,3 +54,18 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error should indicate minimum spend requirement
+
+  # salesagent-wvry: get_total_budget() returns Decimal; the pending-approval
+  # audit feed (operation create_media_buy_pending_approval, NOT in audit_logger
+  # sensitive_ops) drove the >$10k high-value Seller alert SOLELY off the budget
+  # gate. With a raw Decimal that gate's isinstance(.,(int,float)) was False, so
+  # the alert silently never fired. The auto-approve op create_media_buy is a
+  # sensitive_op (alerts regardless) so the bug is specific to the pending path.
+  @T-UC-002-nfr-highvalue @nfr @nfr-highvalue
+  Scenario: High-value pending media buy (>$10k) alerts the Seller
+    Given the tenant requires manual approval
+    And a valid create_media_buy request with total budget 15000
+    And the account exists and is active
+    And the Seller observes high-value audit alerts
+    When the Buyer Agent sends the create_media_buy request
+    Then a high-value alert should be sent to the Seller

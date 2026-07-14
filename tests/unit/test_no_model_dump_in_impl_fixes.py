@@ -80,7 +80,6 @@ class TestMediaBuyRepositoryCreateFromRequest:
         assert isinstance(result.raw_request, dict), (
             f"raw_request should be dict, got {type(result.raw_request).__name__}"
         )
-        # buyer_ref removed from CreateMediaBuyRequest in adcp 3.12
         assert "brand" in result.raw_request
 
     def test_create_from_request_injects_package_ids(self):

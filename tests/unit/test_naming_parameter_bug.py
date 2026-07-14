@@ -33,7 +33,6 @@ class TestBuildOrderNameContextParameters:
         This test documents why callers MUST use keyword arguments.
         """
         request = MagicMock()
-        request.buyer_ref = "TEST-001"
         request.brand = MagicMock(domain="testbrand.com")
         request.get_total_budget.return_value = 1000
         request.packages = []
@@ -50,7 +49,6 @@ class TestBuildOrderNameContextParameters:
     def test_keyword_arg_works_correctly(self):
         """Passing gemini_key as keyword argument works correctly."""
         request = MagicMock()
-        request.buyer_ref = "TEST-001"
         request.brand = MagicMock(domain="testbrand.com")
         request.get_total_budget.return_value = 1000
         request.packages = []
@@ -98,15 +96,6 @@ class TestMediaBuyIdInContext:
         context = build_order_name_context(request, [], datetime(2025, 1, 1), datetime(2025, 1, 31))
         assert context["media_buy_id"] == ""
 
-    def test_buyer_ref_alias_maps_to_media_buy_id(self):
-        """buyer_ref should be a backward-compatible alias for media_buy_id."""
-        request = self._make_request()
-        context = build_order_name_context(
-            request, [], datetime(2025, 1, 1), datetime(2025, 1, 31), media_buy_id="buy_xyz789"
-        )
-        assert context["buyer_ref"] == "buy_xyz789"
-        assert context["buyer_ref"] == context["media_buy_id"]
-
     def test_template_renders_media_buy_id(self):
         """Template with {media_buy_id} should render correctly."""
         request = self._make_request()
@@ -114,16 +103,6 @@ class TestMediaBuyIdInContext:
             request, [], datetime(2025, 1, 1), datetime(2025, 1, 31), media_buy_id="buy_abc123"
         )
         result = apply_naming_template("{brand_name} - {media_buy_id} - {date_range}", context)
-        assert "buy_abc123" in result
-        assert "  " not in result
-
-    def test_legacy_buyer_ref_template_renders_media_buy_id(self):
-        """Legacy template with {buyer_ref} should render media_buy_id value."""
-        request = self._make_request()
-        context = build_order_name_context(
-            request, [], datetime(2025, 1, 1), datetime(2025, 1, 31), media_buy_id="buy_abc123"
-        )
-        result = apply_naming_template("{brand_name} - {buyer_ref} - {date_range}", context)
         assert "buy_abc123" in result
         assert "  " not in result
 

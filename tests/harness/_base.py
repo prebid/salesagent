@@ -231,12 +231,16 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
     message = fallback_message
     recovery: str | None = None
     details: dict | None = None
+    suggestion: str | None = None
+    field: str | None = None
     adcp_err = envelope.get("adcp_error")
     if isinstance(adcp_err, dict):
         error_code = adcp_err.get("code")
         message = adcp_err.get("message", message) or message
         recovery = adcp_err.get("recovery")
         details = adcp_err.get("details")
+        suggestion = adcp_err.get("suggestion")
+        field = adcp_err.get("field")
     errors = envelope.get("errors")
     if isinstance(errors, list) and errors and isinstance(errors[0], dict):
         first = errors[0]
@@ -244,9 +248,11 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
         message = first.get("message", message) or message
         recovery = recovery or first.get("recovery")
         details = details or first.get("details")
+        suggestion = suggestion or first.get("suggestion")
+        field = field or first.get("field")
     if not error_code:
         return None
-    reconstructed = _adcp_error_from_code(error_code, message, recovery, details)
+    reconstructed = _adcp_error_from_code(error_code, message, recovery, details, suggestion, field)
     if reconstructed is not None:
         # Stash the REAL wire envelope on the reconstructed exception so the
         # A2A/REST dispatchers can capture the actual wire bytes (artifact
@@ -294,6 +300,25 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     if isinstance(exc, InternalError):
         return RuntimeError(message)
     return exc
+
+
+class _TestClock:
+    """Simple clock for BDD date token resolution ({now}, {N days from now}, etc.)."""
+
+    def now_iso(self) -> str:
+        from datetime import UTC, datetime
+
+        return datetime.now(UTC).isoformat()
+
+    def future_iso(self, days: int) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) + timedelta(days=days)).isoformat()
+
+    def past_iso(self, days: int) -> str:
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
 
 class BaseTestEnv:
@@ -365,6 +390,7 @@ class BaseTestEnv:
         self._session: Session | None = None
         self._identity_cache: dict[str, ResolvedIdentity] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
+        self.clock = _TestClock()  # BDD steps may use env.clock for date tokens
         # Real serialized success-path wire, stashed by _run_a2a_handler /
         # _run_mcp_client (the only paths that capture it) and read by the
         # A2A/MCP dispatchers. None unless such a path ran — REST builds its
@@ -821,53 +847,29 @@ class BaseTestEnv:
         5. Return raw httpx.Response
 
         Identity handling (mirrors production auth middleware):
-        - identity is None → dep raises AdCPAuthenticationError (no token)
+        - identity is None → dep raises AUTH_REQUIRED (no token) with suggestion
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
         """
         from src.app import app
         from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
-        from tests.harness.transport import Transport, WireAuth
+        from tests.harness.transport import WireAuth
 
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        if identity is _NO_OVERRIDE:
-            identity = self.identity_for(Transport.REST)
-
-        self._commit_factory_data()
-
-        # Get client first (may set default dep overrides on first call),
-        # then override per-request auth AFTER.
-        client = self.get_rest_client()
-
-        # Configure per-request auth (must be after get_rest_client). WireAuth
-        # removes the harness's dependency overrides for exactly this request,
-        # so UnifiedAuthMiddleware and the real auth dependencies consume the
-        # raw headers. Restore the previous overrides even when the request
-        # raises, since ``app`` is process-global across tests.
+        # Snapshot the process-global dependency overrides BEFORE
+        # _prepare_rest_request/_configure_rest_auth_override mutate them, and
+        # restore after the request even when it raises — ``app`` is
+        # process-global across tests, and the WireAuth path pops the overrides
+        # entirely so the real middleware/deps consume the raw headers.
         auth_dependencies = (_require_auth_dep, _resolve_auth_dep)
         missing_override = object()
         previous_overrides = {
             dependency: app.dependency_overrides.get(dependency, missing_override) for dependency in auth_dependencies
         }
 
+        client, identity = self._prepare_rest_request(kwargs)
         request_headers: dict[str, str] | None = None
         if isinstance(identity, WireAuth):
             request_headers = dict(identity.headers)
-            for dependency in auth_dependencies:
-                app.dependency_overrides.pop(dependency, None)
-        elif identity is None:
-            from src.core.exceptions import AdCPAuthenticationError
-
-            def _no_auth() -> None:
-                raise AdCPAuthenticationError("Authentication required")
-
-            app.dependency_overrides[_require_auth_dep] = _no_auth
-            app.dependency_overrides[_resolve_auth_dep] = lambda: None
-        else:
-            app.dependency_overrides[_require_auth_dep] = lambda: identity
-            app.dependency_overrides[_resolve_auth_dep] = lambda: identity
-
         try:
             body = self.build_rest_body(**kwargs)
             if self.REST_METHOD == "get":
@@ -881,6 +883,58 @@ class BaseTestEnv:
                     app.dependency_overrides.pop(dependency, None)
                 else:
                     app.dependency_overrides[dependency] = previous
+
+    def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:
+        """Resolve identity, commit factory data, get the client, and install auth.
+
+        Single source of truth for the REST request preamble every dispatcher
+        shares: pops ``identity`` from *kwargs* (defaulting to the REST identity),
+        commits pending factory rows, creates/returns the TestClient, and installs
+        the per-request auth-dep override (which must run AFTER ``get_rest_client``).
+        Returns ``(client, resolved_identity)``; the caller builds the body from the
+        now-identity-free *kwargs* and issues the HTTP verb.
+        """
+        from tests.harness.transport import Transport
+
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        if identity is _NO_OVERRIDE:
+            identity = self.identity_for(Transport.REST)
+
+        self._commit_factory_data()
+        client = self.get_rest_client()
+        self._configure_rest_auth_override(identity)
+        return client, identity
+
+    @staticmethod
+    def _configure_rest_auth_override(identity: Any) -> None:
+        """Install per-request FastAPI auth-dep overrides for the test app.
+
+        Single source of truth for the REST auth contract every dispatcher needs
+        (must run AFTER ``get_rest_client``). With ``identity=None`` the
+        ``_require_auth_dep`` override is REMOVED so the real production
+        dependency runs against the token-less request and raises the real
+        ``AUTH_REQUIRED`` error — the harness must not hand-copy the production
+        raise (a simulated raise drifted from production once already,
+        #1417/cx41); otherwise both deps return the identity.
+        """
+        from src.app import app
+        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+        from tests.harness.transport import WireAuth
+
+        if isinstance(identity, WireAuth):
+            # WireAuth removes the harness's dependency overrides for exactly this
+            # request, so UnifiedAuthMiddleware and the real auth dependencies
+            # consume the raw wire headers. _run_rest_request snapshots and
+            # restores the previous overrides around the request.
+            app.dependency_overrides.pop(_require_auth_dep, None)
+            app.dependency_overrides.pop(_resolve_auth_dep, None)
+        elif identity is None:
+            app.dependency_overrides.pop(_require_auth_dep, None)
+            app.dependency_overrides[_resolve_auth_dep] = lambda: None
+        else:
+            app.dependency_overrides[_require_auth_dep] = lambda: identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.

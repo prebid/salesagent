@@ -132,6 +132,7 @@ class MediaBuyUoW(BaseUoW):
 
     media_buys: MediaBuyRepository | None
     products: ProductRepository | None
+    creatives: CreativeRepository | None
     currency_limits: CurrencyLimitRepository | None
     idempotency_attempts: IdempotencyAttemptRepository | None
 
@@ -139,12 +140,14 @@ class MediaBuyUoW(BaseUoW):
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
+        self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
         self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
         self.products = None
+        self.creatives = None
         self.currency_limits = None
         self.idempotency_attempts = None
 

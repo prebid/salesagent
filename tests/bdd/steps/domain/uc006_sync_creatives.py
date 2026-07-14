@@ -20,8 +20,8 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -183,14 +183,9 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
         # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
         domain = account_id.replace("_", "-") + ".com"
         other_principal = PrincipalFactory(tenant=tenant)
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=account_id,
-            status="active",
-            brand={"domain": domain},
-            operator=domain,
+        seed_account_with_access(
+            tenant, other_principal, account_id=account_id, status="active", brand_domain=domain, operator=domain
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
         return
 
     if status is None:
@@ -200,14 +195,9 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
     # BrandReference domain must match ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]...)$
     # Replace underscores with hyphens for valid domains
     domain = account_id.replace("_", "-") + ".com"
-    account = AccountFactory(
-        tenant=tenant,
-        account_id=account_id,
-        status=status,
-        brand={"domain": domain},
-        operator=domain,
+    seed_account_with_access(
+        tenant, principal, account_id=account_id, status=status, brand_domain=domain, operator=domain
     )
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: object, principal: object) -> None:
@@ -216,13 +206,16 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     access_denied_domains = {"other-agent.com"}
 
     if brand_domain == "multi.com":
-        # Ambiguous: create 3 accounts with same natural key
+        # Ambiguous: create 3 accounts with same natural key, all accessible to the
+        # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
+        # resolution is access-scoped (#1417).
         for i in range(3):
-            AccountFactory(
-                tenant=tenant,
+            seed_account_with_access(
+                tenant,
+                principal,
                 account_id=f"acc-multi-{i}",
                 status="active",
-                brand={"domain": brand_domain},
+                brand_domain=brand_domain,
                 operator=operator,
             )
     elif brand_domain in ("unknown.com",):
@@ -231,24 +224,24 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     elif brand_domain in access_denied_domains:
         # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
         other_principal = PrincipalFactory(tenant=tenant)
-        account = AccountFactory(
-            tenant=tenant,
+        seed_account_with_access(
+            tenant,
+            other_principal,
             account_id=f"acc-{brand_domain.replace('.', '-')}",
             status="active",
-            brand={"domain": brand_domain},
+            brand_domain=brand_domain,
             operator=operator,
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
     else:
         # Single match — create one active account
-        account = AccountFactory(
-            tenant=tenant,
+        seed_account_with_access(
+            tenant,
+            principal,
             account_id=f"acc-{brand_domain.replace('.', '-')}",
             status="active",
-            brand={"domain": brand_domain},
+            brand_domain=brand_domain,
             operator=operator,
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -292,8 +285,6 @@ def when_sync_creative(ctx: dict) -> None:
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
     """Create tenant + principal if not already created by a Given step."""
-    from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-
     ensure_tenant_principal(ctx, env)
 
 
@@ -427,22 +418,16 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str | None]:
     """Return (error_code, suggestion) for either AdCPError or adcp.types.Error.
 
-    - AdCPError: error_code attribute; suggestion lives in details['suggestion'].
-    - adcp.types.Error: code attribute; suggestion is a top-level field.
+    STRICT error.json conformance: ``suggestion`` is a top-level attribute on
+    both shapes — a copy buried in the free-form ``details`` dict is a
+    conformance bug and deliberately does not count (#1417).
     """
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
-        code = error.error_code
-        suggestion = (error.details or {}).get("suggestion") if error.details else None
-        return code, suggestion
+        return error.error_code, error.suggestion
     code = getattr(error, "error_code", None) or getattr(error, "code", None)
-    suggestion = getattr(error, "suggestion", None)
-    if suggestion is None:
-        details = getattr(error, "details", None)
-        if isinstance(details, dict):
-            suggestion = details.get("suggestion")
-    return code, suggestion
+    return code, getattr(error, "suggestion", None)
 
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))
@@ -458,13 +443,18 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENT_PACKAGE_ID_REQUIRED",
         "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
         "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
+        # Idempotency-key length codes — merged from the shadowed duplicate step
+        # def this literal used to have (#1417): production does not
+        # validate idempotency_key length yet.
+        "IDEMPOTENCY_KEY_TOO_SHORT",
+        "IDEMPOTENCY_KEY_TOO_LONG",
     }
 
     error = ctx.get("error")
     if error is None and error_code in _SPEC_PRODUCTION_GAP_CODES:
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: production does not raise {error_code} for empty/malformed "
-            "assignment entries — spec defines these codes but production silently accepts them"
+            f"SPEC-PRODUCTION GAP: production does not raise {error_code} — "
+            "spec defines this code but production silently accepts the input"
         )
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
@@ -1889,21 +1879,15 @@ def given_buyer_empty_principal_id_in_auth(ctx: dict) -> None:
     """Buyer presents an identity whose principal_id is the empty string.
 
     Sets up the same state as 'the request has an empty principal_id'.
-    Production raises AUTH_TOKEN_INVALID; spec demands AUTH_REQUIRED.
-    The downstream generic Then step ``the error code should be "AUTH_REQUIRED"``
-    performs strict comparison that cannot accommodate this gap without
-    conftest-level xfail for tag T-UC-006-ext-a-empty.
+    Production emits the standard AUTH_REQUIRED for the missing-auth path,
+    matching the spec; the downstream generic Then step
+    ``the error code should be "AUTH_REQUIRED"`` asserts it.
     """
     env = ctx["env"]
     ctx["has_auth"] = False
     ctx["identity"] = PrincipalFactory.make_identity(
         principal_id="",
         tenant_id=env._tenant_id,
-    )
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: production raises AUTH_TOKEN_INVALID, spec requires AUTH_REQUIRED. "
-        "Generic Then step 'the error code should be \"AUTH_REQUIRED\"' does strict comparison. "
-        "Needs conftest xfail for T-UC-006-ext-a-empty (same gap as T-UC-006-ext-a-rest/mcp)."
     )
 
 
@@ -1934,18 +1918,12 @@ def given_principal_no_associated_tenant(ctx: dict) -> None:
 def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
     """Assert the sync was rejected with the spec-named auth error code.
 
-    Production raises AdCPAuthenticationError.error_code='AUTH_TOKEN_INVALID'
-    while the spec uses 'AUTH_REQUIRED'. When they differ, xfail with the
-    spec-production gap reason rather than weakening the assertion.
+    Production emits the standard AUTH_REQUIRED for authentication failures,
+    matching the spec.
     """
     error = ctx.get("error")
     assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
     actual_code, _ = _extract_error_code_and_suggestion(error)
-    if actual_code != expected_code:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: spec requires error_code '{expected_code}' but production "
-            f"raises '{actual_code}' (AdCPAuthenticationError.error_code='AUTH_TOKEN_INVALID')"
-        )
     assert actual_code == expected_code, (
         f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
     )
@@ -2139,8 +2117,11 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
             self.error_code = code
             self.code = code
             self.message = message
+            # STRICT error.json conformance: suggestion is top-level ONLY —
+            # synthesizing a details copy would feed the exact non-conformant
+            # position the harness must reject (#1417).
             self.suggestion = suggestion
-            self.details = {"suggestion": suggestion} if suggestion else {}
+            self.details: dict = {}
 
         def __str__(self) -> str:
             return self.message
@@ -4483,35 +4464,6 @@ def then_request_proceed_normally(ctx: dict) -> None:
     assert has_products or has_creatives, (
         f"Expected a successful response with products or creatives, got {type(resp).__name__}"
     )
-
-
-@then(parsers.parse("the error should be {error_code} with suggestion"))
-def then_idempotency_error_with_suggestion(ctx: dict, error_code: str) -> None:
-    """Assert idempotency_key validation error with the specified code and a suggestion.
-
-    Delegates to the existing then_error_code_with_suggestion for known codes.
-    For idempotency-specific codes (not yet in production), uses SPEC-PRODUCTION GAP.
-    """
-    _IDEMPOTENCY_CODES = {
-        "IDEMPOTENCY_KEY_TOO_SHORT",
-        "IDEMPOTENCY_KEY_TOO_LONG",
-    }
-    if error_code in _IDEMPOTENCY_CODES:
-        error = ctx.get("error")
-        if error is None:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: production does not validate idempotency_key length. "
-                f"Spec requires {error_code} but no error was raised."
-            )
-        actual_code, suggestion = _extract_error_code_and_suggestion(error)
-        if actual_code != error_code:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: expected {error_code}, got '{actual_code}'. "
-                f"Production may not enforce idempotency_key length constraints."
-            )
-        assert suggestion, f"Expected suggestion on {error_code}, got {suggestion!r}"
-    else:
-        then_error_code_with_suggestion(ctx, error_code)
 
 
 # ═══════════════════════════════════════════════════════════════════════

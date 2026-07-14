@@ -117,8 +117,8 @@ class TestNonScalarConceptValueDropped:
     for the _coerce_concept_value non-scalar branch (the symmetric half of the
     numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
 
-    def test_non_scalar_concept_value_is_dropped(self, integration_db, caplog):
-        import logging
+    def test_non_scalar_concept_value_is_dropped(self, integration_db):
+        from unittest.mock import patch
 
         from tests.factories import CreativeFactory
 
@@ -131,8 +131,11 @@ class TestNonScalarConceptValueDropped:
                 status="approved",
                 data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
             )
-            listing_logger = "src.core.tools.creatives.listing"
-            with caplog.at_level(logging.WARNING, logger=listing_logger):
+            # Assert the code EMITS the warning by patching the module logger, not by
+            # capturing log records: the REST path runs in-process, so the patch applies,
+            # and this is immune to the tox/integration logging config (levels, handlers,
+            # propagation, logging.disable) that suppressed capture-based approaches.
+            with patch("src.core.tools.creatives.listing.logger") as mock_logger:
                 result = env.call_via(Transport.REST)
 
             assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
@@ -140,18 +143,18 @@ class TestNonScalarConceptValueDropped:
             # Dropped to None → exclude_none omits the keys from the wire entirely.
             assert "concept_id" not in creative
             assert "concept_name" not in creative
-            # Observability (No Quiet Failures): both corrupt values are surfaced
-            # by the production module logger, not merely swallowed or captured
-            # incidentally through unrelated root-logger configuration.
-            dropped_warnings = [
-                record.getMessage()
-                for record in caplog.records
-                if record.name == listing_logger and record.levelno == logging.WARNING
+            # Observability (No Quiet Failures): BOTH corrupt values are surfaced in
+            # logs, not silent. Production logs lazily (msg, type-name arg), so match
+            # the drop message and collect the lazy args rather than a rendered string.
+            warning_calls = mock_logger.warning.call_args_list
+            dropped_types = [
+                call.args[1]
+                for call in warning_calls
+                if call.args and "Dropping non-scalar concept value" in str(call.args[0])
             ]
-            assert dropped_warnings == [
-                "Dropping non-scalar concept value of type list from creative listing",
-                "Dropping non-scalar concept value of type dict from creative listing",
-            ]
+            assert dropped_types == ["list", "dict"], (
+                f"expected both drop warnings (list then dict); logger.warning calls: {warning_calls}"
+            )
 
 
 class TestSellerConceptEnrichmentIsFilterable:

@@ -115,8 +115,8 @@ class TestAuthOptionalSkills:
             )
 
         assert "Authentication required" in str(exc_info.value)
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
-        assert exc_info.value.recovery == "terminal"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_update_media_buy_requires_auth(self):
@@ -138,22 +138,22 @@ class TestAuthOptionalSkills:
                 identity=None,
             )
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
         assert "supported_versions" not in (exc_info.value.details or {})
 
     def test_missing_token_raises_typed_authentication_error_at_resolver(self):
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             self.handler._resolve_a2a_identity(None, require_valid_token=True)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
-        assert exc_info.value.recovery == "terminal"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_auth_failure_never_sends_or_retains_attacker_push_callback(self):
         """Pre-auth callback data cannot reach the generic task-failure webhook path."""
         from a2a.server.routes.common import ServerCallContext
         from a2a.types import (
-            InternalError,
+            InvalidRequestError,
             SendMessageConfiguration,
             SendMessageRequest,
             TaskPushNotificationConfig,
@@ -175,18 +175,20 @@ class TestAuthOptionalSkills:
         with (
             patch("src.a2a_server.adcp_a2a_server.record_boundary_error_for_identity") as record_error,
             patch.object(self.handler, "_send_protocol_webhook", new_callable=AsyncMock) as send_webhook,
-            pytest.raises(InternalError) as exc_info,
+            pytest.raises(InvalidRequestError) as exc_info,
         ):
             await self.handler.on_message_send(params, ServerCallContext())
 
-        assert_envelope_shape(exc_info.value.data, "AUTH_TOKEN_INVALID", recovery="terminal")
+        # The missing-token rejection is a protocol-level JSON-RPC error raised
+        # BEFORE identity resolution, task creation, or callback persistence
+        # (#1417) — carrying the buyer-facing two-layer envelope in ``data``.
+        assert_envelope_shape(exc_info.value.data, "AUTH_REQUIRED", recovery="correctable")
         send_webhook.assert_not_awaited()
-        # The auth failure routes through the identity-aware helper with the None
-        # identity resolved at the boundary — so tenant_id degrades to None and the
-        # activity-feed + audit writes are skipped. A regression that hand-rolled a
-        # fabricated "unknown" tenant (truthy) would drive those sinks for an
-        # unauthenticated caller; asserting the identity-aware call with None pins that.
-        record_error.assert_called_once_with("a2a", "message_processing", ANY, None)
+        # Pre-auth rejection short-circuits before the boundary-telemetry helper:
+        # nothing is recorded for an unauthenticated sender, so no tenant-scoped
+        # sink can fire for the attacker (stronger than the previous flow, which
+        # relied on the helper degrading tenant_id to None).
+        record_error.assert_not_called()
         assert self.handler.tasks == {}
         assert self.handler._task_push_configs == {}
 

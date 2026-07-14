@@ -1,6 +1,7 @@
 """Factory_boy factories for core tenant-related models.
 
 Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
+Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig)
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from src.core.database.models import (
     PublisherPartner,
     Tenant,
 )
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 
 def subdomain_for(tenant_id: str) -> str:
@@ -134,6 +136,48 @@ class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant = SubFactory(TenantFactory)
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     adapter_type = "mock"
+
+
+def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> None:
+    """Persist adapter test-behavior to the tenant's AdapterConfig row.
+
+    BDD Given steps configure the in-process mock adapter directly (attribute /
+    side_effect on ``env.mock["adapter"]``), then call this helper to mirror the
+    same behavior into the database so the DB-backed mock adapter
+    (``mock_ad_server._read_test_behavior``) picks up failure/approval injection
+    for Docker-hosted / out-of-process transports.
+
+    All keyword behavior flags (``fail_on_create``, ``fail_on_update``,
+    ``error_message``, ``error_details``, ``recovery``, ``manual_approval_required``)
+    are merged into ``config_json["test_behavior"]`` — accumulating across calls so
+    a later flag does not clobber an earlier one. ``manual_approval_required`` is
+    additionally written to the ``mock_manual_approval_required`` column, which is
+    the read path used when the real mock adapter is constructed from config.
+
+    Args:
+        env: Harness environment exposing ``get_session()`` (real-DB envs).
+        tenant_id: Tenant whose AdapterConfig to upsert.
+        **behavior: Test-behavior flags to persist.
+    """
+    session = env.get_session()
+    repo = AdapterConfigRepository(session, tenant_id)
+    row = repo.find_by_tenant()
+    if row is None:
+        row = AdapterConfig(tenant_id=tenant_id, adapter_type="mock")
+        session.add(row)
+
+    # Reassign config_json (rather than mutating in place) so SQLAlchemy's JSON
+    # change tracking marks the column dirty and emits an UPDATE.
+    config_json = dict(row.config_json or {})
+    test_behavior = dict(config_json.get("test_behavior") or {})
+    test_behavior.update(behavior)
+    config_json["test_behavior"] = test_behavior
+    row.config_json = config_json
+
+    if "manual_approval_required" in behavior:
+        row.mock_manual_approval_required = bool(behavior["manual_approval_required"])
+
+    session.commit()
 
 
 class GAMInventoryFactory(factory.alchemy.SQLAlchemyModelFactory):

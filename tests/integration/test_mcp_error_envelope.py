@@ -232,16 +232,16 @@ class TestMcpWireErrorEnvelope:
         assert "past" in msg_lower or "start" in msg_lower, past_or_start_msg
 
     def test_get_media_buy_delivery_missing_identity_emits_auth_envelope_on_wire(self, integration_db):
-        """Missing identity in get_media_buy_delivery surfaces AUTH_TOKEN_INVALID on the MCP wire.
+        """Missing identity in get_media_buy_delivery surfaces AUTH_REQUIRED on the MCP wire.
 
         Flow:
             Client(mcp).call_tool("get_media_buy_delivery", {...}) with identity=None
               → MCP wrapper resolve_identity returns None
-              → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Identity is required")
-              → AdCPAuthRequiredError carries the project-specific error_code="AUTH_TOKEN_INVALID"
-              → with_error_logging → translate_to_tool_error → wire envelope
+              → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Authentication required...")
+              → AdCPAuthRequiredError carries error_code="AUTH_REQUIRED" (passthrough STANDARD code)
+              → with_error_logging → _translate_to_tool_error → wire envelope
 
-        AUTH_TOKEN_INVALID is the project's BDD-grounded code and passes through unchanged.
+        AUTH_REQUIRED is a STANDARD spec code — passes through unchanged.
         """
         is_error, envelope = self._call_mcp_tool_capturing_envelope(
             "get_media_buy_delivery",
@@ -252,10 +252,9 @@ class TestMcpWireErrorEnvelope:
         assert is_error, "Missing identity must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
 
-        # AdCPAuthRequiredError -> project-specific AUTH_TOKEN_INVALID, passed through unchanged.
-        # Recovery is terminal for AdCPAuthenticationError: a hardcoded class default,
-        # intentionally set because the 3.1 storyboards grade the error code, not the recovery class.
-        assert_envelope_shape(envelope, "AUTH_TOKEN_INVALID", recovery="terminal")
+        # AdCPAuthRequiredError -> AUTH_REQUIRED (AdCP 3.1 spec code, passed through unchanged).
+        # Recovery is correctable per the pinned error-code enum (#1417).
+        assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()
         ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"

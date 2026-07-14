@@ -34,7 +34,7 @@ class TestMCPErrorShapes:
         typed exception + error_code + message — without the union dilution.
 
         Missing identity in ``_create_media_buy_impl`` raises
-        ``AdCPAuthRequiredError`` (``AUTH_TOKEN_INVALID``) rather than
+        ``AdCPAuthRequiredError`` (``AUTH_REQUIRED``) rather than
         ``AdCPValidationError`` — identity-required is auth, not validation.
         """
         from src.core.exceptions import AdCPAuthRequiredError
@@ -53,8 +53,8 @@ class TestMCPErrorShapes:
             await _create_media_buy_impl(req=req, identity=None)
 
         error = exc_info.value
-        assert error.error_code == "AUTH_TOKEN_INVALID"
-        assert "Identity is required" in error.message
+        assert error.error_code == "AUTH_REQUIRED"
+        assert "Authentication required" in error.message
 
     def test_pydantic_validation_error_for_invalid_request_shape(self):
         """CreateMediaBuyRequest raises Pydantic ValidationError for malformed input.
@@ -101,7 +101,7 @@ class TestMCPErrorShapes:
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert "Identity is required" in str(exc_info.value)
+        assert "Authentication required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_not_found_principal_raises_auth_error(self):
@@ -153,8 +153,8 @@ class TestA2AErrorShapes:
                 identity=None,
             )
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
-        assert exc_info.value.recovery == "terminal"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
         assert "Authentication required" in str(exc_info.value)
 
     @pytest.mark.asyncio
@@ -191,8 +191,8 @@ class TestA2AErrorShapes:
                 identity=invalid_identity,
             )
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
-        assert exc_info.value.recovery == "terminal"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_missing_params_raises_typed_validation_error(self):
@@ -284,7 +284,7 @@ class TestUpdateMediaBuyErrorShapes:
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             _update_media_buy_impl(req=req, identity=None)
 
-        assert "Identity is required" in str(exc_info.value)
+        assert "Authentication required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_a2a_missing_auth_raises_server_error(self):
@@ -298,8 +298,8 @@ class TestUpdateMediaBuyErrorShapes:
                 identity=None,
             )
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
-        assert exc_info.value.recovery == "terminal"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
 
 class TestListCreativesErrorShapes:
@@ -308,10 +308,10 @@ class TestListCreativesErrorShapes:
     @pytest.mark.asyncio
     async def test_missing_auth_raises_authentication_error(self):
         """list_creatives _impl raises AdCPAuthenticationError when identity is None."""
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _list_creatives_impl(identity=None)
+            _list_creatives_impl(req=_build_list_creatives_request(), identity=None)
 
         assert "x-adcp-auth" in str(exc_info.value).lower() or "Missing" in str(exc_info.value)
 
@@ -327,8 +327,8 @@ class TestListCreativesErrorShapes:
                 identity=None,
             )
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
-        assert exc_info.value.recovery == "terminal"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
 
 class TestCrossTransportErrorConsistency:
@@ -347,8 +347,8 @@ class TestCrossTransportErrorConsistency:
     async def test_missing_context_error_consistent(self):
         """Both transports produce consistent errors when identity/auth is missing.
 
-        MCP path: _create_media_buy_impl(identity=None) -> AdCPAuthenticationError
-        A2A path: _handle_explicit_skill(identity=None) -> AdCPAuthenticationError
+        MCP path: _create_media_buy_impl(identity=None) -> AdCPAuthRequiredError("Authentication required...")
+        A2A path: _handle_explicit_skill(identity=None) -> A2AError("Authentication required")
 
         Both paths reject the request before reaching business logic.
         """
@@ -374,8 +374,8 @@ class TestCrossTransportErrorConsistency:
             )
 
         for error in (mcp_exc.value, a2a_exc.value):
-            assert error.error_code == "AUTH_TOKEN_INVALID"
-            assert error.recovery == "terminal"
+            assert error.error_code == "AUTH_REQUIRED"
+            assert error.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_missing_required_params_error_consistent(self):
@@ -434,7 +434,7 @@ class TestCrossTransportErrorConsistency:
 
         The _create_media_buy_impl function raises AdCPAuthenticationError when the
         principal is not found; this verifies build_two_layer_error_envelope — the
-        helper every transport boundary delegates to — maps it to AUTH_TOKEN_INVALID.
+        helper every transport boundary delegates to — maps it to AUTH_REQUIRED.
         The live A2A wire shape for this path is pinned by test_a2a_error_responses.
         """
         from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
@@ -469,8 +469,8 @@ class TestCrossTransportErrorConsistency:
         # The boundary translator (called by every transport wrapper) produces
         # the same two-layer envelope for this typed exception.
         envelope = build_two_layer_error_envelope(exc_info.value)
-        assert envelope["adcp_error"]["code"] == "AUTH_TOKEN_INVALID"
-        assert envelope["errors"][0]["code"] == "AUTH_TOKEN_INVALID"
+        assert envelope["adcp_error"]["code"] == "AUTH_REQUIRED"
+        assert envelope["errors"][0]["code"] == "AUTH_REQUIRED"
         assert "not found" in envelope["adcp_error"]["message"].lower()
 
     @pytest.mark.asyncio
@@ -541,12 +541,13 @@ class TestMCPRecoveryInErrorResponses:
             # translator maps them to STANDARD_ERROR_CODES at wire emission.
             ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "terminal"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPAuthenticationError", "bad token", "AUTH_TOKEN_INVALID", "terminal"),
-            ("AdCPAuthorizationError", "no access", "AUTH_REQUIRED", "terminal"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "terminal"),
-            ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
+            # The recovery-conformance oracle grades the CLASS ATTRIBUTE
+            # (_default_recovery), not the MCP wire, so these two MUST stay here to pin
+            # the real MCP ToolError recovery — matching the A2A table below. (#1417)
+            ("AdCPConflictError", "duplicate", "CONFLICT", "transient"),
+            ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "terminal"),
             ("AdCPGoneError", "expired", "INVALID_STATE", "correctable"),
-            ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
             ("AdCPRateLimitError", "slow down", "RATE_LIMITED", "transient"),
             ("AdCPAdapterError", "GAM down", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPServiceUnavailableError", "offline", "SERVICE_UNAVAILABLE", "transient"),
@@ -606,12 +607,10 @@ class TestA2ARecoveryInErrorResponses:
         [
             ("AdCPError", "internal", "terminal"),
             ("AdCPValidationError", "bad", "correctable"),
-            ("AdCPAuthenticationError", "unauth", "terminal"),
-            ("AdCPAuthorizationError", "forbidden", "terminal"),
             ("AdCPNotFoundError", "missing", "terminal"),
-            ("AdCPConflictError", "dup", "correctable"),
+            ("AdCPConflictError", "dup", "transient"),
             ("AdCPGoneError", "expired", "correctable"),
-            ("AdCPBudgetExhaustedError", "broke", "correctable"),
+            ("AdCPBudgetExhaustedError", "broke", "terminal"),
             ("AdCPRateLimitError", "slow", "transient"),
             ("AdCPAdapterError", "down", "transient"),
             ("AdCPServiceUnavailableError", "offline", "transient"),
@@ -669,9 +668,9 @@ class TestRecoveryOverrideInSerialization:
         """to_dict() reflects custom recovery, not class default."""
         from src.core.exceptions import AdCPConflictError
 
-        # Default recovery is "correctable"
+        # Default recovery is "transient" (CONFLICT per the pinned enum, #1417)
         default = AdCPConflictError("dup")
-        assert default.to_dict()["recovery"] == "correctable"
+        assert default.to_dict()["recovery"] == "transient"
 
         # Override to "terminal" (e.g., non-retryable conflict)
         overridden = AdCPConflictError("permanent conflict", recovery="terminal")
@@ -720,9 +719,8 @@ class TestErrorCodeVocabularyConsistency:
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
         "INVALID_REQUEST",  # SDK standard: AdCPInvalidRequestError (semantically-invalid value)
-        "AUTH_TOKEN_INVALID",  # Project/BR-UC-011: invalid or missing auth token
+        "AUTH_REQUIRED",  # SDK standard: auth failures (AdCPAuthenticationError + AdCPAuthorizationError)
         "VERSION_UNSUPPORTED",  # AdCP spec: unsupported release/major negotiation pin
-        "AUTH_REQUIRED",  # SDK standard: authorisation (AdCPAuthorizationError)
         "POLICY_VIOLATION",  # SDK standard: AdCPPolicyViolationError (content/advertising policy block)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
