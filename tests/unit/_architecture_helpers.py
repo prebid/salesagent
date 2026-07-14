@@ -182,6 +182,106 @@ def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[as
             yield node
 
 
+def select_call_model_name(call: ast.Call) -> str | None:
+    """Model name from a raw ``select(Model)`` call expression, else None.
+
+    Matches only bare-name ``select(...)`` calls (not attribute access) and
+    resolves the first argument whether written as ``Model`` or ``mod.Model``.
+    """
+    if not (isinstance(call.func, ast.Name) and call.func.id == "select") or not call.args:
+        return None
+    model_arg = call.args[0]
+    if isinstance(model_arg, ast.Name):
+        return model_arg.id
+    if isinstance(model_arg, ast.Attribute):
+        return model_arg.attr
+    return None
+
+
+def extract_select_calls(
+    source_path: Path,
+    func_name: str,
+    class_name: str | None = None,
+    model_predicate: Callable[[str], bool] | None = None,
+) -> list[dict[str, Any]]:
+    """Extract ``select(Model)`` call info from a function or method using AST.
+
+    Args:
+        source_path: Absolute path to the Python source file.
+        func_name: Function or method name to scan.
+        class_name: If set, look for the method inside this class only.
+        model_predicate: If set, only keep calls whose model name satisfies it.
+
+    Returns:
+        List of dicts with keys ``model``, ``has_tenant_filter``, ``lineno``.
+        ``has_tenant_filter`` is True when "tenant_id" appears in the source
+        lines from the select() call through the next ten lines (the full
+        statement can span multiple lines).
+    """
+    source_text = source_path.read_text()
+    tree = ast.parse(source_text)
+    lines = source_text.splitlines()
+
+    target_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in ast.walk(tree):
+        if class_name is not None:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                target_nodes.extend(
+                    child
+                    for child in ast.walk(node)
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == func_name
+                )
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+            target_nodes.append(node)
+
+    results: list[dict[str, Any]] = []
+    for func_node in target_nodes:
+        for call in iter_call_expressions(func_node):
+            model_name = select_call_model_name(call)
+            if not model_name or (model_predicate is not None and not model_predicate(model_name)):
+                continue
+            stmt_text = "\n".join(lines[call.lineno - 1 : call.lineno + 10])
+            results.append(
+                {
+                    "model": model_name,
+                    "has_tenant_filter": "tenant_id" in stmt_text,
+                    "lineno": call.lineno,
+                }
+            )
+    return results
+
+
+def find_raw_select_violations(
+    *,
+    skip: Callable[[str], bool],
+    model_names: set[str],
+) -> list[tuple[str, str, str, int]]:
+    """Find raw ``select(Model)`` calls in src/ for models in *model_names*.
+
+    Returns ``(rel_path, function_name, model_name, lineno)`` tuples — at most
+    one per function (one violation per function is enough for a guard).
+    Files where ``skip(rel_path)`` is True are excluded from the scan.
+    """
+    repo = repo_root()
+    violations: list[tuple[str, str, str, int]] = []
+    for py_file in (repo / "src").rglob("*.py"):
+        rel_path = str(py_file.relative_to(repo))
+        if skip(rel_path):
+            continue
+        tree = safe_parse(py_file)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for call in iter_call_expressions(node):
+                model_name = select_call_model_name(call)
+                if model_name and model_name in model_names:
+                    violations.append((rel_path, node.name, model_name, call.lineno))
+                    break  # One violation per function is enough
+    return violations
+
+
 def iter_architecture_guard_trees(
     *,
     exempt: Iterable[Path] | None = None,
