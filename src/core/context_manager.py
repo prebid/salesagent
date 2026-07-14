@@ -846,6 +846,12 @@ class ContextManager(DatabaseManager):
                     # validated COPY passed to the SDK payload builder.
                     task_type_str = step.tool_name or mapping.action or "unknown"
                     protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
+                    # Correlate to the id the BUYER holds. The A2A boundary persisted its
+                    # outer transport ``task_*`` id on the step's request_data
+                    # (external_task_id) at create time; the buyer polls / receives the
+                    # webhook against THAT id, not the internal step_id. MCP/REST have no
+                    # outer id, so they fall back to step_id (unchanged behavior). #1544 B6.
+                    correlation_task_id = (step.request_data or {}).get("external_task_id") or step.step_id
                     try:
                         status_enum = GeneratedTaskStatus(new_status)
                     except ValueError:
@@ -858,7 +864,7 @@ class ContextManager(DatabaseManager):
                     payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
                     if protocol == "a2a":
                         payload = create_a2a_webhook_payload(
-                            task_id=step.step_id,
+                            task_id=correlation_task_id,
                             status=status_enum,
                             context_id=step.context_id,
                             result=step.response_data or {},
@@ -866,7 +872,7 @@ class ContextManager(DatabaseManager):
                     else:
                         # SDK 5.7: returns McpWebhookPayload directly
                         payload = create_mcp_webhook_payload(
-                            task_id=step.step_id,
+                            task_id=correlation_task_id,
                             status=status_enum,
                             task_type=wire_task_type,
                             result=step.response_data,

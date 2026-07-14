@@ -422,8 +422,14 @@ class TestCreateMediaBuyAdapterAtomicity:
         with patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_adapter_call:
             mock_adapter_call.side_effect = RuntimeError("Simulated adapter failure")
 
-            with pytest.raises(AdCPAdapterError, match="Simulated adapter failure"):
+            # The client-facing message is sanitized — the raw adapter exception text
+            # ("Simulated adapter failure") is logged server-side only, not interpolated
+            # into the AdCPAdapterError message (#1547 round-10 leak fix). The original
+            # RuntimeError is still chained via __cause__ for server-side traceability.
+            with pytest.raises(AdCPAdapterError, match="Failed to create media buy") as exc_info:
                 await _create_media_buy_impl(req=req, identity=mb_identity)
+            assert "Simulated adapter failure" not in str(exc_info.value)
+            assert isinstance(exc_info.value.__cause__, RuntimeError)
 
         # Verify NO media buy record persisted (workflow step may exist, that's OK)
         with get_db_session() as session:

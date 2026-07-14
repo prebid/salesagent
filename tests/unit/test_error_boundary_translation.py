@@ -10,6 +10,7 @@ Validates that:
 beads: salesagent-pyeu, salesagent-d50c
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -504,6 +505,48 @@ class TestA2ADispatcherFailedSkillResult:
         assert message, "wire envelope message must be non-empty"
         assert message != "RuntimeError", "must not fall back to the exception class name"
         assert "internal error" in message.lower()
+
+    def test_internal_bucket_typed_error_message_is_scrubbed(self):
+        """A TYPED internal/infra error (SERVICE_UNAVAILABLE bucket) that interpolated a
+        secret into its message is scrubbed at the boundary — code + recovery preserved.
+
+        Reachable handlers build e.g. ``AdCPAdapterError(f"...: {e}")`` where ``e`` carries a
+        DB connection string. Because it is already an ``AdCPError`` a naive sanitizer would
+        trust it; ``_safe_adcp_error`` instead replaces the message for the
+        ``wire_error_code == "SERVICE_UNAVAILABLE"`` bucket while keeping the wire code and the
+        buyer-facing retry semantics (``recovery``).
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+        result = AdCPRequestHandler._build_failed_skill_result(
+            "create_media_buy", AdCPAdapterError(f"Failed to create media buy: {secret}")
+        )
+
+        env = result["error_envelope"]
+        blob = json.dumps(env)
+        for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
+            assert leak not in blob, f"internal-error message leaked {leak!r} to the wire: {blob}"
+        # Wire code preserved (adapter → SERVICE_UNAVAILABLE); recovery preserved (transient).
+        assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+        assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
+        assert env["errors"][0]["recovery"] == "transient"
+        assert "internal error" in env["errors"][0]["message"].lower()
+
+    def test_client_correctable_typed_error_message_is_preserved(self):
+        """A client-correctable typed error keeps its controlled message — the boundary must
+        NOT over-sanitize. Buyers need the specific guidance to fix their request.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result(
+            "get_products", AdCPValidationError("brief must not be empty")
+        )
+
+        env = result["error_envelope"]
+        assert env["errors"][0]["code"] == "VALIDATION_ERROR"
+        assert env["errors"][0]["recovery"] == "correctable"
+        assert env["errors"][0]["message"] == "brief must not be empty"
 
     def test_envelope_shape_matches_typed_branch(self):
         """Untyped fallthrough produces the SAME envelope shape as the typed branch.

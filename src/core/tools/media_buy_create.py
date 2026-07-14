@@ -1905,6 +1905,7 @@ async def _create_media_buy_impl(
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
+    external_task_id: str | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -2012,6 +2013,12 @@ async def _create_media_buy_impl(
         workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
         if push_notification_config:
             workflow_metadata["push_notification_config"] = push_notification_config
+        # Persist the transport's outer async task id (opaque here — set only by the
+        # A2A boundary from the Task returned to the buyer) so the completion webhook
+        # and tasks/get can correlate to the id the BUYER holds, not the internal
+        # step_id. Durable so a poll survives a server restart. See #1544 (B6).
+        if external_task_id:
+            workflow_metadata["external_task_id"] = external_task_id
 
         step = ctx_manager.create_workflow_step(
             context_id=persistent_ctx.context_id,
@@ -4223,7 +4230,10 @@ async def _create_media_buy_impl(
             # Audit logging failure is non-critical, but we should log it
             logger.warning(f"Failed to log failed media buy creation to audit: {audit_error}")
 
-        raise AdCPAdapterError(f"Failed to create media buy: {str(e)}")
+        # Raw exception already logged/audited above; keep str(e) off the client
+        # message (may carry adapter/DB internals). A2A boundary also scrubs this
+        # SERVICE_UNAVAILABLE-class message; MCP/REST rely on this source scrub.
+        raise AdCPAdapterError("Failed to create media buy.") from e
 
 
 def _build_create_media_buy_request(
@@ -4399,6 +4409,7 @@ async def create_media_buy_raw(
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
+    external_task_id: str | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
@@ -4470,6 +4481,7 @@ async def create_media_buy_raw(
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
+        external_task_id=external_task_id,
     )
 
 

@@ -44,8 +44,12 @@ IMPL_REGISTRY = [
 # Format: "module::impl_name::wrapper_kind::param_name"
 KNOWN_VIOLATIONS: set[str] = set()
 
-# Parameters resolved at the boundary, not forwarded from the caller
-BOUNDARY_RESOLVED_PARAMS = {"identity"}
+# Parameters resolved at the boundary, not forwarded from the caller.
+# ``external_task_id`` is the transport's OUTER async task id — only the A2A
+# boundary has one (the ``task_*`` returned to the buyer); MCP/REST have no outer
+# id and legitimately do not forward it. So it is boundary-resolved per transport,
+# not a dropped param. #1544 B6.
+BOUNDARY_RESOLVED_PARAMS = {"identity", "external_task_id"}
 
 
 def _module_to_filepath(module_path: str) -> Path:

@@ -177,6 +177,78 @@ class TestA2ASkillInvocation:
         msg.parts.append(Part(data=_dict_to_value({"skill": skill, "parameters": parameters})))
         return msg
 
+    def _persist_a2a_step(self, tenant_id: str, principal_id: str, external_task_id: str, response_data: dict) -> str:
+        """Persist a COMPLETED a2a workflow step carrying an outer external_task_id (#1544 B6).
+
+        Mirrors what ``_create_media_buy_impl`` writes when the A2A boundary forwards the
+        buyer's ``task_*`` id. ContextManager manages its own session, so no test-body DB
+        access is needed. Returns the step id.
+        """
+        from src.core.context_manager import ContextManager
+
+        ctx_manager = ContextManager()
+        ctx = ctx_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
+        step = ctx_manager.create_workflow_step(
+            context_id=ctx.context_id,
+            step_type="tool_call",
+            owner="system",
+            status="completed",
+            tool_name="create_media_buy",
+            request_data={"budget": 5000},
+            request_metadata={"protocol": "a2a", "external_task_id": external_task_id},
+            response_data=response_data,
+        )
+        return step.step_id
+
+    @pytest.mark.asyncio
+    async def test_durable_get_task_rebuilds_completed_task_from_external_id(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """#1544 B6: a tasks/get poll of the buyer's outer task_* id resolves to the persisted
+        workflow step (durably, cross-process) and rebuilds a terminal Task with the stored
+        result artifact — even though the task is not in this process's in-memory map."""
+        external_task_id = "task_durable_corr_1"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            {"media_buy_id": "mb_durable_1", "status": "completed"},
+        )
+
+        # The poll authenticates as the buyer; resolve to the real tenant identity.
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            task = handler._durable_task_from_step(external_task_id, context=None)
+
+        assert task is not None, "durable fallback must resolve the buyer's outer task id to the step"
+        assert task.id == external_task_id
+        assert task.status.state == TaskState.TASK_STATE_COMPLETED
+        assert task.artifacts, "rebuilt terminal Task must carry the stored result artifact"
+        assert task.artifacts[0].parts, "result artifact must have parts"
+
+    @pytest.mark.asyncio
+    async def test_durable_get_task_is_tenant_isolated(self, handler, sample_tenant, sample_principal):
+        """The durable lookup is tenant-scoped: a poll authenticated as a DIFFERENT tenant must
+        not resolve another tenant's outer task id."""
+        from tests.factories import PrincipalFactory
+
+        external_task_id = "task_durable_corr_2"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            {"media_buy_id": "mb_durable_2", "status": "completed"},
+        )
+
+        other_identity = PrincipalFactory.make_identity(
+            tenant_id="a_different_tenant", principal_id="other_buyer", protocol="a2a"
+        )
+        handler._get_auth_token = MagicMock(return_value="other-tenant-token")
+        with patch.object(handler, "_resolve_a2a_identity", return_value=other_identity):
+            task = handler._durable_task_from_step(external_task_id, context=None)
+
+        assert task is None, "durable lookup must not cross tenant boundaries"
+
     @pytest.mark.asyncio
     async def test_natural_language_get_products(
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator

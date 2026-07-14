@@ -60,6 +60,26 @@ class WorkflowRepository:
             )
         ).first()
 
+    def get_by_external_task_id(self, external_task_id: str) -> WorkflowStep | None:
+        """Get the workflow step carrying a given transport outer task id (tenant-scoped).
+
+        The A2A boundary persists its outer ``task_*`` id (the id returned to the
+        buyer) on the create step's ``request_data.external_task_id`` (see
+        ``_create_media_buy_impl``), so a durable ``tasks/get`` poll can resolve the
+        buyer's id → step → terminal status + stored ``response_data`` artifact,
+        surviving a server restart (the admin approval that terminalized the step runs
+        in a different process, so the in-memory task map is not enough). Tenant-scoped
+        via the Context join like every other read. #1544 B6.
+        """
+        return self._session.scalars(
+            select(WorkflowStep)
+            .join(DBContext)
+            .where(
+                WorkflowStep.request_data["external_task_id"].as_string() == external_task_id,
+                DBContext.tenant_id == self._tenant_id,
+            )
+        ).first()
+
     def get_by_step_id_or_raise(self, step_id: str) -> WorkflowStep:
         """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
 

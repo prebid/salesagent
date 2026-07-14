@@ -63,6 +63,7 @@ from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
     build_two_layer_error_envelope,
+    normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
@@ -150,20 +151,42 @@ _SANITIZED_INTERNAL_MESSAGE = "An internal error occurred while processing the r
 def _safe_adcp_error(exc: Exception) -> AdCPError:
     """The single sanitization policy for the A2A boundary.
 
-    A TYPED ``AdCPError`` carries a controlled, client-safe ``message`` and passes
-    through unchanged (its own wire code + text). Any UNTYPED exception is replaced
-    with a generic ``AdCPError`` — the raw ``str(exc)`` (which may carry credentials,
-    connection strings, SQL, hostnames, or filesystem paths) is NEVER placed on the
-    wire; callers log it server-side via ``record_boundary_error``.
+    Message safety is decided by ERROR CLASS, not by whether the error is typed —
+    because a *typed* ``AdCPError`` can still carry an interpolated ``str(exc)`` in
+    its message (e.g. reachable handlers do ``AdCPAdapterError(f"...: {e}")`` where
+    ``e`` is a broadly-caught DB/adapter exception carrying a connection string).
 
-    Both A2A error paths route through this one helper: the top-level
-    ``_internal_error_for`` (untyped → JSON-RPC ``InternalError``) and the per-skill
-    ``_build_error_envelope`` (untyped → sanitized failed-Task artifact). Do NOT
-    reintroduce a second normalizer that copies ``str(exc)`` (e.g.
-    ``normalize_to_adcp_error``, which maps ``Exception → AdCPError(str(exc))``) on
-    this boundary — that divergence is exactly the leak this policy closes.
+    - CLIENT-CORRECTABLE errors (VALIDATION_ERROR, *_NOT_FOUND, AUTH_*,
+      POLICY_VIOLATION, BUDGET_*, RATE_LIMITED, …) carry a controlled, client-facing
+      message that the buyer needs to fix their request → pass through unchanged.
+    - INTERNAL/INFRA errors — the ``wire_error_code == "SERVICE_UNAVAILABLE"`` bucket
+      (base ``AdCPError``, ``AdCPAdapterError`` + subclasses, ``AdCPServiceUnavailableError``,
+      ``AdCPConfigurationError``) — have messages that may embed internals. The message
+      is replaced with a generic one while the wire code + recovery (retry semantics)
+      are PRESERVED via ``AdCPError.synthesize``. The raw message is already logged
+      server-side via ``record_boundary_error`` before we get here.
+    - UNTYPED exceptions → generic ``AdCPError``; ``str(exc)`` never reaches the wire.
+
+    ``wire_error_code == "SERVICE_UNAVAILABLE"`` is the discriminator (not
+    ``recovery == "transient"``, which misses terminal base/Config errors and
+    false-positives on the safe-message ``RateLimit``). Both A2A error paths route
+    through this one helper: the top-level ``_internal_error_for`` (→ JSON-RPC
+    ``InternalError``) and the per-skill ``_build_error_envelope`` (→ failed-Task
+    artifact). Do NOT reintroduce a normalizer that trusts a typed message verbatim.
     """
     if isinstance(exc, AdCPError):
+        if exc.wire_error_code == "SERVICE_UNAVAILABLE":
+            # Internal/infra bucket — scrub the (possibly internals-bearing) message,
+            # keep the wire code + recovery so the buyer still gets accurate retry
+            # semantics. Drop details/field/suggestion (may also carry internals);
+            # keep context for request correlation.
+            return AdCPError.synthesize(
+                _SANITIZED_INTERNAL_MESSAGE,
+                error_code=exc.error_code,
+                status_code=exc.status_code,
+                recovery=exc.recovery,
+                context=exc.context,
+            )
         return exc
     return AdCPError(_SANITIZED_INTERNAL_MESSAGE)
 
@@ -734,6 +757,7 @@ class AdCPRequestHandler(RequestHandler):
                             parameters,
                             identity,
                             push_notification_config=push_notification_config,
+                            task_id=task_id,
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
@@ -1120,6 +1144,15 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
+    # Terminal persisted workflow-step status → A2A TaskState, for the durable
+    # tasks/get fallback. Non-terminal steps (in_progress, approved, …) surface as
+    # WORKING. #1544 B6.
+    _STEP_STATUS_TO_TASK_STATE = {
+        "completed": TaskState.TASK_STATE_COMPLETED,
+        "rejected": TaskState.TASK_STATE_REJECTED,
+        "failed": TaskState.TASK_STATE_FAILED,
+    }
+
     async def on_get_task(
         self,
         params: GetTaskRequest,
@@ -1127,15 +1160,57 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
-
-        Returns:
-            Task object if found, otherwise None
+        Resolves the buyer's outer ``task_*`` id first against this process's
+        in-memory map (a task still in flight), then — for an async media-buy task
+        that was approved/rejected out-of-band — against its persisted workflow step.
+        The admin decision that terminalizes the step runs in a DIFFERENT process and
+        the in-memory map does not survive a restart, so the durable fallback is what
+        lets a poll of the original ``task_x`` return ``completed`` with the stored
+        result artifact. See #1544 (B6).
         """
         task_id = params.id
-        return self.tasks.get(task_id)
+        task = self.tasks.get(task_id)
+        if task is not None:
+            return task
+        return self._durable_task_from_step(task_id, context)
+
+    def _durable_task_from_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
+        """Rebuild a terminal Task from the workflow step that stored this transport id.
+
+        A cross-process/restart-surviving lookup needs a tenant scope, so identity is
+        resolved from the poll's own auth (the buyer who created the task
+        authenticated). Without a resolvable tenant the task cannot be safely served.
+        """
+        try:
+            auth_token = self._get_auth_token(context)
+            identity = (
+                self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
+                if auth_token
+                else None
+            )
+        except Exception:
+            return None
+        if identity is None or not identity.tenant_id:
+            return None
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        with get_db_session() as session:
+            step = WorkflowRepository(session, identity.tenant_id).get_by_external_task_id(task_id)
+            if step is None:
+                return None
+            state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
+            task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
+            if step.response_data:
+                task.artifacts.append(
+                    Artifact(
+                        artifact_id=f"{task_id}_result",
+                        name="media_buy_result",
+                        parts=[Part(data=_dict_to_value(step.response_data))],
+                    )
+                )
+            return task
 
     async def on_cancel_task(
         self,
@@ -1502,6 +1577,7 @@ class AdCPRequestHandler(RequestHandler):
         parameters: dict,
         identity: ResolvedIdentity | None,
         push_notification_config: TaskPushNotificationConfig | None = None,
+        task_id: str | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1571,7 +1647,7 @@ class AdCPRequestHandler(RequestHandler):
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
-                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
+                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload, a2a_task_id=task_id)
             else:
                 result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
@@ -1580,30 +1656,31 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (already properly formatted)
             raise
         except (AdCPError, ValueError, PermissionError) as e:
-            # Log the RAW exception server-side with skill-scoped context (full detail
-            # for diagnostics), then sanitize for the wire via the SINGLE boundary
-            # policy (``_safe_adcp_error``): a TYPED ``AdCPError`` keeps its controlled
-            # message + wire code; an uncontrolled ``ValueError``/``PermissionError``
-            # escaping a handler becomes a generic ``AdCPError`` so its raw ``str(exc)``
-            # NEVER reaches the client. (This previously used ``normalize_to_adcp_error``,
-            # which maps ``ValueError → AdCPValidationError(str(exc))`` — a per-skill
-            # ``str(exc)`` leak that then passed through the failed-Task artifact as a
-            # "typed" error.) The outer dispatcher's ``except AdCPError`` branch wraps
-            # the result into a failed Task with the two-layer envelope.
+            # Map to the SEMANTIC typed error the buyer's contract expects — the same
+            # mapping MCP/REST apply: ``ValueError → AdCPValidationError`` (VALIDATION_ERROR,
+            # correctable), ``PermissionError → AdCPAuthorizationError`` (AUTH_REQUIRED), a
+            # native ``AdCPError`` passes through unchanged — then re-raise so the outer
+            # dispatcher wraps it into a failed Task. Wire-MESSAGE sanitization is NOT done
+            # here; it happens once at the envelope boundary (``_build_error_envelope`` →
+            # ``_safe_adcp_error``), which scrubs ONLY the internal-error bucket
+            # (``wire_error_code == "SERVICE_UNAVAILABLE"`` — untyped crashes that normalize
+            # to a base ``AdCPError`` here, and ``AdCPAdapterError(str(e))``) while preserving
+            # client-correctable messages. Keeping the semantic class here means the wire
+            # code stays VALIDATION_ERROR / AUTH_REQUIRED, not a blanket internal error.
             #
             # Defensive about identity shape — test fixtures sometimes pass a string or
             # partially-built identity; record_boundary_error handles None internally.
+            normalized = normalize_to_adcp_error(e)
             record_boundary_error(
                 "a2a",
                 skill_name,
-                e,
+                normalized,
                 tenant_id=getattr(identity, "tenant_id", None),
                 principal_id=getattr(identity, "principal_id", None) or "anonymous",
             )
 
-            safe = _safe_adcp_error(e)
-            if safe is not e:
-                raise safe from e
+            if normalized is not e:
+                raise normalized from e
             raise
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`
@@ -1652,6 +1729,7 @@ class AdCPRequestHandler(RequestHandler):
         parameters: dict,
         identity: ResolvedIdentity,
         raw_wire_payload: dict | None = None,
+        a2a_task_id: str | None = None,
     ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1737,6 +1815,9 @@ class AdCPRequestHandler(RequestHandler):
             # the idempotency payload-hash input; the post-processed dict is the
             # fallback only for direct handler callers.
             raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
+            # Persist the outer A2A task id on the workflow step so the completion
+            # webhook / tasks/get correlate to the id the buyer holds. #1544 B6.
+            external_task_id=a2a_task_id,
         )
 
         return response
