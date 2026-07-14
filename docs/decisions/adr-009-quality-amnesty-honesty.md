@@ -26,7 +26,7 @@ Measured cost of enabling F1/F2 as **hard gates** today (`src/`, locked tooling)
 
 | Switch | Failures |
 |--------|----------|
-| Ruff `C901` alone | **186** (ruff 0.15.14; owned by `.ruff-complexity-baseline` once #1613 merges — do not restale inline) |
+| Ruff `C901` alone | owned by `.ruff-complexity-baseline` after #1613 (do not restale inline counts) |
 | Ruff `PLR091*` + `PLR2004` + `B904` + `F403` | ~614 combined (2026-07-09 manual snapshot) |
 | Mypy `--check-untyped-defs` | ~226 errors / 33 files (2026-07-09 manual snapshot) |
 
