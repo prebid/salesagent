@@ -109,15 +109,6 @@ def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: 
         pytest.xfail("PRODUCTION GAP: no packages have by_placement data to verify sort")
 
 
-def _resolve_media_buy_id(ctx: dict, mb_id: str) -> str:
-    """Resolve a Gherkin media-buy alias (e.g., 'mb-001') to its DB id.
-
-    Currently identity since _ensure_media_buy_in_db stores the alias as-is.
-    Indirection retained for future tests that may need separate aliasing.
-    """
-    return ctx.get("media_buy_id_aliases", {}).get(mb_id, mb_id)
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — media buy setup and adapter configuration
 # ═══════════════════════════════════════════════════════════════════════
