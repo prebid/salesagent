@@ -478,6 +478,70 @@ class TestDedupSuppressesPriorFinalWebhook:
             mock_send.assert_not_awaited()
 
 
+@pytest.mark.requires_db
+class TestBatchContinuesPastFailedSend:
+    """A failed send is counted as an error and does NOT abort the batch.
+
+    ``_send_reports`` catches a per-item failure and continues to the remaining
+    buys. Dropping the per-item try/except (delivery_webhook_scheduler.py:119-145)
+    lets the first failure propagate out of the loop, so the batch never reaches
+    the remaining buys. This drives the real batch loop (only the outbound send
+    is mocked), unlike the other tests that mock _send_report_for_media_buy or
+    check the delivery response directly.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_send_does_not_abort_batch(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from unittest.mock import AsyncMock, patch
+
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            for mb_id in ("mb_a", "mb_b"):
+                MediaBuyFactory(
+                    tenant=tenant,
+                    principal=principal,
+                    media_buy_id=mb_id,
+                    status="active",
+                    start_date=datetime.now(UTC).date() - timedelta(days=30),
+                    end_date=datetime.now(UTC).date() + timedelta(days=30),
+                    raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
+                )
+                env.set_adapter_response(mb_id, impressions=5000)
+
+            scheduler = DeliveryWebhookScheduler()
+
+            # Fail the FIRST send (whichever buy the batch reaches first) and
+            # succeed on the rest. Keying on call ORDER — not buy id — makes the
+            # assertion independent of the DB row order: whichever buy is
+            # processed first fails (the scheduler raises on a False return), and
+            # the batch must still attempt the second one.
+            calls = {"n": 0}
+
+            async def fake_send(*, push_notification_config, payload, metadata):
+                calls["n"] += 1
+                return calls["n"] != 1
+
+            with patch.object(
+                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, side_effect=fake_send
+            ) as mock_send:
+                await scheduler._send_reports()
+
+            # Both buys were attempted: the first send failed and was counted as
+            # an error, but the loop continued to the second. Dropping the
+            # per-item try/except aborts after the first, leaving await_count == 1.
+            assert mock_send.await_count == 2, (
+                f"batch must attempt the second buy after the first send fails; got {mock_send.await_count} send(s)"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Cross-transport: poll omits webhook-only fields on every wire (#1570)
 # ---------------------------------------------------------------------------

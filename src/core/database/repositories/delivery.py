@@ -186,23 +186,26 @@ class DeliveryRepository:
         media_buy_id: str,
         *,
         task_type: str,
-        notification_type: str,
         since: datetime,
+        notification_type: str | None = None,
     ) -> WebhookDeliveryLog | None:
         """Find a recent successful log entry (for duplicate detection).
 
-        Used by the scheduler to check if a report was already sent.
+        Used by the scheduler to check if a report was already sent within a
+        rolling window. When ``notification_type`` is None the check spans ANY
+        notification_type (the broadened #1570 dedup — a sent "final" must also
+        suppress a re-send); pass a value to scope the check to one type.
         """
-        return self._session.scalars(
-            select(WebhookDeliveryLog).where(
-                WebhookDeliveryLog.tenant_id == self._tenant_id,
-                WebhookDeliveryLog.media_buy_id == media_buy_id,
-                WebhookDeliveryLog.task_type == task_type,
-                WebhookDeliveryLog.notification_type == notification_type,
-                WebhookDeliveryLog.status == "success",
-                WebhookDeliveryLog.created_at > since,
-            )
-        ).first()
+        stmt = select(WebhookDeliveryLog).where(
+            WebhookDeliveryLog.tenant_id == self._tenant_id,
+            WebhookDeliveryLog.media_buy_id == media_buy_id,
+            WebhookDeliveryLog.task_type == task_type,
+            WebhookDeliveryLog.status == "success",
+            WebhookDeliveryLog.created_at > since,
+        )
+        if notification_type is not None:
+            stmt = stmt.where(WebhookDeliveryLog.notification_type == notification_type)
+        return self._session.scalars(stmt).first()
 
     def get_max_sequence_number(
         self,

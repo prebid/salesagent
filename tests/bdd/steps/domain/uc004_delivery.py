@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_error, _require_response
+from tests.bdd.steps._outcome_helpers import _require, _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -1709,7 +1709,7 @@ def when_scheduler_sends_report(ctx: dict, mb_id: str) -> None:
 @then(parsers.parse('the scheduler webhook payload notification_type should be "{ntype}"'))
 def then_scheduler_notification_type(ctx: dict, ntype: str) -> None:
     """Assert the scheduler-derived notification_type on the wire (under ``result``)."""
-    result = ctx["scheduler_wire"]["result"]
+    result = _require(ctx, "scheduler_wire", hint="The scheduler send may have been skipped or errored.")["result"]
     assert result.get("notification_type") == ntype, (
         f"Expected scheduler-derived notification_type={ntype!r}, got {result.get('notification_type')!r}"
     )
@@ -1718,7 +1718,7 @@ def then_scheduler_notification_type(ctx: dict, ntype: str) -> None:
 @then(parsers.parse("the scheduler webhook payload sequence_number should be {n:d}"))
 def then_scheduler_sequence_number(ctx: dict, n: int) -> None:
     """Assert the scheduler-computed sequence_number on the wire (under ``result``)."""
-    result = ctx["scheduler_wire"]["result"]
+    result = _require(ctx, "scheduler_wire", hint="The scheduler send may have been skipped or errored.")["result"]
     assert result.get("sequence_number") == n, (
         f"Expected scheduler-computed sequence_number={n}, got {result.get('sequence_number')!r}"
     )
@@ -1734,12 +1734,18 @@ def then_poll_omits_webhook_only_fields(ctx: dict) -> None:
     (``wire_response``), not the reconstructed payload: parsing coerces an
     explicit MCP wire null to None, and re-serializing the model would omit it —
     so a model_dump() oracle would pass even against the MCP null-leak this fix
-    exists to prevent. Falls back to the production serializer only when no wire
-    was stashed (IMPL / legacy env; see tests/CLAUDE.md § wire_response).
+    exists to prevent. Falls back to the production serializer only when the env
+    stashed no wire (defensive; the transports this scenario runs on all stash a
+    wire — see tests/CLAUDE.md § wire_response).
     """
     wire = ctx.get("wire_response")
     if wire is None:
         wire = _require_response(ctx).model_dump(mode="json")
+    # Anchor: the webhook-only fields only surface when deliveries are present,
+    # so a delivery-less response would pass the omission loop vacuously.
+    assert wire.get("media_buy_deliveries"), (
+        f"poll returned no deliveries — omission check would be vacuous (keys={list(wire.keys())})"
+    )
     for field in ("notification_type", "sequence_number", "next_expected_at"):
         assert field not in wire, (
             f"synchronous poll must omit webhook-only {field!r}, got {wire.get(field)!r} (keys={list(wire.keys())})"

@@ -20,7 +20,6 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.helpers import enum_value
@@ -224,15 +223,13 @@ class DeliveryWebhookScheduler:
             # is the status scheduler flipping the buy out of the serving
             # selection, not this check.
             if not force:
-                # Look back 24 hours to find recent successful webhooks
+                # Look back 24 hours to find recent successful webhooks (any
+                # notification_type — the broadened #1570 dedup). Tenant-scoped
+                # via the repository.
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                existing_stmt = select(WebhookDeliveryLog).where(
-                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                    WebhookDeliveryLog.task_type == "media_buy_delivery",
-                    WebhookDeliveryLog.status == "success",
-                    WebhookDeliveryLog.created_at > one_day_ago,
+                existing_log = DeliveryRepository(session, media_buy.tenant_id).get_recent_successful_log(
+                    media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
                 )
-                existing_log = session.scalars(existing_stmt).first()
                 if existing_log:
                     logger.info(
                         "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
@@ -320,9 +317,11 @@ class DeliveryWebhookScheduler:
             # frequency -> start of next day (UTC).
             if derived == "final":
                 delivery_response.next_expected_at = None
-            else:
+            elif derived == "scheduled":
                 next_day = datetime.now(UTC).date() + timedelta(days=1)
                 delivery_response.next_expected_at = utc_flight_start(next_day)
+            # derived is None (zero deliveries) -> leave next_expected_at unset;
+            # notification_type is None too, so the pair stays consistent.
 
             delivery_response.sequence_number = sequence_number
             delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
@@ -415,7 +414,10 @@ class DeliveryWebhookScheduler:
             return True
 
         except Exception as e:
-            logger.error(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+            # Re-raise for the caller (batch loop / manual trigger) to own the
+            # single ERROR line. Log at DEBUG here to avoid a duplicate full
+            # traceback on the common send_notification -> False path.
+            logger.debug(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
             raise
 
 
