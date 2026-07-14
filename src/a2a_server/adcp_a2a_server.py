@@ -66,7 +66,7 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -1658,9 +1658,15 @@ class AdCPRequestHandler(RequestHandler):
         # the manual-approval gate (gh-#1299).
         push_notification_config = params.pop("push_notification_config", None)
 
-        # Coerce string brand shorthand to BrandReference dict (A2A may send "acme.com")
-        if isinstance(params.get("brand"), str):
-            params["brand"] = {"domain": params["brand"]}
+        # Normalize explicit brand through the shared coercion funnel (#1324).
+        # Keep params JSON-serializable: raw_wire_payload falls back to params for
+        # direct handler callers, and idempotency hashes RFC 8785 over that dict.
+        # to_brand_reference returns None only for None input (excluded above); every
+        # other input returns BrandReference or raises typed AdCPValidationError.
+        if params.get("brand") is not None:
+            brand_ref = to_brand_reference(params["brand"])
+            assert brand_ref is not None  # None only for None input; excluded by guard
+            params["brand"] = brand_ref.model_dump(mode="json")
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).
         # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch

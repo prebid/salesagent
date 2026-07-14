@@ -62,6 +62,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
+    "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
 ]
 
@@ -2595,6 +2596,12 @@ _UC002_MEDIA_BUY_CREATE_WIRED: set[str] = _UC002_IDEMPOTENCY_WIRED | {
     "transport-layer-separation",
 }
 
+
+def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
+    """True when a brand_shorthand scenario targets create_media_buy (UC-002 harness)."""
+    return "brand_shorthand" in marker_names and "create_media_buy" in marker_names
+
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -2805,8 +2812,12 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
-    if "inventory_profile" in marker_names:
+    if "inventory_profile" in marker_names or (
+        "brand_shorthand" in marker_names and not _is_brand_shorthand_media_buy(marker_names)
+    ):
         return "UC-GET-PRODUCTS"
+    if _is_brand_shorthand_media_buy(marker_names):
+        return "UC-002"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
     return None
@@ -2873,10 +2884,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with MediaBuyAccountEnv(e2e_config=ctx.get("e2e_config")) as env:
                 ctx["env"] = env
                 yield
-        elif marker_names & _UC002_MEDIA_BUY_CREATE_WIRED:
+        elif marker_names & _UC002_MEDIA_BUY_CREATE_WIRED or _is_brand_shorthand_media_buy(marker_names):
             # Wired create-media-buy scenarios — MediaBuyCreateEnv seeds the
-            # tenant/principal/product chain and drives the real transport path.
-            # Most UC-002 scenarios stay blanket-xfailed below until their
+            # tenant/principal/product chain and drives a real create_media_buy
+            # through every transport. Covers @transport-layer-separation, the
+            # v3.1 idempotency replay/missing scenarios (replay creates once then
+            # resends the same key to exercise the production replay path), and
+            # brand_shorthand create_media_buy. The remaining UC-002 scenarios
+            # (in-flight, expired, conflict, pattern, canonical) stay
+            # blanket-xfailed below until their
             # production gaps + steps are wired.
             request.getfixturevalue("integration_db")
             from tests.harness.media_buy_create import MediaBuyCreateEnv
