@@ -501,8 +501,8 @@ class TestRevisionBumpsOnStatusTransition:
             holder.close()
             reset_health_state()
 
-    def test_get_by_id_locked_translates_contention_to_transient_conflict(self, tenant_a, principal_a):
-        """Production-path lock coverage: the repository's get_by_id_locked (used by
+    def test_get_by_id_lock_timeout_translates_contention_to_transient_conflict(self, tenant_a, principal_a):
+        """Production-path lock coverage: get_by_id(lock_timeout=...) (used by
         _update_media_buy_impl) must arm its OWN lock_timeout and translate the
         expected 55P03 contention into a transient AdCPConflictError — NOT rely on
         a caller-installed timeout. A prior version put the SET LOCAL + SQLSTATE
@@ -527,7 +527,9 @@ class TestRevisionBumpsOnStatusTransition:
 
             with pytest.raises(AdCPConflictError) as exc_info:
                 with get_db_session() as waiter:
-                    MediaBuyRepository(waiter, tenant_a).get_by_id_locked("mb_lock_prod_path")
+                    MediaBuyRepository(waiter, tenant_a).get_by_id(
+                        "mb_lock_prod_path", for_update=True, populate_existing=True, lock_timeout="5s"
+                    )
             # Buyer-facing recovery is transient (re-read and retry), not terminal.
             assert exc_info.value.recovery == "transient"
         finally:

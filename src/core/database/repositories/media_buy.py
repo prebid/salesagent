@@ -61,7 +61,13 @@ class MediaBuyRepository:
     # ------------------------------------------------------------------
 
     def get_by_id(
-        self, media_buy_id: str, *, for_update: bool = False, populate_existing: bool = False
+        self,
+        media_buy_id: str,
+        *,
+        for_update: bool = False,
+        populate_existing: bool = False,
+        lock_timeout: str | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
     ) -> MediaBuy | None:
         """Get a media buy by its ID within the tenant.
 
@@ -70,6 +76,21 @@ class MediaBuyRepository:
         READ COMMITTED. Pass ``populate_existing=True`` when the caller needs
         the locked row to refresh an instance already present in the identity
         map; this is required for authoritative revision/status checks.
+
+        ``lock_timeout`` (e.g. ``"5s"``) arms a transaction-scoped ``SET LOCAL
+        lock_timeout`` before the locked read, so a second request contending for
+        the SAME row's lock fails fast (PostgreSQL SQLSTATE ``55P03``) instead of
+        blocking to the global ``statement_timeout``. That EXPECTED contention is
+        translated to a typed transient :class:`AdCPConflictError`
+        (``recovery="transient"``) — it is NOT a DB outage and must not trip the
+        DB circuit breaker. Keeping the timeout + SQLSTATE handling here (not in
+        the ``_impl``) keeps transport-agnostic business logic free of raw ``SET
+        LOCAL`` / driver error codes — the lock policy is a data-access concern.
+        ``SET LOCAL`` scopes the timeout to the caller's transaction; it bounds
+        only the WAITER, not the lock HOLDER (an in-flight adapter call keeps the
+        lock until commit — bounding the holder needs bounded/idempotent adapter
+        execution, tracked separately). ``context`` is echoed into the CONFLICT
+        envelope. #1544.
         """
         stmt = select(MediaBuy).where(
             MediaBuy.tenant_id == self._tenant_id,
@@ -79,43 +100,19 @@ class MediaBuyRepository:
             stmt = stmt.with_for_update()
         if populate_existing:
             stmt = stmt.execution_options(populate_existing=True)
-        return self._session.scalars(stmt).first()
+        if lock_timeout is None:
+            return self._session.scalars(stmt).first()
 
-    def get_by_id_locked(
-        self,
-        media_buy_id: str,
-        *,
-        context: ContextObject | dict[str, Any] | None = None,
-    ) -> MediaBuy | None:
-        """Acquire the row write-lock, bounded by ``lock_timeout``, translating contention.
-
-        The authoritative pre-mutation lock for the update path. Acquires
-        ``SELECT ... FOR UPDATE`` with ``populate_existing`` (so revision/status
-        reflect the committed row) after arming a transaction-scoped
-        ``lock_timeout``: a second request contending for the SAME row's lock
-        fails fast (PostgreSQL SQLSTATE ``55P03``) instead of blocking to the
-        global ``statement_timeout``. That expected contention is translated to a
-        typed transient :class:`AdCPConflictError` (``recovery="transient"``) —
-        it is NOT a DB outage and must not trip the DB circuit breaker.
-
-        Placing the timeout + SQLSTATE handling here (not in the ``_impl``) keeps
-        transport-agnostic business logic free of raw ``SET LOCAL`` / driver
-        error codes — the lock policy is a repository concern. ``SET LOCAL``
-        scopes the timeout to the caller's open transaction/UoW. This bounds only
-        the WAITER; it does NOT bound the lock HOLDER (an in-flight adapter call
-        below the caller keeps the lock until commit — bounding the holder needs
-        bounded/idempotent adapter execution, tracked separately). #1544.
-        """
         from sqlalchemy import text
         from sqlalchemy.exc import OperationalError
 
         from src.core.database.database_session import LOCK_NOT_AVAILABLE
 
         try:
-            # lock_timeout is a config setting (not a bindable value); the literal
-            # is server-controlled, never user input.
-            self._session.execute(text("SET LOCAL lock_timeout = '5s'"))
-            return self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
+            # lock_timeout is a config setting (not a bindable value); callers pass
+            # a server-controlled literal, never user input.
+            self._session.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
+            return self._session.scalars(stmt).first()
         except OperationalError as exc:
             if getattr(getattr(exc, "orig", None), "pgcode", None) != LOCK_NOT_AVAILABLE:
                 raise

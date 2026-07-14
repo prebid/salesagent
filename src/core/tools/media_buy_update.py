@@ -253,10 +253,12 @@ def _update_media_buy_impl(
             # Acquire the authoritative row lock before any workflow or adapter
             # side effect. The lock is held by this UoW until commit, so two
             # same-token requests cannot both reach the adapter. The timeout-aware
-            # locking and the SQLSTATE 55P03 → transient-CONFLICT translation live
-            # in the repository (get_by_id_locked) — the lock policy is a data-access
+            # locking (lock_timeout) and the SQLSTATE 55P03 → transient-CONFLICT
+            # translation live in the repository — the lock policy is a data-access
             # concern, kept out of this transport-agnostic _impl. #1544.
-            _current_mb = uow.media_buys.get_by_id_locked(media_buy_id_to_use, context=req.context)
+            _current_mb = uow.media_buys.get_by_id(
+                media_buy_id_to_use, for_update=True, populate_existing=True, lock_timeout="5s", context=req.context
+            )
             _current_status = _current_mb.status if _current_mb else ""
             # Precedence: the revision-conflict gate runs BEFORE the terminal-state
             # gate. Two separate things:
