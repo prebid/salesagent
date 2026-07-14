@@ -87,6 +87,9 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
+    # AdCP 3.1.1 pause-on-create surface; accepted for compatibility, not yet
+    # honored on the create path (#1619).
+    paused: bool | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -332,6 +335,7 @@ async def create_media_buy(
         context=context,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        paused=body.paused,
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )

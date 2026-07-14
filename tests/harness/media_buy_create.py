@@ -16,7 +16,12 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.schemas._base import CreateMediaBuyError, CreateMediaBuyResult, CreateMediaBuySuccess
+from src.core.schemas._base import (
+    CreateMediaBuyError,
+    CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
+    CreateMediaBuySuccess,
+)
 from tests.harness._base import IntegrationEnv
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -96,7 +101,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """
         from tests.factories import AuthorizedPropertyFactory
 
-        tenant, principal = self.setup_default_data()
+        # Seed the tenant as auto-approve (human_review_required=False). The
+        # in-process transports never hit the tenant approval gate because this
+        # env's mocked adapter sets manual_approval_operations=[] — but the live
+        # e2e_rest server has no patches and reads the REAL tenant row, where
+        # the column defaults to True, routing every create to the submitted
+        # (manual-approval) envelope instead of completing it. Seeding False
+        # makes the live server's gate state match what every other transport
+        # already grades (#1418 class; #1417/#1537 scenarios re-triaged after
+        # the adcp-6.6 merge). Scenarios that grade the approval path flip it
+        # explicitly via the "tenant requires manual approval" Given (which
+        # commits the change to the shared DB).
+        tenant, principal = self.setup_default_data(human_review_required=False)
         # Satisfy the create_media_buy setup-checklist "Authorized Properties"
         # gate. In-process transports skip it via the testing context, but the
         # live e2e_rest server enforces it (validate_setup_complete), so a
@@ -163,6 +179,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
                 principal_id=kwargs.get("principal_id", self._principal_id),
             )
 
+        def _get_or_create_context(*_args: Any, **kwargs: Any):
+            # The update path (media_buy_update.py:263) resolves its context via
+            # get_or_create_context, not create_context. Delegate to the real one so
+            # persistent_ctx.context_id is a real value the workflow_step INSERT can
+            # persist (a MagicMock context_id fails psycopg2 with "can't adapt").
+            return real.get_or_create_context(
+                tenant_id=kwargs.get("tenant_id", self._tenant_id),
+                principal_id=kwargs.get("principal_id", self._principal_id),
+                context_id=kwargs.get("context_id"),
+                is_async=kwargs.get("is_async", True),
+            )
+
         def _create_workflow_step(*_args: Any, **kwargs: Any):
             kwargs.setdefault("step_type", "media_buy_creation")
             kwargs.setdefault("owner", "system")
@@ -186,6 +214,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
         mgr.create_context.side_effect = _create_context
         mgr.get_context.return_value = None
+        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.create_workflow_step.side_effect = _create_workflow_step
         mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
@@ -398,16 +427,21 @@ class MediaBuyCreateEnv(IntegrationEnv):
         top-level protocol ``status`` and, on a cached idempotency replay, the
         spec's top-level ``replayed: true`` marker — both are popped back onto
         the wrapper so wire tests can assert ``result.payload.replayed``. The
-        CreateMediaBuySuccess|CreateMediaBuyError union discriminates on
-        ``media_buy_id`` (present only on success) — not on ``errors``, since a
-        *successful* buy may also carry non-fatal advisory ``errors``. An error
-        body has ``errors`` and no ``media_buy_id``, so it reconstructs as a
-        CreateMediaBuyError.
+        CreateMediaBuySuccess|CreateMediaBuyError|CreateMediaBuySubmitted union
+        mirrors the production A2A discrimination (adcp_a2a_server.py): submitted
+        first (status="submitted" + task_id, no media_buy_id — a submitted
+        envelope must not reconstruct as Success/Error), then ``media_buy_id``
+        (present only on success) — not ``errors``, since a *successful* buy may
+        also carry non-fatal advisory ``errors``. An error body has ``errors``
+        and no ``media_buy_id``, so it reconstructs as a CreateMediaBuyError.
         """
         status = data.pop("status", "completed")
         replayed = data.pop("replayed", False)
-        if data.get("media_buy_id") is not None:
-            response: CreateMediaBuySuccess | CreateMediaBuyError = CreateMediaBuySuccess(**data)
+        response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
+        if status == "submitted":
+            response = CreateMediaBuySubmitted(status=status, **data)
+        elif data.get("media_buy_id") is not None:
+            response = CreateMediaBuySuccess(**data)
         else:
             response = CreateMediaBuyError(**data)
         return CreateMediaBuyResult(response=response, status=status, replayed=replayed)

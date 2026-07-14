@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
+from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
@@ -79,8 +80,12 @@ def given_buyer_owns_media_buy_by_id(ctx: dict, media_buy_id: str) -> None:
     """Verify the existing media buy is in ctx, persisted in DB, and register its label.
 
     The media_buy_id from Gherkin (e.g. "mb_existing") is a label — the actual
-    factory-generated ID may differ. This step registers the label mapping so
-    subsequent steps (update_kwargs, assertions) can use the Gherkin label.
+    factory-generated ID may differ (label mechanism), or the UC-003 harness may
+    seed the literal id (PR #1567 MediaBuyDualEnv), in which case the label maps
+    to itself. This step registers the label mapping so subsequent steps
+    (update_kwargs, assertions) can use the Gherkin label, and the shared verify
+    checks DB persistence by the real id so a mis-seeded / phantom media buy
+    fails loudly here rather than deep in the update path.
     """
     _verify_existing_media_buy(ctx)
     mb = ctx["existing_media_buy"]
@@ -315,7 +320,11 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
 
 
 # Step "the request does NOT include an idempotency_key" is defined in
-# tests/bdd/steps/domain/uc002_create_media_buy.py (shared across UC-002/003).
+# tests/bdd/steps/domain/uc002_create_media_buy.py (canonical, shared across
+# UC-002/003) to avoid a cross-module shadow now that this module is registered.
+# No graded UC-003 scenario uses that text; when the dormant UC-003 idempotency
+# scenarios graduate (PR #1567 follow-up) they need an update-kwargs strip under
+# a distinct step text (create/update behaviours genuinely differ).
 
 
 @given("the request does not include any updatable fields")
@@ -1123,6 +1132,68 @@ def then_response_has_errors_array(ctx: dict) -> None:
     assert error.message, f"Promoted error missing required 'message' field: {error!r}"
 
 
+def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
+    """Return the success-path response as the buyer sees it on the serialized wire.
+
+    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
+    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
+    through the production serializer — the same path that produces wire bytes for
+    the other transports. A real-wire transport that did NOT stash wire_response is
+    a loud failure, not a silent fallback to the typed model (which would let the
+    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
+    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
+    """
+    from tests.harness.transport import Transport
+
+    wire = ctx.get("wire_response")
+    transport = ctx.get("transport")
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if wire is not None:
+        return wire
+    return _require_response(ctx).model_dump(mode="json")
+
+
+@then("the response should contain a task_id")
+def then_response_contains_task_id(ctx: dict) -> None:
+    """Assert the submitted envelope carries a non-empty task_id on the real wire.
+
+    POST-S8: the buyer receives a task_id to poll tasks/get. Graded on the
+    serialized wire (ctx['wire_response']) so an A2A/MCP/REST regression that
+    drops task_id is caught — not on the coerced typed payload.
+    """
+    data = _submitted_wire_dict(ctx)
+    task_id = data.get("task_id")
+    assert isinstance(task_id, str) and task_id, (
+        f"Submitted response must carry a non-empty task_id on the wire, got {task_id!r} (wire keys: {sorted(data)})"
+    )
+
+
+def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
+    """Defense-in-depth for the A2A submitted case: grade the REAL protobuf Task.
+
+    On A2A a submitted outcome is conveyed via the Task state and the transport
+    clears artifacts (``del task.artifacts[:]``), so the NOT-contain checks over
+    the synthesized wire dict are architecturally vacuous on that transport.
+    Assert on ``env.last_a2a_task`` (the actual transport object, stashed by the
+    dispatcher) that no artifact leaked — mirroring the update path's guard
+    (test_a2a_update_media_buy_submitted_guard.py). PR #1567 round-3.
+    """
+    from tests.harness.transport import Transport
+
+    if ctx.get("transport") is not Transport.A2A:
+        return
+    if (ctx.get("wire_response") or {}).get("status") != "submitted":
+        return
+    env = ctx.get("env")
+    task = getattr(env, "last_a2a_task", None)
+    assert task is not None, "A2A submitted case must stash the real Task (env.last_a2a_task)"
+    assert not task.artifacts, (
+        f"A2A submitted Task must carry NO artifacts (submitted is conveyed via the Task "
+        f"state; an artifact would leak a premature result), got {task.artifacts!r}"
+    )
+
+
 @then(parsers.parse('the response should NOT contain "{field_name}" field'))
 def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     """Assert the response does NOT contain a given field.
@@ -1130,19 +1201,24 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
     and error responses must not contain success-specific fields. Handles both
     directions by checking ctx['response'] (success) first, then error_response/error.
+
+    The success-path check reads the REAL serialized wire (``ctx["wire_response"]``
+    via ``_submitted_wire_dict``), not ``response.model_dump()``: media_buy_id and
+    implementation_date are not declared on UpdateMediaBuySubmitted, so a
+    model-level check passes vacuously and can never catch a wire regression (e.g.
+    the A2A submitted reconstruction leaking a field). Absent-or-null on the wire
+    satisfies "does NOT contain" (a null field is not conveyed); a real value is a
+    contract violation. This is the Core Invariant / Design-Refinement Q5.
     """
-    # Success-path response
+    # Success-path response — assert against the buyer-facing serialized wire.
     response = ctx.get("response")
     if response is not None:
-        if hasattr(response, "model_dump"):
-            data = response.model_dump(exclude_none=True)
-        elif isinstance(response, dict):
-            data = {k: v for k, v in response.items() if v is not None}
-        else:
-            data = {}
-        assert field_name not in data, (
-            f"Response should NOT contain '{field_name}' field (BR-RULE-018), but found: {data.get(field_name)!r}"
+        data = _submitted_wire_dict(ctx)
+        assert data.get(field_name) is None, (
+            f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
+            f"but found: {data.get(field_name)!r}"
         )
+        _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
     # Error-path response (BR-RULE-018 INV-2)
     error_resp = ctx.get("error_response")

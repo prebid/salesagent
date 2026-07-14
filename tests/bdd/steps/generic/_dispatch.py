@@ -72,8 +72,11 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
             ctx["response"] = result.payload
             # Propagate the real serialized success-path wire body so Then steps
             # can assert on what the buyer actually receives (ctx["wire_response"]),
-            # not the reconstructed typed payload. None on IMPL / non-stashing envs;
-            # the wire_field() helper guards against silent tautologies (#1417).
+            # not the reconstructed typed payload (REST HTTP body; A2A/MCP artifact
+            # only when the env routes through _run_a2a_handler/_run_mcp_client).
+            # None on IMPL / non-stashing envs; the wire_field() helper guards
+            # against silent tautologies (#1417). See tests/CLAUDE.md
+            # "TransportResult.wire_response".
             ctx["wire_response"] = result.wire_response
     except Exception as exc:
         ctx["error"] = exc

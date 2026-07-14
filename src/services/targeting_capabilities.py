@@ -376,7 +376,8 @@ def _extract_simple_values(items: list) -> set[str]:
 
 def _extract_system_values(items: list) -> dict[str, set[str]]:
     """Extract {system: set(values)} from a list of GeoMetro/GeoPostalArea objects or dicts."""
-    from adcp.types import GeoMetro, GeoPostalArea
+    from adcp.types import GeoMetro
+    from adcp.types import PostalArea as GeoPostalArea  # adcp 6.6 renamed GeoPostalArea → PostalArea
 
     by_system: dict[str, set[str]] = {}
     for item in items:
