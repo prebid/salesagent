@@ -2,12 +2,13 @@
 
 import json
 import logging
-from datetime import UTC, datetime
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
 from src.admin.services.media_buy_completion import (
+    FinalizeOutcome,
+    claim_pending_creatives_hold,
     finalize_media_buy_rejection,
     finalize_pending_media_buy_approval,
 )
@@ -235,16 +236,15 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                                 f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
                                 "info",
                             )
-                            # Route through the repository seam so the persisted
-                            # revision bumps and the approval instant is stamped
-                            # (AdCP 3.1.0-beta.3 revision + confirmed_at) — see #1544.
-                            media_buy_repo.update_status_or_raise(
-                                media_buy_id,
-                                "pending_creatives",
-                                approved_at=datetime.now(UTC),
-                                approved_by=user_email,
-                            )
-                            db.commit()
+                            # Shared single-winner CLAIM on pending_approval →
+                            # pending_creatives, so a concurrent approve/reject that
+                            # already decided the buy is not overwritten. #1544.
+                            if not claim_pending_creatives_hold(
+                                db, tenant_id, media_buy_id=media_buy_id, approved_by=user_email
+                            ):
+                                return jsonify(
+                                    {"success": False, "error": "This media buy was already decided by another request"}
+                                ), 409
                             return jsonify({"success": True}), 200
 
                     # Creatives ready → finalize atomically via the shared seam (same
@@ -256,7 +256,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # the step at "approved" with no artifact — the finalizer fixes
                     # both. See #1544.
                     logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
-                    success, error_msg = finalize_pending_media_buy_approval(
+                    outcome, error_msg = finalize_pending_media_buy_approval(
                         db,
                         tenant_id,
                         media_buy_id=media_buy_id,
@@ -265,7 +265,12 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         approved_by=user_email,
                     )
 
-                    if not success:
+                    if outcome is FinalizeOutcome.NOT_CLAIMED:
+                        logger.info(f"[APPROVAL] Media buy {media_buy_id} already decided by another request")
+                        return jsonify(
+                            {"success": False, "error": "This media buy was already decided by another request"}
+                        ), 409
+                    if outcome is FinalizeOutcome.ADAPTER_FAILED:
                         logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
@@ -324,7 +329,7 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             media_buy = MediaBuyRepository(db, tenant_id).get_by_id(mapping.object_id) if mapping else None
 
             if mapping and media_buy is not None and media_buy.status in ("pending_approval", "pending_creatives"):
-                finalize_media_buy_rejection(
+                outcome = finalize_media_buy_rejection(
                     db,
                     tenant_id,
                     media_buy_id=mapping.object_id,
@@ -332,6 +337,10 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
                     step_data=step_data,
                     reason=reason,
                 )
+                if outcome is FinalizeOutcome.NOT_CLAIMED:
+                    return jsonify(
+                        {"success": False, "error": "This media buy was already decided by another request"}
+                    ), 409
             else:
                 # No mapped buy awaiting a decision — record the step rejection only.
                 workflow_repo.update_status(step_id, status="rejected", error_message=reason)

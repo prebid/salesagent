@@ -13,6 +13,7 @@ import asyncio
 import datetime
 import logging
 from collections.abc import Callable
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
@@ -32,6 +33,20 @@ if TYPE_CHECKING:
     from src.core.database.models import MediaBuy, MediaPackage
 
 logger = logging.getLogger(__name__)
+
+
+class FinalizeOutcome(StrEnum):
+    """Result of an approve/reject finalization, for single-winner orchestration. #1544.
+
+    ``APPLIED`` — this request won the claim and applied the decision (order created /
+    rejected). ``ADAPTER_FAILED`` — won the claim but the adapter failed (buy marked
+    failed). ``NOT_CLAIMED`` — a competing request already decided the buy (or it
+    vanished): this request did NOTHING (no adapter, no terminalization, no emit).
+    """
+
+    APPLIED = "applied"
+    ADAPTER_FAILED = "adapter_failed"
+    NOT_CLAIMED = "not_claimed"
 
 
 def build_media_buy_result(
@@ -190,39 +205,48 @@ def finalize_media_buy_approval(
     step_data: dict[str, Any],
     compute_target: Callable[[MediaBuy], str | None],
     run_adapter: Callable[[], tuple[bool, str | None]],
+    expected_status: str | tuple[str, ...],
     approved_by: str | None = None,
     approved_at: datetime.datetime | None = None,
-) -> tuple[bool, str | None]:
-    """Atomic approve finalizer shared by the operations / workflow / creative-unblock routes.
+) -> tuple[FinalizeOutcome, str | None]:
+    """Atomic, single-winner approve finalizer (operations / workflow / creative-unblock).
 
-    Sequence (see #1544 review B4/B5):
+    Sequence (see #1544 review B4/B5 and the P1 single-winner fix):
 
-      1. Stamp the approval instant BEFORE external work — transition the buy to the
-         status COMPUTED UNDER THE ROW LOCK (``update_status_computed_or_raise``, so a
-         concurrent flight-window change can't be clobbered), stamping
-         ``approved_at``/``approved_by`` when supplied. That write-once approval
-         instant is what ``confirmed_at`` records — NOT adapter-completion time (the
-         prior workflow route stamped ``approved_at`` only after the adapter
-         returned). commit.
-      2. Run the adapter (``run_adapter`` callback). On failure: mark the buy
-         ``failed`` and the step ``failed``, commit, return ``(False, err)`` — no
-         completion artifact.
+      1. CLAIM the decision UNDER THE ROW LOCK: transition ONLY if the committed status
+         is still in ``expected_status`` (``update_status_computed`` with
+         ``expected_status``), to the flight-derived target computed post-lock. If the
+         claim is lost (a concurrent approve/reject/hold already moved the buy) →
+         rollback and return ``NOT_CLAIMED`` WITHOUT touching the adapter, so the remote
+         order is created exactly once. The claim stamps ``approved_at``/``approved_by``
+         (when supplied) — the write-once approval instant ``confirmed_at`` records,
+         BEFORE any external work. commit.
+      2. Run the adapter. On failure: mark the buy + step ``failed`` (with a buyer-facing
+         error envelope on ``response_data``), commit, return ``ADAPTER_FAILED``.
       3. On success: terminalize the step (``completed``) with the response artifact,
-         commit, and emit the completion webhook after commit.
+         commit, emit the completion webhook after commit, return ``APPLIED``.
 
-    ``approved_at``/``approved_by`` are omitted when finalizing a buy already stamped
-    at an earlier ``pending_creatives`` hold (the creative-unblock path):
-    ``confirmed_at`` is write-once and ``approved_at`` must keep the original
-    admin-approval instant. Returns ``(success, error_message)``.
+    ``approved_at``/``approved_by`` are omitted when finalizing a buy already stamped at
+    an earlier ``pending_creatives`` hold (creative-unblock): ``confirmed_at`` is
+    write-once and ``approved_at`` keeps the original admin-approval instant.
     """
     repo = MediaBuyRepository(session, tenant_id)
-    repo.update_status_computed_or_raise(media_buy_id, compute_target, approved_at=approved_at, approved_by=approved_by)
+    claimed = repo.update_status_computed(
+        media_buy_id,
+        compute_target,
+        approved_at=approved_at,
+        approved_by=approved_by,
+        expected_status=expected_status,
+    )
+    if claimed is None:
+        # Lost the claim (another request decided this buy) or the buy vanished — do
+        # NOTHING further, so no duplicate adapter order / notification. #1544.
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, None
     session.commit()
 
     success, error_msg = run_adapter()
     if not success:
-        # The buy was just transitioned above, so it exists — *_or_raise (never a
-        # discarded None) also satisfies the no-silent-skip guard.
         repo.update_status_or_raise(media_buy_id, "failed")
         # Store a buyer-facing two-layer error envelope as the step's response_data
         # (NOT just error_message): durable tasks/get rebuilds the failed Task's
@@ -235,7 +259,7 @@ def finalize_media_buy_approval(
             step_id, status="failed", error_message=error_msg, response_data=error_envelope
         )
         session.commit()
-        return False, error_msg
+        return FinalizeOutcome.ADAPTER_FAILED, error_msg
 
     _terminalize_step_and_emit(
         session,
@@ -247,7 +271,7 @@ def finalize_media_buy_approval(
         step_status="completed",
         task_status=AdcpTaskStatus.completed,
     )
-    return True, None
+    return FinalizeOutcome.APPLIED, None
 
 
 def _flight_derived_status(media_buy: MediaBuy) -> str:
@@ -258,6 +282,35 @@ def _flight_derived_status(media_buy: MediaBuy) -> str:
     return lifecycle_status_for_window(datetime.datetime.now(datetime.UTC), *resolve_flight_window_utc(media_buy))
 
 
+def claim_pending_creatives_hold(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    approved_by: str | None,
+) -> bool:
+    """Single-winner CLAIM of ``pending_approval`` → ``pending_creatives`` (the approval
+    HOLD taken when creatives are not yet approved).
+
+    Stamps the approval instant + bumps revision UNDER THE ROW LOCK, so a concurrent
+    approve/reject that already decided the buy is not overwritten. Returns ``True`` if
+    this request won the claim (committed), ``False`` if it lost (rolled back). Shared by
+    the operations + workflow approve routes. #1544.
+    """
+    held = MediaBuyRepository(session, tenant_id).update_status_computed(
+        media_buy_id,
+        lambda _mb: "pending_creatives",
+        approved_at=datetime.datetime.now(datetime.UTC),
+        approved_by=approved_by,
+        expected_status="pending_approval",
+    )
+    if held is None:
+        session.rollback()
+        return False
+    session.commit()
+    return True
+
+
 def finalize_pending_media_buy_approval(
     session: Session,
     tenant_id: str,
@@ -266,14 +319,14 @@ def finalize_pending_media_buy_approval(
     step_id: str,
     step_data: dict[str, Any],
     approved_by: str | None,
-) -> tuple[bool, str | None]:
+) -> tuple[FinalizeOutcome, str | None]:
     """finalize_media_buy_approval with the standard manual-approval callbacks.
 
-    The operations and workflow approve routes finalize a pending_approval buy
-    identically — flight-derived status computed UNDER THE LOCK, the shared adapter
-    execution, and the approval instant stamped now. Centralising those callbacks
-    here keeps the two routes from duplicating them (they differ only in how they
-    render the outcome). #1544.
+    The operations and workflow approve routes finalize a ``pending_approval`` buy
+    identically — the single-winner claim on ``pending_approval``, the flight-derived
+    status computed UNDER THE LOCK, the shared adapter execution, and the approval
+    instant stamped now. Centralising those callbacks here keeps the two routes from
+    duplicating them (they differ only in how they render the outcome). #1544.
     """
     from src.core.tools.media_buy_create import execute_approved_media_buy
 
@@ -285,25 +338,26 @@ def finalize_pending_media_buy_approval(
         step_data=step_data,
         compute_target=_flight_derived_status,
         run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+        expected_status="pending_approval",
         approved_by=approved_by,
         approved_at=datetime.datetime.now(datetime.UTC),
     )
 
 
-def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[bool, str | None]:
+def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[FinalizeOutcome, str | None]:
     """Finalize ONE media buy whose last blocking creative was just approved.
 
     Called from the creative-approval route once all of a buy's creatives are
     approved. Owns its OWN DB session (the caller's creative UoW has already
     committed, and — unlike a plain route blueprint — ``creatives.py`` is a scanned
     business-logic module that must not open ``get_db_session`` itself), then routes
-    through the shared approve finalizer: look up the buy's create/approval workflow
-    step, run the adapter, transition to the flight-derived status UNDER THE ROW LOCK,
-    terminalize the step with its artifact, and emit the completion webhook.
-    ``approved_at``/``approved_by`` are NOT re-stamped — ``confirmed_at`` was recorded
-    at the earlier ``pending_creatives`` hold (write-once). Falls back to an adapter +
-    status-only transition when the buy has no workflow step (no async buyer task to
-    notify). Returns ``(success, error_message)``. #1544.
+    through the shared approve finalizer: a single-winner claim on ``pending_creatives``
+    (so concurrent creative-unblocks of the same buy run the adapter exactly once),
+    then adapter → flight-derived status → terminalize step + emit. ``approved_at`` /
+    ``approved_by`` are NOT re-stamped — ``confirmed_at`` was recorded at the earlier
+    ``pending_creatives`` hold (write-once). Falls back to a claim + adapter +
+    status-only transition when the buy has no workflow step (no async buyer task).
+    Returns ``(outcome, error_message)``. #1544.
     """
     from src.core.database.database_session import get_db_session
     from src.core.tools.media_buy_create import execute_approved_media_buy
@@ -313,14 +367,22 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[boo
         mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
         step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
         if step is None:
-            # No workflow step (no async buyer task to notify) — adapter + status only.
+            # No workflow step (no async buyer task to notify) — still single-winner:
+            # claim pending_creatives → active BEFORE the adapter, then adapter only.
+            repo = MediaBuyRepository(session, tenant_id)
+            claimed = repo.update_status_computed(
+                media_buy_id, _flight_derived_status, expected_status="pending_creatives"
+            )
+            if claimed is None:
+                session.rollback()
+                return FinalizeOutcome.NOT_CLAIMED, None
+            session.commit()
             success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-            if success:
-                MediaBuyRepository(session, tenant_id).update_status_computed_or_raise(
-                    media_buy_id, _flight_derived_status
-                )
+            if not success:
+                repo.update_status_or_raise(media_buy_id, "failed")
                 session.commit()
-            return success, error_msg
+                return FinalizeOutcome.ADAPTER_FAILED, error_msg
+            return FinalizeOutcome.APPLIED, None
 
         step_data = {
             "step_id": step.step_id,
@@ -336,6 +398,7 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[boo
             step_data=step_data,
             compute_target=_flight_derived_status,
             run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+            expected_status="pending_creatives",
         )
 
 
@@ -347,22 +410,27 @@ def finalize_media_buy_rejection(
     step_id: str,
     step_data: dict[str, Any],
     reason: str,
-) -> None:
-    """Atomic reject finalizer shared by the operations + workflow reject routes.
+) -> FinalizeOutcome:
+    """Atomic, single-winner reject finalizer (operations + workflow reject routes).
 
-    Transitions the buy to ``rejected`` (revision bump via the repo seam), stores the
+    CLAIMS the decision under the row lock: transitions the buy to ``rejected`` ONLY if
+    it is still ``pending_approval``/``pending_creatives`` (revision bump via the repo
+    seam), so a reject that lost to a concurrent approve (or vice-versa) is a
+    ``NOT_CLAIMED`` no-op instead of overwriting the winner. On a won claim, stores the
     rejection artifact on the workflow step, commits, and emits the rejection webhook
-    carrying ``rejection_reason`` (a pinned-beta.3 MUST on the seller rejection
-    notification). Ensures a rejected buy never lingers at ``pending_approval``
-    without an artifact — the workflow reject route previously left the mapped buy
-    untouched. #1544.
+    carrying ``rejection_reason`` (a pinned-beta.3 MUST). #1544.
     """
     repo = MediaBuyRepository(session, tenant_id)
-    buy = repo.update_status_or_raise(media_buy_id, "rejected")
+    claimed = repo.update_status_computed(
+        media_buy_id, lambda _mb: "rejected", expected_status=("pending_approval", "pending_creatives")
+    )
+    if claimed is None:
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED
     _terminalize_step_and_emit(
         session,
         tenant_id,
-        media_buy=buy,
+        media_buy=claimed,
         packages=repo.get_packages(media_buy_id),
         step_id=step_id,
         step_data=step_data,
@@ -370,3 +438,4 @@ def finalize_media_buy_rejection(
         task_status=AdcpTaskStatus.rejected,
         rejection_reason=reason,
     )
+    return FinalizeOutcome.APPLIED

@@ -7,6 +7,8 @@ from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.services.media_buy_completion import (
+    FinalizeOutcome,
+    claim_pending_creatives_hold,
     finalize_media_buy_rejection,
     finalize_pending_media_buy_approval,
 )
@@ -378,13 +380,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         all_creatives_approved = False
 
                     if all_creatives_approved:
-                        # Creatives ready → finalize in one atomic seam (shared with the
-                        # workflow approve route): stamp the approval instant + flight-
-                        # derived status COMPUTED UNDER THE ROW LOCK, run the adapter,
-                        # terminalize the workflow step with its artifact, and emit the
-                        # completion webhook. See #1544.
+                        # Creatives ready → finalize in one atomic, single-winner seam
+                        # (shared with the workflow approve route): CLAIM pending_approval
+                        # under the row lock, stamp the approval instant + flight-derived
+                        # status, run the adapter, terminalize the step + emit. See #1544.
                         logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
-                        success, error_msg = finalize_pending_media_buy_approval(
+                        outcome, error_msg = finalize_pending_media_buy_approval(
                             db_session,
                             tenant_id,
                             media_buy_id=media_buy_id,
@@ -392,30 +393,30 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             step_data=step_data,
                             approved_by=user_email,
                         )
-                        if not success:
+                        if outcome is FinalizeOutcome.NOT_CLAIMED:
+                            flash("This media buy was already decided by another request", "warning")
+                            return redirect(
+                                url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                            )
+                        if outcome is FinalizeOutcome.ADAPTER_FAILED:
                             flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
                             return redirect(
                                 url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                             )
                         flash("Media buy approved and order created successfully", "success")
-                    else:
-                        # Creatives not yet approved → hold at pending_creatives (a
-                        # SELLER-CONFIRMED status), stamping the approval instant now so
-                        # confirmed_at records THIS admin decision. The creative-unblock
-                        # route later finalizes (adapter + artifact + emit) WITHOUT
-                        # re-stamping approved_at/confirmed_at (both write-once). Using
-                        # 'draft' here would leave the buy unconfirmed. See #1544.
-                        media_buy_repo.update_status_or_raise(
-                            media_buy_id,
-                            "pending_creatives",
-                            approved_at=datetime.now(UTC),
-                            approved_by=user_email,
-                        )
-                        db_session.commit()
+                    # Creatives not yet approved → hold at pending_creatives (a
+                    # SELLER-CONFIRMED status so confirmed_at records THIS admin
+                    # decision) via the shared single-winner CLAIM. Using 'draft' here
+                    # would leave the buy unconfirmed. See #1544.
+                    elif claim_pending_creatives_hold(
+                        db_session, tenant_id, media_buy_id=media_buy_id, approved_by=user_email
+                    ):
                         flash(
                             "Media buy approved; waiting for creative approval before creating the order.",
                             "info",
                         )
+                    else:
+                        flash("This media buy was already decided by another request", "warning")
                 else:
                     db_session.commit()
                     flash("Media buy approved successfully", "success")
@@ -435,13 +436,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 )
                 attributes.flag_modified(step, "comments")
 
-                if media_buy and media_buy.status == "pending_approval":
-                    # Atomic reject: buy → rejected (+revision bump), workflow step
-                    # terminalized with the rejection artifact, then the rejection
-                    # webhook carrying rejection_reason (a pinned-beta.3 MUST on the
-                    # seller rejection notification). Same finalizer the workflow
-                    # reject route uses. See #1544.
-                    finalize_media_buy_rejection(
+                if media_buy and media_buy.status in ("pending_approval", "pending_creatives"):
+                    # Atomic, single-winner reject: CLAIM buy → rejected (+revision bump),
+                    # workflow step terminalized with the rejection artifact, then the
+                    # rejection webhook carrying rejection_reason (a pinned-beta.3 MUST).
+                    # Same finalizer the workflow reject route uses. See #1544.
+                    outcome = finalize_media_buy_rejection(
                         db_session,
                         tenant_id,
                         media_buy_id=media_buy_id,
@@ -449,14 +449,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         step_data=step_data,
                         reason=reason_text,
                     )
+                    if outcome is FinalizeOutcome.NOT_CLAIMED:
+                        flash("This media buy was already decided by another request", "warning")
+                    else:
+                        flash("Media buy rejected", "info")
                 else:
-                    # No mapped buy awaiting approval — record the step rejection only;
-                    # a buy that is not pending_approval must not be force-rejected.
+                    # No mapped buy awaiting a decision — record the step rejection only;
+                    # a buy that is not pending must not be force-rejected.
                     step.status = "rejected"
                     step.error_message = reason_text
                     db_session.commit()
-
-                flash("Media buy rejected", "info")
+                    flash("Media buy rejected", "info")
 
             return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 

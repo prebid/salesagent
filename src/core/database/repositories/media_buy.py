@@ -553,6 +553,7 @@ class MediaBuyRepository:
         mutate: Callable[[MediaBuy], None],
         *,
         expected_revision: int | None = None,
+        expected_status: str | tuple[str, ...] | None = None,
         context: ContextObject | dict[str, Any] | None = None,
     ) -> MediaBuy | None:
         """Shared single-row mutation skeleton: load-under-lock → mutate → bump → flush.
@@ -573,10 +574,22 @@ class MediaBuyRepository:
         check is the authoritative backstop for callers that reach the
         repository directly (admin routes, ``bump_revision`` callers, tests).
         Raises the shared CONFLICT on mismatch, before any mutation.
+
+        ``expected_status`` is a single-winner CLAIM: when provided, if the
+        committed (post-lock) ``status`` is not among it, return ``None`` with NO
+        mutation/bump. Unlike ``expected_revision`` this does NOT raise — a lost
+        claim is a normal race outcome (a competing approve/reject already moved
+        the buy out of the eligible state), not a buyer-visible CONFLICT. The
+        ``FOR UPDATE`` load serializes concurrent claimants, so the loser sees the
+        winner's committed status and bails; exactly one caller proceeds. #1544.
         """
         media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
         if media_buy is None:
             return None
+        if expected_status is not None:
+            allowed = (expected_status,) if isinstance(expected_status, str) else expected_status
+            if media_buy.status not in allowed:
+                return None
         if expected_revision is not None:
             from src.core.exceptions import media_buy_revision_conflict
 
@@ -643,6 +656,7 @@ class MediaBuyRepository:
         *,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
+        expected_status: str | tuple[str, ...] | None = None,
     ) -> MediaBuy | None:
         """Like :meth:`update_status`, but the destination status is COMPUTED under the lock.
 
@@ -654,9 +668,16 @@ class MediaBuyRepository:
         :meth:`_locked_mutate_and_bump` loads ``FOR UPDATE`` with
         ``populate_existing=True`` (every column refreshed to the committed
         value), so ``compute_target`` runs against the live window. A ``None``
-        return leaves the status unchanged (``approved_at``/``approved_by`` still
-        stamped); the shared skeleton stamps ``confirmed_at`` and bumps revision.
-        Returns None if the buy is not found in this tenant. #1544.
+        return from ``compute_target`` leaves the status unchanged
+        (``approved_at``/``approved_by`` still stamped); the shared skeleton
+        stamps ``confirmed_at`` and bumps revision.
+
+        ``expected_status`` makes this a single-winner CLAIM (approval
+        orchestration): the transition applies ONLY if the committed status is
+        among it, else the method returns ``None`` untouched — so exactly one of
+        several concurrent approve/reject requests wins the decision and proceeds
+        to the adapter. Returns None if the buy is not found OR the claim was lost.
+        #1544.
         """
 
         def _apply(media_buy: MediaBuy) -> None:
@@ -668,7 +689,7 @@ class MediaBuyRepository:
             if approved_by is not None:
                 media_buy.approved_by = approved_by
 
-        return self._locked_mutate_and_bump(media_buy_id, _apply)
+        return self._locked_mutate_and_bump(media_buy_id, _apply, expected_status=expected_status)
 
     def update_status_computed_or_raise(
         self,

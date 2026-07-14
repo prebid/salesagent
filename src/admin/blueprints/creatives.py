@@ -43,7 +43,7 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.services.media_buy_completion import finalize_unblocked_media_buy
+from src.admin.services.media_buy_completion import FinalizeOutcome, finalize_unblocked_media_buy
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
@@ -634,9 +634,11 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             # Session ownership + step lookup + finalize live in the admin service
             # (this blueprint is a scanned business-logic module that must route DB
             # access through repositories, not open get_db_session itself). #1544.
-            success, error_msg = finalize_unblocked_media_buy(tenant_id, media_buy_id)
-            if success:
+            outcome, error_msg = finalize_unblocked_media_buy(tenant_id, media_buy_id)
+            if outcome is FinalizeOutcome.APPLIED:
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+            elif outcome is FinalizeOutcome.NOT_CLAIMED:
+                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} already finalized by another request")
             else:
                 logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
 

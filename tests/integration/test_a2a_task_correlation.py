@@ -21,25 +21,34 @@ from src.core.context_manager import ContextManager
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.workflow import WorkflowRepository
 from tests.factories import PrincipalFactory
+from tests.integration.conftest import make_create_media_buy_step
 
 _EXTERNAL_TASK_ID = "task_buyer_abc123"
 
 
-def _make_completed_step(context_manager: ContextManager, tenant_id: str, principal_id: str) -> str:
-    """Create a completed create-media-buy workflow step carrying an external_task_id."""
-    context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
-    step = context_manager.create_workflow_step(
-        context_id=context.context_id,
-        step_type="media_buy_creation",
-        owner="system",
-        status="completed",
-        tool_name="create_media_buy",
-        request_data={"media_buy_id": "mb_1"},
-        response_data={"media_buy_id": "mb_1", "revision": 2},
-        # Merged into request_data by create_workflow_step — same path production uses.
-        request_metadata={"protocol": "a2a", "external_task_id": _EXTERNAL_TASK_ID},
+def _make_step(
+    context_manager: ContextManager,
+    tenant_id: str,
+    principal_id: str,
+    *,
+    status: str = "completed",
+    external_task_id: str = _EXTERNAL_TASK_ID,
+    response_data: dict | None = None,
+) -> str:
+    """Create a create-media-buy workflow step carrying an external_task_id (returns step_id)."""
+    step = make_create_media_buy_step(
+        context_manager,
+        tenant_id,
+        principal_id,
+        status=status,
+        external_task_id=external_task_id,
+        response_data=response_data if response_data is not None else {"media_buy_id": "mb_1", "revision": 2},
     )
     return step.step_id
+
+
+def _make_completed_step(context_manager: ContextManager, tenant_id: str, principal_id: str) -> str:
+    return _make_step(context_manager, tenant_id, principal_id, status="completed")
 
 
 @pytest.mark.requires_db
@@ -98,21 +107,77 @@ class TestA2ATaskCorrelation:
         assert len(task.artifacts) == 1
         assert task.artifacts[0].name == "media_buy_result"
 
-    def test_on_get_task_prefers_in_memory_task(self, integration_db, sample_tenant, sample_principal, context_manager):
-        """An id present in the in-memory map is served directly, without a DB lookup."""
+    def test_on_get_task_terminal_in_memory_task_short_circuits(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A TERMINAL in-memory task is authoritative — served directly, without a DB lookup."""
         from a2a.types import Task, TaskStatus
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
-        live = Task(id="task_live", status=TaskStatus(state=TaskState.TASK_STATE_WORKING))
-        handler.tasks = {"task_live": live}
+        done = Task(id="task_done", status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
+        handler.tasks = {"task_done": done}
 
         with patch.object(handler, "_get_auth_token") as mock_auth:
-            task = asyncio.run(handler.on_get_task(GetTaskRequest(id="task_live"), context=None))
+            task = asyncio.run(handler.on_get_task(GetTaskRequest(id="task_done"), context=None))
 
-        assert task is live
-        mock_auth.assert_not_called()  # in-memory hit short-circuits before any auth/DB work
+        assert task is done
+        mock_auth.assert_not_called()  # terminal in-memory hit short-circuits before any auth/DB work
+
+    def _poll_with_stale_in_memory(self, handler, tenant_id, principal_id, external_task_id):
+        """Seed a SUBMITTED in-memory task for external_task_id, then poll on_get_task."""
+        from a2a.types import Task, TaskStatus
+
+        handler.tasks = {
+            external_task_id: Task(id=external_task_id, status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+        }
+        identity = PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, protocol="a2a")
+        with (
+            patch.object(handler, "_get_auth_token", return_value="tok"),
+            patch.object(handler, "_resolve_a2a_identity", return_value=identity),
+        ):
+            return asyncio.run(handler.on_get_task(GetTaskRequest(id=external_task_id), context=None))
+
+    @pytest.mark.parametrize(
+        "step_status, expected_state",
+        [
+            ("completed", TaskState.TASK_STATE_COMPLETED),
+            ("rejected", TaskState.TASK_STATE_REJECTED),
+            ("failed", TaskState.TASK_STATE_FAILED),
+        ],
+    )
+    def test_stale_submitted_in_memory_yields_to_persisted_terminal(
+        self, integration_db, sample_tenant, sample_principal, context_manager, step_status, expected_state
+    ):
+        """The reviewer's combined-state case: a stale in-memory SUBMITTED task must NOT mask a
+        persisted terminal step — the poll returns the out-of-band decision. #1544 (P1)."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        tenant_id = sample_tenant["tenant_id"]
+        _make_step(context_manager, tenant_id, sample_principal["principal_id"], status=step_status)
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        task = self._poll_with_stale_in_memory(handler, tenant_id, sample_principal["principal_id"], _EXTERNAL_TASK_ID)
+
+        assert task is not None
+        assert task.status.state == expected_state
+
+    def test_stale_submitted_in_memory_kept_when_step_still_non_terminal(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """When neither the in-memory task NOR the persisted step is terminal, the in-flight
+        in-memory SUBMITTED task is returned (still working)."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        tenant_id = sample_tenant["tenant_id"]
+        _make_step(context_manager, tenant_id, sample_principal["principal_id"], status="in_progress")
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        task = self._poll_with_stale_in_memory(handler, tenant_id, sample_principal["principal_id"], _EXTERNAL_TASK_ID)
+
+        assert task is not None
+        assert task.status.state == TaskState.TASK_STATE_SUBMITTED
 
     def test_approval_adapter_failure_stores_buyer_facing_error_artifact(
         self, integration_db, sample_tenant, sample_principal, context_manager
@@ -123,7 +188,7 @@ class TestA2ATaskCorrelation:
         from datetime import UTC, datetime
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.admin.services.media_buy_completion import finalize_media_buy_approval
+        from src.admin.services.media_buy_completion import FinalizeOutcome, finalize_media_buy_approval
         from src.core.database.repositories import MediaBuyUoW
         from tests.integration.conftest import make_media_buy
 
@@ -134,15 +199,13 @@ class TestA2ATaskCorrelation:
         with MediaBuyUoW(tenant_id) as uow:
             uow.media_buys.create(make_media_buy(tenant_id, principal_id, "mb_fail", status="pending_approval"))
 
-        context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
-        step = context_manager.create_workflow_step(
-            context_id=context.context_id,
-            step_type="media_buy_creation",
-            owner="system",
+        step = make_create_media_buy_step(
+            context_manager,
+            tenant_id,
+            principal_id,
+            media_buy_id="mb_fail",
             status="in_progress",
-            tool_name="create_media_buy",
-            request_data={"media_buy_id": "mb_fail"},
-            request_metadata={"protocol": "a2a", "external_task_id": external_task_id},
+            external_task_id=external_task_id,
         )
         step_data = {
             "step_id": step.step_id,
@@ -152,7 +215,7 @@ class TestA2ATaskCorrelation:
         }
 
         with get_db_session() as session:
-            ok, err = finalize_media_buy_approval(
+            outcome, err = finalize_media_buy_approval(
                 session,
                 tenant_id,
                 media_buy_id="mb_fail",
@@ -160,11 +223,12 @@ class TestA2ATaskCorrelation:
                 step_data=step_data,
                 compute_target=lambda mb: "active",
                 run_adapter=lambda: (False, "GAM order creation failed"),
+                expected_status="pending_approval",
                 approved_by="admin@test",
                 approved_at=datetime.now(UTC),
             )
 
-        assert ok is False
+        assert outcome is FinalizeOutcome.ADAPTER_FAILED
         assert err == "GAM order creation failed"
 
         # The step is failed AND carries a buyer-facing two-layer error envelope.

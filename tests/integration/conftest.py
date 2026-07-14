@@ -60,6 +60,38 @@ def make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwarg
     )
 
 
+def make_create_media_buy_step(
+    context_manager,
+    tenant_id: str,
+    principal_id: str,
+    *,
+    media_buy_id: str = "mb_1",
+    status: str = "completed",
+    external_task_id: str | None = None,
+    response_data: dict | None = None,
+):
+    """Create a context + a ``create_media_buy`` workflow step for approval/async tests.
+
+    ``external_task_id`` (when set) is stored on ``request_metadata`` (merged into
+    ``request_data`` by ``create_workflow_step``) so ``on_get_task`` can correlate. Returns
+    the created ``WorkflowStep``.
+    """
+    context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
+    request_metadata: dict = {"protocol": "a2a"}
+    if external_task_id is not None:
+        request_metadata["external_task_id"] = external_task_id
+    return context_manager.create_workflow_step(
+        context_id=context.context_id,
+        step_type="media_buy_creation",
+        owner="system",
+        status=status,
+        tool_name="create_media_buy",
+        request_data={"media_buy_id": media_buy_id},
+        response_data=response_data,
+        request_metadata=request_metadata,
+    )
+
+
 def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
     """Helper to construct a MediaPackage ORM object."""
     defaults = {

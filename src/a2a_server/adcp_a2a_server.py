@@ -1011,6 +1011,15 @@ class AdCPRequestHandler(RequestHandler):
         "rejected": TaskState.TASK_STATE_REJECTED,
         "failed": TaskState.TASK_STATE_FAILED,
     }
+    # A2A task states that are DECIDED — a task in one of these will not change again.
+    _TERMINAL_TASK_STATES = frozenset(
+        {
+            TaskState.TASK_STATE_COMPLETED,
+            TaskState.TASK_STATE_FAILED,
+            TaskState.TASK_STATE_REJECTED,
+            TaskState.TASK_STATE_CANCELED,
+        }
+    )
 
     async def on_get_task(
         self,
@@ -1019,19 +1028,24 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Resolves the buyer's outer ``task_*`` id first against this process's
-        in-memory map (a task still in flight), then — for an async media-buy task
-        that was approved/rejected out-of-band — against its persisted workflow step.
-        The admin decision that terminalizes the step runs in a DIFFERENT process and
-        the in-memory map does not survive a restart, so the durable fallback is what
-        lets a poll of the original ``task_x`` return ``completed`` with the stored
-        result artifact. See #1544 (B6).
+        Prefers the TERMINAL decision, wherever it lives. The in-memory ``self.tasks``
+        snapshot for an async media-buy task stays ``SUBMITTED``/``WORKING`` — the
+        admin approve/reject that terminalizes the persisted workflow step runs in a
+        DIFFERENT process and never mutates this map. So a bare in-memory hit would
+        keep reporting ``SUBMITTED`` after the buy is decided (until restart/eviction).
+        Instead: an already-terminal in-memory task is authoritative; otherwise consult
+        the persisted step and return it when IT is terminal (the out-of-band
+        decision); only when neither is terminal fall back to the in-flight in-memory
+        task (or the durable non-terminal view). See #1544 (B6/P1).
         """
         task_id = params.id
-        task = self.tasks.get(task_id)
-        if task is not None:
-            return task
-        return self._durable_task_from_step(task_id, context)
+        in_memory = self.tasks.get(task_id)
+        if in_memory is not None and in_memory.status.state in self._TERMINAL_TASK_STATES:
+            return in_memory
+        durable = self._durable_task_from_step(task_id, context)
+        if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
+            return durable
+        return in_memory if in_memory is not None else durable
 
     def _durable_task_from_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
         """Rebuild a terminal Task from the workflow step that stored this transport id.
