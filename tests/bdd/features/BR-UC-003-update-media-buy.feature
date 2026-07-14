@@ -2049,7 +2049,7 @@ Feature: BR-UC-003 Update Media Buy
     Given the buyer fabricates a media_buy_id that does not exist in the seller catalog
     When the Buyer Agent sends update_media_buy with the unknown media_buy_id and paused true
     Then the operation should fail
-    And the wire error code should be "MEDIA_BUY_NOT_FOUND"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error recovery hint should indicate correctable
     And the response should echo the context.correlation_id unchanged
     And the response should NOT be a 500 or non-AdCP error shape
@@ -2065,7 +2065,7 @@ Feature: BR-UC-003 Update Media Buy
     And the buyer references a package_id that does not belong to the media buy
     When the Buyer Agent sends update_media_buy targeting the unknown package
     Then the operation should fail
-    And the wire error code should be "PACKAGE_NOT_FOUND"
+    And the error code should be "PACKAGE_NOT_FOUND"
     And the response should echo the context.correlation_id unchanged
     # invalid_transitions Phase 3 (unknown_package): media_buy_id resolves but the buyer
     # references a package_id that does not belong to it. Seller MUST return

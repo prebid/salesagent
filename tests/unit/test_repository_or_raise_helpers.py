@@ -162,8 +162,6 @@ class TestMediaBuyOrRaise:
         session.add.assert_called_once()
 
     def test_get_package_or_raise_raises_when_absent_everywhere(self):
-        from adcp import ErrorCode
-
         media_buy = MagicMock()
         media_buy.raw_request = {"packages": [{"package_id": "pkg-other"}]}
         session = MagicMock()
@@ -171,8 +169,9 @@ class TestMediaBuyOrRaise:
         repo = MediaBuyRepository(session, "tenant-1")
         with pytest.raises(AdCPPackageNotFoundError) as exc:
             repo.get_package_or_raise("mb-1", "pkg-missing", context={"context_id": "ctx-7"})
-        # SDK enum, .value at the comparison boundary (plain Enum, not StrEnum)
-        assert exc.value.error_code == ErrorCode.PACKAGE_NOT_FOUND.value
+        # String literal per local convention; test_error_code_sdk_conformance
+        # pins every spec-claimed _default_error_code against the SDK enum.
+        assert exc.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg-missing" in str(exc.value)
         assert exc.value.context == {"context_id": "ctx-7"}
 
