@@ -1744,6 +1744,26 @@ def _maybe_evict_expired(tenant_id: str) -> None:
         logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
 
 
+def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> CreateMediaBuyResult:
+    """The submitted task envelope for a create that awaits human approval.
+
+    Spec 3.1.1 create-media-buy-response.json: a buy awaiting a human decision is
+    the CreateMediaBuySubmitted variant — status="submitted" + task_id only.
+    media_buy_id/packages land on the task's completion artifact; confirmed_at/
+    revision would falsely assert seller commitment (PR #1567 round-2 item 2;
+    mirrors the update-path fix b8b7e751b). Single construction site shared by the
+    manual-approval and config-approval branches (DRY, PR #1567 round-3).
+    """
+    return CreateMediaBuyResult(
+        response=CreateMediaBuySubmitted(
+            task_id=step.step_id,  # Client tracks approval via this ID
+            context=req.context,
+            errors=property_list_unsupported_advisories(req.packages, adapter),
+        ),
+        status=AdcpTaskStatus.submitted.value,
+    )
+
+
 def _cache_and_return(
     result: CreateMediaBuyResult,
     req: CreateMediaBuyRequest,
@@ -3016,20 +3036,7 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Spec 3.1.1 create-media-buy-response.json: a buy awaiting human
-            # approval is the CreateMediaBuySubmitted variant — status="submitted"
-            # + task_id only. media_buy_id/packages land on the task's completion
-            # artifact; confirmed_at/revision would falsely assert seller
-            # commitment (PR #1567 round-2 item 2; mirrors the update-path fix b8b7e751b).
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,  # Client tracks approval via this ID
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                ),
-                status=AdcpTaskStatus.submitted.value,
-            )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
+            return _cache_and_return(_submitted_approval_result(step, req, adapter), req, identity, request_hash)
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy: tests patch src.core.tools.products.get_product_catalog; the call-time import binds the patched object.
@@ -3157,19 +3164,7 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            # Spec 3.1.1 create-media-buy-response.json: same CreateMediaBuySubmitted
-            # shape as the manual-approval branch above (PR #1567 round-2 item 2) — the buy
-            # is queued for a human decision, so no media_buy_id/packages/
-            # confirmed_at/revision on this envelope.
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySubmitted(
-                    task_id=step.step_id,
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                ),
-                status=AdcpTaskStatus.submitted.value,
-            )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
+            return _cache_and_return(_submitted_approval_result(step, req, adapter), req, identity, request_hash)
 
         # Continue with synchronized media buy creation
 
