@@ -27,7 +27,6 @@ from src.core.exceptions import AdCPError
 _INTERNAL_WIRE_CODES: frozenset[str] = frozenset(
     {
         "ACTIVATION_WORKFLOW_FAILED",
-        "AUTH_TOKEN_INVALID",
         "FORMAT_NOT_FOUND",
         "GAM_UPDATE_FAILED",
         "INTERNAL_ERROR",

@@ -2787,9 +2787,8 @@ def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
 
 # UC-003 storyboard lookup-error scenarios wired to MediaBuyDualEnv (#1432):
 # unknown media_buy_id / unknown package_id must surface structured
-# MEDIA_BUY_NOT_FOUND / PACKAGE_NOT_FOUND on the wire. Deliberately a set —
-# the broader UC-003 wiring (ext-*/targeting-overlay outlines) arrives with
-# #1417, and the two efforts merge as a union of wired tags.
+# MEDIA_BUY_NOT_FOUND / PACKAGE_NOT_FOUND on the wire. Unioned into the
+# UC-003 harness condition alongside #1417's ext-*/targeting-overlay sets.
 _UC003_STORYBOARD_WIRED: set[str] = {
     "T-UC-003-storyboard-media-buy-not-found",
     "T-UC-003-storyboard-package-not-found",
@@ -2801,13 +2800,7 @@ _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
 # variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
-# UC-003 storyboard scenarios: the update REST route EXISTS
-# (PUT /media-buys/{id}) but UpdateMediaBuyBody forwards neither ``packages``
-# nor ``context`` to update_media_buy_raw, so the graded fields (unknown
-# package reference, correlation_id echo) never reach production — a REST
-# param would grade that transport-layer gap, not the production behavior.
-# #1417 extends the REST body with both fields; drop this prefix when it lands.
-_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-", "T-UC-003-storyboard-")
+_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -3271,7 +3264,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
         }
-        if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
+        if (
+            any(t.startswith("T-UC-003-ext-") for t in marker_names)
+            or (marker_names & _UC003_TARGETING_OVERLAY)
+            # Storyboard lookup-error scenarios (#1432): same env, same seed —
+            # they exercise the MEDIA_BUY_NOT_FOUND / PACKAGE_NOT_FOUND guards.
+            or (marker_names & _UC003_STORYBOARD_WIRED)
+        ):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
             # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module
@@ -3330,36 +3329,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail(
                 "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
             )
-
-    elif uc == "UC-003":
-        marker_names = {m.name for m in request.node.iter_markers()}
-        # Storyboard lookup-error scenarios (#1432): MediaBuyDualEnv extends
-        # MediaBuyCreateEnv with update-module patches and dispatches
-        # UpdateMediaBuyRequest through the update transport wrappers
-        # (_update_media_buy_impl / update_media_buy_raw / MCP), so these
-        # scenarios exercise the real update flow — including the
-        # MEDIA_BUY_NOT_FOUND / PACKAGE_NOT_FOUND guards — against the real
-        # DB. Deliberately scoped to _UC003_STORYBOARD_WIRED: the general
-        # UC-003 wiring (ext-*/targeting-overlay outlines) lands with #1417
-        # and the two wired sets merge as a union.
-        if marker_names & _UC003_STORYBOARD_WIRED:
-            request.getfixturevalue("integration_db")
-            from tests.harness.media_buy_dual import MediaBuyDualEnv
-
-            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                # Seed an existing media buy + package for update scenarios and
-                # tell the env which media_buy_id the REST update endpoint targets.
-                _setup_existing_media_buy(ctx, env, tenant, principal, product)
-                env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
-                yield
-        else:
-            pytest.xfail("UC-003 harness not yet wired for non-storyboard scenarios (#1417 wires the rest)")
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
