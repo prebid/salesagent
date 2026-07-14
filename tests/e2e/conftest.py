@@ -243,6 +243,22 @@ def docker_services_e2e(request):
         # branch runs pytest ON THE HOST and reaches the stack over localhost, so
         # it overlays the ports file (the base compose publishes NO host ports —
         # that is reserved for the in-network runner). Same files for build + up.
+        #
+        # The compose stack now ALWAYS includes the pinned creative-agent (the
+        # server resolves format specs against it and the live public host is
+        # blackholed — salesagent-9qe2), and its image is built by the
+        # single-source pin script, not by compose. Build it first so `up`
+        # doesn't fail on a missing `adcp-creative-agent` image.
+        print("Step 0/2: Building pinned creative-agent image (single-sourced)...")
+        agent_build = subprocess.run(
+            ["scripts/creative-agent-stack.sh", "build"],
+            env=env,
+            capture_output=False,
+        )
+        if agent_build.returncode != 0:
+            print(f"❌ creative-agent image build failed with exit code {agent_build.returncode}")
+            raise subprocess.CalledProcessError(agent_build.returncode, "creative-agent-stack.sh build")
+
         print("Step 1/2: Building Docker images...")
         compose_files = ["-f", "docker-compose.e2e.yml", "-f", "docker-compose.e2e.ports.yml"]
         build_result = subprocess.run(

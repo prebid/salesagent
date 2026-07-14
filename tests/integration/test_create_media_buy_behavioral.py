@@ -73,8 +73,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # A subdomain free of underscores is required: Product.publisher_properties derives
 # publisher_domain from the tenant subdomain (f"{subdomain}.example.com") and the
-# AdCP domain pattern rejects underscores. TenantFactory builds the subdomain as
-# f"pub-{tenant_id}", so the tenant_id must not contain underscores either.
+# AdCP domain pattern rejects underscores. TenantFactory derives the subdomain via
+# tenant_subdomain() (pub-<tenant_id> with underscores normalized to hyphens); a
+# hyphen-free tenant_id keeps the rest of the derived name predictable here.
 _TENANT_ID = "behavioraltenant"
 _PRINCIPAL_ID = "behavioralprincipal"
 
@@ -332,7 +333,9 @@ class TestCreativeMissingUrl:
             mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
@@ -369,7 +372,9 @@ class TestCreativeMissingUrl:
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
@@ -542,7 +547,9 @@ class TestMultipleInvalidCreativesAccumulated:
             mock_extract.return_value = (None, None, None)
 
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             error_message = str(exc_info.value)
             assert "creative_errors" in exc_info.value.details
@@ -700,6 +707,104 @@ class TestCreativeIdsNotFound:
 # ===========================================================================
 # OBLIGATION COVERAGE Tests
 # ===========================================================================
+
+
+class TestManualApprovalPathCreativeValidation:
+    """The pending-approval path must validate creative refs like the auto path.
+
+    The graded ext-o/ext-p storyboard steps (BR-UC-002 :426-452) assert
+    CREATIVE_REJECTED regardless of tenant approval mode, and POST-F1/POST-F2
+    forbid a pending SUCCESS that silently dropped creative assignments.
+
+    Covers: UC-002-EXT-O-01
+    """
+
+    def test_manual_path_rejects_missing_creative_ids(self, integration_db):
+        """PR #1430 review: missing creative_ids on the manual-approval path fail
+        CREATIVE_REJECTED on the wire — not a pending SUCCESS that skips them.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["creative_exists", "creative_missing_1"],
+                }
+            ]
+        )
+
+        with _env(human_review_required=True) as env:
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="creative_exists",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+                data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
+            )
+
+            result = env.call_via(Transport.REST, req=req)
+
+            assert result.is_error, (
+                f"Manual-approval path accepted missing creative_ids (pending success): {result.payload}"
+            )
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "CREATIVE_REJECTED",
+                recovery="correctable",
+                message_substr="creative_missing_1",
+            )
+
+    def test_manual_path_format_mismatch_emits_creative_rejected(self, integration_db):
+        """PR #1430 review: creative-vs-product format mismatch must emit
+        CREATIVE_REJECTED on the manual-approval path — the same wire code the
+        auto path emits for the same buyer input — not VALIDATION_ERROR.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["cr-fmt-mismatch"],
+                }
+            ]
+        )
+
+        with _env(human_review_required=True) as env:
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            # Product accepts display_300x250; this creative carries video_640x480.
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="cr-fmt-mismatch",
+                format="video_640x480",
+                agent_url="https://creative.adcontextprotocol.org",
+                data={"url": "https://example.com/ad.mp4", "width": 640, "height": 480},
+            )
+
+            result = env.call_via(Transport.REST, req=req)
+
+            assert result.is_error, f"Manual-approval path accepted a format-mismatched creative: {result.payload}"
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "CREATIVE_REJECTED",
+                recovery="correctable",
+            )
 
 
 class TestMainFlowObligations:

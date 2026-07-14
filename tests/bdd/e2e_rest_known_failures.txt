@@ -1,368 +1,114 @@
-# Known mock-incompatible e2e_rest BDD scenarios (generated from a clean in-network run).
-# These dispatch through the real server over HTTP, so in-process mock injection
-# (set_registry_formats / set_adapter_response / account billing-state fixtures) is
-# invisible to the separate server process -> the scenario cannot pass over e2e_rest.
+# Known-failing e2e_rest BDD scenarios — GENUINE production / harness gaps only.
+#
+# These dispatch through the real server over HTTP. After Wave 3 triage (#1418)
+# every mock-injection-only entry was either graduated (it now passes in-network)
+# or moved to an env-level E2EUnsupportedSetup declaration (raised during harness
+# realization in tests/harness/, surfaced as xfail by the conftest report hook —
+# NOT listed here). What remains below are scenarios that fail for a real reason:
+# a production behaviour gap, an unseeded server-side billing/account state, or a
+# harness observability/seeding gap that needs a code change to fix. Each block is
+# annotated with the gap it represents.
+#
 # Loaded by tests/bdd/conftest.py to xfail(strict=False) exactly these nodeids.
-# Regenerate: run bdd -k e2e_rest, collect failed [e2e_rest] nodeids.
+# Locked by tests/unit/test_e2e_rest_ledger_state.py — keep that test in sync.
 #
-# THIS IS A TODO, NOT A PERMANENT FIXTURE. It is the work-list for retiring the
-# in-process-only setup leak. Design + execution plan + per-mechanism breakdown:
+# CI-GRADED: the "BDD In-Network (e2e_rest)" job in .github/workflows/ci.yml
+# runs the bdd suite inside the compose network with BDD_E2E_ENABLED=true, so a
+# ledger graduation (or regression) fails CI. Historical removals below cite the
+# manual in-network gates (innet_* report ids) that verified them before the CI
+# job existed. To make it merge-blocking, add the job to the repo's required
+# status checks (branch-protection setting, not workflow-controlled).
+# Design + execution plan + per-mechanism breakdown:
 #   docs/test-redesign/e2e-rest-ledger-retirement.md
-# Each entry migrates off this file as the transport-aware harness surfaces land;
-# the file shrinks to ~0. By mechanism: formats 140 (uc005/uc006/get_products),
-# adapter-delivery 124 (uc004), account/billing 44 (uc011). [308 total after #1420
-# pruned 4 stale param-renamed nodeids from the 2026-06-11 origin/main merge]
 #
-# NOTE — the `-invalid]` entries are NOT mock-incompatible: they are server-side
-# validation gaps. Their Then-step asserts the server REJECTS bad input, which is
-# independent of any in-process mock. The schema-violation cases (bad enum / below
-# minimum) are now closed at the production layer by the REST RequestValidationError
-# -> INVALID_REQUEST handler (src/app.py) and verified over e2e_rest (auth now
-# resolves via subdomain_for()). They consequently XPASS and must be retired — but
-# via the rigorous per-scenario inspection tracked in salesagent-rlgl (scenario ->
-# business rule -> use case -> siblings -> production), NOT a bulk delete: an XPASS
-# means "inspect why", never "stale, remove".
+# Wave-3 graduation (#1418, against the in-network wave2 report): removed 163
+# now-passing entries, 4 stale (renamed by #1370), and 98 format-injection
+# entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
+# entries remain, grouped by gap below.
 
-# --- uc004_deliver_media_buy_metrics (104) ---
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-both windows with model=last_touch-{"post_click": {"interval": 14, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}, "model": "last_touch"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-empty object {}-{}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-interval=1 (minimum boundary)-{"post_click": {"interval": 1, "unit": "days"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-model only (data_driven)-{"model": "data_driven"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-omitted (no attribution_window field)-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-post_click only with 7-day window-{"post_click": {"interval": 7, "unit": "days"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-seller ignores field (no configurable window support)-{"post_click": {"interval": 30, "unit": "days"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_boundary__boundary_point[e2e_rest-unit=campaign with interval=1-{"post_click": {"interval": 1, "unit": "campaign"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-both_windows-{"post_click": {"interval": 14, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}, "model": "last_touch"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-campaign_unit-{"post_click": {"interval": 1, "unit": "campaign"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-empty_object-{}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-model_only-{"model": "data_driven"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-omitted-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-post_click_only-{"post_click": {"interval": 7, "unit": "days"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-post_view_only-{"post_view": {"interval": 1, "unit": "days"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_attribution_window_partition__partition[e2e_rest-seller_ignores-{"post_click": {"interval": 30, "unit": "days"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_batch_request_with_mixed_ownership__nonowned_silently_omitted[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_unsupported_dimension__silently_omitted[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_boundary__boundary_point[e2e_rest-omitted (no account field)-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-omitted-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-dates omitted (full range)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_boundary__boundary_point[e2e_rest-start_date before end_date-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-dates_omitted-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_before_end-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_identification_mode_resolution__mode[e2e_rest-media_buy_ids only-media_buy_ids=["mb-001"]-INV-1: resolves by publisher IDs]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-false (explicit)-false-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-omitted (absent from request)-(field absent)-valid]
+# --- uc004 invalid-input validation — wire shape — GRADUATED (#1430 jdy1-M1) ---
+# Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
+# (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
+
+# --- uc004 invalid-input validation — accepted by live server (5) ---
+# GENUINE GAP: the live server accepts these inputs that the spec marks invalid
+# (owner-mismatch principal, out-of-enum sampling, string "true" daily-breakdown,
+# geo metro without system).
+# Production does not validate them — a real spec-production gap, tracked for src/ fix.
+# (campaign-unit interval!=1 GRADUATED at the main merge: upstream regenerated the
+# scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
+# the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
+# in-network on main — absent from main's ledger.)
+# date-range rows GRADUATED on both sides: the BOUNDARY rows on this branch's
+# first in-network CI run 2026-07-09 (the #1270 strict tripwires FIRED — the
+# live server validates start>=end, the merged #1417 validation embed); the
+# partition twins (start_after_end / start_equals_end) on origin/pr-1417 itself
+# (d4af23095, strict-xfail XPASS in-network) — that is the positive evidence the
+# twins were waiting for, so all four date-range rows are off the ledger.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-true (explicit)-true-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_false-false-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_true-true-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-omitted-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_exists_but_no_delivery_data_for_requested_period[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_boundary__boundary_point[e2e_rest-media_buy_ids only (primary)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_boundary__boundary_point[e2e_rest-neither provided (all buys)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_boundary__boundary_point[e2e_rest-zero resolution (empty result)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_partition__partition[e2e_rest-both_provided-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_partition__partition[e2e_rest-media_buy_ids_only-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_partition__partition[e2e_rest-neither_provided-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_partition__partition[e2e_rest-partial_resolution-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_partition__partition[e2e_rest-zero_resolution-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_neither_identifiers_and_no_media_buys_for_principal__empty_array[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_neither_identifiers_provided__returns_all_principals_media_buys[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_only_start_date_provided__end_defaults_to_current_date[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_partial_resolution__some_ids_valid_some_invalid[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_polling_delivery_metrics_for_a_single_media_buy[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_polling_delivery_metrics_for_multiple_media_buys_with_aggregated_totals[e2e_rest]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal matches owner-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_matches-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_production_account_delivery_metrics_response_does_not_include_sandbox_flag[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-all 5 dimensions at once-{"geo": {"geo_level": "country"}, "device_type": {}, "device_platform": {}, "audience": {}, "placement": {}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-empty object {}-{}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=country (no system needed)-{"geo": {"geo_level": "country"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro + system=nielsen_dma-{"geo": {"geo_level": "metro", "system": "nielsen_dma"}}-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=postal_area + system=us_zip-{"geo": {"geo_level": "postal_area", "system": "us_zip"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo without geo_level (required field missing)-{"geo": {"limit": 10}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit negative-{"device_type": {"limit": -1}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit=0 (below minimum)-{"geo": {"geo_level": "country", "limit": 0}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-limit=1 (minimum boundary)-{"geo": {"geo_level": "country", "limit": 1}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-omitted (no reporting_dimensions field)-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-single dimension {device_type: {}}-{"device_type": {}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-sort_by=unsupported_metric (seller falls back to spend)-{"placement": {"sort_by": "conversions"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-unsupported dimension only (seller lacks capability)-{"audience": {}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-all_dimensions-{"geo": {"geo_level": "country"}, "device_type": {}, "device_platform": {}, "audience": {}, "placement": {}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-custom_sort_and_limit-{"placement": {"limit": 50, "sort_by": "clicks"}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-empty_object-{}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-geo_with_system-{"geo": {"geo_level": "metro", "system": "nielsen_dma", "limit": 10}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-multi_dimension-{"geo": {"geo_level": "country"}, "device_type": {}, "audience": {}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-omitted-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-single_dimension_defaults-{"device_type": {}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-unsupported_dimension_only-{"audience": {}}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Not provided (server default)-(omitted)-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-failures_only (last enum value)-failures_only-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-random (first enum value)-random-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-failures_only-failures_only-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-not_provided-(omitted)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-random-random-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-recent-recent-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-stratified-stratified-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter__filter_value[e2e_rest-active]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-["active", "paused"] (multi-status array)-["active", "paused"]-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-canceled (last enum value)-canceled-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-omitted (defaults to active)-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-rejected (new enum value)-rejected-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-omitted-(field absent)-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-single_active-active-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-single_canceled-canceled-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-single_completed-completed-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-single_paused-paused-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-single_rejected-rejected-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-status_array-["active", "paused"]-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_success_response_contains_delivery_data_without_errors_field[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_5xx_response[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_retries_on_network_error[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_sequence_numbers_are_monotonically_increasing[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_zero_resolution__all_ids_invalid_returns_empty_array[e2e_rest]
-# by_device_type/by_geo breakdown + truncation scenarios from upstream #1376
-# (ab6840cad, merged via origin/main). Same adapter-delivery mock-incompatibility
-# class as the entries above: the breakdown rows are seeded by set_adapter_response's
-# in-process MagicMock (simulate_breakdowns), invisible to the separate e2e_rest
-# server process, so the live server returns delivery without by_device_type/by_geo
-# and the truncation flags default false. Pass on impl/mcp/a2a/rest. Retire together
-# with the rest of this bucket when the DeliverySimulationConfig transport-aware
-# seeding lands (#1430). Ledger growth here is the documented behavior of this
-# retirement TODO (docs/test-redesign/e2e-rest-ledger-retirement.md): "the ledger
-# grows when main adds scenarios and shrinks as the harness mechanisms below land."
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]
 
-# --- uc005_discover_creative_formats (114) ---
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-brief (new asset type for generative formats)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-catalog (new asset type for catalog-based formats)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-multiple types OR semantics-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-no formats match (empty result)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_boundary__boundary_point[e2e_rest-single asset type match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_partition__partition[e2e_rest-multiple_types_or-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_partition__partition[e2e_rest-no_matching_formats-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_asset_types_filter_partition__partition[e2e_rest-single_type_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_brrule049_inv10_holds__input_format_ids_ormatch_filter[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_brrule049_inv9_holds__output_format_ids_ormatch_filter[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_boundary__boundary_point[e2e_rest-Not provided (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_boundary__boundary_point[e2e_rest-image (first enum value)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_boundary__boundary_point[e2e_rest-url (last enum value)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-audio-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-html-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-image-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-javascript-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-not_provided-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-text-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-url-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_asset_type_partition__partition[e2e_rest-video-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_boundary__boundary_point[e2e_rest-Not provided (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_boundary__boundary_point[e2e_rest-audio (first enum value)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_boundary__boundary_point[e2e_rest-dooh (last enum value)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_partition__partition[e2e_rest-audio-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_partition__partition[e2e_rest-display-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_partition__partition[e2e_rest-dooh-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_partition__partition[e2e_rest-not_provided-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_creative_agent_format_type_partition__partition[e2e_rest-video-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_boundary__boundary_point[e2e_rest-height filter only-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_boundary__boundary_point[e2e_rest-no render matches constraints-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_boundary__boundary_point[e2e_rest-omitted (no dimension filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_boundary__boundary_point[e2e_rest-width and height combined-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_boundary__boundary_point[e2e_rest-width filter only-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_partition__partition[e2e_rest-height_only-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_partition__partition[e2e_rest-no_dimension_info-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_partition__partition[e2e_rest-no_render_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_partition__partition[e2e_rest-width_and_height-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_dimension_filter_partition__partition[e2e_rest-width_only-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_boundary__boundary_point[e2e_rest-all 8 positions (max meaningful array)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_boundary__boundary_point[e2e_rest-duplicate positions ['prominent','prominent']-invalid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_boundary__boundary_point[e2e_rest-format has no supported_disclosure_positions (excluded)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_boundary__boundary_point[e2e_rest-single position ['prominent'] (min array size)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-all_positions-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-duplicate_positions-invalid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-multiple_positions_all_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-no_matching_formats-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_disclosure_positions_filter_partition__partition[e2e_rest-single_position-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_boundary__boundary_point[e2e_rest-all IDs match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_boundary__boundary_point[e2e_rest-no IDs match (empty result)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_boundary__boundary_point[e2e_rest-partial match (some excluded)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_partition__partition[e2e_rest-all_ids_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_partition__partition[e2e_rest-no_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_ids_filter_partition__partition[e2e_rest-partial_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-display (valid enum)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-invalid type (rejected)-invalid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-video (valid enum)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-display-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-invalid_type-invalid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-video-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_boundary__boundary_point[e2e_rest-format has no input_format_ids (excluded)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_boundary__boundary_point[e2e_rest-multiple FormatIds, one matches (ANY semantics)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_boundary__boundary_point[e2e_rest-no formats match requested input IDs-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_boundary__boundary_point[e2e_rest-single FormatId (min array size)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_partition__partition[e2e_rest-format_without_input_ids-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_partition__partition[e2e_rest-multiple_ids_any_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_partition__partition[e2e_rest-no_matching_formats-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_input_format_ids_filter_partition__partition[e2e_rest-single_format_id-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_boundary__boundary_point[e2e_rest-case-insensitive match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_boundary__boundary_point[e2e_rest-exact name match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_boundary__boundary_point[e2e_rest-no match (empty result)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_boundary__boundary_point[e2e_rest-partial substring match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_partition__partition[e2e_rest-case_insensitive-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_partition__partition[e2e_rest-exact_name-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_partition__partition[e2e_rest-no_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_name_search_filter_partition__partition[e2e_rest-partial_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_boundary__boundary_point[e2e_rest-format has no output_format_ids (excluded)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_boundary__boundary_point[e2e_rest-multiple FormatIds, one matches (ANY semantics)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_boundary__boundary_point[e2e_rest-no formats match requested output IDs-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_boundary__boundary_point[e2e_rest-omitted (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_boundary__boundary_point[e2e_rest-single FormatId (min array size)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_partition__partition[e2e_rest-format_without_output_ids-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_partition__partition[e2e_rest-multiple_ids_any_match-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_partition__partition[e2e_rest-no_matching_formats-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_output_format_ids_filter_partition__partition[e2e_rest-single_format_id-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_production_account_creative_formats_response_does_not_include_sandbox_flag[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_responsive_filter_boundary__boundary_point[e2e_rest-is_responsive = false-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_responsive_filter_boundary__boundary_point[e2e_rest-is_responsive = true-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_responsive_filter_boundary__boundary_point[e2e_rest-is_responsive omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_responsive_filter_partition__partition[e2e_rest-omitted-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_responsive_filter_partition__partition[e2e_rest-responsive_false-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_responsive_filter_partition__partition[e2e_rest-responsive_true-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_wcag_level_filter_boundary__boundary_point[e2e_rest-A (first enum value \u2014 minimum conformance)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_wcag_level_filter_boundary__boundary_point[e2e_rest-AAA (last enum value \u2014 highest conformance)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_wcag_level_filter_boundary__boundary_point[e2e_rest-Not provided (no filter)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_wcag_level_filter_partition__partition[e2e_rest-level_a-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_wcag_level_filter_partition__partition[e2e_rest-level_aa-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_wcag_level_filter_partition__partition[e2e_rest-level_aaa-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_wcag_level_filter_partition__partition[e2e_rest-not_provided-valid]
+# --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---
+# Was: valid account rows referenced acc_acme_001 / acme-corp.com and no uc004
+# step seeded them -> honest ACCOUNT_NOT_FOUND. #1417's seeded-account Given
+# (salesagent-jr5b) now provisions the referenced accounts and the harness
+# realizes the seeding against the server DB; both rows XPASSed in-network
+# (innet_140726_1516) and are retired with the boundary siblings.
 
-# --- uc006_sync_creatives (16) ---
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_payment_required-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_setup_required-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-account_suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-the request should proceed with resolved account]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-explicit_not_found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_ambiguous-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_not_found-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution__partition[e2e_rest-natural_key_unambiguous-{"brand": {"domain": "acme-corp.com"}, "operator": "acme.com"}-the request should proceed with resolved account]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + payment due-{"account_id": "acc_overdue"}-the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + setup incomplete-{"account_id": "acc_new_unconfigured"}-the error should be ACCOUNT_SETUP_REQUIRED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account resolved + suspended-{"account_id": "acc_suspended"}-the error should be ACCOUNT_SUSPENDED with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account_id present + account exists + active-{"account_id": "acc_acme_001"}-the request should proceed with resolved account]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-account_id present + not found-{"account_id": "acc_nonexistent"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + multiple matches-{"brand": {"domain": "multi.com"}, "operator": "agency.com"}-the error should be ACCOUNT_AMBIGUOUS with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + no match-{"brand": {"domain": "unknown.com"}, "operator": "unknown.com"}-the error should be ACCOUNT_NOT_FOUND with suggestion]
-tests/bdd/test_uc006_sync_creatives.py::test_account_resolution_boundary__boundary_point[e2e_rest-brand + operator present + single match + active-{"brand": {"domain": "acme.com"}, "operator": "acme.com"}-the request should proceed with resolved account]
+# --- uc006 account billing-state resolution — GRADUATED (#1417 merge) ---
+# Was: ACCOUNT_PAYMENT_REQUIRED / ACCOUNT_SETUP_REQUIRED / ACCOUNT_SUSPENDED /
+# ACCOUNT_NOT_FOUND / ACCOUNT_AMBIGUOUS never raised by the live server (billing
+# state not server-seeded). PR #1417's account-resolution + canonical error-code
+# wiring makes all 12 pass in-network — xpass confirmed innet_040726_0013.
 
-# --- uc011_manage_accounts (43) ---
-tests/bdd/test_uc011_manage_accounts.py::test_account_immediately_active__active_no_setup_status__active_no_setup[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_account_pending_message_only__setup_with_message_only[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_account_pending_with_url__setup_with_url__message__expires_at_status__pending_approval_with_setup[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_billing_rejection_is_peraccount__other_accounts_still_succeed[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_false_preserves_absent_accounts_delete_missing__false_with_absent_accounts[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_none_absent__true_with_no_absent_accounts_delete_missing__true_with_no_absent_accounts[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_omitted__default_preserves_accounts_delete_missing_omitted[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_scoped_to_authenticated_agent_only[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_delete_missing_true_deactivates_absent_accounts_delete_missing__true_with_absent_accounts[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_dry_run_false__normal_sync_applies_changes_dry_run__false[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_dry_run_omitted__default_behavior_applies_changes_dry_run_omitted[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_dry_run_true_returns_preview__success_dry_run_dry_run__true[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_authenticated_with_accounts[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_filtered_by_status_status_status_filter_match[e2e_rest-active]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_filtered_by_status_status_status_filter_match[e2e_rest-closed]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_filtered_by_status_status_status_filter_match[e2e_rest-payment_required]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_filtered_by_status_status_status_filter_match[e2e_rest-pending_approval]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_filtered_by_status_status_status_filter_match[e2e_rest-suspended]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_pagination_boundary__max_results_value[e2e_rest-1-success with 1 account]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_pagination_boundary__max_results_value[e2e_rest-100-success with 100 accounts]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_pagination_boundary__max_results_value[e2e_rest-50-success with 50 accounts]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_returns_empty_when_authenticated_agent_has_no_accounts_0_accounts_visible[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_with_no_status_filter_returns_all_statuses_status_filter__all[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_with_pagination[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_list_accounts_with_status_filter_returns_empty_when_no_matches_status_filter__specific_value_with_no_matches[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sandbox_account_provisioned_via_sync_accounts_with_sandbox_flag[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_seller_rejects_unsupported_billing__billing_rejected_billing__unsupported_value_for_seller[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_success_all_ok__accounts_present_no_operationlevel_errors_success_with_0_peraccount_failures[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_success_with_all_peraccount_failures__still_success_variant_success_with_all_peraccount_failures[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_accounts_array_boundary__count_accounts_boundary_desc[e2e_rest-1-success with per-account results-1 account (minimum)]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_accounts_array_boundary__count_accounts_boundary_desc[e2e_rest-1000-success with per-account results-1000 accounts (maximum)]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_brand_direct__brand_operating_own_seat_operator_is_brands_domain[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_echoes_brand_from_request_in_peraccount_result_brand_echo[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_mixed_results__created_and_updated_in_same_request_all_different_actions[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_multi_brand_domain_with_brand_id_and_operator_brand_with_domain__brand_id[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_new_account__single_brand_domain_all_created_1_account_all_same_action[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_partial_failure__success_partial_failure_with_actionfailed_actionfailed_with_errors[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_unchanged_account_is_idempotent__all_unchanged[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_updates_existing_account__all_updated[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_with_billing_model_billing__partition_name[e2e_rest-agent-agent_honored-billing = agent]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_with_billing_model_billing__partition_name[e2e_rest-operator-operator_honored-billing = operator]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_with_empty_accounts_array_rejected_0_accounts[e2e_rest]
-tests/bdd/test_uc011_manage_accounts.py::test_sync_with_shortest_valid_domain_eg_ab[e2e_rest]
+# --- uc011 account sync DB read-back — GRADUATED (#1430 items 1-2) ---
+# Was: read-back assertions found 0 accounts in the server DB. Root cause was the
+# wrong-DB class (integration_db repointed production's cached engine at an empty
+# per-test DB while env factories wrote to the live server DB) plus tokenless agent
+# identities being 401'd with the Given errors swallowed. Fixed by _db_scope_for
+# (production engine pointed at the server DB over e2e) and the uc011 agent
+# auth_token + fail-loudly Given fix; all 6 xpassed in-network (innet_050726_2030).
 
-# --- Added from origin/main merge 2026-06-11 (#1370 feature-file updates added/renamed
-#     these e2e_rest scenarios). VERIFIED mock-incompatible: each PASSES on all 4
-#     in-process transports and fails only over real HTTP (adapter mock / captured-logs /
-#     seeded-tenant not visible to the separate live server). Same class as entries above. ---
-# +++ test_uc004_deliver_media_buy_metrics (14) +++
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_aggregated_totals_scalar_fields_include_roas_and_cost_per_acquisition[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_omits_attribution_window__seller_uses_and_echoes_default[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_custom_attribution__seller_applies_and_echoes[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_campaign_unit_with_interval_1__valid[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_geo_with_metro_level_includes_classification_system[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_geo_with_postal_area_level_includes_classification_system[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_media_buy_resolution_boundary__boundary_point[e2e_rest-media_buy_ids provided-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_response_always_echoes_applied_attribution_window_with_model[e2e_rest]
+# --- get_products inventory-profile tenant duplicate — GRADUATED (#1430 jdy1-M3) ---
+# Fixed by idempotent get-or-create given_tenant (uc_get_products_inventory.py); the 6
+# entries now pass in-network (xpass confirmed innet_120626_1822).
+
+# --- uc004 webhook retry/backoff/sequence observability — GRADUATED (#1430 jdy1-M4) ---
+# retry-on-5xx/network, no-retry-on-4xx, sequence-monotonic assert on env.mock["post"]
+# counts not visible over HTTP. Now declared impl-only by tag in
+# _UC004_E2E_WEBHOOK_INTERNAL_TAGS (conftest) -> env-owned strict=False xfail, off the
+# nodeid ledger (same mechanism as the other webhook-internal e2e scenarios).
+
+# --- explicit inline-xfail production gaps (2) ---
+# GENUINE GAP (already inline-xfailed in the step body): seller attribution-default not
+# implemented (production echoes the buyer request), and push_notification_config webhook
+# registration acknowledgement not implemented. src/ feature work.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sort_by_metric_available__seller_uses_requested_metric[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-all 7 statuses in array-["pending_creatives", "pending_start", "active", "paused", "completed", "rejected", "canceled"]-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_boundary__boundary_point[e2e_rest-pending_creatives (first enum value)-pending_creatives-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_status_filter_partition__partition[e2e_rest-all_statuses_array-["pending_creatives", "pending_start", "active", "paused", "completed", "rejected", "canceled"]-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_webhook_delivery_does_not_retry_on_4xx_response[e2e_rest]
-# +++ test_uc005_discover_creative_formats (4) +++
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-audio (valid enum)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_boundary__boundary_point[e2e_rest-dooh (valid enum)-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-audio-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_type_filter_partition__partition[e2e_rest-dooh-valid]
-# +++ test_uc011_manage_accounts (1) +++
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
 
-# --- Added 2026-07-09: surfaced when perf/parallelize-test-suite enabled parallel
-# e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
-# UC-004 set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
-# injected cross-principal creatives — none visible to the separate HTTP server.
-# Ledger: e2e_rest retirement epic #1418.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-explicit_account_id-{"account_id": "acc_acme_001"}-valid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_account_partition__partition[e2e_rest-natural_key-{"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}-valid]
-tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]
-tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]
-tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]
-tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]
+# --- uc004 roas/cpa aggregated_totals — RETIRED from the ledger (#1430 item 4),
+# --- then GRADUATED outright ---
+# The three Then steps are defined (uc004_delivery.py) and production now computes
+# conversions/conversion_value/roas/cost_per_acquisition in aggregated_totals
+# (media_buy_delivery.py DeliveryTotals aggregation, omit-on-zero quotients).
+# T-UC-004-aggregated-roas-and-cpa is marked Graduated in conftest (no longer in
+# _UC004_XFAIL_ADDITIONAL); the innet full-suite gate runs it green on all transports.
 
-# +++ test_uc002_create_media_buy creative scenarios (3) — gh8p.12 graduated for a2a/mcp/rest +++
-# In-process CreativeFactory seeding + adapter-response injection are invisible to the
-# separate e2e_rest server, so the creative-validation check can't fire (the create
-# succeeds with creative_assignments=None). a2a/mcp/rest assert the real wire CREATIVE_REJECTED/
-# SERVICE_UNAVAILABLE; e2e_rest retires off this ledger when the transport-aware seeding lands.
-tests/bdd/test_uc002_create_media_buy.py::test_creative_ids_not_found_in_library[e2e_rest]
-tests/bdd/test_uc002_create_media_buy.py::test_creative_format_does_not_match_product_supported_formats[e2e_rest]
-tests/bdd/test_uc002_create_media_buy.py::test_creative_upload_to_ad_server_fails[e2e_rest]
+# --- uc002 creative extension scenarios, newly wired by #1417 — GRADUATED ---
+# Imported from PR #1417's ledger at the media-buy-validation merge. ext-o/ext-p
+# GRADUATED (#1430 item 3): over e2e the live tenant defaulted to the
+# PENDING-approval path (different validation semantics than the auto path the
+# scenarios assert); seeding auto-approval in the ext-o/ext-p Givens
+# (_seed_auto_approval) makes both xpass in-network (innet_050726_2030).
+# ext-q GRADUATED (#1430, upload mock-fidelity): the Given now seeds a REAL
+# reference-catalog format (display_300x250_image, asset_id banner_image),
+# MockAdServer.add_creative_assets honors a DB-injected fail_on_upload flag
+# (shared _raise_injected_failure with fail_on_create/fail_on_update), and
+# _get_format_spec_sync uses run_async_in_sync_context so server-side format
+# resolution works inside the async transports at all (it previously ALWAYS
+# failed with 'asyncio.run() cannot be called from a running event loop').
+# Verified in-network: all 4 transports pass incl. e2e_rest.
+

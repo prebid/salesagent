@@ -86,6 +86,31 @@ def _extract_select_calls_in_function(file_path: str, func_name: str) -> list[di
     return results
 
 
+def _function_calls_repo_get_by_ids(file_path: str, func_name: str) -> bool:
+    """True if *func_name* calls CreativeRepository(...).get_by_ids(...).
+
+    The repository pins tenant_id in its constructor and requires
+    principal_id, so routing through it IS the tenant-isolation fix —
+    stronger than an inline select with a hand-written tenant filter.
+    """
+    source_path = ROOT / file_path
+    tree = ast.parse(source_path.read_text())
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != func_name:
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "get_by_ids"):
+                continue
+            base = func.value
+            if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "CreativeRepository":
+                return True
+    return False
+
+
 class TestCreativeQueryTenantIsolation:
     """Every Creative/CreativeReview query must include tenant_id filter.
 
@@ -95,11 +120,13 @@ class TestCreativeQueryTenantIsolation:
     """
 
     def test_fetch_creative_approvals_scopes_by_tenant(self):
-        """_fetch_creative_approvals must filter Creative by tenant_id.
+        """_fetch_creative_approvals must load Creative via CreativeRepository.
 
-        The function already has tenant_id as a parameter and uses it on
-        CreativeAssignment queries, but the Creative query at line 414
-        only filters by creative_id.
+        Originally this pinned an inline tenant-filtered select(). The lookup
+        now routes through CreativeRepository.get_by_ids (tenant_id pinned in
+        the constructor, principal_id required) — the centralized form of the
+        same isolation fix (salesagent-s9eg, DRY'd in salesagent-ol24). An
+        inline select(Creative) reappearing here is a regression.
         """
         selects = _extract_select_calls_in_function(
             "src/core/tools/media_buy_list.py",
@@ -107,20 +134,23 @@ class TestCreativeQueryTenantIsolation:
         )
 
         creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert creative_selects, "Expected at least one Creative select() call"
-
-        for s in creative_selects:
-            assert s["has_tenant_filter"], (
-                f"Creative query at media_buy_list.py:{s['lineno']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak (salesagent-s9eg)."
-            )
+        assert not creative_selects, (
+            f"Inline Creative select() at media_buy_list.py:"
+            f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
+            f"through CreativeRepository.get_by_ids (salesagent-s9eg/salesagent-ol24)."
+        )
+        assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"), (
+            "_fetch_creative_approvals must load creatives via CreativeRepository(...).get_by_ids()."
+        )
 
     def test_execute_approved_creative_lookup_scopes_by_tenant(self):
-        """execute_approved_media_buy must filter Creative by tenant_id.
+        """execute_approved_media_buy must load Creative via CreativeRepository.
 
-        The function opens its own session and queries CreativeModel by
-        creative_id alone at line 783. The tenant dict is available
-        as tenant_dict["tenant_id"].
+        Originally this pinned an inline tenant-filtered select(). The lookup
+        now routes through CreativeRepository.get_by_ids (tenant_id pinned in
+        the constructor, principal_id required) — the centralized form of the
+        same isolation fix (salesagent-s9eg, DRY'd in salesagent-ol24). An
+        inline select(Creative) reappearing here is a regression.
         """
         selects = _extract_select_calls_in_function(
             "src/core/tools/media_buy_create.py",
@@ -128,13 +158,14 @@ class TestCreativeQueryTenantIsolation:
         )
 
         creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert creative_selects, "Expected at least one Creative select() call"
-
-        for s in creative_selects:
-            assert s["has_tenant_filter"], (
-                f"Creative query at media_buy_create.py:{s['lineno']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak (salesagent-s9eg)."
-            )
+        assert not creative_selects, (
+            f"Inline Creative select() at media_buy_create.py:"
+            f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
+            f"through CreativeRepository.get_by_ids (salesagent-s9eg/salesagent-ol24)."
+        )
+        assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_create.py", "execute_approved_media_buy"), (
+            "execute_approved_media_buy must load creatives via CreativeRepository(...).get_by_ids()."
+        )
 
     def test_get_creative_with_latest_review_scopes_by_tenant(self):
         """get_creative_with_latest_review must accept and filter by tenant_id.

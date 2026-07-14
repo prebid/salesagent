@@ -4,11 +4,19 @@ PR #1420 review finding: unlike the duplication baseline and
 the structural-guard allowlists, the e2e_rest ledger
 (``tests/bdd/e2e_rest_known_failures.txt``) had no ratchet and no stale-entry
 test, so it could silently grow or accumulate dead nodeids after a feature/param
-rename. Two invariants:
+rename. Two invariants, enforced in two places:
 
-1. **Monotonic** — the entry count may only DECREASE. Graduating a scenario
-   lowers ``_LEDGER_CEILING``; re-adding one trips the guard, forcing a fix of
-   the e2e_rest scenario instead.
+1. **No silent growth or shrinkage** — enforced by the exact-set lock in
+   ``test_e2e_rest_ledger_state.py`` (``EXPECTED_LEDGER``): any added, removed,
+   or re-added entry fails there and must be justified in the same change. A
+   separate count ceiling derived from that same pin could never fail
+   independently, so this module no longer carries one (#1430 review: the old
+   ``count <= len(EXPECTED_LEDGER)`` ratchet was tautological). PR #1417's
+   branch carried the same shrink-only invariant as a monotonic
+   ``_LEDGER_CEILING`` ratchet (last at 305 against its pre-#1430-retirement
+   ledger); at the merge that ceiling is subsumed by the exact-set pin, and
+   its final graduations (the two uc004 date-range partition rows) are
+   reflected in ``EXPECTED_LEDGER``.
 2. **No stale entries** — every ledger nodeid must resolve to a currently
    collected test item. A param/feature rename that orphans a nodeid is caught
    here rather than silently masking a never-run scenario.
@@ -22,52 +30,11 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 
-# Ratchet ceiling — normally may only ever DECREASE (graduate an entry, lower the
-# ceiling to the new count). The single exception is a MERGED-UPSTREAM scenario that
-# lands in an already-known mechanism: it is a new item on the #1423 retirement
-# work-list, not branch-introduced e2e_rest debt, so it is ledgered with its siblings
-# rather than papered over in a step. Do NOT raise this for branch-authored
-# failures — fix or graduate those.
-#
-# One-time owner-approved recalibration 2026-07-09, 308 -> 315: perf/parallelize-
-# test-suite enabled parallel e2e_rest (E2E_PER_WORKER), which for the first time
-# exercises 12 pre-existing MAIN scenarios (UC-004 #1545, UC-005 #1479, UC-018
-# BR-RULE-034 #1551) over the real HTTP transport. They fail for transport-inherent
-# reasons (mock-injection invisible, e2e_rest auth/tenant-context, wire not stashed)
-# unrelated to the adcp 6.6 bump — the run surface expanded, so this is a genuinely
-# new baseline, not a re-add of a graduated scenario. Deferred to the e2e_rest
-# retirement epic #1418; the ceiling drops as those scenarios are retired.
-#
-# From origin/main (#1417/#1420 line): the branch's 3 uc002 creative entries and
-# the upstream breakdown/roundtrip entries are all mock-mechanism debt that retires
-# with #1430. 307 -> 305: the two uc004 invalid date-range entries graduated (the
-# #1417 refactor made the live server validate date ranges — confirmed by
-# strict-xfail XPASS in-network). 305 -> 299: the six get_products_inventory_profile
-# entries graduated — the #1417 subdomain_for auth fix (given_tenant) removed the
-# tenant-resolution 401 that parked them; all six XPASS with real assertions over
-# e2e_rest. They were mis-filed under the formats mechanism but never depended on
-# it (salesagent-rjc5).
-#
-# Merge of origin/main into chore/bump-adcp-6.6 (PR #1567): union of both sides'
-# entries minus main's 12 graduations/renames (6 inventory-profile + 2 date-range
-# graduated per above; 2 partition ids renamed to the error-with-suggestion params;
-# 2 identification-mode rows removed from the Examples table). 306 = current entry
-# count exactly (no slack).
-_LEDGER_CEILING = 306
-
 
 def _ledger_entries() -> list[str]:
     return [
         line.strip() for line in _LEDGER.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")
     ]
-
-
-def test_ledger_count_is_monotonic_non_increasing():
-    count = len(_ledger_entries())
-    assert count <= _LEDGER_CEILING, (
-        f"e2e_rest ledger grew to {count} (ceiling {_LEDGER_CEILING}). The ledger may only "
-        "shrink — fix the e2e_rest scenario instead of re-adding it to the ledger."
-    )
 
 
 def test_every_ledger_entry_resolves_to_a_collected_item():

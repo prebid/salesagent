@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
+from src.core.exceptions import AdCPError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -334,6 +335,24 @@ def _sync_creatives_impl(
                     # If we reach here, creative processing succeeded
                     synced_creatives.append(creative)
 
+            except AdCPError as e:
+                # Typed errors keyed on their recovery semantics: TRANSIENT ones
+                # (agent rate-limited/unavailable during the format fetch) are
+                # request-level infra failures — propagate so the buyer sees
+                # RATE_LIMITED/SERVICE_UNAVAILABLE on the wire and retries the
+                # request, matching create_media_buy (salesagent-mpo1).
+                # Correctable/terminal typed errors (e.g. unknown-format
+                # AdCPValidationError) remain PER-ITEM failures: the request is
+                # fine, that creative is not.
+                if e.recovery == "transient":
+                    raise
+                creative_id = _get_field(raw_creative, "creative_id", "unknown")
+                error_msg = str(e)
+                failed_creatives.append(
+                    {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
+                )
+                failed_count += 1
+                results.append(_failed_sync_result(creative_id, error_msg))
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
                 creative_id = _get_field(raw_creative, "creative_id", "unknown")

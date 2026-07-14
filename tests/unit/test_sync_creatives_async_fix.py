@@ -56,6 +56,35 @@ class TestRunAsyncInSyncContext:
         assert result2 == "async_result"
         assert result3 == "async_result"
 
+    @pytest.mark.asyncio
+    async def test_coroutine_raised_runtimeerror_propagates_in_async_context(self):
+        """A RuntimeError raised BY the coroutine must propagate unmangled.
+
+        salesagent-mpo1: the helper wraps BOTH the get_running_loop() probe AND
+        the thread-pool execution in one try. When a running loop exists, a
+        coroutine-raised RuntimeError (e.g. httpx/anyio 'Event loop is closed')
+        re-raises out of future.result() INSIDE that try, is misread as
+        "no running loop", and the already-CONSUMED coroutine is re-run on a
+        fresh loop — surfacing as 'cannot reuse already awaited coroutine'
+        instead of the real error (which downstream degrades to a terminal
+        CREATIVE_REJECTED).
+        """
+
+        async def boom():
+            raise RuntimeError("Event loop is closed")
+
+        with pytest.raises(RuntimeError, match="Event loop is closed"):
+            run_async_in_sync_context(boom())
+
+    def test_coroutine_raised_runtimeerror_propagates_in_sync_context(self):
+        """Same contract without a running loop (guards both branches)."""
+
+        async def boom():
+            raise RuntimeError("Event loop is closed")
+
+        with pytest.raises(RuntimeError, match="Event loop is closed"):
+            run_async_in_sync_context(boom())
+
 
 def _make_creative_uow():
     """Create a mock CreativeUoW with creative_repo returning sensible defaults."""

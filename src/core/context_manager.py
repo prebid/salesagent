@@ -361,26 +361,26 @@ class ContextManager(DatabaseManager):
 
         Untyped exceptions are normalized to ``AdCPError`` via
         ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
-        subscribers only see codes in ``STANDARD_ERROR_CODES``.
+        subscribers only see codes in ``WIRE_STANDARD_CODES``.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the
         caller is about to re-raise.
         """
-        from adcp.server.helpers import STANDARD_ERROR_CODES
+        from src.core.exceptions import WIRE_STANDARD_CODES
 
         try:
             source = normalize_to_adcp_error(exc)
 
             # Defensive wire-code enforcement: webhook subscribers must only
-            # see codes in ``STANDARD_ERROR_CODES``. If the wire code falls
+            # see codes in ``WIRE_STANDARD_CODES``. If the wire code falls
             # outside the standard set, override with SERVICE_UNAVAILABLE
             # so async subscribers never receive an internal-only code.
             # Structured fields (details/field/suggestion/context) carry
             # forward so buyer agents and webhook subscribers retain
             # machine-actionable correction context across the rewrite.
             wire_code = source.wire_error_code
-            if wire_code not in STANDARD_ERROR_CODES:
+            if wire_code not in WIRE_STANDARD_CODES:
                 source = AdCPError.synthesize(
                     source.message or str(source),
                     error_code="SERVICE_UNAVAILABLE",

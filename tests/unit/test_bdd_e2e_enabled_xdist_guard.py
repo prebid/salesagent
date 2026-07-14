@@ -54,6 +54,7 @@ def test_e2e_enabled_under_xdist_allowed_with_per_worker_stacks(monkeypatch, num
 def test_e2e_enabled_serial_is_allowed(monkeypatch, numprocesses):
     monkeypatch.delenv("E2E_PER_WORKER", raising=False)
     monkeypatch.setenv("BDD_E2E_ENABLED", "true")
+    monkeypatch.delenv("E2E_PER_WORKER", raising=False)
     pytest_configure(_config(numprocesses))  # must not raise
 
 

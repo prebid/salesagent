@@ -106,11 +106,39 @@ def _sync_adapter_approval_to_db(ctx: dict, *, manual_approval_required: bool) -
     set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=manual_approval_required)
 
 
+def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
+    """Force the auto-approval create path for the scenario's tenant.
+
+    Sets human_review_required=False on the ORM row, the identity cache, and
+    the env tenant overrides. With ``sync_adapter`` also mirrors
+    manual_approval_required=False into the adapter DB config so live-server
+    (e2e) transports take the same auto path as in-process: the in-process
+    harness zeroes manual_approval_operations, but the live tenant defaults to
+    human_review_required=True and the real adapter requires approval for
+    create_media_buy, which would divert e2e onto the PENDING-approval path
+    with different validation semantics (PR #1430 item 3).
+
+    No-op when the scenario has no tenant yet.
+    """
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        return
+    env = ctx["env"]
+    tenant.human_review_required = False
+    env._commit_factory_data()
+    # Also update identity's tenant dict (pre-built, not re-read from DB)
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
+    if sync_adapter:
+        _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+
+
 def _sync_adapter_error_to_db(
     ctx: dict,
     *,
     fail_on_create: bool = False,
     fail_on_update: bool = False,
+    fail_on_upload: bool = False,
     error_message: str | None = None,
     error_details: dict | None = None,
     recovery: str | None = None,
@@ -125,6 +153,7 @@ def _sync_adapter_error_to_db(
     kwargs: dict = {
         "fail_on_create": fail_on_create,
         "fail_on_update": fail_on_update,
+        "fail_on_upload": fail_on_upload,
         "error_message": error_message,
     }
     if error_details is not None:
@@ -166,18 +195,10 @@ def given_tenant_auto_approval(ctx: dict) -> None:
     this module is registered; UC-003 scenarios reach this via the
     "human_review_required is false" alias.
     """
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
+    assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for auto-approval' but no tenant exists to configure"
     )
-    tenant.human_review_required = False
-    env = ctx["env"]
-    env._commit_factory_data()
-    # Also update identity's tenant dict (pre-built, not re-read from DB)
-    env._identity_cache.clear()
-    env._tenant_overrides["human_review_required"] = False
-    # Also write to DB so Docker-hosted adapter reads the correct config
-    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+    _seed_auto_approval(ctx)
 
 
 @given("the tenant is configured for manual approval")
@@ -1988,11 +2009,15 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
     pkg["creative_ids"] = existing
 
 
-def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_300x250") -> Any:
+def _create_approved_creative(
+    ctx: dict, creative_id: str, fmt: str = "display_300x250", asset_key: str = "primary"
+) -> Any:
     """Create an approved Creative in the DB and return it.
 
     Uses CreativeFactory with the tenant/principal from harness context.
-    Asset key uses "primary" to match the harness format spec's asset_id.
+    The default asset key "primary" matches the harness format spec's
+    asset_id; scenarios seeding a real reference-catalog format pass the
+    format's actual asset_id (e.g. "banner_image" for display_300x250_image).
     """
     from tests.factories.creative import CreativeFactory
 
@@ -2003,7 +2028,7 @@ def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_3
         principal=ctx["principal"],
         format=fmt,
         approved=True,
-        data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
+        data={"assets": {asset_key: {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
     )
     env._commit_factory_data()
     return creative
@@ -2190,8 +2215,13 @@ def given_package_references_missing_creative(ctx: dict, creative_id: str) -> No
     "Creative IDs not found" check (media_buy_create.py) raises
     AdCPCreativeRejectedError → CREATIVE_REJECTED on the wire, with the missing
     id and a sync_creatives suggestion.
+
+    Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
+    auto path; the live-server default (human_review_required=True) would take
+    the PENDING path, which silently skips missing creatives.
     """
     _add_creative_ids_to_package(ctx, [creative_id])
+    _seed_auto_approval(ctx)
 
 
 @given("But a creative's format_id does not match any of the product's supported format_ids")
@@ -2202,9 +2232,14 @@ def given_creative_format_mismatch(ctx: dict) -> None:
     The default product accepts ``display_300x250``; this creative carries
     ``video_640x480``. The pre-adapter creative validation in the create path
     rejects the format mismatch with CREATIVE_REJECTED on the wire.
+
+    Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
+    auto path; the live-server default (human_review_required=True) would take
+    the PENDING path, which emits VALIDATION_ERROR for the same condition.
     """
     creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_640x480")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
+    _seed_auto_approval(ctx)
 
 
 @given("a valid create_media_buy request with inline creatives")
@@ -2271,16 +2306,23 @@ def given_request_inline_creatives_valid(ctx: dict) -> None:
     rejection surfaces on the create wire.
     """
     _ensure_request_defaults(ctx)
-    creative = _create_approved_creative(ctx, "cr-upload-ok")
+    # A REAL reference-catalog format (not the synthetic display_300x250):
+    # the live server resolves formats from the 54-format fixture under
+    # ADCP_TESTING, so a synthetic id dies CREATIVE_REJECTED before the upload
+    # this scenario tests. display_300x250_image's asset_id is banner_image.
+    creative = _create_approved_creative(ctx, "cr-upload-ok", fmt="display_300x250_image", asset_key="banner_image")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
-    tenant = ctx.get("tenant")
-    if tenant is not None:
+    # The default product only accepts display_300x250 — add the real format so
+    # the creative-vs-product compat check passes on the server DB too.
+    product = ctx.get("default_product")
+    if product is not None:
         env = ctx["env"]
-        tenant.human_review_required = False
+        product.format_ids = [
+            *(product.format_ids or []),
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+        ]
         env._commit_factory_data()
-        env._identity_cache.clear()
-        env._tenant_overrides["human_review_required"] = False
-        _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+    _seed_auto_approval(ctx)
 
 
 @given("But the ad server rejects the creative upload")
@@ -2294,28 +2336,27 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     """
     from src.core.exceptions import AdCPAdapterError
 
+    message = "Ad server rejected the creative upload"
+    suggestion = "Retry the upload or verify the creative meets the ad server's requirements"
+    recovery = "transient"
+
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
     # Model a CONFORMANT adapter error: the buyer suggestion rides the first-class
     # suggestion= param so the envelope builder lifts it to the top-level error.json
     # position. Burying it in details={"suggestion": ...} yields a non-conformant wire
-    # error (empty top-level suggestion) — the disease ioni/9val/cx41 removed. The e2e
-    # sibling below keeps error_details; mock_ad_server pops it back to first-class (wwyx).
-    upload_error = AdCPAdapterError(
-        "Ad server rejected the creative upload",
-        recovery="transient",
-        suggestion="Retry the upload or verify the creative meets the ad server's requirements",
-    )
-    mock_adapter.add_creative_assets.side_effect = upload_error
-    # E2E path: write the failure to the adapter test-behavior config so a
-    # Docker-hosted adapter raises the same error on creative upload.
+    # error (empty top-level suggestion). The e2e sibling below keeps error_details;
+    # mock_ad_server pops it back to first-class.
+    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(message, recovery=recovery, suggestion=suggestion)
+    # E2E path: write the failure to the adapter test-behavior config so the
+    # Docker-hosted adapter raises the same error on creative upload
+    # (MockAdServer.add_creative_assets reads the fail_on_upload flag).
     _sync_adapter_error_to_db(
         ctx,
-        fail_on_create=False,
-        fail_on_update=False,
-        error_message="Ad server rejected the creative upload",
-        error_details={"suggestion": "Retry the upload or verify the creative meets the ad server's requirements"},
-        recovery="transient",
+        fail_on_upload=True,
+        error_message=message,
+        error_details={"suggestion": suggestion},
+        recovery=recovery,
     )
 
 
@@ -2814,12 +2855,7 @@ def given_adapter_error(ctx: dict) -> None:
         recovery="retryable",
     )
     # Ensure tenant is auto-approval so production code doesn't short-circuit
-    tenant = ctx.get("tenant")
-    if tenant is not None:
-        tenant.human_review_required = False
-        env._commit_factory_data()
-        env._identity_cache.clear()
-        env._tenant_overrides["human_review_required"] = False
+    _seed_auto_approval(ctx, sync_adapter=False)
     # Strip creative_ids so E2E doesn't fail on creative format validation
     # (the Docker creative agent doesn't know test formats like display_300x250).
     # This scenario tests adapter failure, not creative assignment.

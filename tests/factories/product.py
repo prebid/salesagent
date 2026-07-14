@@ -22,8 +22,12 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     product_id = Sequence(lambda n: f"prod_{n:04d}")
     name = LazyAttribute(lambda o: f"Product {o.product_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+    # Default to a format_id present in the captured reference catalog
+    # (tests/fixtures/creative_formats/reference_formats.json). The legacy
+    # "display_300x250" id is NOT in the agent's catalog; "display_300x250_image" is,
+    # so format resolution against the reference formats succeeds. See issue #1418.
     format_ids = factory.LazyFunction(
-        lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+        lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
     )
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"

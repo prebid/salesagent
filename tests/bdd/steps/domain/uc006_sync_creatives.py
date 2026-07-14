@@ -3915,31 +3915,35 @@ def then_workflow_step_created_with_type(ctx: dict, step_type: str) -> None:
 
 @given(parsers.parse('a creative "{creative_id}" exists for principal "{principal_id}" in the tenant'))
 def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_id: str) -> None:
-    """Pre-seed a creative in the DB keyed by (tenant_id, principal_id, creative_id)."""
-    from sqlalchemy import select
+    """Pre-seed a creative in the DB keyed by (tenant_id, principal_id, creative_id).
 
+    Seeds tenant/principal idempotently: the auth Given only mutates the env
+    identity (no DB writes — the assumption that it seeds rows was never true;
+    surfaced when the dormant BR-RULE-034 scenarios were wired). The named
+    principal may differ from the authenticated one (INV-2 seeds the OTHER
+    principal's creative), so it gets its own get-or-create row.
+    """
     from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory
+    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories.core import get_or_create
 
     env = ctx["env"]
-    # The auth step (given_buyer_authenticated_as) already created tenant/principal
-    # via env.identity → _ensure_default_data_for_auth(). Retrieve them from DB
-    # rather than calling _ensure_tenant_principal which would try to create duplicates.
-    if "tenant" not in ctx:
-        with db_session(ctx) as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
-            assert tenant is not None, f"Tenant {env._tenant_id!r} not found — auth step should have created it"
-            principal = session.scalars(
-                select(Principal).filter_by(principal_id=principal_id, tenant_id=env._tenant_id)
-            ).first()
-            assert principal is not None, f"Principal {principal_id!r} not found — auth step should have created it"
-            ctx["tenant"] = tenant
-            ctx["principal"] = principal
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    assert principal.principal_id == principal_id, (
-        f"Authenticated principal '{principal.principal_id}' != scenario principal '{principal_id}'"
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        tenant = get_or_create(
+            env,
+            Tenant,
+            {"tenant_id": env._tenant_id},
+            lambda: TenantFactory(tenant_id=env._tenant_id),
+        )
+        ctx["tenant"] = tenant
+    principal = get_or_create(
+        env,
+        Principal,
+        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
     )
+    ctx.setdefault("principal", principal)
     creative = CreativeFactory(
         tenant=tenant,
         principal=principal,
@@ -5521,48 +5525,15 @@ def then_response_includes_assignment_errors(ctx: dict) -> None:
 
 @given(parsers.parse('a creative "{creative_id}" exists for principal "{principal_id}" in the same tenant'))
 def given_creative_exists_for_principal_same_tenant(ctx: dict, creative_id: str, principal_id: str) -> None:
-    """Pre-seed a creative for a different principal in the same tenant.
+    """Pre-seed a creative for a (possibly different) principal in the same tenant.
 
     Used by cross-principal isolation tests (BR-RULE-034 INV-2): the creative
     belongs to principal_id (e.g. "buyer-A"), but the authenticated principal
     (e.g. "buyer-B") is different — sync should create a new creative.
+    Delegates to the "in the tenant" Given (same semantics; the named principal
+    gets its own get-or-create row, never overwriting ctx["principal"]).
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Tenant
-    from tests.factories import CreativeFactory, PrincipalFactory
-
-    env = ctx["env"]
-    # Retrieve tenant from DB (created by auth step)
-    if "tenant" not in ctx:
-        with db_session(ctx) as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
-            assert tenant is not None, f"Tenant {env._tenant_id!r} not found"
-            ctx["tenant"] = tenant
-    tenant = ctx["tenant"]
-
-    # Create or retrieve the other principal in the same tenant
-    with db_session(ctx) as session:
-        from src.core.database.models import Principal
-
-        other_principal = session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
-        ).first()
-    if other_principal is None:
-        other_principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        env._commit_factory_data()
-
-    creative = CreativeFactory(
-        tenant=tenant,
-        principal=other_principal,
-        creative_id=creative_id,
-        name=f"Pre-existing creative {creative_id}",
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_300x250",
-    )
-    env._commit_factory_data()
-    ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_creative"] = creative
+    given_creative_exists_for_principal(ctx, creative_id, principal_id)
     ctx["pre_existing_principal_id"] = principal_id
 
 
@@ -5614,6 +5585,21 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
+    # The auth Given only mutates the env identity; the AUTHENTICATED principal
+    # (e.g. buyer-B) still needs a DB row — the pre-existing creative's Given
+    # seeded only the OTHER principal. Without it the new creative's insert
+    # violates the principals FK and the sync reports action='failed'.
+    from src.core.database.models import Principal
+    from tests.factories import PrincipalFactory
+    from tests.factories.core import get_or_create
+
+    tenant = ctx["tenant"]
+    get_or_create(
+        env,
+        Principal,
+        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
+    )
     creative_payload = {
         "creative_id": creative_id,
         "name": f"Synced creative {creative_id}",
@@ -5622,6 +5608,71 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
+
+
+@when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
+def when_sync_cross_principal_assignment(ctx: dict) -> None:
+    """Dispatch sync_creatives with ONLY an assignment referencing another
+    principal's creative (no creatives array) — the cross-principal FK-500
+    surface (local feature; upstream storyboard gap, PR #1430 review).
+    """
+    from src.core.database.models import Principal
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
+    from tests.factories.core import get_or_create
+
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    authenticated = get_or_create(
+        env,
+        Principal,
+        {"principal_id": env._principal_id, "tenant_id": tenant.tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=env._principal_id),
+    )
+    media_buy = MediaBuyFactory(tenant=tenant, principal=authenticated)
+    pkg = MediaPackageFactory(media_buy=media_buy)
+    env._commit_factory_data()
+    ctx["xp_package_id"] = pkg.package_id
+    dispatch_request(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+
+
+@then("the sync operation should not fail")
+def then_sync_did_not_fail(ctx: dict) -> None:
+    """The cross-principal reference must be skipped — never a raw FK 500 —
+    and the skip must be VISIBLE: a synthesized per-item action='failed'
+    result naming the package in assignment_errors (salesagent-9qpj;
+    the spec's success branch forbids response-level errors, so the outcome
+    rides creatives[]). A bare no-error check survives deletion of the
+    error recording — this assertion does not.
+    """
+    error = ctx.get("error")
+    assert error is None, f"sync_creatives failed on a cross-principal assignment reference: {error!r}"
+    response = ctx.get("response")
+    assert response is not None, "Expected a sync_creatives response"
+    entries = {r.creative_id: r for r in (getattr(response, "creatives", None) or [])}
+    entry = entries.get("creative-xp")
+    assert entry is not None, (
+        f"Skipped cross-principal assignment must surface as a per-item result entry, got creatives={sorted(entries)}"
+    )
+    assert entry.action == "failed", f"Expected action='failed' for the skipped reference, got {entry.action!r}"
+    pkg_id = ctx["xp_package_id"]
+    assert (entry.assignment_errors or {}).get(pkg_id), (
+        f"assignment_errors must name the skipped package {pkg_id}: {entry.assignment_errors!r}"
+    )
+
+
+@then('no assignment should exist for creative "creative-xp" in the tenant')
+def then_no_assignment_for_xp_creative(ctx: dict) -> None:
+    """DB read-back: the cross-principal reference must not create a row."""
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment as DBAssignment
+
+    tenant = ctx["tenant"]
+    with db_session(ctx) as session:
+        rows = session.scalars(
+            select(DBAssignment).filter_by(tenant_id=tenant.tenant_id, creative_id="creative-xp")
+        ).all()
+    assert len(rows) == 0, f"Cross-principal assignment reference created {len(rows)} row(s) — must be 0"
 
 
 @then(parsers.parse('a new creative should be created for principal "{principal_id}"'))
