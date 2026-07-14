@@ -80,7 +80,8 @@ def run_webhook_capture_server(
     sock.close()
 
     server = HTTPServer(("0.0.0.0", port), handler_class)
-    Thread(target=server.serve_forever, daemon=True).start()
+    serve_thread = Thread(target=server.serve_forever, daemon=True)
+    serve_thread.start()
 
     webhook_host = host if host is not None else os.getenv("ADCP_WEBHOOK_HOST", "localhost")
     try:
@@ -90,6 +91,15 @@ def run_webhook_capture_server(
             "received": received,
         }
     finally:
-        server.shutdown()
+        # Bound the teardown: shutdown() waits for the serve_forever loop to
+        # acknowledge, which can race with a slow/mid-request handler on a
+        # loaded CI runner and previously ate the whole 300s pytest-timeout at
+        # TEARDOWN of an otherwise-green test. Signal shutdown from a helper
+        # thread, give the loop a bounded window, then close the socket
+        # regardless — the daemon thread cannot outlive the test process.
+        shutdown_signal = Thread(target=server.shutdown, daemon=True)
+        shutdown_signal.start()
+        shutdown_signal.join(timeout=10)
+        serve_thread.join(timeout=10)
         server.server_close()
         received.clear()
