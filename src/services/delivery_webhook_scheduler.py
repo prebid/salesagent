@@ -25,8 +25,7 @@ from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.helpers import enum_value
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools._media_buy_status import (
-    CANONICAL_COMPLETED,
-    CANONICAL_SERVING,
+    REPORTABLE_CANONICAL_STATUSES,
     SERVING_PERSISTED_STATUSES,
     derive_notification_type,
     resolve_canonical_status,
@@ -40,13 +39,6 @@ logger = logging.getLogger(__name__)
 # 1 hour because AdCP protocol has frequency options hourly, daily and monthly
 # Configurable via env var for testing
 SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
-
-# The canonical statuses the delivery impl reports on — used both as the
-# impl request's status_filter and as the scheduler's pre-send skip: a
-# selected buy resolving outside this set (pre-flight pending_start, paused)
-# has no delivery data, and asking the impl for it produces a
-# MEDIA_BUY_NOT_FOUND advisory for a buy that exists.
-REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CANONICAL_COMPLETED})
 
 
 class DeliveryWebhookScheduler:
@@ -201,6 +193,8 @@ class DeliveryWebhookScheduler:
             error instead of a send.
         """
         try:
+            delivery_repo = DeliveryRepository(session, media_buy.tenant_id)
+
             # Determine reporting frequency from AdCP config (hourly, daily, monthly)
             raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
 
@@ -228,7 +222,7 @@ class DeliveryWebhookScheduler:
                 # notification_type — the broadened #1570 dedup). Tenant-scoped
                 # via the repository.
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                existing_log = DeliveryRepository(session, media_buy.tenant_id).get_recent_successful_log(
+                existing_log = delivery_repo.get_recent_successful_log(
                     media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
                 )
                 if existing_log:
@@ -261,7 +255,7 @@ class DeliveryWebhookScheduler:
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=[media_buy.media_buy_id],
-                status_filter=[MediaBuyStatus(s) for s in REPORTABLE_CANONICAL_STATUSES],
+                status_filter=[MediaBuyStatus(s) for s in sorted(REPORTABLE_CANONICAL_STATUSES)],
                 start_date=start_date_obj.strftime("%Y-%m-%d"),
                 end_date=end_date_obj.strftime("%Y-%m-%d"),
                 context=None,
@@ -290,10 +284,7 @@ class DeliveryWebhookScheduler:
             # propagates and aborts this send loudly: a quiet fallback to 1
             # would put an already-consumed sequence on the wire.
             sequence_number = (
-                DeliveryRepository(session, media_buy.tenant_id).get_max_sequence_number(
-                    media_buy.media_buy_id, task_type="media_buy_delivery"
-                )
-                + 1
+                delivery_repo.get_max_sequence_number(media_buy.media_buy_id, task_type="media_buy_delivery") + 1
             )
 
             # Set webhook-specific metadata directly on the response model (#1570).
@@ -418,7 +409,9 @@ class DeliveryWebhookScheduler:
             # Re-raise for the caller (batch loop / manual trigger) to own the
             # single ERROR line. Log at DEBUG here to avoid a duplicate full
             # traceback on the common send_notification -> False path.
-            logger.debug(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+            logger.debug(
+                "Error sending delivery report for media buy %s: %s", media_buy.media_buy_id, e, exc_info=True
+            )
             raise
 
 

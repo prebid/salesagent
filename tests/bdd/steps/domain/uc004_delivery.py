@@ -18,7 +18,8 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require, _require_response
+from src.core.tools._media_buy_status import WEBHOOK_ONLY_FIELDS
+from tests.bdd.steps._outcome_helpers import _require, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -1674,28 +1675,20 @@ def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str, flight: str) -
     """
     from datetime import UTC, datetime, timedelta
 
-    from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-
     windows = {"live": (-30, 30), "completed": (-60, -30)}
     assert flight in windows, f"unknown flight phase {flight!r}; expected one of {sorted(windows)}"
     start_days, end_days = windows[flight]
 
     env = ctx["env"]
     owner = ctx.get("principal_id", "buyer-001")
-    if "db_tenant" not in ctx:
-        ctx["db_tenant"] = TenantFactory(tenant_id=ctx.get("tenant_id", "test_tenant"))
-    principal_key = f"db_principal_{owner}"
-    if principal_key not in ctx:
-        ctx[principal_key] = PrincipalFactory(tenant=ctx["db_tenant"], principal_id=owner)
-
     today = datetime.now(UTC).date()
-    buy = MediaBuyFactory(
-        tenant=ctx["db_tenant"],
-        principal=ctx[principal_key],
-        media_buy_id=mb_id,
+    buy = _ensure_media_buy_in_db(
+        ctx,
+        mb_id,
+        owner,
         status="active",
-        start_date=today + timedelta(days=start_days),
-        end_date=today + timedelta(days=end_days),
+        start_date=(today + timedelta(days=start_days)).isoformat(),
+        end_date=(today + timedelta(days=end_days)).isoformat(),
         raw_request={"reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"}},
     )
     ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": owner, "status": "active"}
@@ -1716,10 +1709,19 @@ def when_scheduler_sends_report(ctx: dict, mb_id: str) -> None:
         ctx["error"] = exc
 
 
+def _scheduler_result(ctx: dict) -> dict:
+    """The ``result`` block of the real scheduler's captured wire payload.
+
+    Raises a diagnostic (not a bare KeyError) if the scheduler send was skipped
+    or errored — those set ``ctx["error"]`` without ``ctx["scheduler_wire"]``.
+    """
+    return _require(ctx, "scheduler_wire", hint="The scheduler send may have been skipped or errored.")["result"]
+
+
 @then(parsers.parse('the scheduler webhook payload notification_type should be "{ntype}"'))
 def then_scheduler_notification_type(ctx: dict, ntype: str) -> None:
     """Assert the scheduler-derived notification_type on the wire (under ``result``)."""
-    result = _require(ctx, "scheduler_wire", hint="The scheduler send may have been skipped or errored.")["result"]
+    result = _scheduler_result(ctx)
     assert result.get("notification_type") == ntype, (
         f"Expected scheduler-derived notification_type={ntype!r}, got {result.get('notification_type')!r}"
     )
@@ -1728,7 +1730,7 @@ def then_scheduler_notification_type(ctx: dict, ntype: str) -> None:
 @then(parsers.parse("the scheduler webhook payload sequence_number should be {n:d}"))
 def then_scheduler_sequence_number(ctx: dict, n: int) -> None:
     """Assert the scheduler-computed sequence_number on the wire (under ``result``)."""
-    result = _require(ctx, "scheduler_wire", hint="The scheduler send may have been skipped or errored.")["result"]
+    result = _scheduler_result(ctx)
     assert result.get("sequence_number") == n, (
         f"Expected scheduler-computed sequence_number={n}, got {result.get('sequence_number')!r}"
     )
@@ -1743,10 +1745,13 @@ def then_scheduler_next_expected(ctx: dict, next_expected: str) -> None:
     'final'" (get-media-buy-delivery-response.json @ v3.1-04f59d2d5). Mirrors
     ``then_next_expected`` but reads the scheduler wire, not env.mock["post"].
     """
-    result = _require(ctx, "scheduler_wire", hint="The scheduler send may have been skipped or errored.")["result"]
+    result = _scheduler_result(ctx)
     has_key = "next_expected_at" in result
     if "should not" in next_expected:
-        assert not has_key, f"a final notification must omit next_expected_at, got {result.get('next_expected_at')!r}"
+        assert not has_key, (
+            f"Expected 'next_expected_at' to be absent for a final notification, "
+            f"got {result.get('next_expected_at')!r} (explicit null is non-conforming)"
+        )
     else:
         assert has_key, f"a non-final notification must include next_expected_at; keys={list(result.keys())}"
 
@@ -1755,25 +1760,21 @@ def then_scheduler_next_expected(ctx: dict, next_expected: str) -> None:
 def then_poll_omits_webhook_only_fields(ctx: dict) -> None:
     """Assert the synchronous poll's WIRE body carries none of the webhook-only fields.
 
-    #1570: notification_type / sequence_number / next_expected_at are "only
-    present in webhook deliveries" (get-media-buy-delivery-response.json @
-    v3.1-04f59d2d5). This asserts on the real serialized wire body per transport
-    (``wire_response``), not the reconstructed payload: parsing coerces an
-    explicit MCP wire null to None, and re-serializing the model would omit it —
-    so a model_dump() oracle would pass even against the MCP null-leak this fix
-    exists to prevent. Falls back to the production serializer only when the env
-    stashed no wire (defensive; the transports this scenario runs on all stash a
-    wire — see tests/CLAUDE.md § wire_response).
+    #1570: WEBHOOK_ONLY_FIELDS are "only present in webhook deliveries"
+    (get-media-buy-delivery-response.json @ v3.1-04f59d2d5). ``wire_dict`` returns
+    the real serialized wire body per transport and RAISES loudly if a wire
+    transport didn't stash one — never silently degrading to a ``model_dump()``
+    of the reconstructed payload, which would coerce an explicit MCP wire null to
+    None and re-serialize it away, passing even against the MCP null-leak this
+    scenario exists to catch.
     """
-    wire = ctx.get("wire_response")
-    if wire is None:
-        wire = _require_response(ctx).model_dump(mode="json")
+    wire = wire_dict(ctx)
     # Anchor: the webhook-only fields only surface when deliveries are present,
     # so a delivery-less response would pass the omission loop vacuously.
     assert wire.get("media_buy_deliveries"), (
         f"poll returned no deliveries — omission check would be vacuous (keys={list(wire.keys())})"
     )
-    for field in ("notification_type", "sequence_number", "next_expected_at"):
+    for field in sorted(WEBHOOK_ONLY_FIELDS):
         assert field not in wire, (
             f"synchronous poll must omit webhook-only {field!r}, got {wire.get(field)!r} (keys={list(wire.keys())})"
         )
@@ -3076,17 +3077,19 @@ def _ensure_media_buy_in_db(
     status: str = "active",
     start_date: str | None = None,
     end_date: str | None = None,
-) -> None:
-    """Create a media buy in the test database using factories.
+    raw_request: dict | None = None,
+) -> Any:
+    """Create a media buy in the test database using factories; return it.
 
     Uses the env's integration DB session. If the env doesn't support
-    DB operations (unit harness), this is a no-op — ctx state is enough.
-    ``start_date``/``end_date`` (YYYY-MM-DD) override the factory's default
-    mid-flight window when a status needs a specific flight phase.
+    DB operations (unit harness), this is a no-op returning ``None`` — ctx state
+    is enough. ``start_date``/``end_date`` (YYYY-MM-DD) override the factory's
+    default mid-flight window when a status needs a specific flight phase;
+    ``raw_request`` overrides the default (e.g. to attach a ``reporting_webhook``).
     """
     env = ctx["env"]
     if env is None or not hasattr(env, "_session"):
-        return
+        return None
 
     from datetime import date as _date
 
@@ -3115,8 +3118,10 @@ def _ensure_media_buy_in_db(
         mb_kwargs["start_date"] = _date.fromisoformat(start_date)
     if end_date is not None:
         mb_kwargs["end_date"] = _date.fromisoformat(end_date)
+    if raw_request is not None:
+        mb_kwargs["raw_request"] = raw_request
 
-    MediaBuyFactory(**mb_kwargs)
+    return MediaBuyFactory(**mb_kwargs)
 
 
 def _parse_request_params(params_str: str) -> dict[str, Any]:

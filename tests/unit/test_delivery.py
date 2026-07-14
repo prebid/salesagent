@@ -2450,9 +2450,9 @@ class TestTimeSimulationReachesFinalNotification:
         )
 
         assert response.media_buy_deliveries[0].status == "completed"
-        # The status feeds the webhook path's "final" derivation; the poll
-        # itself carries no notification_type (#1570).
-        assert derive_notification_type(["completed"]) == "final"
+        # The status feeds the webhook path's "final" derivation (pinned once by
+        # test_no_more_data_status_is_final); the poll itself carries no
+        # notification_type (#1570).
         assert "notification_type" not in response.model_dump(mode="json")
 
     def test_mid_flight_mock_time_via_from_headers_does_not_raise(self):

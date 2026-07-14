@@ -18,7 +18,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -575,7 +575,7 @@ def _make_media_buy_delivery_response(
     media_buy_count: int = 0,
     *,
     notification_type: str | None = None,
-    next_expected_at: object | None = None,
+    next_expected_at: datetime | None = None,
 ) -> GetMediaBuyDeliveryResponse:
     """Build a minimal GetMediaBuyDeliveryResponse with *media_buy_count* entries."""
     from datetime import UTC, datetime

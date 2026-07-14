@@ -142,6 +142,32 @@ SERVING_PERSISTED_STATUSES: frozenset[str] = frozenset(
     k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == CANONICAL_SERVING
 )
 
+# Persisted pre-serving states the STATUS SCHEDULER may auto-promote to "active"
+# once the flight starts (and creatives are approved). Derived from the map (all
+# -> "pending_start") MINUS the human-approval gates that must NEVER be
+# date-promoted: "pending_approval" (awaiting seller acceptance — promoting it
+# would serve a buy the seller has not accepted) and bare "pending". The
+# subtraction is business taxonomy the map cannot encode on its own, so it is
+# spelled out here (and pinned in test_media_buy_status_consistency.py) rather
+# than hardcoded as a partial copy that could silently drift (#1556 class).
+PENDING_PERSISTED_STATUSES: frozenset[str] = frozenset(
+    k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == "pending_start"
+) - {"pending", "pending_approval"}
+
+# The canonical statuses the delivery impl reports on — a serving buy plus the
+# one terminal state that still carries delivery data. Used both as the delivery
+# webhook scheduler's status_filter and as its pre-send skip (a selected buy
+# resolving outside this set — pre-flight pending_start, paused — has no
+# delivery data). Lives here beside CANONICAL_SERVING/CANONICAL_COMPLETED
+# because it describes the read tool's contract, not the scheduler's.
+REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CANONICAL_COMPLETED})
+
+# The three webhook-only response fields — "only present in webhook deliveries"
+# (get-media-buy-delivery-response.json @ v3.1-04f59d2d5). The polling
+# _get_media_buy_delivery_impl must omit all three; the delivery webhook
+# scheduler is the sole place they are attached to the wire (#1570).
+WEBHOOK_ONLY_FIELDS: frozenset[str] = frozenset({"notification_type", "sequence_number", "next_expected_at"})
+
 
 def derive_notification_type(statuses: Iterable[str]) -> str | None:
     """Derive the webhook ``notification_type`` from the reported buy statuses.

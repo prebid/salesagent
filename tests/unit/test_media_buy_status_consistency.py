@@ -21,6 +21,7 @@ from src.core.tools._media_buy_status import (
     CANONICAL_SERVING,
     CANONICAL_STATUSES,
     NO_MORE_DATA_STATUSES,
+    PENDING_PERSISTED_STATUSES,
     PERSISTED_STATUS_TO_CANONICAL,
     SERVING_PERSISTED_STATUSES,
     TERMINAL_STATUSES,
@@ -150,6 +151,28 @@ class TestCanonicalVocabularyPinnedToSdk:
         assert SERVING_PERSISTED_STATUSES == frozenset(
             k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == CANONICAL_SERVING
         )
+
+    def test_pending_persisted_statuses_membership_is_pinned(self):
+        """Pin the exact PENDING_PERSISTED_STATUSES set (the status scheduler's promote gate).
+
+        Same #1556 class as SERVING: the status scheduler promotes exactly these
+        pre-serving persisted statuses to "active" once the flight starts. A silent
+        widen would auto-promote a buy the seller has not accepted.
+        """
+        assert PENDING_PERSISTED_STATUSES == {"pending_start", "pending_activation"}
+
+    def test_pending_persisted_statuses_excludes_the_human_approval_gates(self):
+        """Derived from the map's pending_start keys MINUS the human-approval gates.
+
+        ``pending`` and ``pending_approval`` also map to pending_start, but must NEVER
+        be date-promoted by the scheduler (awaiting seller acceptance). Pin the exact
+        subtraction so neither a map change nor a blind re-derivation can re-introduce
+        the #1556 hand-coded-partial-copy defect.
+        """
+        pending_start_keys = frozenset(k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == "pending_start")
+        assert PENDING_PERSISTED_STATUSES == pending_start_keys - {"pending", "pending_approval"}
+        # and the two gates really are in the map (so the subtraction is load-bearing)
+        assert {"pending", "pending_approval"} <= pending_start_keys
 
 
 class TestAdcpProjectionAgreesWithCanonicalMap:

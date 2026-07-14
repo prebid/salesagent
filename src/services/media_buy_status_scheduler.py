@@ -23,7 +23,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
-from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
+from src.core.tools._media_buy_status import PENDING_PERSISTED_STATUSES, SERVING_PERSISTED_STATUSES
 from src.core.utils import utc_flight_end, utc_flight_start
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,9 @@ logger = logging.getLogger(__name__)
 # Configurable via env var - default 60 seconds
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
 
-# Pre-serving states the scheduler promotes once the flight starts AND
-# creatives are approved (creative-gated, per PERSISTED_STATUS_TO_CANONICAL).
-PENDING_PERSISTED_STATUSES: frozenset[str] = frozenset({"pending_start", "pending_activation"})
+# PENDING_PERSISTED_STATUSES (imported): the creative-gated pre-serving states
+# this scheduler promotes once the flight starts — derived from the canonical
+# map minus the human-approval gates. See src/core/tools/_media_buy_status.py.
 
 # Legacy serving aliases to migrate to the modern "active" once serving —
 # purely date-gated (already approved), no creative check.

@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
 
 # ---------------------------------------------------------------------------
 # Webhook-path coverage for UC-004-ALT-WEBHOOK-PUSH-REPORTING
@@ -38,6 +39,43 @@ from src.core.schemas import GetMediaBuyDeliveryResponse
 # ---------------------------------------------------------------------------
 
 _DAILY_WEBHOOK = {"url": "https://example.com/webhook", "frequency": "daily"}
+
+
+def _serving_webhook_buy(env, *, flight="live", mb_id=None, tenant=None, principal=None):
+    """Create a serving buy (tenant t1 / principal p1) with a daily reporting_webhook + adapter data.
+
+    ``flight`` selects the window so the scheduler derives the right
+    notification_type: "live" -> in-flight (resolves "active" -> "scheduled");
+    "completed" -> flight ended (date-refines to "completed" -> "final").
+    Pass ``tenant``/``principal`` to reuse them across multiple buys in one env
+    (a second TenantFactory("t1") would collide on the primary key). Returns the
+    MediaBuy; the adapter response is registered for its id.
+    """
+    from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+
+    if tenant is None:
+        tenant = TenantFactory(tenant_id="t1")
+    if principal is None:
+        principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+    today = datetime.now(UTC).date()
+    windows = {
+        "live": (today - timedelta(days=30), today + timedelta(days=30)),
+        "completed": (today - timedelta(days=60), today - timedelta(days=30)),
+    }
+    start_date, end_date = windows[flight]
+    kwargs = {
+        "tenant": tenant,
+        "principal": principal,
+        "status": "active",
+        "start_date": start_date,
+        "end_date": end_date,
+        "raw_request": {"reporting_webhook": dict(_DAILY_WEBHOOK)},
+    }
+    if mb_id is not None:
+        kwargs["media_buy_id"] = mb_id
+    buy = MediaBuyFactory(**kwargs)
+    env.set_adapter_response(buy.media_buy_id, impressions=5000)
+    return buy
 
 
 # ---------------------------------------------------------------------------
@@ -58,21 +96,10 @@ class TestWebhookNotificationTypeScheduled:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                status="active",
-                start_date=datetime.now(UTC).date() - timedelta(days=30),
-                end_date=datetime.now(UTC).date() + timedelta(days=30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
             wire = await env.send_delivery_webhook(buy)
             assert wire["result"]["notification_type"] == "scheduled"
@@ -80,10 +107,7 @@ class TestWebhookNotificationTypeScheduled:
             # The synchronous poll for the same buy carries none of the
             # webhook-only fields (#1570).
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
-            dumped = response.model_dump(mode="json")
-            assert "notification_type" not in dumped
-            assert "sequence_number" not in dumped
-            assert "next_expected_at" not in dumped
+            assert_omits_webhook_only_fields(response.model_dump(mode="json"))
 
 
 # ---------------------------------------------------------------------------
@@ -108,22 +132,11 @@ class TestWebhookNotificationTypeFinal:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                # Was serving; flight ended -> date-refined to "completed"
-                status="active",
-                start_date=date(2025, 1, 1),
-                end_date=date(2025, 6, 30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            # Was serving; flight ended -> date-refines to "completed" -> "final".
+            buy = _serving_webhook_buy(env, flight="completed")
 
             wire = await env.send_delivery_webhook(buy)
 
@@ -135,8 +148,7 @@ class TestWebhookNotificationTypeFinal:
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "completed"
-            assert "notification_type" not in dumped
-            assert "next_expected_at" not in dumped
+            assert_omits_webhook_only_fields(dumped)
 
 
 @pytest.mark.requires_db
@@ -183,8 +195,7 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "completed"
-            assert "notification_type" not in dumped
-            assert "next_expected_at" not in dumped
+            assert_omits_webhook_only_fields(dumped)
 
     def test_mock_time_in_flight_reports_active(self, integration_db):
         """The in-flight companion: simulated clock inside the window -> active."""
@@ -214,8 +225,7 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "active"
-            assert "notification_type" not in dumped
-            assert "next_expected_at" not in dumped
+            assert_omits_webhook_only_fields(dumped)
 
 
 # ---------------------------------------------------------------------------
@@ -241,21 +251,10 @@ class TestWebhookSequenceNumber:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                status="active",
-                start_date=datetime.now(UTC).date() - timedelta(days=30),
-                end_date=datetime.now(UTC).date() + timedelta(days=30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
             first = await env.send_delivery_webhook(buy)
             second = await env.send_delivery_webhook(buy)
@@ -280,21 +279,10 @@ class TestWebhookSequenceNumber:
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
         """
         from src.core.database.repositories.delivery import DeliveryRepository
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                status="active",
-                start_date=datetime.now(UTC).date() - timedelta(days=30),
-                end_date=datetime.now(UTC).date() + timedelta(days=30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
             # A prior attempt that failed after consuming what would be seq 1.
             session = env.get_session()
@@ -336,21 +324,10 @@ class TestWebhookNextExpectedAt:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                status="active",
-                start_date=datetime.now(UTC).date() - timedelta(days=30),
-                end_date=datetime.now(UTC).date() + timedelta(days=30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
             wire = await env.send_delivery_webhook(buy)
 
@@ -386,21 +363,10 @@ class TestFailedWebhookSendRaisesNotCountedAsSent:
         from unittest.mock import AsyncMock, patch
 
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                status="active",
-                start_date=datetime.now(UTC).date() - timedelta(days=30),
-                end_date=datetime.now(UTC).date() + timedelta(days=30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
             scheduler = DeliveryWebhookScheduler()
             # send_notification returns False (never raises) on permanent 4xx /
@@ -437,21 +403,10 @@ class TestDedupSuppressesPriorFinalWebhook:
 
         from src.core.database.repositories.delivery import DeliveryRepository
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                status="active",
-                start_date=datetime.now(UTC).date() - timedelta(days=30),
-                end_date=datetime.now(UTC).date() + timedelta(days=30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
             # A "final" webhook was already delivered inside the 24h window.
             session = env.get_session()
@@ -503,23 +458,14 @@ class TestBatchContinuesPastFailedSend:
         from unittest.mock import AsyncMock, patch
 
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.factories import PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
             for mb_id in ("mb_a", "mb_b"):
-                MediaBuyFactory(
-                    tenant=tenant,
-                    principal=principal,
-                    media_buy_id=mb_id,
-                    status="active",
-                    start_date=datetime.now(UTC).date() - timedelta(days=30),
-                    end_date=datetime.now(UTC).date() + timedelta(days=30),
-                    raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
-                )
-                env.set_adapter_response(mb_id, impressions=5000)
+                _serving_webhook_buy(env, mb_id=mb_id, tenant=tenant, principal=principal)
 
             scheduler = DeliveryWebhookScheduler()
 
@@ -545,6 +491,51 @@ class TestBatchContinuesPastFailedSend:
             assert mock_send.await_count == 2, (
                 f"batch must attempt the second buy after the first send fails; got {mock_send.await_count} send(s)"
             )
+
+
+@pytest.mark.requires_db
+class TestPausedBuyReceivesNoDeliveryWebhook:
+    """A paused buy is never sent a delivery report webhook by the batch.
+
+    "paused" is not in SERVING_PERSISTED_STATUSES (so ``_send_reports`` never
+    selects it) and not in REPORTABLE_CANONICAL_STATUSES (so the pre-send skip
+    at delivery_webhook_scheduler.py drops it even if reached). Either way the
+    buyer gets no report for a paused buy — pinned here through the real batch.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_paused_buy_is_not_sent(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from unittest.mock import AsyncMock, patch
+
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            today = datetime.now(UTC).date()
+            # Paused, but mid-flight and with a reporting_webhook configured.
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="paused",
+                start_date=today - timedelta(days=30),
+                end_date=today + timedelta(days=30),
+                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            scheduler = DeliveryWebhookScheduler()
+            with patch.object(
+                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=True
+            ) as mock_send:
+                await scheduler._send_reports()
+
+            assert mock_send.await_count == 0, "a paused buy must not receive a delivery webhook"
 
 
 # ---------------------------------------------------------------------------
@@ -589,8 +580,10 @@ class TestPollOmitsWebhookOnlyFieldsOnEveryTransport:
                 # IMPL has no wire; serialize the payload through the production
                 # serializer instead (see tests/CLAUDE.md § wire_response).
                 wire = result.wire_response or result.payload.model_dump(mode="json")
-                for field in ("notification_type", "sequence_number", "next_expected_at"):
-                    assert field not in wire, f"{transport} wire must omit webhook-only {field!r}"
+                # Anchor: the webhook-only fields only surface alongside deliveries,
+                # so an empty-deliveries response would pass the omission check vacuously.
+                assert wire.get("media_buy_deliveries"), f"{transport}: no deliveries — omission check is vacuous"
+                assert_omits_webhook_only_fields(wire, context=str(transport))
 
 
 # ---------------------------------------------------------------------------
