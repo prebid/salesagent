@@ -42,15 +42,22 @@ _INTERNAL_WIRE_CODES: frozenset[str] = frozenset(
 
 
 def _all_emitted_codes() -> set[str]:
-    """Collect ``_default_error_code`` from AdCPError and every subclass."""
-    codes: set[str] = set()
-    stack: list[type] = [AdCPError]
-    while stack:
-        cls = stack.pop()
-        code = cls.__dict__.get("_default_error_code")
-        if isinstance(code, str):
-            codes.add(code)
-        stack.extend(cls.__subclasses__())
+    """Collect the ``_default_error_code`` every concrete AdCPError subclass emits.
+
+    Uses ``AdCPError.iter_concrete_subclasses`` — the single source of truth for
+    this walk — so it dedupes diamond inheritance and skips abstract bases that
+    are never emitted, which a hand-rolled ``__subclasses__`` stack does not.
+    """
+    codes = {
+        code
+        for cls in AdCPError.iter_concrete_subclasses()
+        if isinstance((code := getattr(cls, "_default_error_code", None)), str)
+    }
+    # AdCPError itself is the emitted fallback for unmapped errors; its own
+    # default (INTERNAL_ERROR) is not a descendant, so add it explicitly.
+    base_code = AdCPError.__dict__.get("_default_error_code")
+    if isinstance(base_code, str):
+        codes.add(base_code)
     return codes
 
 

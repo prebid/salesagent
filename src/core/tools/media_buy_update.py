@@ -293,6 +293,28 @@ def _validate_creatives_for_assignment(
         )
 
 
+def _resolve_package_product(
+    uow: "MediaBuyUoW",
+    media_buy_id: str,
+    package_id: str,
+) -> "DBProduct | None":
+    """Resolve the product backing a package, tolerant of raw_request-only buys.
+
+    Reads the package config via ``get_package_config`` (DB row OR ``raw_request``
+    fallback), so a pre-dual-write legacy buy keeps format validation instead of
+    silently skipping it. Returns ``None`` when the package or its ``product_id``
+    can't be resolved — ``_validate_creatives_for_assignment`` treats that as
+    "no format constraint". Shared by the ``creative_ids`` and
+    ``creative_assignments`` update paths so both resolve identically.
+    """
+    package_config = uow.media_buys.get_package_config(media_buy_id, package_id)
+    product_id = package_config.get("product_id") if package_config else None
+    if not product_id:
+        return None
+    assert uow.products is not None
+    return uow.products.get_by_id(product_id)
+
+
 def _verify_principal(
     media_buy_id: str,
     identity: "ResolvedIdentity",
@@ -920,14 +942,7 @@ def _update_media_buy_impl(
 
                         # Validate creatives (existence, status, format) via the
                         # shared helper so the rules match the creative_assignments path.
-                        # Config-only read (row or raw_request) — raw_request-only
-                        # legacy buys keep format validation instead of skipping it
-                        db_package_config = uow.media_buys.get_package_config(
-                            actual_media_buy_id, pkg_update.package_id
-                        )
-                        product_id = db_package_config.get("product_id") if db_package_config else None
-                        assert uow.products is not None
-                        product = uow.products.get_by_id(product_id) if product_id else None
+                        product = _resolve_package_product(uow, actual_media_buy_id, pkg_update.package_id)
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
                             uow=uow,
@@ -1069,16 +1084,9 @@ def _update_media_buy_impl(
 
                         # Validate referenced creatives (existence, status, format) BEFORE
                         # building any assignment rows — otherwise a not-found creative_id
-                        # would surface as a composite-FK IntegrityError. Same rules as the
-                        # creative_ids path via the shared helper.
-                        ca_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-                        ca_product_id = (
-                            ca_package.package_config.get("product_id")
-                            if ca_package and ca_package.package_config
-                            else None
-                        )
-                        assert uow.products is not None
-                        ca_product = uow.products.get_by_id(ca_product_id) if ca_product_id else None
+                        # would surface as a composite-FK IntegrityError. Same rules and same
+                        # raw_request-tolerant product resolution as the creative_ids path.
+                        ca_product = _resolve_package_product(uow, actual_media_buy_id, pkg_update.package_id)
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
                             uow=uow,

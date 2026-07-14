@@ -964,22 +964,13 @@ def given_media_buy_exists_in_catalog(ctx: dict) -> None:
 @given("the buyer references a package_id that does not belong to the media buy")
 def given_unrelated_package_reference(ctx: dict) -> None:
     """Target a package_id that is not attached to the (existing) media buy."""
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaPackage
-
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — conftest setup_update_data() failed"
+    unknown_pkg = "pkg_not_in_this_buy"
+    # Reuse the parametrized absence guard rather than re-inlining the DB check.
+    given_package_not_in_media_buy(ctx, unknown_pkg)
     kwargs = _ensure_update_defaults(ctx)
     kwargs["media_buy_id"] = mb.media_buy_id
-    unknown_pkg = "pkg_not_in_this_buy"
-    with db_session(ctx) as session:
-        db_pkg = session.scalars(
-            select(MediaPackage).filter_by(package_id=unknown_pkg, media_buy_id=mb.media_buy_id)
-        ).first()
-        assert db_pkg is None, (
-            f"Package '{unknown_pkg}' found on media buy '{mb.media_buy_id}' — step claims it does not belong"
-        )
     kwargs["packages"] = [{"package_id": unknown_pkg, "paused": True}]
 
 

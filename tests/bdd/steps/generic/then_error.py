@@ -1,10 +1,12 @@
 """Then steps for error assertions (failure, error codes, messages, suggestions).
 
-These steps assert on ``ctx["error"]`` which is populated by When steps when
-an operation fails. Errors are real exceptions from production code:
-    - AdCPError subclasses (have .error_code, .message)
-    - pydantic.ValidationError (mapped to VALIDATION_ERROR)
-    - Other exceptions
+Error-path steps grade the WIRE contract (Error Verification Policy,
+tests/CLAUDE.md): ``dispatch_request`` stores the normalized ``TransportResult``
+on ``ctx['result']``, and its ``wire_error_envelope`` is the buyer-facing
+two-layer ``{adcp_error, errors[]}`` shape. Steps read that via the ``_wire_*``
+accessors (or ``TransportResult.assert_wire_error`` for a full code assertion),
+never the lossy reconstructed ``ctx['error']`` — which is only a fallback for
+the handful of message/existence steps that predate wire-first grading.
 """
 
 from __future__ import annotations
@@ -140,18 +142,20 @@ def _get_error_dict(error: object) -> dict:
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
 
-def _resolve_wire_envelope(ctx: dict) -> dict:
-    """Return the two-layer error envelope captured by the dispatcher.
+def _require_wire_envelope(ctx: dict) -> dict:
+    """Return the two-layer wire error envelope off the dispatched result.
 
-    ``wire_error_envelope`` carries the real wire bytes on A2A/MCP/REST;
-    ``synthesized_error_envelope`` carries the production builder's output on
-    IMPL (no wire). One of the two is always present on an error, so error
-    Then steps assert on the envelope rather than the lossy reconstructed
-    exception.
+    Single source of truth: ``dispatch_request`` stores the ``TransportResult``
+    on ``ctx['result']`` and exposes the real two-layer envelope on
+    ``wire_error_envelope`` — the same path the ``_wire_*`` accessors read.
+    Raises loudly (never falls back to the reconstructed exception) so a step
+    that means to grade the wire cannot silently pass without one; IMPL is out
+    of BDD parametrization (#1417), so every error scenario has a wire.
     """
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
     assert isinstance(envelope, dict), (
-        f"No wire/synthesized error envelope captured for this transport — error: {ctx.get('error')!r}"
+        f"No wire error envelope captured for this transport — error: {ctx.get('error')!r}"
     )
     return envelope
 
@@ -252,12 +256,11 @@ def then_error_code(ctx: dict, code: str) -> None:
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
-# NOTE: error-path scenarios must grade the WIRE code (Error Verification
-# Policy, tests/CLAUDE.md) — the reconstructed exception collapses distinct
-# wire codes onto one exception class. UC-003 does this via a module-local
-# override of the step above (test_uc003_update_media_buy.py) so the
-# generated feature text stays canonical; #1417 generalizes wire-first
-# semantics into the generic step itself.
+# NOTE: error-path scenarios grade the WIRE code (Error Verification Policy,
+# tests/CLAUDE.md) — the reconstructed exception collapses distinct wire codes
+# onto one exception class. ``then_error_code`` above is wire-first for every
+# transport (generalized in #1417); the reconstructed ``ctx['error']`` is only
+# a fallback for IMPL/no-wire scenarios.
 
 
 # ── Error message content (generic) ───────────────────────────────────
@@ -403,11 +406,8 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 @then("the error recovery hint should indicate correctable")
 def then_error_recovery_correctable(ctx: dict) -> None:
     """Assert recovery=correctable on the wire envelope (both layers agree)."""
-    from tests.helpers import assert_envelope_shape
-
-    envelope = _resolve_wire_envelope(ctx)
-    code = envelope["errors"][0]["code"]
-    assert_envelope_shape(envelope, code, recovery="correctable")
+    envelope = _require_wire_envelope(ctx)
+    ctx["result"].assert_wire_error(envelope["errors"][0]["code"], recovery="correctable")
 
 
 @then("the response should echo the context.correlation_id unchanged")
@@ -415,7 +415,7 @@ def then_error_echoes_correlation_id(ctx: dict) -> None:
     """Assert the wire envelope echoes the request's context.correlation_id."""
     sent = ctx.get("sent_correlation_id")
     assert sent, "When step did not record ctx['sent_correlation_id'] — cannot verify echo"
-    envelope = _resolve_wire_envelope(ctx)
+    envelope = _require_wire_envelope(ctx)
     context = envelope.get("context")
     echoed = context.get("correlation_id") if isinstance(context, dict) else None
     assert echoed == sent, f"Expected correlation_id '{sent}' echoed unchanged, got '{echoed}'"
@@ -425,16 +425,14 @@ def then_error_echoes_correlation_id(ctx: dict) -> None:
 def then_error_is_structured_adcp_shape(ctx: dict) -> None:
     """Assert the failure surfaced as the two-layer AdCP envelope, not a 500.
 
-    A bare 500 / non-AdCP body does not parse into the two-layer
-    ``{adcp_error, errors[]}`` shape, so a well-formed envelope is itself the
-    "not a 500" assertion.
+    A bare 500 / non-AdCP body has no ``wire_error_envelope`` and no
+    ``{adcp_error, errors[]}`` code, so grading the envelope's own code through
+    the canonical ``assert_wire_error`` is itself the "not a 500" assertion.
     """
-    from tests.helpers import assert_envelope_shape
-
-    envelope = _resolve_wire_envelope(ctx)
-    code = envelope["errors"][0]["code"]
-    recovery = envelope["errors"][0].get("recovery")
-    assert_envelope_shape(envelope, code, recovery=recovery)
+    envelope = _require_wire_envelope(ctx)
+    ctx["result"].assert_wire_error(
+        envelope["errors"][0]["code"], recovery=envelope["errors"][0].get("recovery")
+    )
 
 
 @then('the error should include a "suggestion" field')

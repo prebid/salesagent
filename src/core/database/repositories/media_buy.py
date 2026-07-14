@@ -257,6 +257,20 @@ class MediaBuyRepository:
         if raw_pkg is None:
             return None
 
+        package = self._build_package_row(media_buy_id, package_id, raw_pkg)
+        self._session.add(package)
+        self._session.flush()
+        return package
+
+    @staticmethod
+    def _build_package_row(media_buy_id: str, package_id: str, raw_pkg: dict[str, Any]) -> MediaPackage:
+        """Build a ``MediaPackage`` row from a raw_request package dict.
+
+        Single home for the dual-write construction (budget dict → total/pacing,
+        ``Decimal(str(...))`` coercion, row build). ``materialize_package`` uses
+        it; the create-side dual-write sites (``media_buy_create.py``, under
+        their FIXME) can route through it as follow-up so the copies converge.
+        """
         budget_value = raw_pkg.get("budget")
         budget_total = None
         pacing_value = None
@@ -267,7 +281,7 @@ class MediaBuyRepository:
             budget_total = budget_value
         bid_price_value = raw_pkg.get("bid_price")
 
-        package = MediaPackage(
+        return MediaPackage(
             media_buy_id=media_buy_id,
             package_id=package_id,
             package_config=dict(raw_pkg),
@@ -275,9 +289,6 @@ class MediaBuyRepository:
             bid_price=Decimal(str(bid_price_value)) if bid_price_value is not None else None,
             pacing=pacing_value,
         )
-        self._session.add(package)
-        self._session.flush()
-        return package
 
     def get_package_or_raise(
         self, media_buy_id: str, package_id: str, *, context: ContextObject | dict[str, Any] | None = None

@@ -41,6 +41,7 @@ from unittest.mock import patch
 import pytest
 
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.exceptions import AdCPCreativeRejectedError
 from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories import CreativeFactory, MediaBuyFactory
@@ -95,13 +96,13 @@ def _seeded(integration_db):
         yield seeded
 
 
-def _seed_creatives(seeded: dict, creative_ids: list[str]) -> None:
+def _seed_creatives(seeded: dict, creative_ids: list[str], format_id: str = DEFAULT_FORMAT_ID) -> None:
     for cid in creative_ids:
         CreativeFactory(
             tenant=seeded["tenant"],
             principal=seeded["principal"],
             creative_id=cid,
-            format=DEFAULT_FORMAT_ID,
+            format=format_id,
             status="ready",
             data={
                 "url": "https://example.com/creative.jpg",
@@ -110,6 +111,38 @@ def _seed_creatives(seeded: dict, creative_ids: list[str]) -> None:
                 "platform_creative_id": f"mock_{cid}",
             },
         )
+
+
+def _seed_raw_request_only_buy(
+    seeded: dict,
+    *,
+    media_buy_id: str,
+    package_id: str,
+    impressions: int,
+    product_id: str | None = None,
+):
+    """Seed a pre-dual-write buy whose packages live ONLY in ``raw_request``.
+
+    No ``MediaPackageFactory`` row is created — this is the shape of a buy made
+    before the media_packages dual-write (or an adapter that returned empty
+    ``response.packages``). Pass ``product_id`` to exercise the pricing/format
+    validation that raw_request tolerance newly runs on such legacy buys.
+    """
+    now = datetime.now(UTC)
+    raw_package: dict = {"package_id": package_id, "impressions": impressions}
+    if product_id is not None:
+        raw_package["product_id"] = product_id
+    return MediaBuyFactory(
+        tenant=seeded["tenant"],
+        principal=seeded["principal"],
+        media_buy_id=media_buy_id,
+        status="active",
+        start_date=now.date(),
+        end_date=(now + timedelta(days=30)).date(),
+        start_time=now,
+        end_time=now + timedelta(days=30),
+        raw_request={"packages": [raw_package]},
+    )
 
 
 class TestPackageGuardRealCreateFlow:
@@ -167,19 +200,10 @@ class TestPackageGuardRawRequestFallback:
         creative_ids = ["c_guard_legacy_1"]
         _seed_creatives(_seeded, creative_ids)
 
-        now = datetime.now(UTC)
         # Deliberately NO MediaPackageFactory row — packages recorded only in
         # raw_request, matching the pre-dual-write shape.
-        media_buy = MediaBuyFactory(
-            tenant=_seeded["tenant"],
-            principal=_seeded["principal"],
-            media_buy_id="mb_raw_request_only",
-            status="active",
-            start_date=now.date(),
-            end_date=(now + timedelta(days=30)).date(),
-            start_time=now,
-            end_time=now + timedelta(days=30),
-            raw_request={"packages": [{"package_id": "pkg_legacy", "impressions": 100000}]},
+        media_buy = _seed_raw_request_only_buy(
+            _seeded, media_buy_id="mb_raw_request_only", package_id="pkg_legacy", impressions=100000
         )
 
         update_req = UpdateMediaBuyRequest(
@@ -206,17 +230,8 @@ class TestPackageGuardRawRequestFallback:
 
         identity = _seeded["identity"]
 
-        now = datetime.now(UTC)
-        media_buy = MediaBuyFactory(
-            tenant=_seeded["tenant"],
-            principal=_seeded["principal"],
-            media_buy_id="mb_raw_only_targeting",
-            status="active",
-            start_date=now.date(),
-            end_date=(now + timedelta(days=30)).date(),
-            start_time=now,
-            end_time=now + timedelta(days=30),
-            raw_request={"packages": [{"package_id": "pkg_legacy_t", "impressions": 50000}]},
+        media_buy = _seed_raw_request_only_buy(
+            _seeded, media_buy_id="mb_raw_only_targeting", package_id="pkg_legacy_t", impressions=50000
         )
         assert isinstance(media_buy, MediaBuy)
 
@@ -243,17 +258,8 @@ class TestPackageGuardRawRequestFallback:
 
         identity = _seeded["identity"].model_copy(update={"testing_context": AdCPTestContext(dry_run=True)})
 
-        now = datetime.now(UTC)
-        media_buy = MediaBuyFactory(
-            tenant=_seeded["tenant"],
-            principal=_seeded["principal"],
-            media_buy_id="mb_raw_only_dry_run",
-            status="active",
-            start_date=now.date(),
-            end_date=(now + timedelta(days=30)).date(),
-            start_time=now,
-            end_time=now + timedelta(days=30),
-            raw_request={"packages": [{"package_id": "pkg_legacy_d", "impressions": 75000}]},
+        media_buy = _seed_raw_request_only_buy(
+            _seeded, media_buy_id="mb_raw_only_dry_run", package_id="pkg_legacy_d", impressions=75000
         )
 
         update_req = UpdateMediaBuyRequest(
@@ -268,3 +274,56 @@ class TestPackageGuardRawRequestFallback:
             "dry_run persisted a materialized media_packages row — the "
             "pre-dry_run guard wrote to the session and the UoW committed it"
         )
+
+    def test_creative_assignments_succeed_on_raw_request_only_buy(self, _seeded):
+        """The creative_assignments update path (sibling of creative_ids) also
+        tolerates a raw_request-only buy: its product resolution now shares the
+        raw_request-aware _resolve_package_product helper, so a valid assignment
+        lands instead of the path diverging. Deletion oracle: reverting that
+        lookup to the non-tolerant get_package resolves product to None and the
+        assignment path stops matching the creative_ids path."""
+        identity = _seeded["identity"]
+        _seed_creatives(_seeded, ["c_ca_legacy_1"])  # compatible format
+
+        media_buy = _seed_raw_request_only_buy(
+            _seeded,
+            media_buy_id="mb_raw_only_ca",
+            package_id="pkg_legacy_ca",
+            impressions=120000,
+            product_id="guaranteed_display",
+        )
+
+        update_req = UpdateMediaBuyRequest(
+            media_buy_id=media_buy.media_buy_id,
+            packages=[{"package_id": "pkg_legacy_ca", "creative_assignments": [{"creative_id": "c_ca_legacy_1"}]}],
+        )
+        result = _update_media_buy_impl(req=update_req, identity=identity)
+        assert not isinstance(result, UpdateMediaBuyError), f"update failed: {result}"
+
+        assignments = _seeded["env"].query(DBAssignment, tenant_id="pkg_guard_test", media_buy_id="mb_raw_only_ca")
+        assert assignments, "expected creative assignment on the raw_request-only buy via creative_assignments"
+
+    def test_creative_format_validation_fires_on_raw_request_only_buy(self, _seeded):
+        """The format validation the get_package_config swap newly runs on legacy
+        buys actually FIRES: a raw_request-only buy whose raw package carries a
+        product_id resolves the product, so a creative whose format the product
+        does not support is rejected rather than silently skipped. Deletion
+        oracle: with the old product=None skip path this update would succeed."""
+        identity = _seeded["identity"]
+        # A creative in a format the display product does not support.
+        _seed_creatives(_seeded, ["c_ca_bad_format"], format_id="video_1920x1080")
+
+        media_buy = _seed_raw_request_only_buy(
+            _seeded,
+            media_buy_id="mb_raw_only_fmt",
+            package_id="pkg_legacy_fmt",
+            impressions=90000,
+            product_id="guaranteed_display",
+        )
+
+        update_req = UpdateMediaBuyRequest(
+            media_buy_id=media_buy.media_buy_id,
+            packages=[{"package_id": "pkg_legacy_fmt", "creative_assignments": [{"creative_id": "c_ca_bad_format"}]}],
+        )
+        with pytest.raises(AdCPCreativeRejectedError, match="not supported"):
+            _update_media_buy_impl(req=update_req, identity=identity)
