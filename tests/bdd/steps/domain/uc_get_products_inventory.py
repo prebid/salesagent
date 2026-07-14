@@ -1,5 +1,7 @@
 """Domain step definitions for product discovery with inventory profiles (#1162).
 
+Also hosts brand-shorthand steps for #1324 (same get_products dispatch).
+
 Given steps: tenant setup, inventory profile creation, product linking
 When steps: get_products dispatch via call_via (all 4 transports)
 Then steps: publisher_properties assertions (selection_type, field presence)
@@ -7,6 +9,7 @@ Then steps: publisher_properties assertions (selection_type, field presence)
 Steps store results in ctx:
     ctx["response"] — GetProductsResponse on success
     ctx["error"] — Exception on failure
+    ctx["wire_error_envelope"] — transport wire envelope on tool error
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
     InventoryProfileFactory,
@@ -23,6 +27,7 @@ from tests.factories import (
     ProductFactory,
     TenantFactory,
 )
+from tests.helpers import assert_envelope_shape
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -157,6 +162,12 @@ def when_request_products(ctx: dict) -> None:
     _call_get_products(ctx)
 
 
+@when(parsers.parse("the buyer requests products with brand {brand}"))
+def when_request_products_with_brand(ctx: dict, brand: str) -> None:
+    """Dispatch get_products with a brand value (JSON dict or bare/quoted string)."""
+    _call_get_products(ctx, brand=parse_brand_gherkin_param(brand))
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 
@@ -174,6 +185,20 @@ def then_has_products(ctx: dict) -> None:
     )
     assert actual.name == expected.name, f"Expected name={expected.name!r}, got {actual.name!r}"
     ctx["first_product"] = actual
+
+
+@then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
+def then_rejected_validation_field(ctx: dict, field: str) -> None:
+    """Assert the wire envelope is VALIDATION_ERROR and names the field structurally."""
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
+    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+    assert envelope["errors"][0].get("field") == field, (
+        f"errors[0].field={envelope['errors'][0].get('field')!r}, expected {field!r}"
+    )
+    assert envelope["adcp_error"].get("field") == field, (
+        f"adcp_error.field={envelope['adcp_error'].get('field')!r}, expected {field!r}"
+    )
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))

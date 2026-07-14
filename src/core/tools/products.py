@@ -775,8 +775,13 @@ async def _get_products_impl(
 
 async def get_products(
     brand: Annotated[
-        BrandReference | str | None,
-        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+        BrandReference | dict[str, Any] | str | None,
+        Field(
+            description=(
+                "Brand reference (object with domain), domain/URL string shorthand "
+                "(e.g. 'acme.com' / 'https://acme.com'), or equivalent dict"
+            )
+        ),
     ] = None,
     brief: Annotated[str, Field(description="Natural language description of campaign goals and requirements")] = "",
     filters: ProductFilters | None = None,
@@ -799,11 +804,7 @@ async def get_products(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
-    if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
-
-    # Build request object for shared implementation
+    # create_get_products_request coerces string/dict brand via to_brand_reference
     try:
         with adcp_validation_boundary(context="get_products request"):
             req = create_get_products_request(

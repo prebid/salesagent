@@ -9,9 +9,17 @@ The guard scans:
 - Integration tests: tests/integration/test_*_v3.py + behavioral files
 - Unit entity tests: tests/unit/test_media_buy.py, test_creative.py, test_delivery.py
 
-The allowlist can only SHRINK — adding new uncovered obligations fails CI.
-When tests are written, remove the covered ID from the allowlist
-(the stale-entry test enforces this).
+Allowlist policy (#1228 G2 / #1609; ADR-009 on #1579):
+- May **grow** when a new behavioral obligation is documented without a test yet
+  (intentional backlog; reviewable in that PR).
+- Must **shrink** when a ``Covers:`` test lands — the stale-entry test fails CI
+  until the ID is removed from ``obligation_coverage_allowlist.json``.
+- Size must equal ``behavioral - covered`` (exact match).
+- There is no hard numeric ceiling; do not re-frame this as unratcheted amnesty.
+- Reconcile with the general structural-guard rule "allowlists can only shrink":
+  that rule applies to *violation* allowlists (new rows = new invariant debt).
+  This file is a *coverage backlog* — growth means we documented an untested
+  obligation (reviewable); covered IDs must still leave the list.
 
 See: scripts/tag_obligation_ids.py (assigns IDs to obligation docs)
 """
