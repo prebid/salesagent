@@ -86,7 +86,6 @@ def _make_mock_media_buy(
     start_date: date | None = None,
     end_date: date | None = None,
     raw_request: dict | None = None,
-    buyer_ref: str | None = None,
     start_time=None,
     end_time=None,
     principal_id: str = "test_principal",
@@ -102,7 +101,6 @@ def _make_mock_media_buy(
     buy.start_time = start_time
     buy.end_time = end_time
     buy.status = status  # generic "active" is date-refined by _get_target_media_buys
-    buy.buyer_ref = None
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
     buy.is_paused = False
@@ -397,12 +395,12 @@ class TestDeliveryPollingMultiBuy:
 
 
 class TestDeliveryIdentificationModes:
-    """UC-004 BR-RULE-030: media_buy_ids vs buyer_refs vs both vs neither."""
+    """UC-004 BR-RULE-030: media_buy_ids identification (provided vs neither)."""
 
     def test_media_buy_ids_only(self):
         """UC-004-MAIN-02: media_buy_ids provided.
 
-        Spec: UPDATED -- buyer_refs removed in adcp 3.12, media_buy_ids is the identifier.
+        Spec: media_buy_ids is the delivery identifier.
         Covers: UC-004-MAIN-02
         """
         buy = _make_mock_media_buy(media_buy_id="mb_ref1")
@@ -435,25 +433,11 @@ class TestDeliveryIdentificationModes:
         call_req = mock_target.call_args[0][0]
         assert call_req.media_buy_ids == ["mb_ref1"]
 
-    def test_buyer_refs_no_longer_accepted(self):
-        """UC-004-MAIN-05: buyer_refs removed from delivery request in adcp 3.12.
-
-        Spec: UPDATED -- buyer_refs removed from get-media-buy-delivery-request in adcp 3.12.
-        Covers: UC-004-MAIN-05
-        """
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError, match="buyer_refs"):
-            GetMediaBuyDeliveryRequest(
-                media_buy_ids=["mb_priority"],
-                buyer_refs=["should_be_rejected"],
-            )
-
     def test_neither_provided_fetches_all(self):
         """UC-004-MAIN-04: neither identifiers fetches all principal buys.
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-request.json
-        CONFIRMED: media_buy_ids and buyer_refs are both optional (no required fields in request schema).
+        CONFIRMED: media_buy_ids is optional (no required fields in request schema).
         Covers: UC-004-MAIN-04
         """
         buy = _make_mock_media_buy(media_buy_id="mb_all1")
@@ -606,7 +590,6 @@ class TestDeliveryStatusFilter:
 
         mock_req = MagicMock()
         mock_req.media_buy_ids = ["mb_ready", "mb_active", "mb_completed"]
-        mock_req.buyer_refs = None
         mock_status = MagicMock()
         mock_status.value = "all"
         mock_req.status_filter = mock_status
@@ -666,7 +649,6 @@ class TestDeliveryStatusFilter:
 
         mock_req = MagicMock()
         mock_req.media_buy_ids = None
-        mock_req.buyer_refs = None
         mock_req.status_filter = None
 
         mock_repo = MagicMock()
@@ -700,7 +682,6 @@ class TestDeliveryStatusFilter:
 
         mock_req = MagicMock()
         mock_req.media_buy_ids = None
-        mock_req.buyer_refs = None
         mock_status = MagicMock()
         mock_status.value = "completed"
         mock_req.status_filter = mock_status
@@ -732,7 +713,6 @@ class TestDeliveryStatusFilter:
 
         mock_req = MagicMock()
         mock_req.media_buy_ids = None
-        mock_req.buyer_refs = None
         mock_status = MagicMock()
         mock_status.value = "paused"
         mock_req.status_filter = mock_status
@@ -763,7 +743,6 @@ class TestDeliveryStatusFilter:
 
         mock_req = MagicMock()
         mock_req.media_buy_ids = None
-        mock_req.buyer_refs = None
         mock_status = MagicMock()
         mock_status.value = "completed"
         mock_req.status_filter = mock_status
@@ -1192,8 +1171,8 @@ class TestDeliveryPricingOptionLookup:
 class TestDeliveryUpgradeCompat:
     """UC-004-UPG: 3.6 upgrade schema compatibility."""
 
-    def test_buyer_ref_not_in_delivery_entries(self):
-        """UC-004-UPG-03: buyer_ref removed from media_buy_deliveries (adcp 3.12).
+    def test_delivery_entries_returned(self):
+        """UC-004-UPG-03: delivery returns entries for resolved media_buy_ids.
 
         Covers: UC-004-MAIN-16
         """
@@ -1218,8 +1197,6 @@ class TestDeliveryUpgradeCompat:
         )
 
         assert len(response.media_buy_deliveries) == 1
-        # buyer_ref removed from schema in adcp 3.12
-        assert not hasattr(response.media_buy_deliveries[0], "buyer_ref")
 
     def test_nested_serialization_model_dump(self):
         """UC-004-UPG-04: GetMediaBuyDeliveryResponse nested serialization with NestedModelSerializerMixin.
@@ -1445,19 +1422,6 @@ class TestDeliveryMediaBuyNotFound:
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
         assert "mb_gone" in response.errors[0].message
-
-    def test_buyer_refs_no_longer_accepted_on_delivery(self):
-        """UC-004-EXT-C3: buyer_refs removed from delivery request in adcp 3.12.
-
-        Spec: UPDATED -- buyer_refs removed from get-media-buy-delivery-request in adcp 3.12.
-        Covers: UC-004-EXT-C-03
-        """
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError, match="buyer_refs"):
-            GetMediaBuyDeliveryRequest(
-                buyer_refs=["buyer_phantom"],
-            )
 
 
 # ===========================================================================

@@ -192,7 +192,6 @@ class TestGAMManualApprovalPath:
                 assert returned_ids == expected_ids, ids_msg
 
                 # Assert - Other required fields
-                # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
                 assert response.workflow_step_id == "workflow_step_123", "workflow_step_id must be set"
 
     def test_manual_approval_failure_still_returns_packages(
@@ -327,7 +326,6 @@ class TestGAMActivationWorkflowPath:
             assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
             # Assert - Other required fields
-            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
             assert response.workflow_step_id == "activation_workflow_123", "workflow_step_id must be set"
             assert response.media_buy_id == mock_order_id, "media_buy_id must match order ID"
 

@@ -52,14 +52,28 @@ class CreativeListEnv(IntegrationEnv):
     def call_impl(self, **kwargs: Any) -> ListCreativesResponse:
         """Call _list_creatives_impl with real DB.
 
-        Accepts all _list_creatives_impl kwargs. The 'identity' kwarg
-        defaults to self.identity if not provided.
+        _list_creatives_impl now takes a typed ``req: ListCreativesRequest`` plus
+        the out-of-band ``format`` / ``include_performance`` / ``include_sub_assets``
+        / ``page`` kwargs. This method accepts either a pre-built ``req=`` or the
+        flat request fields and builds the request (matching MediaBuyCreateEnv).
         """
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return _list_creatives_impl(**kwargs)
+        identity = kwargs.pop("identity", self.identity)
+
+        # Out-of-band params not representable on ListCreativesRequest
+        out_of_band = {
+            key: kwargs.pop(key)
+            for key in ("format", "include_performance", "include_sub_assets", "page")
+            if key in kwargs
+        }
+
+        req = kwargs.pop("req", None)
+        if req is None:
+            req = _build_list_creatives_request(**kwargs)
+
+        return _list_creatives_impl(req=req, identity=identity, **out_of_band)
 
     def call_a2a(self, **kwargs: Any) -> ListCreativesResponse:
         """Call list_creatives via real AdCPRequestHandler — full A2A pipeline."""
@@ -72,7 +86,7 @@ class CreativeListEnv(IntegrationEnv):
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativesBody shape for REST POST."""
         body: dict[str, Any] = {}
-        for key in ("media_buy_id", "media_buy_ids", "buyer_ref", "status", "format"):
+        for key in ("media_buy_id", "media_buy_ids", "status", "format"):
             if key in kwargs and kwargs[key] is not None:
                 body[key] = kwargs[key]
         # The structured filters travel over REST as a JSON dict — the body field is

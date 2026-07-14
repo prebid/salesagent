@@ -33,8 +33,10 @@ def _update_budget(env, media_buy_id: str, budget: float) -> UpdateMediaBuySucce
     """Drive a real budget update through the impl; returns the success response."""
     req = UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=budget)
     result = env.call_impl(req=req)
-    assert isinstance(result, UpdateMediaBuySuccess), f"update must succeed, got {result!r}"
-    return result
+    # _update_media_buy_impl returns UpdateMediaBuyResult wrapping the success
+    # response (upstream #1417 unified the return type).
+    assert isinstance(result.response, UpdateMediaBuySuccess), f"update must succeed, got {result!r}"
+    return result.response
 
 
 def _get_buy(env, media_buy_id: str):
@@ -114,9 +116,9 @@ class TestPersistedRevisionOnTheWire:
                 end_time=new_end.isoformat(),
             )
             result = env.call_impl(req=req)
-            assert isinstance(result, UpdateMediaBuySuccess), f"update must succeed, got {result!r}"
+            assert isinstance(result.response, UpdateMediaBuySuccess), f"update must succeed, got {result!r}"
             # Budget + dates in one call → exactly one increment.
-            assert result.revision == 2
+            assert result.response.revision == 2
 
             item = _get_buy(env, created.media_buy_id)
             assert item.revision == 2
@@ -168,11 +170,11 @@ class TestPersistedRevisionOnTheWire:
             pre_pause = _get_buy(env, created.media_buy_id).revision
 
             result = env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=created.media_buy_id, paused=True))
-            assert isinstance(result, UpdateMediaBuySuccess), f"pause must succeed, got {result!r}"
+            assert isinstance(result.response, UpdateMediaBuySuccess), f"pause must succeed, got {result!r}"
 
             # Pause advanced the revision by exactly one, and the read tool agrees.
-            assert result.revision == pre_pause + 1
-            assert _get_buy(env, created.media_buy_id).revision == result.revision
+            assert result.response.revision == pre_pause + 1
+            assert _get_buy(env, created.media_buy_id).revision == result.response.revision
 
 
 @pytest.mark.requires_db
@@ -249,8 +251,8 @@ class TestRevisionOptimisticConcurrency:
             result = env.call_impl(
                 req=UpdateMediaBuyRequest(media_buy_id=created.media_buy_id, budget=9000.0, revision=1)
             )
-            assert isinstance(result, UpdateMediaBuySuccess), f"matching revision must succeed, got {result!r}"
-            assert result.revision == 2
+            assert isinstance(result.response, UpdateMediaBuySuccess), f"matching revision must succeed, got {result!r}"
+            assert result.response.revision == 2
 
     def test_absent_revision_keeps_last_write_wins(self, integration_db):
         """Omitting the token preserves LWW semantics — the gate only fires when provided."""

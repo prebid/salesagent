@@ -68,7 +68,7 @@ class TestListAccountsAgentScoping:
 
 
 class TestListAccountsUnauthenticated:
-    """BR-RULE-055 INV-3: unauthenticated list_accounts raises AUTH_TOKEN_INVALID."""
+    """BR-RULE-055 INV-3: unauthenticated list_accounts raises AUTH_REQUIRED."""
 
     def test_unauthenticated_returns_auth_error(self, integration_db):
         import pytest

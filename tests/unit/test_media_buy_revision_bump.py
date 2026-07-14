@@ -128,6 +128,9 @@ class TestRevisionNumericStringCoercionDivergence:
             UpdateMediaBuyRequest(media_buy_id="mb-1", revision="7")
 
     def test_rest_body_lax_coerces_numeric_string_revision(self):
+        # media_buy_id is a PATH parameter on PUT /media-buys/{id}, not a body field;
+        # UpdateMediaBuyBody (SalesAgentBaseModel, extra="forbid" in dev/CI) carries
+        # only the updatable fields. The body still LAX-coerces a numeric string "7" -> 7.
         from src.routes.api_v1 import UpdateMediaBuyBody
 
-        assert UpdateMediaBuyBody.model_validate({"media_buy_id": "mb-1", "revision": "7"}).revision == 7
+        assert UpdateMediaBuyBody.model_validate({"revision": "7"}).revision == 7

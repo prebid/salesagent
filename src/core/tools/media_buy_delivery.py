@@ -15,7 +15,7 @@ from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, RootModel, ValidationError
+from pydantic import Field, RootModel
 from rich.console import Console
 
 from src.core.exceptions import (
@@ -113,7 +113,7 @@ from src.core.tools._media_buy_status import (
     resolve_canonical_status,
 )
 from src.core.utils import utc_flight_end, utc_flight_start
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
@@ -212,7 +212,12 @@ def _get_media_buy_delivery_impl(
         end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
         if start_dt >= end_dt:
-            raise AdCPValidationError("Start date must be before end date", context=req.context)
+            raise AdCPValidationError(
+                "Start date must be before end date",
+                field="start_date",
+                suggestion="Set start_date to a date before end_date and resend.",
+                context=req.context,
+            )
     else:
         # Default to last 30 days
         end_dt = datetime.now(UTC)
@@ -684,6 +689,36 @@ def _get_media_buy_delivery_impl(
     return response
 
 
+def _build_get_media_buy_delivery_request(
+    media_buy_ids: list[str] | None,
+    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
+    start_date: str | None,
+    end_date: str | None,
+    reporting_dimensions: ReportingDimensions | None,
+    attribution_window: AttributionWindow | None,
+    include_package_daily_breakdown: bool | None,
+    context: ContextObject | None,
+) -> GetMediaBuyDeliveryRequest:
+    """Build a GetMediaBuyDeliveryRequest from individual wire params.
+
+    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
+    construction runs inside the ONE validation boundary — previously the raw
+    wrapper built the request unprotected and REST leaked a raw pydantic
+    ``ValidationError`` with no top-level suggestion (#1417).
+    """
+    with adcp_validation_boundary(context="get_media_buy_delivery request"):
+        return GetMediaBuyDeliveryRequest(
+            media_buy_ids=media_buy_ids,
+            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+            start_date=start_date,
+            end_date=end_date,
+            reporting_dimensions=reporting_dimensions,
+            attribution_window=attribution_window,
+            include_package_daily_breakdown=include_package_daily_breakdown,
+            context=cast(ContextObject | None, context),
+        )
+
+
 async def get_media_buy_delivery(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -725,24 +760,18 @@ async def get_media_buy_delivery(
 
         identity = enrich_identity_with_account(identity, account)
 
-    # Create AdCP-compliant request object
-    try:
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            start_date=start_date,
-            end_date=end_date,
-            reporting_dimensions=reporting_dimensions,
-            attribution_window=attribution_window,
-            include_package_daily_breakdown=include_package_daily_breakdown,
-            context=cast(ContextObject | None, context),
-        )
-
-        response = _get_media_buy_delivery_impl(req, identity)
-
-        return ToolResult(content=str(response), structured_content=response)
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="get_media_buy_delivery request"))
+    req = _build_get_media_buy_delivery_request(
+        media_buy_ids=media_buy_ids,
+        status_filter=status_filter,
+        start_date=start_date,
+        end_date=end_date,
+        reporting_dimensions=reporting_dimensions,
+        attribution_window=attribution_window,
+        include_package_daily_breakdown=include_package_daily_breakdown,
+        context=context,
+    )
+    response = _get_media_buy_delivery_impl(req, identity)
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def get_media_buy_delivery_raw(
@@ -787,19 +816,16 @@ def get_media_buy_delivery_raw(
 
         identity = enrich_identity_with_account(identity, account)
 
-    # Create request object
-    req = GetMediaBuyDeliveryRequest(
+    req = _build_get_media_buy_delivery_request(
         media_buy_ids=media_buy_ids,
-        status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+        status_filter=status_filter,
         start_date=start_date,
         end_date=end_date,
         reporting_dimensions=reporting_dimensions,
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
-        context=cast(ContextObject | None, context),
+        context=context,
     )
-
-    # Call the implementation
     return _get_media_buy_delivery_impl(req, identity)
 
 

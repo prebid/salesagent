@@ -51,8 +51,6 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     "CONFIGURATION_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
-    # AUTH_TOKEN_INVALID is not mapped — it passes through directly as the
-    # spec error code for invalid/missing tokens (per AdCP BDD feature files).
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
     "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
     "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
@@ -224,6 +222,11 @@ class AdCPError(Exception):
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
+    # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
+    # "provide valid credentials") sets this so no raise site can forget the
+    # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
+    _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     error_code: str
@@ -251,7 +254,7 @@ class AdCPError(Exception):
         self.message = message
         self.details = details
         self.field = field
-        self.suggestion = suggestion
+        self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
         self.retry_after = retry_after
         self.context = context
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
@@ -417,51 +420,54 @@ class AdCPInvalidRequestError(AdCPValidationError):
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
 
 
+AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
-    Default error_code is ``AUTH_TOKEN_INVALID``. This code is project-specific:
-    it is in neither the AdCP 3.1 error-code enum nor adcp 5.7
-    ``STANDARD_ERROR_CODES`` (both define only ``AUTH_REQUIRED``). It reaches the
-    wire by passthrough — it is deliberately absent from ``ERROR_CODE_MAPPING``,
-    so ``wire_error_code`` returns it unchanged on the sync transports
-    (REST/MCP/A2A). The async webhook path additionally enforces
-    ``STANDARD_ERROR_CODES`` and would downgrade it to ``SERVICE_UNAVAILABLE``.
+    Emits the standard ``AUTH_REQUIRED`` wire code — the sole authentication
+    error code in the AdCP 3.1 error-code enum and adcp 5.7
+    ``STANDARD_ERROR_CODES``. Its enum description explicitly covers both
+    "credentials missing" and "credentials presented but rejected", so it is
+    the canonical code for every authentication failure.
 
-    Recovery defaults to ``terminal`` (inherited from ``AdCPError``; this is a
-    hardcoded ``_default_recovery`` ClassVar, not read from
-    ``STANDARD_ERROR_CODES``). We keep ``terminal`` deliberately: the AdCP 3.1
-    storyboards grade the wire *error code*, not the recovery class, so the
-    recovery hint is ours to set. This intentionally diverges from how adcp 5.7
-    classifies its nearest neighbour ``AUTH_REQUIRED`` (``correctable``).
+    Recovery is ``correctable`` per the pinned AdCP error-code enum
+    (``AUTH_REQUIRED.recovery == "correctable"``; released 3.1.0 agrees) —
+    not the ``terminal`` base default. The enum carries operationally distinct
+    sub-cases (missing credentials → retry; presented-but-rejected → escalate),
+    but its single canonical ``recovery`` classification is ``correctable``,
+    and the wire contract is graded against that enum (#1417,
+    superseding the earlier "storyboards grade only the code" judgment).
     """
 
     _default_status_code: ClassVar[int] = 401
-    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
+    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    # Every authentication rejection shares one buyer fix hint, so the graded
+    # top-level suggestion (error.json) can never be forgotten at a raise site
+    # (#1417 round-8 review item 4: 11 of 12 raise sites emitted an empty suggestion).
+    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
-    """No authentication context present (401, AUTH_TOKEN_INVALID).
+    """No authentication context present (401, AUTH_REQUIRED).
 
-    Raised when the request contains no auth token at all.
-    Uses same error_code as parent (AUTH_TOKEN_INVALID) — a project-specific
-    code; see parent docstring.
+    Raised when the request contains no auth token at all. Inherits the
+    standard ``AUTH_REQUIRED`` wire code from its parent.
     """
-
-    _default_error_code: ClassVar[str] = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
-    Same ``terminal`` default as ``AdCPAuthenticationError``, for the same
-    reason: recovery is intentionally terminal because the AdCP 3.1 storyboards
-    grade the wire error code, not the recovery class — see that class's
-    docstring.
+    Emits ``AUTH_REQUIRED`` with ``correctable`` recovery, matching the pinned
+    AdCP error-code enum and ``AdCPAuthenticationError`` (#1417).
     """
 
     _default_status_code: ClassVar[int] = 403
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPPolicyViolationError(AdCPAuthorizationError):
@@ -520,7 +526,14 @@ class AdCPAccountPaymentRequiredError(AdCPError):
 
 
 class AdCPConflictError(AdCPError):
-    """Resource conflict, e.g. duplicate idempotency key (409)."""
+    """Resource conflict, e.g. duplicate idempotency key (409).
+
+    Recovery=transient per the pinned error-code.json enumMetadata (CONFLICT):
+    a generic resource conflict (e.g. concurrent modification) is resolved by
+    retrying with backoff. Subclasses whose specific code the enum classifies as
+    correctable (ACCOUNT_AMBIGUOUS, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_EXPIRED)
+    override this (#1417).
+    """
 
     _default_status_code: ClassVar[int] = 409
     _default_error_code: ClassVar[str] = "CONFLICT"
@@ -528,7 +541,7 @@ class AdCPConflictError(AdCPError):
     # ``transient`` ("re-read the resource and retry with current state"). The
     # installed SDK's STANDARD_ERROR_CODES table says ``correctable``, but the SDK
     # is a cross-check, not the authority, and diverges here. Subclasses whose
-    # pinned recovery differs (ACCOUNT_AMBIGUOUS → correctable) override below. #1544.
+    # pinned recovery differs (ACCOUNT_AMBIGUOUS → correctable) override below (#1417, #1544).
     _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
@@ -538,7 +551,7 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
     # Pinned beta.3 error-code.json: ACCOUNT_AMBIGUOUS → correctable (the buyer
     # disambiguates by supplying the exact account), unlike the CONFLICT base which
-    # is transient. Explicit override so the base change does not leak here. #1544.
+    # is transient. Explicit override so the base change does not leak here (#1417, #1544).
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -556,11 +569,16 @@ class AdCPGoneError(AdCPError):
 
 
 class AdCPBudgetExhaustedError(AdCPError):
-    """Budget or spend limit has been reached (422)."""
+    """Budget or spend limit has been reached (422).
+
+    Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
+    an exhausted budget cannot be recovered autonomously — an operator must add
+    budget — so the buyer agent must not retry (#1417).
+    """
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "BUDGET_EXHAUSTED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPRateLimitError(AdCPError):
@@ -768,24 +786,19 @@ class AdCPCapabilityNotSupportedError(AdCPError):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
     .. note::
-        **Intentional spec divergence.** The AdCP spec classifies
-        ``UNSUPPORTED_FEATURE`` as ``terminal``; we emit ``correctable``.
-        The salesagent raises this exception only when the buyer holds the
-        recovery lever — they can fix the request by dropping the
-        unsupported feature (e.g. removing ``property_list`` targeting
-        against an adapter that doesn't compile it). Classifying it
-        ``terminal`` would tell the buyer agent to give up on a recoverable
-        condition.
+        **Spec-conformant.** The pinned AdCP error-code enum classifies
+        ``UNSUPPORTED_FEATURE`` as ``correctable`` ("check
+        get_adcp_capabilities and remove unsupported fields"), and we emit
+        ``correctable`` — so this matches the spec, it is not a divergence.
+        The buyer holds the recovery lever: they can fix the request by
+        dropping the unsupported feature (e.g. removing ``property_list``
+        targeting against an adapter that doesn't compile it).
 
-        **Revisit condition:** if the SDK runtime starts enforcing the
-        spec's ``terminal`` classification at the wire (rejecting our
-        ``correctable`` recovery hint), drop this override and update
-        affected raise-site call sites to either select a different code or
-        accept the ``terminal`` retry semantics. Until then this is the
-        documented, expected behavior — not a TODO.
-
-        FIXME(salesagent-unsupported-feature-recovery): grep tag for the
-        revisit condition above. Remove when the SDK enforces terminal.
+        Only the adcp SDK's ``STANDARD_ERROR_CODES`` table classifies it
+        ``terminal``; the SDK is not authoritative (the pinned spec enum is),
+        so its table diverges from the spec here. If the SDK runtime ever
+        starts enforcing ``terminal`` at the wire (rejecting our spec-correct
+        ``correctable`` hint), reconcile with the SDK then.
     """
 
     _default_status_code: ClassVar[int] = 422

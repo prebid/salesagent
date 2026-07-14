@@ -10,6 +10,11 @@ from pytest_bdd import parsers, then
 
 from src.core.helpers import enum_value
 
+# The "no media buy record should be persisted[ in the database]" steps are
+# owned by the now-registered then_media_buy.py (upstream #1417 canonicalized
+# that module). Re-exposing them here would double-register (shadowed-steps guard).
+
+
 # ── Response status ──────────────────────────────────────────────────
 
 
@@ -119,6 +124,45 @@ def then_no_sandbox_field(ctx: dict) -> None:
     dumped = resp.model_dump()
     assert "sandbox" not in dumped, (
         f"Expected no sandbox field in serialized response, got sandbox={dumped.get('sandbox')}"
+    )
+
+
+# ── Natural-key sandbox resolution (UC-002 sandbox-natural-key) ───────
+
+
+@then("the reference should resolve to the sandbox account for that brand and operator")
+def then_natural_key_resolves_to_sandbox(ctx: dict) -> None:
+    """Assert the natural-key reference resolved to a sandbox account on success.
+
+    BR-RULE-209 INV-8: a brand+operator+sandbox:true reference resolves to the
+    sandbox account WITHOUT prior provisioning. The create must succeed (no
+    error) and the response must carry the resolved media buy.
+    """
+    assert "error" not in ctx, (
+        f"Expected the natural-key reference to resolve to a sandbox account, but the create failed: "
+        f"{ctx.get('error')!r}"
+    )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a successful create response with a resolved sandbox account"
+    media_buy_id = getattr(resp, "media_buy_id", None)
+    assert media_buy_id, f"Expected a media_buy_id from the sandbox-account create, got {media_buy_id!r}"
+
+
+@then("no real ad platform orders should have been created")
+def then_no_real_orders_created(ctx: dict) -> None:
+    """Assert no real ad-platform order was created (sandbox isolation).
+
+    The sandbox resolution must not have invoked the real adapter's order
+    creation. The mock adapter records create_media_buy calls; in sandbox mode
+    none should have run against a real platform.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a successful sandbox response"
+    # Sandbox isolation contract: the response must mark itself sandbox so the
+    # buyer knows no real platform order exists.
+    assert getattr(resp, "sandbox", None) is True, (
+        f"Expected sandbox=True to confirm no real ad-platform order was created, "
+        f"got sandbox={getattr(resp, 'sandbox', None)!r}"
     )
 
 

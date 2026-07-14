@@ -169,6 +169,15 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
 
     if getattr(buy, "is_paused", False):
         return "paused"
+    # Defensive: a serving-state buy with no resolvable flight edge cannot be
+    # date-refined. This is schema-impossible on the happy path (MediaBuy
+    # start_date/end_date are NOT NULL) and has no AdCP spec meaning (the media-buy
+    # object carries no dates; status is always emitted from the persisted column),
+    # but a corrupt/legacy row must not crash the read path with a raw TypeError
+    # (`reference_date < None`). Skip refinement and return the persisted serving
+    # status — the buy is still describable, satisfying the required-status contract.
+    if start_compare is None or end_compare is None:
+        return canonical
     if reference_date < start_compare:
         return "pending_start"
     if reference_date > end_compare:

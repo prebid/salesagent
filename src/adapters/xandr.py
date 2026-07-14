@@ -506,7 +506,7 @@ class XandrAdapter(AdServerAdapter):
                 raise ValueError("Advertiser ID is required for Xandr operations")
 
             # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec
-            # Use brand domain or buyer_ref as fallback
+            # Use brand domain as fallback
             campaign_name = None
             if hasattr(request, "brand") and request.brand:
                 brand = request.brand

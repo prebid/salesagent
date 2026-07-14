@@ -3,12 +3,16 @@
 Focuses on account resolution error paths (ext-r, ext-s, ext-t, BR-RULE-080)
 and partition/boundary scenarios for account_ref.
 
-Steps delegate to MediaBuyAccountEnv which calls resolve_account() with real DB.
+Steps dispatch a full create_media_buy through the wire transport
+(MediaBuyCreateEnv); production resolves the account at the transport boundary
+and emits the outcome on the wire (#1417).
 
-beads: salesagent-2rq
+beads: salesagent-2rq, salesagent-zh85
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
@@ -28,6 +32,44 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _attach_account_to_full_request(ctx: dict) -> None:
+    """Build a complete, valid create request carrying the account reference.
+
+    Account-not-found scenarios dispatch through the full create flow
+    (dispatch_mode="create") so production account resolution runs at the
+    transport boundary. The request must be otherwise valid — reuse the shared
+    base-request defaults and inject the account so the only failure surfaced is
+    ACCOUNT_NOT_FOUND, not a missing-field ValidationError.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["account"] = ctx["account_ref"]
+    ctx["dispatch_mode"] = "create"
+
+
+def _attach_raw_account_shape(ctx: dict, account_value: Any | None) -> None:
+    """Build a complete, valid create request carrying a MALFORMED account SHAPE.
+
+    Schema-shape cases (account field absent, or a oneOf-both dict carrying both
+    account_id AND brand+operator) cannot be expressed as a typed
+    ``CreateMediaBuyRequest`` — Pydantic rejects them at construction in test
+    code, so they could never reach the production transport boundary that way.
+    Instead we stash the raw flat kwargs (``request_kwargs`` minus a typed
+    account, plus the raw ``account_value`` verbatim) and dispatch them as a RAW
+    body (``dispatch_mode="create_raw"``). Production's route + Pydantic then
+    builds the request and either accepts it (account omitted is valid — account
+    is optional) or rejects the oneOf-both shape with VALIDATION_ERROR on the wire.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs.pop("account", None)
+    if account_value is not None:
+        kwargs["account"] = account_value
+    ctx["dispatch_mode"] = "create_raw"
+
+
 @given(parsers.parse('a valid create_media_buy request with account_id "{account_id}"'))
 def given_request_with_account_id(ctx: dict, account_id: str) -> None:
     """Set up a create_media_buy request referencing an explicit account_id."""
@@ -35,6 +77,7 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 
     ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
     ctx["request_account_id"] = account_id
+    _attach_account_to_full_request(ctx)
 
 
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
@@ -47,6 +90,7 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
     )
     ctx["request_brand"] = brand
     ctx["request_operator"] = operator
+    _attach_account_to_full_request(ctx)
 
 
 @given("a create_media_buy request without account field")
@@ -86,30 +130,32 @@ def given_request_with_account(ctx: dict, account_id: str) -> None:
 
 @given("the account_id does not exist in the seller's account store")
 def given_account_id_not_found(ctx: dict) -> None:
-    """Verify the account_id from the request does not exist via production resolve_account."""
-    from src.core.exceptions import AdCPAccountNotFoundError
+    """Precondition: the referenced account is absent from the store.
 
-    env = ctx["env"]
-    try:
-        # TRANSPORT-BYPASS: Given step verifies precondition state, not request dispatch
-        env.call_impl(account_ref=ctx["account_ref"])
-        raise AssertionError("Expected account not found, but resolve_account succeeded")
-    except AdCPAccountNotFoundError:
-        pass  # Correct — account doesn't exist
+    No account row is seeded for this account_ref, so the full create dispatch
+    surfaces ACCOUNT_NOT_FOUND when production resolves the account at the
+    transport boundary. Assert the request carries the account reference so the
+    resolution path is actually exercised (a prior version built a partial
+    request via call_impl and crashed with a ValidationError — see #1417).
+    """
+    assert ctx.get("account_ref") is not None, "account_ref must be set by the request Given step"
+    assert ctx.get("request_kwargs", {}).get("account") is not None, (
+        "request_kwargs must carry the account reference for the create dispatch"
+    )
 
 
 @given("no account matches the brand + operator combination")
 def given_natural_key_not_found(ctx: dict) -> None:
-    """Verify no account matches the natural key via production resolve_account."""
-    from src.core.exceptions import AdCPAccountNotFoundError
+    """Precondition: no account matches the natural key (none seeded).
 
-    env = ctx["env"]
-    try:
-        # TRANSPORT-BYPASS: Given step verifies precondition state, not request dispatch
-        env.call_impl(account_ref=ctx["account_ref"])
-        raise AssertionError("Expected account not found, but resolve_account succeeded")
-    except AdCPAccountNotFoundError:
-        pass  # Correct — no matching account
+    The full create dispatch surfaces ACCOUNT_NOT_FOUND when production resolves
+    the brand+operator natural key. Assert the request carries the account
+    reference so the resolution path is exercised (see #1417).
+    """
+    assert ctx.get("account_ref") is not None, "account_ref must be set by the request Given step"
+    assert ctx.get("request_kwargs", {}).get("account") is not None, (
+        "request_kwargs must carry the account reference for the create dispatch"
+    )
 
 
 @given(parsers.parse('the account "{account_id}" exists but requires setup (billing not configured)'))
@@ -154,6 +200,68 @@ def given_multiple_matches(ctx: dict, count: int) -> None:
             operator=operator,
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+
+
+@given(parsers.parse("the natural key matches {total:d} accounts but the agent can access {accessible:d}"))
+def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> None:
+    """Create ``total`` active accounts matching the request natural key, granting the
+    requesting agent access to only ``accessible`` of them (the rest are accessible to a
+    different agent). Exercises access-scoped natural-key ambiguity (#1417):
+    the inaccessible matches must not drive ambiguity nor leak into the disclosed count.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    if "tenant" not in ctx:
+        tenant, principal = env.setup_default_data()
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+    else:
+        tenant = ctx["tenant"]
+        principal = ctx["principal"]
+
+    brand = ctx.get("request_brand", "multi-brand.com")
+    operator = ctx.get("request_operator", "agency.com")
+    other_principal = PrincipalFactory(tenant=tenant)
+
+    accessible_ids: list[str] = []
+    for i in range(total):
+        account_id = f"acc-scope-{i}"
+        account = AccountFactory(
+            tenant=tenant,
+            account_id=account_id,
+            status="active",
+            brand={"domain": brand},
+            operator=operator,
+        )
+        owner = principal if i < accessible else other_principal
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=owner, account=account)
+        if i < accessible:
+            accessible_ids.append(account_id)
+    # Record the accessible account id(s) so a Then step can pin the resolved
+    # account to the one the agent can actually access (#1417).
+    ctx["accessible_account_ids"] = accessible_ids
+
+
+@given("the Buyer Agent's token resolves no principal")
+def given_unauthenticated_principal(ctx: dict) -> None:
+    """Force the dispatch identity to an unauthenticated one: a tenant is resolved
+    (from the host header, as MCP middleware does) but principal_id is None.
+
+    This is the exact shape an unauthenticated MCP caller presents — MCP resolves
+    a tenant from the host but no principal from a missing/invalid token, so account
+    resolution at the transport boundary runs with principal_id=None. A2A/REST raise
+    on the missing token before this point; forcing the identity here exercises the
+    shared ``enrich_identity_with_account`` boundary guard uniformly on every wire
+    transport. See #1417.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    ctx["dispatch_identity"] = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=env._tenant_id,
+    )
 
 
 @given(parsers.parse('the account "{account_id}" exists and is active'))
@@ -240,12 +348,19 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         )
 
     elif partition == "missing_account":
-        ctx["account_ref"] = None
-        ctx["account_absent"] = True
+        # Schema-shape case: dispatch the create with NO account field at all.
+        # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec),
+        # so production accepts it and creates the buy — outcome is success, not
+        # a rejection (see #1417 empirical trace).
+        _attach_raw_account_shape(ctx, None)
+        return
 
     elif partition == "invalid_oneOf_both":
-        ctx["account_ref"] = None
-        ctx["account_invalid_both"] = True
+        # Schema-shape case: dispatch a raw account carrying BOTH account_id AND
+        # brand+operator. Pydantic's AccountReference oneOf rejects it at the
+        # transport boundary → VALIDATION_ERROR on the wire.
+        _attach_raw_account_shape(ctx, {"account_id": "acc_001", "brand": {"domain": "x.com"}, "operator": "x.com"})
+        return
 
     elif partition == "explicit_not_found":
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-not-found"))
@@ -257,13 +372,16 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "natural_key_ambiguous":
         for i in range(3):
-            AccountFactory(
+            account = AccountFactory(
                 tenant=tenant,
                 account_id=f"acc-amb-{i}",
                 status="active",
                 brand={"domain": "ambiguous.com"},
                 operator="ambiguous.com",
             )
+            # Grant the requesting agent access so ambiguity is genuine FOR THIS AGENT —
+            # natural-key resolution is access-scoped (#1417).
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
         )
@@ -323,6 +441,12 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
     else:
         raise ValueError(f"Unknown account partition: {partition}")
 
+    # Valid-shape cases (resolution succeeds OR resolution fails with an account
+    # error): dispatch a full, valid create_media_buy carrying the typed account
+    # reference so production resolves it at the transport boundary and emits the
+    # outcome on the wire.
+    _attach_account_to_full_request(ctx)
+
 
 @given(parsers.parse("a create_media_buy request with account: {config}"))
 def given_request_with_boundary_config(ctx: dict, config: str) -> None:
@@ -374,13 +498,16 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 
     elif config.startswith("brand+op") and "multi match" in config:
         for i in range(2):
-            AccountFactory(
+            account = AccountFactory(
                 tenant=tenant,
                 account_id=f"acc-multi-{i}",
                 status="active",
                 brand={"domain": "multi.com"},
                 operator="multi.com",
             )
+            # Access-scoped ambiguity (#1417): grant the agent access so the
+            # two matches are genuinely ambiguous for it.
+            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="multi.com"), operator="multi.com"),
         )
@@ -419,12 +546,17 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
 
     elif "no account" in config:
-        ctx["account_ref"] = None
-        ctx["account_absent"] = True
+        # Schema-shape case: account field omitted entirely. account is OPTIONAL
+        # on CreateMediaBuyRequest, so production accepts and creates the buy →
+        # success, not a rejection (#1417 empirical trace).
+        _attach_raw_account_shape(ctx, None)
+        return
 
     elif "both fields" in config:
-        ctx["account_ref"] = None
-        ctx["account_invalid_both"] = True
+        # Schema-shape case: raw account with BOTH account_id and brand+operator.
+        # Pydantic oneOf rejects at the boundary → VALIDATION_ERROR on the wire.
+        _attach_raw_account_shape(ctx, {"account_id": "acc_001", "brand": {"domain": "x.com"}, "operator": "x.com"})
+        return
 
     elif config.startswith("brand+op") and "sandbox" in config:
         # v3.1: sandbox natural-key resolution — an active sandbox account is
@@ -447,6 +579,134 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     else:
         raise ValueError(f"Unknown boundary config: {config}")
 
+    # Valid-shape cases: dispatch a full, valid create_media_buy carrying the
+    # typed account reference so production resolves it on the wire.
+    _attach_account_to_full_request(ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — malformed-package error scenarios (#1417)
+#
+# Each step mutates the first package of the shared create request to introduce
+# the malformed condition the scenario describes, then routes the request
+# through the RAW wire dispatch (dispatch_mode="create_raw") so the malformed
+# body reaches production's real Pydantic + business-logic boundary. The
+# scenarios are all CURRENT production gaps (the fields are accepted by
+# PackageRequest's extra="allow" but never validated, or the dead-code
+# validator is never called) and carry strict xfail markers in conftest; these
+# steps make them wire-ready so each flips to a real pass the moment production
+# implements the validation. See the gh8p.13 production-gap beads.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _first_package(ctx: dict) -> dict:
+    """Return the first package dict of the shared create request (raw-dispatched)."""
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    packages = kwargs.get("packages")
+    assert packages, "request has no packages to mutate"
+    ctx["dispatch_mode"] = "create_raw"
+    return packages[0]
+
+
+@given(parsers.parse('a package has optimization_goal with kind "metric" and metric "{metric}" not in supported set'))
+def given_package_optimization_unsupported_metric(ctx: dict, metric: str) -> None:
+    """Attach an optimization_goal whose metric is outside the seller's supported set.
+
+    Production gap: create_media_buy never reads optimization_goals; the metric
+    is silently accepted (BR-UC-002 ext-u wants UNSUPPORTED_FEATURE).
+    """
+    pkg = _first_package(ctx)
+    pkg["optimization_goals"] = [{"metric": metric, "weight": 1.0}]
+
+
+@given(parsers.parse('a package has optimization_goal with kind "event" and unregistered event_source_id'))
+def given_package_optimization_unregistered_event(ctx: dict) -> None:
+    """Attach an optimization_goal referencing an unregistered event_source_id.
+
+    Production gap: no event_source validation exists (ext-u-event wants a
+    'not registered' error + sync_event_sources suggestion).
+    """
+    pkg = _first_package(ctx)
+    pkg["optimization_goals"] = [{"event_source_id": "evt-unregistered", "weight": 1.0}]
+
+
+@given(parsers.parse('a package format_id is a plain string "{format_id}" instead of a FormatId object'))
+def given_package_format_id_plain_string(ctx: dict, format_id: str) -> None:
+    """Set a package format_id to a bare string instead of a FormatId object.
+
+    Production behaviour: Pydantic rejects the plain string with a generic
+    VALIDATION_ERROR ('Input should be a valid dictionary or instance of
+    FormatReferenceStructuredObject'). ext-h wants the message to name
+    'FormatId' with a suggestion (the structured validator is dead code).
+    """
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [format_id]
+
+
+@given(parsers.parse("a package format_id references an unregistered agent_url"))
+def given_package_format_id_unregistered_agent(ctx: dict) -> None:
+    """Set a well-formed FormatId whose agent_url is not a registered creative agent.
+
+    Production gap: _validate_and_convert_format_ids (the unregistered-agent
+    check) is dead code — never called — so the unregistered agent_url is not
+    detected (ext-h-agent wants a 'not registered' error).
+    """
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
+
+
+@given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))
+def given_package_duplicate_catalog_types(ctx: dict, catalog_type: str) -> None:
+    """Attach two catalogs of the same type to one package.
+
+    Production gap: create_media_buy never reads request catalogs; the duplicate
+    type is silently accepted (ext-v wants INVALID_REQUEST 'duplicate catalog type').
+    """
+    pkg = _first_package(ctx)
+    pkg["catalogs"] = [
+        {"type": catalog_type, "ids": ["cat-a"]},
+        {"type": catalog_type, "ids": ["cat-b"]},
+    ]
+
+
+@given(parsers.parse('a package references catalog_id "{catalog_id}" not found in synced catalogs'))
+def given_package_catalog_not_found(ctx: dict, catalog_id: str) -> None:
+    """Reference a catalog_id that was never synced for the tenant.
+
+    Production gap: no catalog_id existence validation (ext-v-notfound wants
+    INVALID_REQUEST 'not found' + sync_catalogs suggestion).
+    """
+    pkg = _first_package(ctx)
+    pkg["catalogs"] = [{"type": "product", "ids": [catalog_id]}]
+
+
+@given(parsers.parse("the request uses a natural-key account reference with brand and operator and sandbox true"))
+def given_request_natural_key_sandbox(ctx: dict) -> None:
+    """Attach a natural-key (brand+operator+sandbox:true) account reference.
+
+    BR-RULE-209 INV-8 wants this to resolve to a sandbox account WITHOUT prior
+    sync_accounts provisioning and echo sandbox=true on the response.
+
+    Production gap: _resolve_by_natural_key (account_helpers.py:110) requires the
+    account to already exist (raises ACCOUNT_NOT_FOUND otherwise — there is no
+    sandbox auto-provisioning), and CreateMediaBuyResult exposes no ``sandbox``
+    field. So with no prior provisioning the create fails ACCOUNT_NOT_FOUND and
+    the sandbox echo cannot be asserted. Wire-ready: dispatch a full create
+    carrying the natural-key reference so production resolves it at the boundary.
+    """
+    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
+
+    ctx["account_ref"] = AccountReference(
+        root=AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="sandbox-brand.com"),
+            operator="sandbox-brand.com",
+            sandbox=True,
+        )
+    )
+    _attach_account_to_full_request(ctx)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # WHEN steps — send request
@@ -457,7 +717,8 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 def when_send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
-    Two scenario families share this step text:
+    Three dispatch modes share this step text — every one routes a full
+    ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
     - Account-resolution scenarios resolve an ``account_ref`` at the transport
       boundary via ``resolve_account_or_error`` (returns the resolved account_id).
@@ -472,9 +733,45 @@ def when_send_create_media_buy(ctx: dict) -> None:
         dispatch_request(ctx, **ctx["request_kwargs"])
         return
 
-    from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
+    if ctx.get("dispatch_mode") == "create_raw":
+        _dispatch_raw_create(ctx)
+    else:
+        _dispatch_full_create(ctx)
 
-    resolve_account_or_error(ctx)
+
+def _dispatch_full_create(ctx: dict) -> None:
+    """Build a typed CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
+    from pydantic import ValidationError
+
+    from src.core.schemas import CreateMediaBuyRequest
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    kwargs = ctx.get("request_kwargs", {})
+    try:
+        req = CreateMediaBuyRequest(**kwargs)
+    except ValidationError as e:
+        ctx["error"] = e
+        return
+
+    # No-auth scenarios (#1417) stash an unauthenticated identity so the
+    # transport-boundary account-resolution guard is exercised on the wire.
+    if "dispatch_identity" in ctx:
+        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
+    else:
+        dispatch_request(ctx, req=req)
+
+
+def _dispatch_raw_create(ctx: dict) -> None:
+    """Dispatch ctx['request_kwargs'] as a RAW flat body (no typed construction).
+
+    Schema-shape cases carry a malformed ``account`` shape that a typed
+    ``CreateMediaBuyRequest`` would reject in test code before reaching the wire.
+    Dispatching the flat kwargs sends them through the real route + production
+    Pydantic, so the boundary itself accepts or rejects the shape.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    dispatch_request(ctx, **ctx.get("request_kwargs", {}))
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -528,7 +825,12 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     - Error outcomes: AdCPError with matching code and recovery
     - Unknown: raises ValueError so unmapped rows are caught immediately
     """
-    if outcome.startswith("account resolution succeeds"):
+    if outcome == "success":
+        # Bare success outcome (e.g. UC-003 targeting-overlay "Valid partitions"):
+        # the operation proceeded without error and produced a response.
+        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+        assert ctx.get("response") is not None, "Expected a response for success outcome but ctx['response'] is None"
+    elif outcome.startswith("account resolution succeeds"):
         _assert_account_resolution_succeeds(ctx)
     elif outcome.strip() == "success":
         # Plain-success partition arm: the operation returned a response, no error.
@@ -550,35 +852,57 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         raise ValueError(f"Unknown outcome: {outcome!r}")
 
 
-def _assert_account_resolution_succeeds(ctx: dict) -> None:
-    """Assert account resolution produced the correct account_id."""
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    resolved_id = ctx["resolved_account_id"]
-    assert isinstance(resolved_id, str), (
-        f"Expected resolved_account_id to be a string, got {type(resolved_id).__name__}: {resolved_id!r}"
-    )
-    # Compare against the expected account_id from the request's account_ref
-    account_ref = ctx.get("account_ref")
-    if account_ref is not None:
-        root = account_ref.root
-        if hasattr(root, "account_id"):
-            # Explicit account_id reference — resolved must match exactly
-            assert resolved_id == root.account_id, (
-                f"Expected resolved_account_id '{root.account_id}', got '{resolved_id}'"
-            )
-            return
-    # Natural key resolution — verify against request_account_id if available
-    if "request_account_id" in ctx:
-        assert resolved_id == ctx["request_account_id"], (
-            f"Expected resolved_account_id '{ctx['request_account_id']}', got '{resolved_id}'"
-        )
-    else:
-        # Natural key scenario: verify the ID is a non-trivial string (alphanumeric + hyphens)
-        import re
+@then("the resolved account is the one the agent can access")
+def then_resolved_account_is_accessible(ctx: dict) -> None:
+    """Pin the resolved account to the accessible one (#1417).
 
-        assert re.match(r"^[a-zA-Z0-9_-]+$", resolved_id), (
-            f"Expected resolved_account_id to be a valid ID string, got: {resolved_id!r}"
-        )
+    A bare 'success' assertion proves the create did not error, but not that the
+    ACCESS-SCOPED resolution actually returned the account the agent can access
+    (rather than, say, an inaccessible sibling matching the same natural key).
+    The created MediaBuy persists identity.account_id, so assert its account_id
+    equals the single accessible account seeded by given_natural_key_partial_access.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    accessible = ctx.get("accessible_account_ids")
+    assert accessible, "given_natural_key_partial_access must record ctx['accessible_account_ids']"
+
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a create success response, got error: {ctx.get('error')}"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, f"Expected a media_buy_id in the create response, got: {resp!r}"
+
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    env._commit_factory_data()
+    mb = MediaBuyRepository(env._session, tenant.tenant_id).get_by_id(media_buy_id)
+    assert mb is not None, f"Media buy {media_buy_id!r} not found in DB"
+    assert mb.account_id == accessible[0], (
+        f"Access-scoped resolution should return the accessible account {accessible[0]!r}, "
+        f"but the created media buy resolved to account_id={mb.account_id!r}"
+    )
+
+
+def _assert_account_resolution_succeeds(ctx: dict) -> None:
+    """Assert the create_media_buy succeeded — proving production resolved the account.
+
+    Account resolution now runs inside a full create_media_buy on the wire
+    (#1417): a successful create proves the account reference resolved
+    at the transport boundary, because an unresolved/invalid account would have
+    raised before the buy was created. Assert the wire success response carries a
+    ``media_buy_id`` rather than inspecting a bare resolved-account string (which
+    no longer exists on this path).
+    """
+    assert "error" not in ctx, f"Expected account resolution to succeed but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a create_media_buy success response, but ctx['response'] is None"
+
+    from tests.bdd.steps._outcome_helpers import _get_response_field
+
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, (
+        f"Expected the create to succeed with a media_buy_id (account resolved), got response: {resp!r}"
+    )
 
 
 # -- Outcome family classifiers -----------------------------------------------
@@ -946,15 +1270,14 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
 
 
 def _assert_error_has_suggestion(error: object) -> None:
-    """The error carries a buyer-actionable suggestion.
+    """The error carries a buyer-actionable suggestion at the TOP LEVEL.
 
-    Typed in-process errors carry it as the ``suggestion`` attribute (the
-    envelope serializes it as errors[0].suggestion); some raise sites (and
-    reconstructed wire errors) carry it inside ``details`` instead — accept
-    either, since both surface it to the buyer.
+    error.json places ``suggestion`` at the top level of the error object;
+    reading it out of the free-form ``details`` dict masks non-conformant
+    emitters (#1417), so we assert the top-level attribute only.
     """
-    suggestion = getattr(error, "suggestion", None) or (getattr(error, "details", None) or {}).get("suggestion")
-    assert suggestion, f"Expected a suggestion on the error (attribute or details), got: {error!r}"
+    suggestion = getattr(error, "suggestion", None)
+    assert suggestion, f"Expected a top-level suggestion on the error, got: {error!r}"
 
 
 def _assert_error_outcome(ctx: dict, outcome: str) -> None:
@@ -964,6 +1287,11 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     1. Structured code: "error CODE [recovery] [with suggestion]"
     2. Suggestion-only: "error with suggestion"
     3. Descriptive: "error <desc>" or "error: <desc>" -- message-contains check.
+
+    When the scenario dispatched through a wire transport (``ctx["result"]`` is a
+    TransportResult), the structured-code and suggestion-only paths assert on the
+    real wire envelope via ``result.assert_wire_error`` — the AdCP two-layer error
+    contract the buyer sees — instead of a reconstructed exception.
     """
     from src.core.exceptions import AdCPError
 
@@ -978,8 +1306,14 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert description.lower() in error_msg, f"Expected error message to contain '{description}', got: {error}"
         return
 
+    result = ctx.get("result")
+
     # Suggestion-only: "error with suggestion"
     if remainder.startswith("with suggestion"):
+        if result is not None and result.wire_error_envelope is not None:
+            code = result.wire_error_envelope.get("adcp_error", {}).get("code")
+            result.assert_wire_error(code, require_suggestion=True)
+            return
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
@@ -1162,11 +1496,12 @@ def _build_valid_request_kwargs(ctx: dict) -> dict:
         "brand": {"domain": "testbrand.com"},
         # Explicit, stable po_number so the canonical payload is byte-identical
         # between the original create and the replay across ALL transports. The
-        # A2A wrapper (adcp_a2a_server.py) injects a RANDOM po_number when the
-        # caller omits one (`A2A-<uuid>`), which would otherwise diverge the two
-        # A2A payloads and surface as IDEMPOTENCY_CONFLICT — a real buyer
-        # replaying an idempotent request resends their own po_number, so the
-        # request fixes it here rather than relying on the server default.
+        # A2A wrapper no longer mints a random po_number when the caller omits
+        # one (it stays None for idempotency-hash + cross-transport parity), so
+        # this value is set explicitly here to keep the canonical payload —
+        # and therefore the idempotency hash — identical between the original
+        # create and the replay. A real buyer replaying an idempotent request
+        # resends their own po_number.
         "po_number": "PO-IDEMPOTENCY-REPLAY-001",
         "start_time": (now + timedelta(days=1)).isoformat(),
         "end_time": (now + timedelta(days=30)).isoformat(),
@@ -1197,10 +1532,10 @@ def given_request_idempotency_key_omitted(ctx: dict) -> None:
     Uses the harness OMIT sentinel: the request assembler keeps it, and
     MediaBuyCreateEnv._ensure_idempotency_key pops it so the constructed
     CreateMediaBuyRequest is missing the REQUIRED field — production rejects it
-    with a VALIDATION_ERROR naming idempotency_key. (Production's
-    format_validation_error returns a message string only, so the error carries
-    no structured ``suggestion`` field — the scenario is strict-xfailed on that
-    one Then step; see T-UC-002-v31-idempotency-missing in conftest _XFAIL_TAGS.)
+    with a VALIDATION_ERROR naming idempotency_key and a buyer-facing
+    ``suggestion`` derived by ``suggest_validation_fix`` ("Provide the required
+    'idempotency_key' field ..."), surfaced on the wire across all transports
+    (#1417/gh8p.10).
     """
     from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 
@@ -1281,10 +1616,8 @@ def given_package_positive_budget(ctx: dict) -> None:
     ctx["package_budget_valid"] = True
 
 
-@given("the ad server adapter is available")
-def given_adapter_available(ctx: dict) -> None:
-    """Mark the ad server adapter as available for the scenario."""
-    ctx["adapter_available"] = True
+# Step "the ad server adapter is available" is defined in
+# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
 
 
 @given("the request does NOT include an idempotency_key")
@@ -1339,6 +1672,10 @@ def then_response_should_succeed(ctx: dict) -> None:
     assert "response" in ctx, "No response recorded in ctx"
 
 
+# "the budget validation should pass" is owned by the registered generic
+# then_media_buy.py (shadowed-steps guard forbids a duplicate here).
+
+
 @then(parsers.parse('the response should include a "{field}"'))
 def then_response_includes_field(ctx: dict, field: str) -> None:
     """Assert the response includes the specified field."""
@@ -1352,6 +1689,57 @@ def then_response_includes_field(ctx: dict, field: str) -> None:
         # Try model_dump if it's a Pydantic model
         dumped = response.model_dump() if hasattr(response, "model_dump") else {}
         assert field in dumped, f"Response missing field '{field}'"
+
+
+@then("the response carries the domain media_buy_status and the protocol status separately")
+def then_dual_emit_media_buy_status(ctx: dict) -> None:
+    """AdCP 3.1 create/update-media-buy-response status fields, asserted on the REAL
+    wire (``ctx['wire_response']``) — not the reconstructed typed payload.
+
+    Grounded to the GA behavior graded by the published 3.1.0 storyboard
+    ``pending_creatives_to_start.yaml`` (3.1.1 is byte-identical for this
+    storyboard). GA grades the two fields as SEPARATE namespaces:
+      - ``media_buy_status`` => ``field_value`` (REQUIRED): the DOMAIN status, a
+        ``MediaBuyStatus`` enum value (GA 3.1.0 L146-149).
+      - ``status`` => ``field_value`` ``'completed'``: the PROTOCOL ``TaskStatus``
+        on the flattened envelope (GA 3.1.0 L150-153, "protocol-envelope task-status").
+
+    This DIVERGES from the pinned SDK's 3.1.0-beta.3 storyboard, which graded
+    ``status`` as ``field_value_or_absent`` that MUST equal ``media_buy_status``
+    (the deprecated "both identical" model, #4908). We target GA, so the two fields
+    are DIFFERENT namespaces and are NOT identical: ``TaskResultEnvelope._serialize``
+    sets the top-level ``status`` to the protocol ``TaskStatus`` (e.g. ``completed`` /
+    ``submitted``) while the DOMAIN status survives under ``media_buy_status``. The
+    earlier "both identical" oracle read the re-mirrored reconstructed payload
+    (``_mirror_media_buy_status``) and so could never observe this wire reality.
+    See docs/adcp-spec-version.md "Behavior target vs SDK pin".
+    """
+    from adcp.types import GeneratedTaskStatus as ProtocolTaskStatus
+    from adcp.types import MediaBuyStatus
+
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    domain_values = {e.value for e in MediaBuyStatus}
+    protocol_values = {e.value for e in ProtocolTaskStatus}
+
+    # media_buy_status is REQUIRED (storyboard field_value) and carries the DOMAIN status.
+    assert "media_buy_status" in wire, f"Expected 'media_buy_status' on the wire, got keys: {sorted(wire)}"
+    media_buy_status = wire["media_buy_status"]
+    assert media_buy_status in domain_values, (
+        f"Expected 'media_buy_status' to be a domain MediaBuyStatus value on the wire "
+        f"(one of {sorted(domain_values)}), got {media_buy_status!r}"
+    )
+
+    # status is OPTIONAL (storyboard field_value_or_absent). When the flattened envelope
+    # carries it, it is the PROTOCOL TaskStatus (a different namespace from the domain
+    # status), NOT necessarily equal to media_buy_status.
+    if "status" in wire:
+        status = wire["status"]
+        assert status in protocol_values, (
+            f"Expected top-level 'status' to be a protocol TaskStatus value on the wire "
+            f"(one of {sorted(protocol_values)}), got {status!r}"
+        )
 
 
 @then(parsers.parse('I remember the "{field}" as "{alias}"'))
@@ -1439,29 +1827,6 @@ def then_response_includes_previously_created(ctx: dict, field: str) -> None:
     assert replayed is True, (
         f"Expected the replay marker (replayed=True) on the cached-hit response, got replayed={replayed!r}. "
         "Without it the buyer cannot tell the response was served from the idempotency cache."
-    )
-
-
-@then("no new ad platform order should have been created")
-def then_no_new_ad_platform_order(ctx: dict) -> None:
-    """Assert the idempotency replay did NOT re-invoke the ad server adapter.
-
-    The adapter mock's ``create_media_buy`` call count after the replay must
-    equal the count recorded right after the FIRST create — proving the replay
-    returned the cached response WITHOUT booking a second order.
-    """
-    env = ctx["env"]
-    adapter_mock = env.mock["adapter"].return_value
-    before_replay = ctx.get("adapter_calls_after_first_create")
-    assert before_replay is not None, (
-        "No adapter call count recorded after the first create — the 'already created' "
-        "Given step must run before this assertion"
-    )
-    after_replay = adapter_mock.create_media_buy.call_count
-    assert after_replay == before_replay, (
-        f"Adapter create_media_buy was called {after_replay} time(s) total, but only "
-        f"{before_replay} (the original) is allowed — the replay re-booked an ad platform order "
-        "instead of serving the cached response"
     )
 
 
@@ -1924,15 +2289,8 @@ def then_simulated_success(ctx: dict) -> None:
     )
 
 
-@then("no database records should be created")
-def then_no_db_records(ctx: dict) -> None:
-    """Dry-run persists nothing — no MediaBuy row exists for the tenant."""
-    from tests.bdd.steps.domain._media_buy_steps_shared import _media_buy_repo
-
-    env = ctx["env"]
-    env._session.expire_all()
-    persisted = _media_buy_repo(ctx).list_all()
-    assert persisted == [], f"dry-run must not persist any media buy, found {[b.media_buy_id for b in persisted]}"
+# "no database records should be created" is owned by the registered generic
+# then_error.py (shadowed-steps guard forbids a duplicate here).
 
 
 @then("the simulated response should be labelled sandbox and not fabricate confirmed_at or revision")

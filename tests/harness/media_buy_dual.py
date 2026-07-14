@@ -108,24 +108,56 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         if _is_update_request(kwargs):
+            # Set flag before returning — reset in parse_rest_response after routing,
+            # not in a finally block here (the dispatcher calls parse_rest_response
+            # after this method returns, so a finally reset races with routing).
+            self._active_update = True
             return self._run_update_rest_request(**kwargs)
         return super()._run_rest_request(endpoint, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        # Selecting the parser here (not in a per-layer boolean) keeps every
-        # build→parse path consistent — including dispatcher-driven ones that
-        # never route through _run_rest_request. See MediaBuyCreateEnv._rest_parser.
+        # The E2E dispatcher (RestE2EDispatcher) reads REST_ENDPOINT/REST_METHOD as
+        # plain attrs and never calls _run_rest_request, so set the mode flag + target
+        # id HERE (deterministically per request, not via parse_rest_response's reset —
+        # the E2E error path calls parse_rest_error, which would leave a stale flag).
         if _is_update_request(kwargs):
-            self._rest_parser = self._parse_update_rest_response
+            self._active_update = True
+            req = kwargs.get("req")
+            target = self._seeded_media_buy_id
+            if req is not None and getattr(req, "media_buy_id", None):
+                target = req.media_buy_id
+            self._update_target_id = target
             return self._build_update_rest_body(**kwargs)
+        self._active_update = False
         return super().build_rest_body(**kwargs)
+
+    @property
+    def REST_ENDPOINT(self) -> str:  # noqa: N802 — matches the inherited class-attr name
+        """Update scenarios PUT a per-id endpoint; create scenarios POST the collection.
+
+        A @property (not a static attr) because the E2E dispatcher reads it directly and
+        the update path needs the seeded media_buy_id in the URL. The in-process path
+        ignores this value (it builds its own PUT URL in _run_update_rest_request)."""
+        if self._active_update:
+            return f"/api/v1/media-buys/{self._update_target_id}"
+        return "/api/v1/media-buys"
+
+    @property
+    def REST_METHOD(self) -> str:  # noqa: N802 — dispatcher reads getattr(env, "REST_METHOD", "post")
+        return "put" if self._active_update else "post"
+
+    def parse_rest_response(self, data: dict[str, Any]) -> Any:
+        if self._active_update:
+            self._active_update = False
+            return self._parse_update_rest_response(data)
+        return super().parse_rest_response(data)
+
+    _active_update: bool = False
+    _update_target_id: str = "NOT_SEEDED"
 
     # -- Concrete update transport implementations -----------------------------
 
     def _call_update_impl(self, **kwargs: Any) -> Any:
-        if self.e2e_config is not None:
-            return self._call_update_via_live_server(kwargs)
-
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         self._commit_factory_data()
@@ -137,88 +169,75 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             req = UMR(**kwargs)
         return _update_media_buy_impl(req=req, identity=identity)
 
-    def _call_update_via_live_server(self, kwargs: dict[str, Any]) -> Any:
-        """Realize an update on the LIVE SERVER (transport-aware Given plumbing).
+    def _flatten_update_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Flatten an ``UpdateMediaBuyRequest`` into flat A2A/MCP skill parameters.
 
-        The in-process impl reads/writes the suite DB, which the live server
-        never sees (docs/test-redesign/e2e-rest-ledger-retirement.md). The
-        update endpoint is per-buy (PUT /api/v1/media-buys/{id}), which the
-        static-endpoint RestE2EDispatcher cannot express — drive the shared
-        ``live_server_request`` with the update body/parse surface this env
-        already owns.
+        Pops ``req`` and expands it (dropping wrapper-unsupported fields), then
+        overlays any explicit kwargs. Shared by the A2A and MCP update paths (DRY).
         """
-        identity = kwargs.pop("identity", self.identity)
-        endpoint = self._update_endpoint(kwargs)
-        body = self._build_update_rest_body(**kwargs)
-        data = self.live_server_request("put", endpoint, body=body, identity=identity)
-        return self._parse_update_rest_response(data)
+        req = kwargs.pop("req", None)
+        if req is None:
+            return dict(kwargs)
+        flat = req.model_dump(mode="json", exclude_none=True)
+        for key in _WRAPPER_UNSUPPORTED_FIELDS:
+            flat.pop(key, None)
+        flat.update(kwargs)
+        return flat
 
     def _call_update_a2a(self, **kwargs: Any) -> Any:
-        from src.core.tools.media_buy_update import update_media_buy_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        req = kwargs.pop("req", None)
-        if req is not None:
-            flat = req.model_dump(mode="json", exclude_none=True)
-            for key in _WRAPPER_UNSUPPORTED_FIELDS:
-                flat.pop(key, None)
-            flat.update(kwargs)
-            kwargs = flat
-        return update_media_buy_raw(**kwargs)
+        # Drive the REAL on_message_send → _serialize_for_a2a → Task/Artifact
+        # pipeline (mirrors the create path's call_a2a), so _run_a2a_handler stashes
+        # the true artifact DataPart as the wire_response. A prior version synthesized
+        # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
+        # model rather than the assembled envelope — an update-envelope regression
+        # would not be caught. The update_media_buy skill routes through the real A2A
+        # handler; _parse_update_rest_response recovers the success|error union from
+        # the flattened artifact (needs the top-level status the plain model drops).
+        return self._run_a2a_handler(
+            "update_media_buy",
+            lambda **data: self._parse_update_rest_response(data),
+            **self._flatten_update_request(kwargs),
+        )
 
     def _call_update_mcp(self, **kwargs: Any) -> Any:
         import asyncio
-        from unittest.mock import AsyncMock
         from unittest.mock import MagicMock as MM
 
         from fastmcp.server.context import Context
 
-        from src.core.tool_error_logging import _translate_to_tool_error
+        from src.core.tool_error_logging import with_error_logging
         from src.core.tools.media_buy_update import update_media_buy
         from tests.harness.transport import Transport
 
         self._commit_factory_data()
 
-        req = kwargs.pop("req", None)
-        if req is not None:
-            flat = req.model_dump(mode="json", exclude_none=True)
-            for key in _WRAPPER_UNSUPPORTED_FIELDS:
-                flat.pop(key, None)
-            flat.update(kwargs)
-            kwargs = flat
+        kwargs = self._flatten_update_request(kwargs)
 
         identity = kwargs.pop("identity", self.identity_for(Transport.MCP))
         mock_ctx = MM(spec=Context)
 
-        # The wrapper reads BOTH get_state("identity") and get_state("context_id");
-        # a plain return_value would hand the identity object to the context_id
-        # DB filter (psycopg2 "can't adapt type 'ResolvedIdentity'").
+        # The update MCP wrapper reads two distinct state keys:
+        # get_state("identity") and get_state("context_id"). A blanket
+        # return_value=identity would feed the ResolvedIdentity in as the
+        # context_id, which then hits a DB query and fails to adapt. Return the
+        # identity only for the "identity" key; no buyer-supplied context.
         async def _get_state(key: str) -> Any:
             return identity if key == "identity" else None
 
-        mock_ctx.get_state = AsyncMock(side_effect=_get_state)
+        mock_ctx.get_state = _get_state
 
-        # Direct-wrapper dispatch (bypasses FastMCP's TypeAdapter, so the AdCP
-        # boundary — not FastMCP's arg validation — rejects a bad field, matching
-        # a2a/rest). On error, mirror the FULL production MCP boundary round-trip
-        # the in-memory Client would run: translate AdCPError -> AdCPToolError
-        # (two-layer JSON envelope), then unwrap it back to a reconstructed
-        # AdCPError with the real envelope stashed as ``_wire_error_envelope`` —
-        # exactly what ``_run_mcp_client`` does. This gives the McpDispatcher BOTH
-        # a proper AdCPError (``ctx["error"]``) and the real
-        # ``wire_error_envelope`` (e.g. the CONFLICT resource_id/expected/current
-        # details). A bare AdCPError would yield ``wire_error_envelope=None``.
-        from tests.harness._base import _unwrap_mcp_tool_error
-
-        try:
-            tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
-        except Exception as exc:  # noqa: BLE001 — normalized to the MCP wire shape below
-            try:
-                _translate_to_tool_error(exc)  # always raises (AdCPToolError / ToolError)
-            except Exception as tool_exc:
-                raise _unwrap_mcp_tool_error(tool_exc) from exc
+        # Invoke through the production boundary decorator that real MCP
+        # registration applies (src/core/main.py: mcp.tool()(with_error_logging(fn))).
+        # On error this translates the raised AdCPError into an AdCPToolError
+        # carrying the two-layer wire envelope, which McpDispatcher captures as
+        # wire_error_envelope — calling the raw wrapper would let the bare
+        # exception escape with no wire envelope (#1417).
+        wrapped_update_media_buy = with_error_logging(update_media_buy)
+        tool_result = asyncio.run(wrapped_update_media_buy(ctx=mock_ctx, **kwargs))
         data = dict(tool_result.structured_content)
+        # structured_content IS the real MCP wire body — stash it before
+        # _parse_update_rest_response mutates it (.pop("status")) (#1417).
+        self._last_wire_response = dict(data)
         return self._parse_update_rest_response(data)
 
     def _build_update_rest_body(self, **kwargs: Any) -> dict[str, Any]:
@@ -231,49 +250,34 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         kwargs.pop("media_buy_id", None)
         return kwargs
 
-    def _update_endpoint(self, kwargs: dict[str, Any]) -> str:
-        """Per-buy REST update endpoint; falls back to the seeded buy when the request omits the id."""
-        req = kwargs.get("req")
-        media_buy_id = getattr(req, "media_buy_id", None) or self._seeded_media_buy_id
-        return f"/api/v1/media-buys/{media_buy_id}"
-
-    def rest_dispatch_target(self, kwargs: dict[str, Any]) -> tuple[str, str]:
-        """(method, endpoint) for the e2e REST dispatcher, resolved per request.
-
-        Updates PUT the per-buy route; everything else takes the env's static
-        endpoint (create here; the lifecycle subclass's query route for lists).
-        """
-        if _is_update_request(kwargs):
-            return "put", self._update_endpoint(kwargs)
-        return getattr(self, "REST_METHOD", "post"), self.REST_ENDPOINT
-
     def _run_update_rest_request(self, **kwargs: Any) -> Any:
-        from tests.harness.transport import Transport
+        # Shared preamble (identity resolution + commit + client + auth-dep
+        # override): with no identity the REST auth dep rejects, so the no-auth
+        # update scenario fires instead of test-mode auth letting it through.
+        client, identity = self._prepare_rest_request(kwargs)
 
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        if identity is _NO_OVERRIDE:
-            identity = self.identity_for(Transport.REST)
-
-        self._commit_factory_data()
-        client = self.get_rest_client()
-
-        # Reuse the shared wire-header builder so REST stamps x-dry-run in
-        # dry-run mode exactly like the A2A/MCP paths (was dropped here). See #1544.
         headers: dict[str, str] = {}
-        if identity is not None and identity.auth_token:
-            headers = self._wire_auth_headers(identity.auth_token, identity.tenant_id)
+        if identity is not None:
+            auth_token = identity.auth_token
+            if auth_token:
+                headers["x-adcp-auth"] = auth_token
+            if identity.tenant_id:
+                headers["x-adcp-tenant"] = identity.tenant_id
 
-        endpoint = self._update_endpoint(kwargs)
-        # Route through build_rest_body (not _build_update_rest_body directly):
-        # the dispatcher parses AFTER this method returns, so the parse
-        # selector must be stashed alongside the body build.
-        body = self.build_rest_body(**kwargs)
+        body = self._build_update_rest_body(**kwargs)
+        req = kwargs.get("req")
+        media_buy_id = self._seeded_media_buy_id
+        if req is not None and hasattr(req, "media_buy_id") and req.media_buy_id:
+            media_buy_id = req.media_buy_id
+        endpoint = f"/api/v1/media-buys/{media_buy_id}"
         return client.put(endpoint, json=body, headers=headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
-        from src.core.schemas._base import UpdateMediaBuyError, UpdateMediaBuySuccess
+        from src.core.schemas._base import UpdateMediaBuyError, UpdateMediaBuyResult, UpdateMediaBuySuccess
 
+        status = data.pop("status", "completed")
         if "errors" in data and data["errors"]:
-            return UpdateMediaBuyError(**data)
-        return UpdateMediaBuySuccess(**data)
+            response = UpdateMediaBuyError(**data)
+        else:
+            response = UpdateMediaBuySuccess(**data)
+        return UpdateMediaBuyResult(response=response, status=status)

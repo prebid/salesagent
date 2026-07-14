@@ -1,6 +1,6 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
@@ -74,7 +74,9 @@ async def sync_creatives(
 
 
 def sync_creatives_raw(
-    creatives: list[CreativeAsset],
+    # A2A/REST send wire dicts; _sync_creatives_impl validates each entry
+    # individually (partial-success semantics with per-creative results).
+    creatives: list[CreativeAsset] | list[dict[str, Any]],
     assignments: dict = None,
     creative_ids: list[str] = None,
     delete_missing: bool = False,

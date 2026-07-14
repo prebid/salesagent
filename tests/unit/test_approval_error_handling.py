@@ -29,7 +29,6 @@ class TestApprovalErrorHandling:
         """Verify CreateMediaBuySuccess has media_buy_id field."""
         success_response = CreateMediaBuySuccess(
             media_buy_id="mb_123",
-            buyer_ref="test_ref",
             packages=[],
         )
 
@@ -42,7 +41,6 @@ class TestApprovalErrorHandling:
         error_response = CreateMediaBuyError(errors=[Error(code="TEST", message="Test error")])
         success_response = CreateMediaBuySuccess(
             media_buy_id="mb_123",
-            buyer_ref="test_ref",
             packages=[],
         )
 

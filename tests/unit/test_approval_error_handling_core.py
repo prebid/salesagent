@@ -27,7 +27,7 @@ class TestCreateMediaBuyErrorHandling:
 
     def test_isinstance_check_identifies_success_response(self):
         """Test that isinstance() correctly identifies CreateMediaBuySuccess."""
-        success_response = CreateMediaBuySuccess(media_buy_id="mb_123", buyer_ref="ref_123", packages=[])
+        success_response = CreateMediaBuySuccess(media_buy_id="mb_123", packages=[])
 
         # Verify it's identified as success, not error
         assert isinstance(success_response, CreateMediaBuySuccess)
@@ -57,7 +57,7 @@ class TestCreateMediaBuyErrorHandling:
 
     def test_success_response_has_media_buy_id(self):
         """Test that CreateMediaBuySuccess has 'media_buy_id' field."""
-        success_response = CreateMediaBuySuccess(media_buy_id="mb_123", buyer_ref="ref_123", packages=[])
+        success_response = CreateMediaBuySuccess(media_buy_id="mb_123", packages=[])
 
         # CreateMediaBuySuccess has 'media_buy_id' field
         assert hasattr(success_response, "media_buy_id")

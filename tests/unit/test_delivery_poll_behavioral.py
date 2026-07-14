@@ -366,7 +366,7 @@ class TestUC004EXTA02AuthenticationFailure:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _get_media_buy_delivery_impl(req, identity=None)
 
-            assert exc_info.value.message == "Identity is required"
+            assert exc_info.value.message == "Authentication required: no identity in request."
 
 
 # ---------------------------------------------------------------------------
@@ -388,14 +388,14 @@ class TestUC004EXTA02AuthenticationFailure:
 # ---------------------------------------------------------------------------
 
 
-class TestBuyerRefResolution:
-    """Verify that buyer_refs resolve media buys when media_buy_ids is absent.
+class TestMediaBuyIdResolution:
+    """Verify that media_buy_ids resolve media buys.
 
     Covers: UC-004-MAIN-02
     """
 
     def test_media_buy_ids_resolve_media_buys(self):
-        """media_buy_ids resolve media buys (buyer_refs removed in adcp 3.12).
+        """media_buy_ids resolve media buys.
 
         Covers: UC-004-MAIN-02
         """

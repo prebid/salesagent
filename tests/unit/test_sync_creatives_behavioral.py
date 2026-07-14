@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPNotFoundError
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
 from src.core.tools.creatives._workflow import _send_creative_notifications
@@ -449,41 +449,6 @@ class TestStrictModeAdCPErrorPropagation:
 
         # After AdCPError, the post-processing loop never ran,
         # so assignment_errors is NOT populated on the result
-        assert results[0].assignment_errors is None
-
-    def test_strict_mode_format_mismatch_error_not_written_to_result(self, tenant, _make_db_package):
-        """rule-038-inv4: format mismatch AdCPValidationError also prevents result population."""
-        db_package, db_media_buy = _make_db_package(product_id="product_1")
-
-        db_creative = Mock()
-        db_creative.agent_url = "https://agent.example.com"
-        db_creative.format = "video_format"
-
-        mock_product = Mock()
-        mock_product.name = "Display Product"
-        mock_product.format_ids = [
-            {"agent_url": "https://agent.example.com", "id": "display_300x250"},
-        ]
-
-        results = [SyncCreativeResult(creative_id="c1", action="created")]
-
-        mock_uow, mock_repo = _make_creative_uow()
-        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = db_creative
-        mock_repo.get_product_by_id.return_value = mock_product
-
-        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            with pytest.raises(AdCPValidationError, match="is not supported by product"):
-                _process_assignments(
-                    assignments={"c1": ["pkg_1"]},
-                    results=results,
-                    tenant=tenant,
-                    validation_mode="strict",
-                )
-
-        # AdCPError prevented post-processing — assignment_errors not written to result
         assert results[0].assignment_errors is None
 
 

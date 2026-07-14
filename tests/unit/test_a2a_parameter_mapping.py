@@ -93,14 +93,14 @@ class TestA2AParameterMapping:
             assert call_kwargs["pacing"] == "even"
             assert call_kwargs["daily_budget"] == 500.0
 
-    def test_update_media_buy_invalid_revision_emits_invalid_request(self):
-        """A schema-invalid revision emits INVALID_REQUEST on the A2A skill path,
-        matching MCP/REST — not the boundary's VALIDATION_ERROR.
+    def test_update_media_buy_invalid_revision_emits_validation_error(self):
+        """A schema-invalid revision emits VALIDATION_ERROR on the A2A skill path.
 
-        Regression for the transport-parity divergence (#1544): the skill handler
-        used to validate ``revision`` inside ``adcp_validation_boundary`` (→
-        VALIDATION_ERROR); it now defers the raw value to the shared translator
-        (``invalid_update_request_error`` → INVALID_REQUEST).
+        On the #1417 merge, the update path was reconciled to the ONE sanctioned
+        translation point — ``adcp_validation_boundary`` — which emits
+        VALIDATION_ERROR (with the error.json top-level suggestion + field) for a
+        schema-invalid revision. PR1544's earlier hand-rolled INVALID_REQUEST
+        variant was reverted to comply with the no-handrolled-boundary guard.
 
         Drives the REAL boundary — ``on_message_send`` → skill dispatch → failed
         Task — and asserts on the wire error envelope in the Task's artifact
@@ -133,7 +133,7 @@ class TestA2AParameterMapping:
         assert result.artifacts, "failed skill must still return a Task with an artifact"
         envelope = extract_data_from_artifact(result.artifacts[0])
         # Assert on the actual wire envelope the buyer receives, not exc.error_code.
-        assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
+        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
 
     def test_update_media_buy_backward_compatibility_with_updates(self):
         """
@@ -178,14 +178,14 @@ class TestA2AParameterMapping:
         """
         Test that update_media_buy validates required parameters per AdCP spec.
 
-        Per AdCP oneOf constraint: requires either 'media_buy_id' OR 'buyer_ref'
+        Per AdCP spec: requires 'media_buy_id'
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
-            # Request with neither media_buy_id nor buyer_ref
+            # Request with no media_buy_id
             invalid_parameters = {"active": True, "packages": []}
 
             import asyncio
@@ -202,7 +202,7 @@ class TestA2AParameterMapping:
             # Error message should mention required parameter
             error_message = str(exc_info.value).lower()
             msg = "Error message should mention required parameter"
-            assert "media_buy_id" in error_message or "buyer_ref" in error_message, msg
+            assert "media_buy_id" in error_message, msg
 
     def test_get_media_buy_delivery_uses_plural_media_buy_ids(self):
         """
@@ -357,7 +357,7 @@ class TestA2AParameterMapping:
         with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
             # Request missing required AdCP parameters
             incomplete_parameters = {
-                "buyer_ref": "campaign_123",
+                "po_number": "campaign_123",
                 # Missing: brand, packages, start_time, end_time
             }
 

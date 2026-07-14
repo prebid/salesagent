@@ -41,6 +41,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
+      # check_type_ignore_count.py compares .type-ignore-baseline against
+      # origin/main and hard-fails when the ref is missing; the shallow
+      # checkout above doesn't bring it in.
+      - name: Fetch origin/main for baseline ratchet comparison
+        run: git fetch origin main --depth=1
       - name: Run static analysis (make quality-ci)
         run: make quality-ci
 
@@ -386,7 +391,7 @@ jobs:
         with:
           paths: ${{ steps.bdd_shard.outputs.paths }}
           coverage_xml: coverage-bdd-${{ matrix.shard }}.xml
-          extra_args: -n auto --dist=loadfile --timeout=60
+          extra_args: -n auto --dist=load --timeout=60
       - name: Combine xdist coverage fragments
         run: |
           shopt -s nullglob

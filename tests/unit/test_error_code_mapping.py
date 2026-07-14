@@ -52,7 +52,7 @@ class TestErrorCodeMapping:
         set in ``__init__`` and is not present on the class object.
         """
         # Spec-required codes not yet in SDK STANDARD_ERROR_CODES
-        spec_codes = {"AUTH_TOKEN_INVALID", "BILLING_NOT_SUPPORTED"}
+        spec_codes = {"BILLING_NOT_SUPPORTED"}
         allowed = set(STANDARD_ERROR_CODES) | INTERNAL_CODES | spec_codes
         violations = []
         for cls in AdCPError.iter_concrete_subclasses():
