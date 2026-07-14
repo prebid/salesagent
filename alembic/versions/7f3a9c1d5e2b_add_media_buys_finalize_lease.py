@@ -11,9 +11,14 @@ Four nullable columns backing the exactly-once phase-2 protocol:
   adapters may auto-resume past it.
 - ``finalize_recovery_mode`` — NULL = automatic recovery; ``manual_required`` =
   the reconciler must not touch the buy again (crash left a possibly-partial
-  remote graph on a non-replayable adapter). Operator remediation:
-  ``UPDATE media_buys SET finalize_recovery_mode = NULL WHERE media_buy_id = ...``
-  after reconciling the remote state (or resetting the buy for re-approval).
+  remote graph on a non-replayable adapter). Operator remediation, AFTER
+  reconciling the remote state (remove/archive the partial order so a fresh
+  create is clean, or complete it and cancel the buy): preferred — RE-APPROVE
+  the buy (the fresh claim resets the whole operation state); or clear BOTH
+  flags so the reconciler retries — clearing only ``finalize_recovery_mode``
+  would leave the invoked marker and immediately re-flag the row:
+  ``UPDATE media_buys SET finalize_recovery_mode = NULL,
+  finalize_adapter_invoked_at = NULL WHERE media_buy_id = ...``.
 
 No backfill: all four are operation-state fields that are meaningless for rows
 not currently mid-finalization; existing rows correctly read as "no operation

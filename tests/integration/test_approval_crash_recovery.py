@@ -441,6 +441,191 @@ class TestApprovalCrashRecovery:
             buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_nostep")
             assert buy is not None and buy.status == "active" and buy.finalize_lease_id is None
 
+    # ── Round N+6 pins: order-id ≠ complete workflow / uncertain-vs-manual /
+    #    operator remediation / capability-probe failure ────────────────────
+
+    def test_persisted_order_id_never_skips_the_adapter(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A persisted ``platform_order_id`` is NOT proof the remote workflow completed
+        (it lands before creative upload and order approval). The re-approval shape —
+        marker ABSENT, stale order id present — must RUN the adapter before publishing,
+        never skip; and the stale per-package ids are reset for the fresh full create."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_orderid"
+        )
+        self._claim_expired(tenant_id, "mb_orderid", mark_invoked=False)
+        with get_db_session() as session:
+            session.add(
+                MediaPackage(
+                    media_buy_id="mb_orderid",
+                    package_id="pkg_1",
+                    package_config={"platform_order_id": "stale_1", "platform_line_item_id": "li_1"},
+                )
+            )
+            session.commit()
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            # Pin the stale-id reset: by adapter time the partial identifiers are gone,
+            # so a fresh full create cannot trip the persist mismatch guard.
+            with get_db_session() as check:
+                pkgs = MediaBuyRepository(check, tenant_id).get_packages("mb_orderid")
+                assert all("platform_order_id" not in (p.package_config or {}) for p in pkgs)
+                assert all("platform_line_item_id" not in (p.package_config or {}) for p in pkgs)
+            return True, None
+
+        with get_db_session() as session:
+            outcome, _ = _resume(session, tenant_id, "mb_orderid", step_id, step_data, adapter, replayable=False)
+
+        assert outcome is FinalizeOutcome.APPLIED
+        assert adapter_calls == ["call"]  # the adapter RAN — publish never rode a stale order id
+
+    def test_uncertain_clears_a_concurrent_manual_flag(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """An expired-lease worker whose adapter raises ``AdapterIdempotencyUncertain``
+        (guaranteed: nothing remote happened) must return the buy to the FULLY
+        automatic state — including clearing a ``manual_required`` flag a reconciler
+        set while the worker was in flight — and the next resume completes."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_unmanual"
+        )
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def uncertain_after_release():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30)
+            raise AdapterIdempotencyUncertain("lookup failed mid-flight")
+
+        t, worker_result = _start_approval_worker(tenant_id, "mb_unmanual", step_id, step_data, uncertain_after_release)
+        try:
+            assert adapter_entered.wait(timeout=30)
+            _expire_lease_now(tenant_id, "mb_unmanual")
+            # Reconciler flags manual (marker set, real adapter, expired lease).
+            with get_db_session() as session:
+                outcome, _ = _resume(
+                    session, tenant_id, "mb_unmanual", step_id, step_data, lambda: (True, None), replayable=False
+                )
+            assert outcome is FinalizeOutcome.RETRYING
+            with get_db_session() as session:
+                buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_unmanual")
+                assert buy is not None and buy.finalize_recovery_mode == "manual_required"
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive() and "error" not in worker_result
+        assert worker_result["outcome"] is FinalizeOutcome.RETRYING  # the worker's Uncertain path
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_unmanual")
+            assert buy is not None and buy.status == "finalizing"
+            # FULLY automatic again — Uncertain outlives the stale manual flag.
+            assert buy.finalize_recovery_mode is None
+            assert buy.finalize_adapter_invoked_at is None
+            assert buy.finalize_lease_id is None
+
+        # And the next reconciler pass completes it.
+        with get_db_session() as session:
+            outcome2, _ = _resume(
+                session, tenant_id, "mb_unmanual", step_id, step_data, lambda: (True, None), replayable=False
+            )
+        assert outcome2 is FinalizeOutcome.APPLIED
+
+    def test_documented_operator_remediation_recovers(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """The documented remediation clears BOTH fields (recovery_mode AND the invoked
+        marker) — after which the reconciler auto-recovers even a real adapter (the
+        marker-absent window). Clearing only recovery_mode would immediately re-flag."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_operator"
+        )
+        self._claim_expired(tenant_id, "mb_operator", mark_invoked=True)
+        with get_db_session() as session:
+            outcome, _ = _resume(session, tenant_id, "mb_operator", step_id, step_data, lambda: (True, None))
+        assert outcome is FinalizeOutcome.RETRYING  # manual_required now set
+
+        # The documented operator remediation: clear BOTH fields.
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_operator")
+            assert buy is not None
+            buy.finalize_recovery_mode = None
+            buy.finalize_adapter_invoked_at = None
+            session.commit()
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        with get_db_session() as session:
+            outcome2, _ = _resume(session, tenant_id, "mb_operator", step_id, step_data, adapter, replayable=False)
+        assert outcome2 is FinalizeOutcome.APPLIED  # NOT re-flagged manual
+        assert adapter_calls == ["call"]
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_operator")
+            assert buy is not None and buy.status == "active"
+
+    def test_capability_probe_failure_goes_manual_once(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A capability-resolution exception must NOT escape to the scheduler (which
+        would retry the same row every pass forever): it is treated conservatively as
+        non-replayable → ``manual_required`` ONCE; the second pass skips entirely."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_probe"
+        )
+        self._claim_expired(tenant_id, "mb_probe", mark_invoked=True)
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        def exploding_probe():
+            raise RuntimeError("adapter resolution failed")
+
+        with get_db_session() as session:
+            outcome, msg = resume_finalizing_media_buy(
+                session,
+                tenant_id,
+                media_buy_id="mb_probe",
+                step_id=step_id,
+                step_data=step_data,
+                run_adapter=adapter,
+                adapter_supports_replay=exploding_probe,
+            )
+        assert outcome is FinalizeOutcome.RETRYING and "manual" in (msg or "")  # no exception escaped
+        assert adapter_calls == []
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_probe")
+            assert buy is not None and buy.finalize_recovery_mode == "manual_required"
+
+        # Second pass: skipped entirely — no hot loop, probe not even consulted.
+        with get_db_session() as session:
+            outcome2, _ = resume_finalizing_media_buy(
+                session,
+                tenant_id,
+                media_buy_id="mb_probe",
+                step_id=step_id,
+                step_data=step_data,
+                run_adapter=adapter,
+                adapter_supports_replay=exploding_probe,
+            )
+        assert outcome2 is FinalizeOutcome.NOT_CLAIMED
+        assert adapter_calls == []
+
     def test_happy_path_bumps_revision_once_and_stamps_confirmed_at(
         self, integration_db, sample_tenant, sample_principal, context_manager
     ):

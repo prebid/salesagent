@@ -505,6 +505,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "tests/integration/test_approval_crash_recovery.py",
         "test_crash_after_marker_on_real_adapter_goes_manual_once_no_hot_loop",
     ),
+    ("tests/integration/test_approval_crash_recovery.py", "test_persisted_order_id_never_skips_the_adapter"),
     # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
     # FIXME(salesagent-e2e-admin-factories): migrate e2e seed helpers to factories.
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
@@ -769,6 +770,11 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "test_happy_path_bumps_revision_once_and_stamps_confirmed_at",
     ),
     ("tests/integration/test_approval_crash_recovery.py", "worker"),
+    ("tests/integration/test_approval_crash_recovery.py", "test_persisted_order_id_never_skips_the_adapter"),
+    ("tests/integration/test_approval_crash_recovery.py", "adapter"),
+    ("tests/integration/test_approval_crash_recovery.py", "test_uncertain_clears_a_concurrent_manual_flag"),
+    ("tests/integration/test_approval_crash_recovery.py", "test_documented_operator_remediation_recovers"),
+    ("tests/integration/test_approval_crash_recovery.py", "test_capability_probe_failure_goes_manual_once"),
     ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),

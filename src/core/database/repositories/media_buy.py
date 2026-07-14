@@ -796,16 +796,6 @@ class MediaBuyRepository:
         self._session.flush()
         return lease_id
 
-    def release_finalize_lease(self, media_buy_id: str, lease_id: str) -> bool:
-        """Clear the lease iff still owner (the RETRYING path — no TTL wait). #1637."""
-
-        def _apply(media_buy: MediaBuy) -> None:
-            media_buy.finalize_lease_id = None
-            media_buy.finalize_lease_expires_at = None
-
-        released = self._locked_mutate_and_bump(media_buy_id, _apply, expected_lease_id=lease_id, bump=False)
-        return released is not None
-
     def set_finalize_adapter_invoked(self, media_buy_id: str, lease_id: str) -> bool:
         """CAS-set the adapter-invoked marker (still owner + still finalizing). #1637.
 
@@ -825,14 +815,25 @@ class MediaBuyRepository:
         )
         return marked is not None
 
-    def clear_finalize_adapter_invoked(self, media_buy_id: str, lease_id: str) -> bool:
-        """CAS-clear the adapter-invoked marker (the uncertain-before-mutation path). #1637."""
+    def clear_stale_platform_order_ids(self, media_buy_id: str) -> None:
+        """Drop persisted per-package platform ids before a fresh full adapter run (#1637).
 
-        def _apply(media_buy: MediaBuy) -> None:
-            media_buy.finalize_adapter_invoked_at = None
+        A replay re-creates the ENTIRE remote graph and may mint a different order id;
+        ``_persist_adapter_package_ids``' mismatch guard (which protects against
+        concurrent writers, not replays) would otherwise raise and strand the buy in
+        ``finalizing``. No-op when no ids are persisted (every first attempt). The
+        caller owns the transaction (committed together with the invoked marker).
+        """
+        from sqlalchemy.orm import attributes
 
-        cleared = self._locked_mutate_and_bump(media_buy_id, _apply, expected_lease_id=lease_id, bump=False)
-        return cleared is not None
+        for pkg in self.get_packages(media_buy_id):
+            config = pkg.package_config or {}
+            if "platform_order_id" in config or "platform_line_item_id" in config:
+                config.pop("platform_order_id", None)
+                config.pop("platform_line_item_id", None)
+                pkg.package_config = config
+                attributes.flag_modified(pkg, "package_config")
+        self._session.flush()
 
     def set_finalize_recovery_manual(self, media_buy_id: str) -> bool:
         """Mark a stranded buy ``manual_required`` (fail-closed disposition). #1637.

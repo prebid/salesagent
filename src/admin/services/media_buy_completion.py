@@ -289,17 +289,6 @@ def finalize_media_buy_approval(
     )
 
 
-def _remote_order_exists(repo: MediaBuyRepository, media_buy_id: str) -> bool:
-    """True once the adapter has created the remote order for this buy.
-
-    ``platform_order_id`` is persisted to every package's ``package_config`` AFTER
-    ``adapter.create_media_buy`` returns (media_buy_create.py). Its presence is the
-    durable idempotency anchor: a resume that sees it must NOT call the adapter
-    again. #1637.
-    """
-    return any((pkg.package_config or {}).get("platform_order_id") for pkg in repo.get_packages(media_buy_id))
-
-
 def _run_adapter_and_finalize(
     session: Session,
     tenant_id: str,
@@ -321,16 +310,22 @@ def _run_adapter_and_finalize(
     ``NOT_CLAIMED``: never run the adapter further, mark failed, terminalize, or
     emit on lost ownership):
 
-      1. ``platform_order_id`` guard — a prior attempt already got past the adapter;
-         skip straight to publish.
-      2. Otherwise CAS-commit the adapter-invoked marker (durable "remote mutations
-         may exist" signal), then run the adapter:
+      1. CAS-commit the adapter-invoked marker (durable "remote mutations may exist"
+         signal), reset stale per-package platform ids (a replay re-creates the
+         remote graph — see below), then run the adapter. The adapter ALWAYS runs:
+         a persisted ``platform_order_id`` is NOT proof the remote workflow
+         completed (it is written before creative upload and order approval), so
+         phase 2 never skips the adapter on its account — the serving status
+         becomes visible ONLY after adapter success in THIS attempt. #1637.
          - ``AdapterIdempotencyUncertain`` (contract: NOTHING remote happened) →
-           CAS-clear the marker + release the lease, return ``RETRYING`` — the buy
-           stays ``finalizing`` on the AUTOMATIC recovery path.
+           one owner-CAS returns the buy to the FULLY automatic state (marker,
+           lease, AND ``finalize_recovery_mode`` cleared — a manual flag set by a
+           reconciler while this expired-lease worker was in flight must not
+           outlive an exception that guarantees automatic retry is safe), return
+           ``RETRYING``.
          - handled failure ``(False, msg)`` → ``failed`` transition via lease-CAS
            (+ step failed with a buyer-facing envelope), commit, ``ADAPTER_FAILED``.
-      3. Success publish: ``finalizing`` → flight-derived serving status via
+      2. Success publish: ``finalizing`` → flight-derived serving status via
          lease-CAS with ``bump=False`` (the claim already advanced the revision) and
          ``clear_finalize_state=True`` (lease/marker/recovery_mode cleared —
          including the self-heal of a ``manual_required`` flag set while this slow
@@ -342,49 +337,60 @@ def _run_adapter_and_finalize(
     (no async buyer task): the serving transition is committed on its own. #1637.
     """
     repo = MediaBuyRepository(session, tenant_id)
-    if not _remote_order_exists(repo, media_buy_id):
-        # Durable marker BEFORE the adapter: a crash after this commit means remote
-        # mutations may exist, so only full-replay adapters may auto-resume past it.
-        if not repo.set_finalize_adapter_invoked(media_buy_id, lease_id):
-            session.rollback()
-            return FinalizeOutcome.NOT_CLAIMED, None
-        session.commit()
+    # Durable marker BEFORE the adapter: a crash after this commit means remote
+    # mutations may exist, so only full-replay adapters may auto-resume past it.
+    if not repo.set_finalize_adapter_invoked(media_buy_id, lease_id):
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, None
+    # A (re)run re-creates the remote graph and may mint a DIFFERENT order id —
+    # drop stale per-package platform ids so _persist_adapter_package_ids' mismatch
+    # guard (which protects against concurrent writers, not replays) doesn't strand
+    # the buy. No-op on first attempts. Committed atomically with the marker.
+    repo.clear_stale_platform_order_ids(media_buy_id)
+    session.commit()
 
-        try:
-            success, error_msg = run_adapter()
-        except AdapterIdempotencyUncertain as exc:
-            # Contract: no remote mutation happened. Return the buy to the clean
-            # automatic-retry state (marker cleared, lease released) — the
-            # reconciler re-attempts on its next pass.
-            logger.warning(f"Adapter idempotency uncertain for media buy {media_buy_id}; will retry: {exc}")
-            repo.clear_finalize_adapter_invoked(media_buy_id, lease_id)
-            repo.release_finalize_lease(media_buy_id, lease_id)
-            session.commit()
-            return FinalizeOutcome.RETRYING, str(exc)
-        if not success:
-            failed = repo.update_status_computed(
-                media_buy_id,
-                lambda _mb: "failed",
-                expected_status=MEDIA_BUY_FINALIZING_STATUS,
-                expected_lease_id=lease_id,
-                clear_finalize_state=True,
+    try:
+        success, error_msg = run_adapter()
+    except AdapterIdempotencyUncertain as exc:
+        # Contract: no remote mutation happened. ONE owner-CAS restores the fully
+        # automatic state — marker, lease, and any manual_required flag a
+        # reconciler set while this (expired-lease but alive) worker was in
+        # flight. compute_target=None leaves the status at ``finalizing``.
+        logger.warning(f"Adapter idempotency uncertain for media buy {media_buy_id}; will retry: {exc}")
+        repo.update_status_computed(
+            media_buy_id,
+            lambda _mb: None,
+            expected_status=MEDIA_BUY_FINALIZING_STATUS,
+            expected_lease_id=lease_id,
+            clear_finalize_state=True,
+            bump=False,
+        )
+        session.commit()
+        return FinalizeOutcome.RETRYING, str(exc)
+    if not success:
+        failed = repo.update_status_computed(
+            media_buy_id,
+            lambda _mb: "failed",
+            expected_status=MEDIA_BUY_FINALIZING_STATUS,
+            expected_lease_id=lease_id,
+            clear_finalize_state=True,
+        )
+        if failed is None:
+            # Lost ownership while the adapter ran — a newer owner decides.
+            session.rollback()
+            return FinalizeOutcome.NOT_CLAIMED, error_msg
+        if step_id is not None:
+            # Store a buyer-facing two-layer error envelope as the step's response_data
+            # (NOT just error_message): durable tasks/get rebuilds the failed Task's
+            # artifact from response_data. #1544 (P1).
+            error_envelope = build_two_layer_error_envelope(
+                AdCPAdapterError(error_msg or "Adapter execution failed while creating the media buy")
             )
-            if failed is None:
-                # Lost ownership while the adapter ran — a newer owner decides.
-                session.rollback()
-                return FinalizeOutcome.NOT_CLAIMED, error_msg
-            if step_id is not None:
-                # Store a buyer-facing two-layer error envelope as the step's response_data
-                # (NOT just error_message): durable tasks/get rebuilds the failed Task's
-                # artifact from response_data. #1544 (P1).
-                error_envelope = build_two_layer_error_envelope(
-                    AdCPAdapterError(error_msg or "Adapter execution failed while creating the media buy")
-                )
-                WorkflowRepository(session, tenant_id).update_status(
-                    step_id, status="failed", error_message=error_msg, response_data=error_envelope
-                )
-            session.commit()
-            return FinalizeOutcome.ADAPTER_FAILED, error_msg
+            WorkflowRepository(session, tenant_id).update_status(
+                step_id, status="failed", error_message=error_msg, response_data=error_envelope
+            )
+        session.commit()
+        return FinalizeOutcome.ADAPTER_FAILED, error_msg
 
     # Publish the serving status — OWNERSHIP-CHECKED (#1637): a stale worker whose
     # lease was taken over (or whose buy was already published/failed by the new
@@ -451,18 +457,36 @@ def resume_finalizing_media_buy(
     if stranded is None or stranded.status != MEDIA_BUY_FINALIZING_STATUS or stranded.finalize_recovery_mode:
         return FinalizeOutcome.NOT_CLAIMED, None
 
-    if stranded.finalize_adapter_invoked_at is not None and not adapter_supports_replay():
-        if repo.set_finalize_recovery_manual(media_buy_id):
-            session.commit()
-            logger.error(
-                f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) crashed mid-finalization "
-                f"AFTER its adapter was invoked; the adapter does not support full create replay, so the "
-                f"remote state may be partial. Marked finalize_recovery_mode=manual_required — reconcile "
-                f"the remote order manually, then clear the flag (or re-approve) to resume."
+    if stranded.finalize_adapter_invoked_at is not None:
+        try:
+            replayable = adapter_supports_replay()
+        except Exception:
+            # Conservative disposition (#1637): if the adapter/capability cannot even
+            # be RESOLVED, we cannot prove the remote graph is safely replayable —
+            # treat as non-replayable so the row goes manual_required ONCE below,
+            # instead of re-raising into the scheduler and retrying (and
+            # error-logging) the same row on every pass forever.
+            logger.exception(
+                f"Capability resolution failed for media buy {media_buy_id} (tenant {tenant_id}); "
+                f"treating adapter as non-replayable"
             )
-        else:
-            session.rollback()
-        return FinalizeOutcome.RETRYING, "manual reconciliation required"
+            replayable = False
+        if not replayable:
+            if repo.set_finalize_recovery_manual(media_buy_id):
+                session.commit()
+                logger.error(
+                    f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) crashed mid-finalization "
+                    f"AFTER its adapter was invoked; the adapter does not support full create replay, so the "
+                    f"remote state may be partial. Marked finalize_recovery_mode=manual_required — the "
+                    f"preferred remediation is to reconcile the remote state (remove/archive the partial "
+                    f"order so a fresh create is clean, or complete it and cancel the buy) and then "
+                    f"RE-APPROVE the buy; alternatively clear BOTH flags to let the reconciler retry: "
+                    f"UPDATE media_buys SET finalize_recovery_mode = NULL, finalize_adapter_invoked_at = NULL "
+                    f"WHERE media_buy_id = '{media_buy_id}'."
+                )
+            else:
+                session.rollback()
+            return FinalizeOutcome.RETRYING, "manual reconciliation required"
 
     lease_id = repo.acquire_finalize_lease(media_buy_id, lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS)
     if lease_id is None:

@@ -991,8 +991,12 @@ class MediaBuy(Base):
     finalize_adapter_invoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # NULL = automatic recovery; "manual_required" = the reconciler must not
     # touch this buy again (a crash left a possibly-partial remote graph on a
-    # non-replayable adapter). Cleared by a successful publish (self-heal) or by
-    # an operator: UPDATE media_buys SET finalize_recovery_mode = NULL WHERE ...
+    # non-replayable adapter). Cleared by a successful publish (self-heal) or by an
+    # operator AFTER reconciling the remote state. The operator must clear BOTH this
+    # flag AND finalize_adapter_invoked_at (the surviving marker would immediately
+    # re-flag manual): UPDATE media_buys SET finalize_recovery_mode = NULL,
+    # finalize_adapter_invoked_at = NULL WHERE ... — or, preferred, RE-APPROVE the
+    # buy (claim_finalizing resets the whole operation state).
     finalize_recovery_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Relationships
