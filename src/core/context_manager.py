@@ -797,137 +797,141 @@ class ContextManager(DatabaseManager):
 
             console.print(f"[cyan]🔍 Found {len(webhooks)} active webhook configs for principal {principal_id}[/cyan]")
 
-            # Send notifications for each mapping (media buy, creative, etc.)
-            for mapping in mappings:
-                console.print(
-                    f"[cyan]📦 Processing mapping: {mapping.object_type} {mapping.object_id} action={mapping.action}[/cyan]"
+            # ONE webhook per step status change. The payload depends only on
+            # (step, new_status): the delivery URL comes from the step's own
+            # ``request_data.push_notification_config``, so ``mappings`` and
+            # ``webhooks`` are opt-in gates, not per-item delivery targets.
+            # Looping over them multiplied identical sends (mappings x configs)
+            # — a buyer's auto-approved create_media_buy received duplicate
+            # ``completed`` webhooks. E2E pin:
+            # test_a2a_webhook_payload_types::test_completed_status_sends_task_payload.
+            if not webhooks:
+                console.print(f"[yellow]No active webhook configs for principal {principal_id}; skipping[/yellow]")
+                return
+            mapping = mappings[0]
+            console.print(
+                f"[cyan]📦 Processing mapping: {mapping.object_type} {mapping.object_id} action={mapping.action}[/cyan]"
+            )
+            # build push notification config from step request data
+            from uuid import uuid4
+
+            cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
+            url = cfg_dict.get("url")
+            if not url:
+                console.print("[red]No push notification URL present; skipping webhook[/red]")
+                return
+
+            authentication = cfg_dict.get("authentication") or {}
+            schemes = authentication.get("schemes") or []
+            auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
+            auth_token = authentication.get("credentials")
+
+            # Derive principal/tenant from the step context if available
+            context_obj = getattr(step, "context", None)
+            derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
+            derived_principal_id = getattr(context_obj, "principal_id", None)
+
+            push_notification_config = PushNotificationConfig(
+                id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
+                tenant_id=derived_tenant_id,
+                principal_id=derived_principal_id,
+                url=url,
+                authentication_type=auth_type,
+                authentication_token=auth_token,
+                is_active=True,
+            )
+
+            service = get_protocol_webhook_service()
+
+            console.print(
+                f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
+            )
+
+            # Build webhook payload based on protocol type.
+            # task_type_str is the ORIGINAL action label — it keys the
+            # delivery-webhook guards + audit log and must NOT be rewritten
+            # by the SDK fallback (salesagent-yi3s). wire_task_type is the
+            # validated COPY passed to the SDK payload builder.
+            task_type_str = step.tool_name or mapping.action or "unknown"
+            protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
+            # Correlate to the id the BUYER holds. The A2A boundary persisted its
+            # outer transport ``task_*`` id on the step's request_data
+            # (external_task_id) at create time; the buyer polls / receives the
+            # webhook against THAT id, not the internal step_id. MCP/REST have no
+            # outer id, so they fall back to step_id (unchanged behavior). #1544 B6.
+            correlation_task_id = (step.request_data or {}).get("external_task_id") or step.step_id
+            try:
+                status_enum = GeneratedTaskStatus(new_status)
+            except ValueError:
+                status_enum = GeneratedTaskStatus.unknown
+
+            # SDK 5.7 validates task_type against TaskType enum; coerce a
+            # COPY for the payload while leaving task_type_str untouched.
+            wire_task_type = validate_webhook_task_type(task_type_str)
+
+            payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
+            if protocol == "a2a":
+                payload = create_a2a_webhook_payload(
+                    task_id=correlation_task_id,
+                    status=status_enum,
+                    context_id=step.context_id,
+                    result=step.response_data or {},
+                )
+            else:
+                # SDK 5.7: returns McpWebhookPayload directly
+                payload = create_mcp_webhook_payload(
+                    task_id=correlation_task_id,
+                    status=status_enum,
+                    task_type=wire_task_type,
+                    result=step.response_data,
                 )
 
-                for _webhook_config in webhooks:
-                    # build push notification config from step request data
-                    from uuid import uuid4
+            metadata: dict[str, Any] = {
+                "task_type": task_type_str,
+                "tenant_id": derived_tenant_id,
+                "principal_id": derived_principal_id,
+            }
 
-                    cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
-                    url = cfg_dict.get("url")
-                    if not url:
-                        console.print("[red]No push notification URL present; skipping webhook[/red]")
-                        continue
-
-                    authentication = cfg_dict.get("authentication") or {}
-                    schemes = authentication.get("schemes") or []
-                    auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
-                    auth_token = authentication.get("credentials")
-
-                    # Derive principal/tenant from the step context if available
-                    context_obj = getattr(step, "context", None)
-                    derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
-                    derived_principal_id = getattr(context_obj, "principal_id", None)
-
-                    push_notification_config = PushNotificationConfig(
-                        id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
-                        tenant_id=derived_tenant_id,
-                        principal_id=derived_principal_id,
-                        url=url,
-                        authentication_type=auth_type,
-                        authentication_token=auth_token,
-                        is_active=True,
+            try:
+                # If we're already in an event loop, schedule the send; otherwise run it directly
+                try:
+                    loop = asyncio.get_running_loop()
+                    task = loop.create_task(
+                        service.send_notification(
+                            push_notification_config=push_notification_config,
+                            payload=payload,
+                            metadata=metadata,
+                        )
                     )
 
-                    service = get_protocol_webhook_service()
-
-                    console.print(
-                        f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
-                    )
-
-                    # Build webhook payload based on protocol type.
-                    # task_type_str is the ORIGINAL action label — it keys the
-                    # delivery-webhook guards + audit log and must NOT be rewritten
-                    # by the SDK fallback (salesagent-yi3s). wire_task_type is the
-                    # validated COPY passed to the SDK payload builder.
-                    task_type_str = step.tool_name or mapping.action or "unknown"
-                    protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
-                    # Correlate to the id the BUYER holds. The A2A boundary persisted its
-                    # outer transport ``task_*`` id on the step's request_data
-                    # (external_task_id) at create time; the buyer polls / receives the
-                    # webhook against THAT id, not the internal step_id. MCP/REST have no
-                    # outer id, so they fall back to step_id (unchanged behavior). #1544 B6.
-                    correlation_task_id = (step.request_data or {}).get("external_task_id") or step.step_id
-                    try:
-                        status_enum = GeneratedTaskStatus(new_status)
-                    except ValueError:
-                        status_enum = GeneratedTaskStatus.unknown
-
-                    # SDK 5.7 validates task_type against TaskType enum; coerce a
-                    # COPY for the payload while leaving task_type_str untouched.
-                    wire_task_type = validate_webhook_task_type(task_type_str)
-
-                    payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-                    if protocol == "a2a":
-                        payload = create_a2a_webhook_payload(
-                            task_id=correlation_task_id,
-                            status=status_enum,
-                            context_id=step.context_id,
-                            result=step.response_data or {},
-                        )
-                    else:
-                        # SDK 5.7: returns McpWebhookPayload directly
-                        payload = create_mcp_webhook_payload(
-                            task_id=correlation_task_id,
-                            status=status_enum,
-                            task_type=wire_task_type,
-                            result=step.response_data,
-                        )
-
-                    metadata: dict[str, Any] = {
-                        "task_type": task_type_str,
-                        "tenant_id": derived_tenant_id,
-                        "principal_id": derived_principal_id,
-                    }
-
-                    try:
-                        # If we're already in an event loop, schedule the send; otherwise run it directly
+                    def _log_task_result(t: asyncio.Task, config_url: str = push_notification_config.url) -> None:
+                        # Runs AFTER pin_task's discard (see pin_task
+                        # docstring), so this log-and-swallow can't hold
+                        # the strong ref past completion.
                         try:
-                            loop = asyncio.get_running_loop()
-                            task = loop.create_task(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
-                                )
-                            )
+                            t.result()
+                            console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
+                        except Exception as e:
+                            console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
-                            def _log_task_result(
-                                t: asyncio.Task, config_url: str = push_notification_config.url
-                            ) -> None:
-                                # Runs AFTER pin_task's discard (see pin_task
-                                # docstring), so this log-and-swallow can't hold
-                                # the strong ref past completion.
-                                try:
-                                    t.result()
-                                    console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
-                                except Exception as e:
-                                    console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
+                    # Strong-ref pin against asyncio's weak-ref task
+                    # tracker; discard runs before _log_task_result.
+                    pin_task(task, on_done=_log_task_result)
+                except RuntimeError:
+                    # No running loop; safe to run synchronously
+                    asyncio.run(
+                        service.send_notification(
+                            push_notification_config=push_notification_config,
+                            payload=payload,
+                            metadata=metadata,
+                        )
+                    )
+                    console.print(f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]")
 
-                            # Strong-ref pin against asyncio's weak-ref task
-                            # tracker; discard runs before _log_task_result.
-                            pin_task(task, on_done=_log_task_result)
-                        except RuntimeError:
-                            # No running loop; safe to run synchronously
-                            asyncio.run(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
-                                )
-                            )
-                            console.print(
-                                f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
-                            )
-
-                    except requests.exceptions.Timeout:
-                        console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
-                    except requests.exceptions.RequestException as e:
-                        console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
+            except requests.exceptions.Timeout:
+                console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
+            except requests.exceptions.RequestException as e:
+                console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
 
         except Exception as e:
             console.print(f"[red]Error sending push notifications: {e}[/red]")

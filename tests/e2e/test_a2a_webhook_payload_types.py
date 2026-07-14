@@ -337,6 +337,9 @@ class TestA2AWebhookPayloadTypes:
         while elapsed < 15.0 and not webhook_capture_server["received"]:
             sleep(0.5)
             elapsed += 0.5
+        # Grace window: a regression re-adding on_message_send's immediate-terminal
+        # webhook would deliver a SECOND completed webhook shortly after the first.
+        sleep(2.0)
         received = webhook_capture_server["received"]
         assert received, "Expected an async workflow completion webhook"
         assert_no_classification_errors(received)
@@ -344,6 +347,15 @@ class TestA2AWebhookPayloadTypes:
         completed_webhooks = [w for w in received if w["status"] == "completed"]
         assert completed_webhooks, (
             f"Expected a 'completed' status webhook. Received statuses: {[w['status'] for w in received]}"
+        )
+        # a2a-guide.mdx terminal-state rule: an already-terminal initial response must
+        # NOT trigger its own webhook — the buyer receives exactly ONE completed
+        # webhook (the async workflow-step completion), never an on_message_send
+        # duplicate. (Unit pin: test_immediate_completed_task_sends_no_webhook.)
+        assert len(completed_webhooks) == 1, (
+            f"Expected exactly one completed webhook (the async workflow completion); "
+            f"a second one means on_message_send webhooked its immediate-terminal "
+            f"response. Received: {[(w['status'], w['payload'].get('id')) for w in received]}"
         )
         webhook = completed_webhooks[0]
         assert webhook["payload_type"] == "Task", (

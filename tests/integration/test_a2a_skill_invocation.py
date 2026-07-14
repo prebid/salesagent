@@ -11,7 +11,18 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatus
+from a2a.types import (
+    Artifact,
+    CancelTaskRequest,
+    Message,
+    Part,
+    Role,
+    SendMessageRequest,
+    Task,
+    TaskNotCancelableError,
+    TaskState,
+    TaskStatus,
+)
 from adcp.types import AccountReference as LibraryAccountReference
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
@@ -177,8 +188,15 @@ class TestA2ASkillInvocation:
         msg.parts.append(Part(data=_dict_to_value({"skill": skill, "parameters": parameters})))
         return msg
 
-    def _persist_a2a_step(self, tenant_id: str, principal_id: str, external_task_id: str, response_data: dict) -> str:
-        """Persist a COMPLETED a2a workflow step carrying an outer external_task_id (#1544 B6).
+    def _persist_a2a_step(
+        self,
+        tenant_id: str,
+        principal_id: str,
+        external_task_id: str,
+        response_data: dict | None,
+        status: str = "completed",
+    ) -> str:
+        """Persist an a2a workflow step carrying an outer external_task_id (#1544 B6).
 
         Mirrors what ``_create_media_buy_impl`` writes when the A2A boundary forwards the
         buyer's ``task_*`` id. ContextManager manages its own session, so no test-body DB
@@ -192,7 +210,7 @@ class TestA2ASkillInvocation:
             context_id=ctx.context_id,
             step_type="tool_call",
             owner="system",
-            status="completed",
+            status=status,
             tool_name="create_media_buy",
             request_data={"budget": 5000},
             request_metadata={"protocol": "a2a", "external_task_id": external_task_id},
@@ -248,6 +266,101 @@ class TestA2ASkillInvocation:
             task = handler._durable_task_from_step(external_task_id, context=None)
 
         assert task is None, "durable lookup must not cross tenant boundaries"
+
+    @pytest.mark.asyncio
+    async def test_durable_cancel_marks_pending_step_canceled(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """#1544 B6: tasks/cancel of the buyer's outer task_* id survives a restart — the
+        persisted non-terminal workflow step is durably marked canceled (not just the
+        in-memory map), and a subsequent durable tasks/get sees CANCELED."""
+        external_task_id = "task_durable_cancel_1"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            None,
+            status="requires_approval",
+        )
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            task = await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
+            polled = handler._durable_task_from_step(external_task_id, context=None)
+
+        assert task is not None, "durable cancel must resolve the buyer's outer task id to the step"
+        assert task.id == external_task_id
+        assert task.status.state == TaskState.TASK_STATE_CANCELED
+        assert polled is not None, "a durable poll after cancel must still resolve the task"
+        assert polled.status.state == TaskState.TASK_STATE_CANCELED, (
+            "cancel must persist on the workflow step — a poll after restart must see CANCELED"
+        )
+
+    @pytest.mark.asyncio
+    async def test_durable_cancel_of_terminal_step_is_not_cancelable(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """A2A spec tasks/cancel: a task already in a terminal state cannot be canceled —
+        the persisted completed step stays completed and TaskNotCancelableError is raised."""
+        external_task_id = "task_durable_cancel_2"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            {"media_buy_id": "mb_cancel_terminal", "status": "completed"},
+        )
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            with pytest.raises(TaskNotCancelableError):
+                await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
+            polled = handler._durable_task_from_step(external_task_id, context=None)
+
+        assert polled is not None
+        assert polled.status.state == TaskState.TASK_STATE_COMPLETED, (
+            "a refused cancel must not mutate the persisted terminal step"
+        )
+
+    @pytest.mark.asyncio
+    async def test_durable_cancel_is_tenant_isolated(self, handler, sample_tenant, sample_principal):
+        """The durable cancel is tenant-scoped: a cancel authenticated as a DIFFERENT tenant
+        must neither resolve nor mutate another tenant's task."""
+        from tests.factories import PrincipalFactory
+
+        external_task_id = "task_durable_cancel_3"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            None,
+            status="requires_approval",
+        )
+
+        other_identity = PrincipalFactory.make_identity(
+            tenant_id="a_different_tenant", principal_id="other_buyer", protocol="a2a"
+        )
+        handler._get_auth_token = MagicMock(return_value="other-tenant-token")
+        with patch.object(handler, "_resolve_a2a_identity", return_value=other_identity):
+            task = await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
+
+        assert task is None, "durable cancel must not cross tenant boundaries"
+
+    @pytest.mark.asyncio
+    async def test_cancel_of_terminal_in_memory_task_is_not_cancelable(self, handler):
+        """A2A spec tasks/cancel: an in-memory task already terminal (completed) must raise
+        TaskNotCancelableError, not be silently overwritten to CANCELED."""
+        task_id = "task_inmem_terminal"
+        handler.tasks[task_id] = Task(
+            id=task_id,
+            context_id="ctx_inmem",
+            status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+        )
+        handler._get_auth_token = MagicMock(return_value=None)
+
+        with pytest.raises(TaskNotCancelableError):
+            await handler.on_cancel_task(CancelTaskRequest(id=task_id), context=None)
+
+        assert handler.tasks[task_id].status.state == TaskState.TASK_STATE_COMPLETED
 
     @pytest.mark.asyncio
     async def test_natural_language_get_products(

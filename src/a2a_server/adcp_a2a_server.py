@@ -40,6 +40,7 @@ from a2a.types import (
     SendMessageRequest,
     SubscribeToTaskRequest,
     Task,
+    TaskNotCancelableError,
     TaskNotFoundError,
     TaskPushNotificationConfig,
     TaskState,
@@ -1151,7 +1152,14 @@ class AdCPRequestHandler(RequestHandler):
         "completed": TaskState.TASK_STATE_COMPLETED,
         "rejected": TaskState.TASK_STATE_REJECTED,
         "failed": TaskState.TASK_STATE_FAILED,
+        "canceled": TaskState.TASK_STATE_CANCELED,
     }
+
+    # Step statuses that are final outcomes — a buyer's tasks/cancel cannot undo
+    # work that already completed/failed/was rejected (or was already canceled).
+    _TERMINAL_STEP_STATUSES = frozenset(_STEP_STATUS_TO_TASK_STATE)
+
+    _TERMINAL_TASK_STATES = frozenset(_STEP_STATUS_TO_TASK_STATE.values())
 
     async def on_get_task(
         self,
@@ -1174,12 +1182,13 @@ class AdCPRequestHandler(RequestHandler):
             return task
         return self._durable_task_from_step(task_id, context)
 
-    def _durable_task_from_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
-        """Rebuild a terminal Task from the workflow step that stored this transport id.
+    def _durable_lookup_identity(self, context: ServerCallContext | None):
+        """Resolve the caller's identity for a durable (cross-process) task lookup.
 
-        A cross-process/restart-surviving lookup needs a tenant scope, so identity is
-        resolved from the poll's own auth (the buyer who created the task
-        authenticated). Without a resolvable tenant the task cannot be safely served.
+        A restart-surviving lookup needs a tenant scope, so identity is resolved
+        from the request's own auth (the buyer who created the task authenticated).
+        Returns None when no tenant is resolvable — the durable lookup must then be
+        refused rather than risk serving or mutating another tenant's task.
         """
         try:
             auth_token = self._get_auth_token(context)
@@ -1191,6 +1200,17 @@ class AdCPRequestHandler(RequestHandler):
         except Exception:
             return None
         if identity is None or not identity.tenant_id:
+            return None
+        return identity
+
+    def _durable_task_from_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
+        """Rebuild a terminal Task from the workflow step that stored this transport id.
+
+        See ``_durable_lookup_identity`` for why the poll's own auth provides the
+        tenant scope.
+        """
+        identity = self._durable_lookup_identity(context)
+        if identity is None:
             return None
 
         from src.core.database.database_session import get_db_session
@@ -1219,19 +1239,57 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/cancel' method to cancel a task.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
+        Mirrors ``on_get_task``'s durability (#1544 B6): the in-memory task is
+        resolved first, then the persisted workflow step carrying the buyer's outer
+        ``task_*`` id — so a cancel still lands after a restart or in a different
+        process than the create. A task/step already in a terminal state cannot be
+        canceled (A2A spec ``tasks/cancel``: ``TaskNotCancelableError``); the
+        durable check runs even on an in-memory hit so a stale WORKING task can't
+        cancel a workflow that was approved out-of-band.
 
         Returns:
-            Task object with canceled status, or None if not found
+            Task object with canceled status, or None if not found anywhere.
         """
         task_id = params.id
         task = self.tasks.get(task_id)
-        if task:
+        if task is not None and task.status.state in self._TERMINAL_TASK_STATES:
+            raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {task.status.state}")
+        durable = self._durable_cancel_step(task_id, context)
+        if task is not None:
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
             self.tasks[task_id] = task
-        return task
+            return task
+        return durable
+
+    def _durable_cancel_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
+        """Durably cancel the workflow step carrying this outer task id (tenant-scoped).
+
+        Returns None when no persisted step matches (or no tenant is resolvable —
+        see ``_durable_lookup_identity``). Raises ``TaskNotCancelableError`` when
+        the step already reached a terminal status: an approved/completed media buy
+        cannot be undone by ``tasks/cancel``.
+        """
+        identity = self._durable_lookup_identity(context)
+        if identity is None:
+            return None
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        with get_db_session() as session:
+            repo = WorkflowRepository(session, identity.tenant_id)
+            step = repo.get_by_external_task_id(task_id)
+            if step is None:
+                return None
+            if step.status in self._TERMINAL_STEP_STATUSES:
+                raise TaskNotCancelableError(message=f"Task cannot be canceled - current step status: {step.status}")
+            repo.update_status(step.step_id, status="canceled", completed_at=datetime.now(UTC))
+            session.commit()
+            return Task(
+                id=task_id,
+                context_id=step.context_id,
+                status=TaskStatus(state=TaskState.TASK_STATE_CANCELED),
+            )
 
     async def on_list_tasks(
         self,
