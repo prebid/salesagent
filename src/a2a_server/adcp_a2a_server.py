@@ -1966,8 +1966,6 @@ class AdCPRequestHandler(RequestHandler):
 
         Authentication is REQUIRED per BR-RULE-055.
         """
-        import uuid
-
         from src.core.schemas.account import SyncAccountsRequest
 
         request = SyncAccountsRequest(

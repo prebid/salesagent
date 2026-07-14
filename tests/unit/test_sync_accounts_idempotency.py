@@ -1,16 +1,17 @@
-"""Idempotency-key preservation for sync_accounts across MCP and A2A (#1512).
+"""Idempotency-key preservation for sync_accounts across MCP, A2A, and REST (#1512).
 
-The envelope-tolerance layer stripped the buyer's ``idempotency_key`` (MCP) or
-the wrapper dropped it (A2A), and both paths then synthesized a fresh UUID — so
-two retries carrying the SAME client key were treated as distinct requests. These
-tests pin that the client's key is forwarded verbatim, and that a fresh key is
-synthesized only when the client omits one.
+The envelope-tolerance layer stripped the buyer's ``idempotency_key`` (MCP), the
+wrapper dropped it (A2A), or the REST body model discarded it via ``extra="ignore"``;
+each path then synthesized a fresh UUID — so two retries carrying the SAME client key
+were treated as distinct requests. These tests pin that the client's key is forwarded
+verbatim on every transport, and that a fresh key is synthesized only when the client
+omits one.
 """
 
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -58,3 +59,39 @@ class TestSyncAccountsIdempotencyKeyPreserved:
 
         req = mock_tool.call_args.kwargs["req"]
         assert req.idempotency_key == "client-key-a2a"
+
+    @pytest.mark.asyncio
+    async def test_rest_route_forwards_client_idempotency_key(self):
+        from src.routes import api_v1
+
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1", tenant_id="t1", tenant={"tenant_id": "t1"}, protocol="rest"
+        )
+        body = api_v1.SyncAccountsBody(accounts=[], idempotency_key="client-key-rest")
+
+        with patch.object(
+            api_v1.accounts_module, "sync_accounts_raw", new_callable=AsyncMock, return_value=MagicMock()
+        ) as mock_raw:
+            await api_v1.sync_accounts(body, identity)
+
+        req = mock_raw.call_args.kwargs["req"]
+        assert req.idempotency_key == "client-key-rest"
+
+    @pytest.mark.asyncio
+    async def test_rest_route_synthesizes_key_only_when_omitted(self):
+        from src.routes import api_v1
+
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1", tenant_id="t1", tenant={"tenant_id": "t1"}, protocol="rest"
+        )
+        body = api_v1.SyncAccountsBody(accounts=[])
+
+        with patch.object(
+            api_v1.accounts_module, "sync_accounts_raw", new_callable=AsyncMock, return_value=MagicMock()
+        ) as mock_raw:
+            await api_v1.sync_accounts(body, identity)
+
+        req = mock_raw.call_args.kwargs["req"]
+        assert req.idempotency_key is not None
+        # A synthesized fallback is a valid UUID v4 string.
+        uuid.UUID(req.idempotency_key)

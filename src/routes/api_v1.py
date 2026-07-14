@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -310,6 +311,9 @@ class SyncAccountsBody(BaseModel):  # FIXME(#1442): extend SalesAgentBaseModel (
     delete_missing: bool = False
     dry_run: bool = False
     push_notification_config: dict[str, Any] | None = None
+    # Declared so extra="ignore" does not silently drop a REST buyer's key — REST must
+    # preserve it like the MCP/A2A siblings do (#1512), not be the transport that loses it.
+    idempotency_key: str | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
@@ -360,6 +364,9 @@ async def get_products(
 @router.get("/capabilities", dependencies=[Depends(_version_after_resolve)])
 async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
+    # Unlike the MCP/A2A siblings, no context= is forwarded here: /capabilities is a GET
+    # with no request body, so a REST caller has no channel to supply context and the echo
+    # would be a guaranteed no-op. The omission is inherent to GET semantics, not a gap.
     response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
     return response.model_dump(mode="json")
 
@@ -540,5 +547,8 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    # Preserve the buyer's idempotency_key; synthesize only when omitted (#1512), matching
+    # the MCP/A2A siblings so a retry carrying the same key is not fabricated a fresh UUID.
+    req.idempotency_key = req.idempotency_key or str(uuid.uuid4())
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
