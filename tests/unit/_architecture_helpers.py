@@ -20,6 +20,7 @@ import functools
 import os
 import re
 import subprocess
+import warnings
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -221,6 +222,7 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
 # set closely enough that the fallback matches the tracked set.
 _FALLBACK_PRUNE_DIRS = frozenset(
     {
+        ".claude",
         ".git",
         ".venv",
         "venv",
@@ -256,7 +258,16 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
     """
     try:
         output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True, stderr=subprocess.DEVNULL)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        # Loud fallback: guard verdicts computed from a filesystem walk are only
+        # as hermetic as the prune set, so surface the degradation in test output.
+        warnings.warn(
+            f"iter_git_tracked_files: 'git ls-files' failed in {repo} "
+            f"({exc.__class__.__name__}: {exc}); falling back to a pruned filesystem "
+            "walk — untracked files outside _FALLBACK_PRUNE_DIRS can affect guard scans",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         yield from _iter_files_fallback(repo)
         return
     for line in output.splitlines():
