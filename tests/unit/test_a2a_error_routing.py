@@ -91,6 +91,66 @@ async def test_untyped_crash_raises_sanitized_internal_error_without_leaking_sec
 
 
 @pytest.mark.asyncio
+async def test_untyped_crash_leaves_no_orphan_working_task():
+    """An untyped crash routes to a sanitized InternalError AND leaves no retrievable task.
+
+    Regression: the provisional Task is stored WORKING before dispatch; the untyped-error
+    branch used to raise the sanitized InternalError without finalizing or removing it, so
+    ``tasks/get`` still returned a task stuck in WORKING. The crash is a TRANSPORT-layer
+    error (a JSON-RPC InternalError), not a Task-layer outcome, so the branch now drops the
+    provisional task + push config before raising — nothing should remain retrievable.
+    """
+    handler, ctx = _make_handler()
+    params = make_nl_send_message_request("Show me available products in the catalog")
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
+        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool", side_effect=RuntimeError("boom")):
+            with pytest.raises(InternalError):
+                await handler.on_message_send(params, context=ctx)
+
+    # The provisional WORKING task (and any push config) must be gone — no orphan.
+    assert handler.tasks == {}, f"orphan task(s) left in WORKING after untyped crash: {list(handler.tasks)}"
+    assert handler._task_push_configs == {}, "orphan push config left after untyped crash"
+
+
+@pytest.mark.asyncio
+async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
+    """An untyped crash inside an EXPLICIT-skill invocation returns a failed Task whose
+    artifact is scrubbed of the raw exception — in BOTH the DataPart envelope and the
+    human-readable TextPart.
+
+    Regression: the explicit-skill path routed ``str(exc)`` onto the wire (via
+    ``normalize_to_adcp_error`` → ``AdCPError(str(exc))``) while the outer/NL path was
+    already sanitized. Both paths now share the single ``_safe_adcp_error`` policy, so an
+    untyped crash becomes a generic internal error regardless of which path caught it.
+    Mirrors the reviewer's repro: patch ``_handle_explicit_skill`` to raise a
+    secret-shaped exception and inspect the returned failed Task.
+    """
+    handler, ctx = _make_handler()
+    params = SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "video"}))
+    secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
+        with patch.object(handler, "_handle_explicit_skill", new_callable=AsyncMock, side_effect=RuntimeError(secret)):
+            result = await handler.on_message_send(params, context=ctx)
+
+    assert isinstance(result, Task), f"expected a returned failed Task, got {type(result).__name__}"
+    assert result.status.state == TaskState.TASK_STATE_FAILED, (
+        f"expected TASK_STATE_FAILED, got {result.status.state!r}"
+    )
+    # Scan the ENTIRE failed artifact: the structured DataPart envelope AND every TextPart.
+    artifact = result.artifacts[0]
+    envelope = extract_data_from_artifact(artifact)
+    text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+    client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
+    for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
+        assert leak not in client_facing, f"raw exception leaked to client ({leak!r}): {client_facing}"
+    # Sanitized to a generic internal error, not a str(exc)-derived message/code.
+    assert envelope["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
+    assert "internal error" in envelope["errors"][0]["message"].lower()
+
+
+@pytest.mark.asyncio
 async def test_unknown_skill_records_boundary_error_exactly_once():
     """An unknown skill emits exactly one boundary-observability record.
 
@@ -120,7 +180,8 @@ async def test_typed_adcp_error_keeps_its_own_wire_code_on_failed_task():
 
     The envelope must carry the AdCPError's code (here ``VALIDATION_ERROR``),
     not a blanket ``INTERNAL_ERROR`` — ``_build_error_envelope`` passes typed
-    errors through ``normalize_to_adcp_error`` unchanged.
+    errors through ``_safe_adcp_error`` unchanged (only untyped crashes are
+    replaced with a generic error).
     """
     handler, ctx = _make_handler()
     params = make_nl_send_message_request("Show me available products in the catalog")

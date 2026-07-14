@@ -1496,8 +1496,12 @@ async def _validate_and_convert_format_ids(
         try:
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
+            # Raw validation error logged server-side; the client message states the
+            # required structure without interpolating str(e).
+            logger.warning("Package %s, format_ids[%s]: invalid format_id structure: %s", package_idx + 1, idx, e)
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
+                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure. "
+                f"Per AdCP spec, each format_id must be a FormatId object with {{agent_url, id}}.",
             ) from e
         agent_url = str(validated_fmt.agent_url).rstrip("/")
         format_id = validated_fmt.id
@@ -1530,10 +1534,12 @@ async def _validate_and_convert_format_ids(
         except AdCPError:
             raise
         except Exception as e:
+            # Raw fetch error logged server-side only (may carry upstream/network
+            # detail); the client message drops "Error: {e}" to avoid leaking it.
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
             raise AdCPAdapterError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
-                f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
+                f"agent_url={agent_url}, format_id={format_id!r}.",
             )
 
         # Format validated - add to results

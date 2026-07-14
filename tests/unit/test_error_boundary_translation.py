@@ -464,37 +464,46 @@ class TestA2ADispatcherFailedSkillResult:
         assert env["errors"][0]["code"] == "VALIDATION_ERROR"
         assert env["errors"][0]["recovery"] == "correctable"
 
-    def test_untyped_exception_wrapped_in_synthetic_adcp_error(self):
-        """Bare ``Exception`` is wrapped in a synthetic AdCPError with wire-safe code.
+    def test_untyped_exception_wrapped_in_sanitized_adcp_error(self):
+        """Bare ``Exception`` is wrapped in a SANITIZED synthetic AdCPError.
 
-        ``AdCPError`` defaults to ``INTERNAL_ERROR`` which lives in
-        ``INTERNAL_CODES`` — ``wire_error_code`` translates it to
-        ``SERVICE_UNAVAILABLE`` so buyer agents only see standard codes.
+        Per the A2A boundary security policy (``_safe_adcp_error``), an untyped
+        exception must NOT expose its raw ``str(exc)`` — which may carry credentials,
+        connection strings, SQL, or hostnames. The message is replaced with a generic
+        internal error, and the wire code is the safe ``SERVICE_UNAVAILABLE``
+        (``AdCPError`` defaults to ``INTERNAL_ERROR`` → translated by ``wire_error_code``).
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
-        result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError("unexpected boom"))
+        result = AdCPRequestHandler._build_failed_skill_result(
+            "get_products", RuntimeError("postgresql://svc:hunter2@db.internal/prod unexpected boom")
+        )
 
         assert result["success"] is False
         env = result["error_envelope"]
         # Wire code is translated via ERROR_CODE_MAPPING
         assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
-        # The original RuntimeError message is preserved verbatim
-        assert "unexpected boom" in env["errors"][0]["message"]
+        # The raw exception text is NEVER on the wire — only a generic internal message.
+        message = env["errors"][0]["message"]
+        assert "unexpected boom" not in message
+        assert "hunter2" not in message and "postgresql://" not in message
+        assert "internal error" in message.lower()
 
-    def test_exception_with_empty_message_falls_back_to_type_name(self):
-        """Untyped exceptions with no string content get the exception class name.
-
-        Avoids emitting an empty ``message`` field that violates the spec's
-        non-empty-message expectation on the wire envelope.
+    def test_untyped_exception_with_empty_message_still_sanitized(self):
+        """An untyped exception with no string content still yields the generic sanitized
+        message — never an empty ``message`` (spec requires non-empty) and never the raw
+        exception class name (which could itself hint at internals).
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError())
 
         env = result["error_envelope"]
-        assert env["errors"][0]["message"] == "RuntimeError"
+        message = env["errors"][0]["message"]
+        assert message, "wire envelope message must be non-empty"
+        assert message != "RuntimeError", "must not fall back to the exception class name"
+        assert "internal error" in message.lower()
 
     def test_envelope_shape_matches_typed_branch(self):
         """Untyped fallthrough produces the SAME envelope shape as the typed branch.

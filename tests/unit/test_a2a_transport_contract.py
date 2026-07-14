@@ -51,9 +51,11 @@ SKILL_METADATA: dict[str, dict] = {
     "update_performance_index": {"classification": "implemented", "advertised": True, "params": {}},
     "sync_creatives": {"classification": "implemented", "advertised": True, "params": {}},
     "list_creatives": {"classification": "implemented", "advertised": True, "params": {}},
-    "approve_creative": {"classification": "unsupported", "advertised": True, "params": {}},
-    "get_media_buy_status": {"classification": "unsupported", "advertised": True, "params": {}},
-    "optimize_media_buy": {"classification": "unsupported", "advertised": True, "params": {}},
+    # Unsupported + NOT advertised (round-9 SF-B): handlers raise UNSUPPORTED_FEATURE,
+    # so they are hidden from the agent card but stay reachable-but-unsupported by name.
+    "approve_creative": {"classification": "unsupported", "advertised": False, "params": {}},
+    "get_media_buy_status": {"classification": "unsupported", "advertised": False, "params": {}},
+    "optimize_media_buy": {"classification": "unsupported", "advertised": False, "params": {}},
     "create_creative": {
         "classification": "unsupported",
         "advertised": False,

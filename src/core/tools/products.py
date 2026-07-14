@@ -409,8 +409,10 @@ async def _get_products_impl(
         except AdCPError:
             raise
         except Exception as e:
+            # Log the raw exception server-side only — it may carry DB/connection
+            # detail. The client-facing message must not interpolate str(e).
             logger.error(f"Property list resolution failed: {e}")
-            raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
+            raise AdCPValidationError("Failed to resolve property list.", recovery="transient") from e
 
     # Generate dynamic product variants from signals agents
     try:
@@ -817,8 +819,10 @@ async def get_products(
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
     except ValueError as e:
-        # Convert ValueError from helper to ToolError with clear message
-        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
+        # Convert ValueError from helper to a clean VALIDATION_ERROR. Log the raw
+        # exception server-side; do not interpolate str(e) into the wire message.
+        logger.warning("Invalid get_products request: %s", e)
+        raise AdCPValidationError("Invalid get_products request.") from e
 
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None

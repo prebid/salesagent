@@ -63,7 +63,6 @@ from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
     build_two_layer_error_envelope,
-    normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
@@ -145,6 +144,30 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
+_SANITIZED_INTERNAL_MESSAGE = "An internal error occurred while processing the request."
+
+
+def _safe_adcp_error(exc: Exception) -> AdCPError:
+    """The single sanitization policy for the A2A boundary.
+
+    A TYPED ``AdCPError`` carries a controlled, client-safe ``message`` and passes
+    through unchanged (its own wire code + text). Any UNTYPED exception is replaced
+    with a generic ``AdCPError`` — the raw ``str(exc)`` (which may carry credentials,
+    connection strings, SQL, hostnames, or filesystem paths) is NEVER placed on the
+    wire; callers log it server-side via ``record_boundary_error``.
+
+    Both A2A error paths route through this one helper: the top-level
+    ``_internal_error_for`` (untyped → JSON-RPC ``InternalError``) and the per-skill
+    ``_build_error_envelope`` (untyped → sanitized failed-Task artifact). Do NOT
+    reintroduce a second normalizer that copies ``str(exc)`` (e.g.
+    ``normalize_to_adcp_error``, which maps ``Exception → AdCPError(str(exc))``) on
+    this boundary — that divergence is exactly the leak this policy closes.
+    """
+    if isinstance(exc, AdCPError):
+        return exc
+    return AdCPError(_SANITIZED_INTERNAL_MESSAGE)
+
+
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical JSON-RPC ``InternalError`` for A2A boundary failures — SANITIZED.
 
@@ -164,11 +187,10 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     ``on_message_send``, all raise through here). The two-layer envelope rides in the
     error's ``data`` field (``error.data["adcp_error"]`` / ``error.data["errors"][0]``).
     """
+    adcp_error = _safe_adcp_error(exc)
     if isinstance(exc, AdCPError):
-        adcp_error: AdCPError = exc
         message = f"{operation} failed: {exc.message}"
     else:
-        adcp_error = AdCPError("An internal error occurred while processing the request.")
         message = f"Internal error during {operation}"
     return InternalError(message=message, data=build_two_layer_error_envelope(adcp_error))
 
@@ -188,17 +210,19 @@ class AdCPRequestHandler(RequestHandler):
 
         Single source of truth for "wrap-arbitrary-exception → wire envelope"
         used by both the per-skill dispatcher (``_build_failed_skill_result``)
-        and the top-level ``on_message_send`` error handler. Delegates to
-        ``normalize_to_adcp_error`` for the type→AdCPError mapping
-        (``ValueError → AdCPValidationError``, ``PermissionError →
-        AdCPAuthorizationError``, arbitrary ``Exception →
-        AdCPError(INTERNAL_ERROR)``) so the wire output stays in
-        ``STANDARD_ERROR_CODES`` and the envelope shape never degrades to a
-        flat ``{"error": "..."}`` dict the storyboard runner would synthesize
-        as ``MCP_ERROR``.
+        and the top-level ``on_message_send`` error handler. Sanitizes via
+        ``_safe_adcp_error`` — the SAME policy the top-level ``_internal_error_for``
+        uses — so a TYPED ``AdCPError`` keeps its controlled message + wire code,
+        while any UNTYPED exception becomes a generic ``AdCPError`` and its raw
+        ``str(exc)`` is NEVER placed on the wire. (It deliberately does NOT use
+        ``normalize_to_adcp_error``, which maps ``Exception → AdCPError(str(exc))``
+        and would leak credentials/SQL/hostnames through the per-skill failed-Task
+        artifact.) The envelope shape stays a two-layer ``errors[]`` structure, never
+        a flat ``{"error": "..."}`` dict the storyboard runner would treat as
+        ``MCP_ERROR``.
         """
 
-        return build_two_layer_error_envelope(normalize_to_adcp_error(exc))
+        return build_two_layer_error_envelope(_safe_adcp_error(exc))
 
     @staticmethod
     def _failed_task_artifact(exc: Exception) -> "Artifact":
@@ -1063,6 +1087,12 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=err_tenant_id,
                 principal_id=err_principal_id,
             )
+            # This path yields a JSON-RPC InternalError (transport-layer), NOT a
+            # Task-layer outcome — so the provisional WORKING task stored before
+            # dispatch must not survive as a retrievable orphan. Drop it (and its
+            # push config) before raising so ``tasks/get`` returns nothing.
+            self.tasks.pop(task_id, None)
+            self._task_push_configs.pop(task_id, None)
             raise _internal_error_for("message processing", e) from e
 
         self.tasks[task_id] = task
@@ -1550,26 +1580,30 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (already properly formatted)
             raise
         except (AdCPError, ValueError, PermissionError) as e:
-            # Normalize ValueError/PermissionError to typed AdCPError via the
-            # shared normalize_to_adcp_error() helper — same mapping the MCP
-            # and REST boundaries apply. The outer dispatcher's `except
-            # AdCPError` branch wraps the result into a failed Task with the
-            # two-layer envelope.
-            normalized = normalize_to_adcp_error(e)
-
-            # Defensive about identity shape — test fixtures sometimes pass a
-            # string or partially-built identity instead of ResolvedIdentity.
-            # record_boundary_error handles None tenant_id internally.
+            # Log the RAW exception server-side with skill-scoped context (full detail
+            # for diagnostics), then sanitize for the wire via the SINGLE boundary
+            # policy (``_safe_adcp_error``): a TYPED ``AdCPError`` keeps its controlled
+            # message + wire code; an uncontrolled ``ValueError``/``PermissionError``
+            # escaping a handler becomes a generic ``AdCPError`` so its raw ``str(exc)``
+            # NEVER reaches the client. (This previously used ``normalize_to_adcp_error``,
+            # which maps ``ValueError → AdCPValidationError(str(exc))`` — a per-skill
+            # ``str(exc)`` leak that then passed through the failed-Task artifact as a
+            # "typed" error.) The outer dispatcher's ``except AdCPError`` branch wraps
+            # the result into a failed Task with the two-layer envelope.
+            #
+            # Defensive about identity shape — test fixtures sometimes pass a string or
+            # partially-built identity; record_boundary_error handles None internally.
             record_boundary_error(
                 "a2a",
                 skill_name,
-                normalized,
+                e,
                 tenant_id=getattr(identity, "tenant_id", None),
                 principal_id=getattr(identity, "principal_id", None) or "anonymous",
             )
 
-            if normalized is not e:
-                raise normalized from e
+            safe = _safe_adcp_error(e)
+            if safe is not e:
+                raise safe from e
             raise
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`
@@ -2321,25 +2355,13 @@ def create_agent_card() -> AgentCard:
                 description="Search and query creative library with advanced filtering (AdCP spec)",
                 tags=["creative", "library", "search", "adcp", "spec"],
             ),
-            # Creative Management & Approval
-            AgentSkill(
-                id="approve_creative",
-                name="approve_creative",
-                description="Review and approve/reject creative assets (admin only)",
-                tags=["creative", "approval", "review", "adcp"],
-            ),
-            AgentSkill(
-                id="get_media_buy_status",
-                name="get_media_buy_status",
-                description="Check status and performance of media buys",
-                tags=["status", "performance", "tracking", "adcp"],
-            ),
-            AgentSkill(
-                id="optimize_media_buy",
-                name="optimize_media_buy",
-                description="Optimize media buy performance and targeting",
-                tags=["optimization", "performance", "targeting", "adcp"],
-            ),
+            # Note: approve_creative, get_media_buy_status, and optimize_media_buy are
+            # deliberately NOT advertised (round-9 SF-B). Their handlers unconditionally
+            # raise UNSUPPORTED_FEATURE, so advertising them would promise capabilities
+            # the agent does not provide. They stay registered in _skill_handler_map and
+            # remain reachable-but-unsupported (structured UNSUPPORTED_FEATURE failed
+            # Task) if a buyer invokes them by name — they are just no longer offered on
+            # the card. The test oracle (SKILL_METADATA) marks them advertised: False.
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         ],
