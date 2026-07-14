@@ -140,14 +140,10 @@ class CapabilitiesEnv(IntegrationEnv):
             raise reset_error
         return result
 
-    def setup_default_data(self) -> tuple[Any, Any]:
-        """Create the tenant + principal rows the identity references."""
-        from tests.factories import PrincipalFactory, TenantFactory
-
-        tenant = TenantFactory(tenant_id=self._tenant_id)
-        principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
-        self._commit_factory_data()
-        return tenant, principal
+    # setup_default_data: inherited from BaseTestEnv — its get-or-create form is
+    # required over e2e_rest, where the env's __enter__ auto-seed
+    # (_seed_e2e_identity) already created the tenant/principal and a blind
+    # factory insert would violate tenants_pkey (#1546 CI).
 
     def call_impl(self, **kwargs: Any) -> GetAdcpCapabilitiesResponse:
         """Call _get_adcp_capabilities_impl.
