@@ -302,14 +302,16 @@ jobs:
     # server, serial, BDD_E2E_ENABLED=true from docker-compose.e2e.yml) — the
     # only job that grades the e2e_rest known-failures ledger. Without it a
     # ledger graduation (or regression) is invisible to CI: the sharded BDD
-    # job runs in-process transports only (PR #1430 review).
+    # job runs in-process transports only (PR #1430 review). This job runs
+    # ONLY the bdd_e2e tox env (-k e2e_rest): re-running the in-process bulk
+    # here would duplicate the sharded job serially for no added grading.
     name: BDD In-Network (e2e_rest)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Measured on the first run: image build ~5m + serial in-network bdd 44m
-    # (2649s pytest) + teardown — 50m fired during teardown with the suite
-    # fully green. 75m leaves headroom without masking a hang.
+    # The full serial all-transports run measured 44m of pytest; the e2e_rest
+    # leg alone is the minority of that. Keep 75m until the leg-only runtime
+    # is measured, then ratchet the timeout down.
     timeout-minutes: 75
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
@@ -328,7 +330,7 @@ jobs:
       # ports. No coverage upload: the suite asserts behavior on the live
       # server; host-side coverage would measure the client harness, not src/.
       - name: Run BDD suite in-network
-        run: ./run_all_tests.sh bdd
+        run: ./run_all_tests.sh bdd_e2e
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
