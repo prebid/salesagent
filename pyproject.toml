@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 dependencies = [
     "a2wsgi>=1.10.0",
     "adcp==5.7.0",  # exact pin — 5.7.0 targets AdCP spec 3.1.0-beta.3; see docs/adcp-spec-version.md
-    "fastmcp>=3.2.0,<3.3.0", # 3.3.0 split fastmcp-slim[server] from the monolith (breaking Context/Middleware imports); stay on 3.2.x
+    "fastmcp>=3.2.0,<3.5.0", # 3.3.0 split fastmcp-slim[server] from the monolith (breaking Context/Middleware imports); stay on 3.2.x
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",
