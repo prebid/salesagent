@@ -627,6 +627,7 @@ class AdCPRequestHandler(RequestHandler):
                             parameters,
                             identity,
                             push_notification_config=push_notification_config,
+                            task_id=task_id,
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
@@ -1002,6 +1003,15 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
+    # Terminal persisted workflow-step status → A2A TaskState, for the durable
+    # tasks/get fallback. Non-terminal steps (in_progress, approved, …) surface as
+    # WORKING. #1544 B6.
+    _STEP_STATUS_TO_TASK_STATE = {
+        "completed": TaskState.TASK_STATE_COMPLETED,
+        "rejected": TaskState.TASK_STATE_REJECTED,
+        "failed": TaskState.TASK_STATE_FAILED,
+    }
+
     async def on_get_task(
         self,
         params: GetTaskRequest,
@@ -1009,15 +1019,57 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
-
-        Returns:
-            Task object if found, otherwise None
+        Resolves the buyer's outer ``task_*`` id first against this process's
+        in-memory map (a task still in flight), then — for an async media-buy task
+        that was approved/rejected out-of-band — against its persisted workflow step.
+        The admin decision that terminalizes the step runs in a DIFFERENT process and
+        the in-memory map does not survive a restart, so the durable fallback is what
+        lets a poll of the original ``task_x`` return ``completed`` with the stored
+        result artifact. See #1544 (B6).
         """
         task_id = params.id
-        return self.tasks.get(task_id)
+        task = self.tasks.get(task_id)
+        if task is not None:
+            return task
+        return self._durable_task_from_step(task_id, context)
+
+    def _durable_task_from_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
+        """Rebuild a terminal Task from the workflow step that stored this transport id.
+
+        A cross-process/restart-surviving lookup needs a tenant scope, so identity is
+        resolved from the poll's own auth (the buyer who created the task
+        authenticated). Without a resolvable tenant the task cannot be safely served.
+        """
+        try:
+            auth_token = self._get_auth_token(context)
+            identity = (
+                self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
+                if auth_token
+                else None
+            )
+        except Exception:
+            return None
+        if identity is None or not identity.tenant_id:
+            return None
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        with get_db_session() as session:
+            step = WorkflowRepository(session, identity.tenant_id).get_by_external_task_id(task_id)
+            if step is None:
+                return None
+            state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
+            task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
+            if step.response_data:
+                task.artifacts.append(
+                    Artifact(
+                        artifact_id=f"{task_id}_result",
+                        name="media_buy_result",
+                        parts=[Part(data=_dict_to_value(step.response_data))],
+                    )
+                )
+            return task
 
     async def on_cancel_task(
         self,
@@ -1347,6 +1399,7 @@ class AdCPRequestHandler(RequestHandler):
         parameters: dict,
         identity: ResolvedIdentity | None,
         push_notification_config: TaskPushNotificationConfig | None = None,
+        task_id: str | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1436,7 +1489,7 @@ class AdCPRequestHandler(RequestHandler):
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
-                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
+                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload, a2a_task_id=task_id)
             else:
                 result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
@@ -1513,6 +1566,7 @@ class AdCPRequestHandler(RequestHandler):
         parameters: dict,
         identity: ResolvedIdentity,
         raw_wire_payload: dict | None = None,
+        a2a_task_id: str | None = None,
     ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1592,6 +1646,9 @@ class AdCPRequestHandler(RequestHandler):
             # the idempotency payload-hash input; the post-processed dict is the
             # fallback only for direct handler callers.
             raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
+            # Persist the outer A2A task id on the workflow step so the completion
+            # webhook / tasks/get correlate to the id the buyer holds. #1544 B6.
+            external_task_id=a2a_task_id,
         )
 
         return response

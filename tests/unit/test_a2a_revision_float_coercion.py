@@ -15,14 +15,9 @@ assert the value handed to core — deleting the coercion turns
 import asyncio
 from unittest.mock import MagicMock, patch
 
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories import PrincipalFactory
 
-_MOCK_IDENTITY = ResolvedIdentity(
-    principal_id="principal_123",
-    tenant_id="tenant_123",
-    tenant={"tenant_id": "tenant_123"},
-    protocol="a2a",
-)
+_MOCK_IDENTITY = PrincipalFactory.make_identity(principal_id="principal_123", tenant_id="tenant_123", protocol="a2a")
 
 
 def _revision_handed_to_core(revision_param: object) -> object:

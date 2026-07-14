@@ -71,10 +71,15 @@ def emit_media_buy_webhook(
     # Default to MCP for backward compatibility with steps recorded before the
     # protocol was persisted on request_data.
     protocol = step_data["request_data"].get("protocol", "mcp")
+    # Correlate to the id the BUYER holds. A2A returned an outer transport task id
+    # (persisted on the step's request_data as ``external_task_id`` at create time);
+    # the buyer polls / receives the webhook against THAT id, not the internal
+    # step_id. MCP/REST have no outer id, so they fall back to step_id. #1544 B6.
+    correlation_task_id = step_data["request_data"].get("external_task_id") or step_data["step_id"]
     payload: Any
     if protocol == "a2a":
         payload = create_a2a_webhook_payload(
-            task_id=step_data["step_id"],
+            task_id=correlation_task_id,
             status=status,
             result=result,
             context_id=step_data["context_id"],
@@ -83,7 +88,7 @@ def emit_media_buy_webhook(
         # tool_name is untrusted (workflow_steps DB column) — validate a COPY for the
         # SDK payload; metadata keeps the original label.
         payload = create_mcp_webhook_payload(
-            task_id=step_data["step_id"],
+            task_id=correlation_task_id,
             task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
             result=result,
             status=status,
