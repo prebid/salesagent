@@ -424,16 +424,21 @@ class CreateMediaBuyResult(SalesAgentBaseModel):
     response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
     # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
-    # envelope / top of the structured result). Set True ONLY when this response
-    # is a verbatim replay of a previously cached success. Injected at response
-    # time, never stored in the cached body; omitted when False so fresh
-    # responses are byte-identical to before. Only valid on a successful result.
+    # envelope / top of the structured result). Wrapper-owned: set True ONLY when
+    # this response is a verbatim replay of a previously cached result (success
+    # OR submitted — the replay test asserts True on a submitted replay). Injected
+    # at response time, never stored in the cached body; omitted when False on
+    # EVERY variant so fresh responses are byte-identical across variants.
     replayed: bool = False
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
         result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
+        # The adcp 6.6 submitted base declares replayed=False as a FIELD, so it
+        # rides response.model_dump(); strip it — the wrapper is the marker's
+        # single source (PR #1567 round-3).
+        result.pop("replayed", None)
         if self.replayed:
             result["replayed"] = True
         return result

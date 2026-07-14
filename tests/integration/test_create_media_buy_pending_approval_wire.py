@@ -63,6 +63,13 @@ def _assert_submitted_shape(envelope: dict) -> None:
             f"submitted (pending-approval) create must not carry {confirmation_field!r}, "
             f"got {envelope.get(confirmation_field)!r} — the buy is NOT confirmed yet"
         )
+    # Wrapper-owned replay marker: omitted when False on EVERY variant (fresh
+    # submitted must match fresh success — PR #1567 round-3). The replay sibling
+    # test asserts the True case.
+    assert "replayed" not in envelope, (
+        f"fresh submitted create leaked replayed={envelope.get('replayed')!r} — "
+        "the marker is omitted when False (uniform with fresh Success)"
+    )
 
 
 def test_adapter_manual_approval_create_emits_submitted_not_confirmed(integration_db):
