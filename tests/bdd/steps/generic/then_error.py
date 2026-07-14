@@ -430,9 +430,7 @@ def then_error_is_structured_adcp_shape(ctx: dict) -> None:
     the canonical ``assert_wire_error`` is itself the "not a 500" assertion.
     """
     envelope = _require_wire_envelope(ctx)
-    ctx["result"].assert_wire_error(
-        envelope["errors"][0]["code"], recovery=envelope["errors"][0].get("recovery")
-    )
+    ctx["result"].assert_wire_error(envelope["errors"][0]["code"], recovery=envelope["errors"][0].get("recovery"))
 
 
 @then('the error should include a "suggestion" field')

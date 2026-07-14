@@ -307,6 +307,7 @@ def _resolve_package_product(
     "no format constraint". Shared by the ``creative_ids`` and
     ``creative_assignments`` update paths so both resolve identically.
     """
+    assert uow.media_buys is not None
     package_config = uow.media_buys.get_package_config(media_buy_id, package_id)
     product_id = package_config.get("product_id") if package_config else None
     if not product_id:
