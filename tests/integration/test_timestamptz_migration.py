@@ -113,9 +113,19 @@ class TestTimestamptzMigration:
         """Downgrade should revert TIMESTAMPTZ columns back to TIMESTAMP."""
         engine, db_url = migration_db
 
-        # The database is already at MIGRATION_REV from the previous test.
-        # Verify it's TIMESTAMPTZ first.
+        # Normally the database is already at MIGRATION_REV, with test data, from the
+        # previous test in this module (they share the module-scoped migration_db).
+        # The integration tox env runs xdist with --dist loadfile so this whole file
+        # stays on one worker in order. Self-contained fallback (#1572 fallout): under
+        # xdist --dist load this test can land on a different worker than the upgrade
+        # test — a fresh, empty DB. Detect that and replay the upgrade test's setup
+        # instead of assuming its state.
         col_type = _get_column_type(engine, "tenants", "created_at")
+        if col_type is None:
+            run_alembic_upgrade(db_url, PRE_MIGRATION_REV)
+            _insert_test_tenant(engine, datetime(2025, 6, 15, 12, 30, 0))
+            run_alembic_upgrade(db_url, MIGRATION_REV)
+            col_type = _get_column_type(engine, "tenants", "created_at")
         assert col_type == "timestamp with time zone", f"Expected TIMESTAMPTZ before downgrade, got: {col_type}"
 
         # Step 1: Downgrade

@@ -432,7 +432,7 @@ class TestGetMediaBuysImpl:
         from src.core.exceptions import AdCPAuthenticationError
 
         req = self._make_request()
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
             _get_media_buys_impl(req, None)
 
 

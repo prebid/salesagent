@@ -15,7 +15,7 @@ from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, RootModel, ValidationError
+from pydantic import Field, RootModel
 from rich.console import Console
 
 from src.core.exceptions import (
@@ -113,7 +113,7 @@ from src.core.tools._media_buy_status import (
     resolve_canonical_status,
 )
 from src.core.utils import utc_flight_end, utc_flight_start
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
@@ -212,7 +212,12 @@ def _get_media_buy_delivery_impl(
         end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
         if start_dt >= end_dt:
-            raise AdCPValidationError("Start date must be before end date", context=req.context)
+            raise AdCPValidationError(
+                "Start date must be before end date",
+                field="start_date",
+                suggestion="Set start_date to a date before end_date and resend.",
+                context=req.context,
+            )
     else:
         # Default to last 30 days
         end_dt = datetime.now(UTC)
@@ -275,6 +280,10 @@ def _get_media_buy_delivery_impl(
         total_impressions = 0
         media_buy_count = 0
         total_clicks = 0
+        # Spec-optional ("if applicable") — stay None (omitted) unless at least
+        # one buy reports the metric; never zeroed.
+        total_conversions: float | None = None
+        total_conversion_value: float | None = None
 
         for media_buy_id, buy in target_media_buys:
             try:
@@ -311,6 +320,7 @@ def _get_media_buy_delivery_impl(
                 total_spend_from_adapter = 0.0
                 total_impressions_from_adapter = 0
                 adapter_conversions: float | None = None
+                adapter_conversion_value: float | None = None
                 adapter_viewability: float | None = None
 
                 if not any(
@@ -341,7 +351,12 @@ def _get_media_buy_delivery_impl(
                         # Adapter totals are always present (required field on schema)
                         spend = float(adapter_response.totals.spend)
                         impressions = int(adapter_response.totals.impressions)
-                        adapter_conversions = getattr(adapter_response.totals, "conversions", None)
+                        raw_conversions = getattr(adapter_response.totals, "conversions", None)
+                        adapter_conversions = float(raw_conversions) if raw_conversions is not None else None
+                        raw_conversion_value = getattr(adapter_response.totals, "conversion_value", None)
+                        adapter_conversion_value = (
+                            float(raw_conversion_value) if raw_conversion_value is not None else None
+                        )
                         adapter_viewability = getattr(adapter_response.totals, "viewability", None)
 
                     except Exception as e:
@@ -527,6 +542,7 @@ def _get_media_buy_delivery_impl(
                         completed_views=None,  # Optional field
                         completion_rate=None,  # Optional field
                         conversions=adapter_conversions,  # From adapter totals
+                        conversion_value=adapter_conversion_value,  # From adapter totals
                         viewability=adapter_viewability,  # From adapter totals
                     ),
                     by_package=package_deliveries,
@@ -539,6 +555,10 @@ def _get_media_buy_delivery_impl(
                 total_impressions += impressions
                 media_buy_count += 1
                 total_clicks += clicks if clicks is not None else 0
+                if adapter_conversions is not None:
+                    total_conversions = (total_conversions or 0.0) + adapter_conversions
+                if adapter_conversion_value is not None:
+                    total_conversion_value = (total_conversion_value or 0.0) + adapter_conversion_value
 
             except AdCPError:
                 # A typed AdCPError from per-buy processing propagates to the boundary
@@ -629,6 +649,21 @@ def _get_media_buy_delivery_impl(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
+        # Derived quotients — top-level aggregated_totals scalars per the AdCP 3.1
+        # response schema (media-buy/get-media-buy-delivery-response.json defines
+        # roas as "total conversion_value / total spend" and cost_per_acquisition
+        # as "total spend / total conversions"). Conformance-ungraded on this
+        # general delivery path (the storyboard value-grades them only in the
+        # capability-gated performance_buy_flow[_roas]); locally verified by the
+        # T-UC-004-aggregated-roas-and-cpa BDD scenario.
+        # Spec semantics: roas = total conversion_value / total spend;
+        # cost_per_acquisition = total spend / total conversions. Omitted (None) —
+        # never zeroed — when inputs are absent or the denominator is zero.
+        roas = total_conversion_value / total_spend if total_conversion_value is not None and total_spend > 0 else None
+        cost_per_acquisition = (
+            total_spend / total_conversions if total_conversions is not None and total_conversions > 0 else None
+        )
+
         # Normalize advisory error codes to guaranteed-standard wire codes
         # (see _normalize_advisory_errors for why this can't leak an internal code).
         advisory_errors = _normalize_advisory_errors(not_found_errors + adapter_errors)
@@ -643,6 +678,10 @@ def _get_media_buy_delivery_impl(
                 spend=total_spend,
                 clicks=float(total_clicks) if total_clicks else None,
                 completed_views=None,
+                conversions=total_conversions,
+                conversion_value=total_conversion_value,
+                roas=roas,
+                cost_per_acquisition=cost_per_acquisition,
                 media_buy_count=media_buy_count,
             ),
             media_buy_deliveries=deliveries,
@@ -682,6 +721,36 @@ def _get_media_buy_delivery_impl(
             )
 
     return response
+
+
+def _build_get_media_buy_delivery_request(
+    media_buy_ids: list[str] | None,
+    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
+    start_date: str | None,
+    end_date: str | None,
+    reporting_dimensions: ReportingDimensions | None,
+    attribution_window: AttributionWindow | None,
+    include_package_daily_breakdown: bool | None,
+    context: ContextObject | None,
+) -> GetMediaBuyDeliveryRequest:
+    """Build a GetMediaBuyDeliveryRequest from individual wire params.
+
+    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
+    construction runs inside the ONE validation boundary — previously the raw
+    wrapper built the request unprotected and REST leaked a raw pydantic
+    ``ValidationError`` with no top-level suggestion (#1417).
+    """
+    with adcp_validation_boundary(context="get_media_buy_delivery request"):
+        return GetMediaBuyDeliveryRequest(
+            media_buy_ids=media_buy_ids,
+            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+            start_date=start_date,
+            end_date=end_date,
+            reporting_dimensions=reporting_dimensions,
+            attribution_window=attribution_window,
+            include_package_daily_breakdown=include_package_daily_breakdown,
+            context=cast(ContextObject | None, context),
+        )
 
 
 async def get_media_buy_delivery(
@@ -725,24 +794,18 @@ async def get_media_buy_delivery(
 
         identity = enrich_identity_with_account(identity, account)
 
-    # Create AdCP-compliant request object
-    try:
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            start_date=start_date,
-            end_date=end_date,
-            reporting_dimensions=reporting_dimensions,
-            attribution_window=attribution_window,
-            include_package_daily_breakdown=include_package_daily_breakdown,
-            context=cast(ContextObject | None, context),
-        )
-
-        response = _get_media_buy_delivery_impl(req, identity)
-
-        return ToolResult(content=str(response), structured_content=response)
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="get_media_buy_delivery request"))
+    req = _build_get_media_buy_delivery_request(
+        media_buy_ids=media_buy_ids,
+        status_filter=status_filter,
+        start_date=start_date,
+        end_date=end_date,
+        reporting_dimensions=reporting_dimensions,
+        attribution_window=attribution_window,
+        include_package_daily_breakdown=include_package_daily_breakdown,
+        context=context,
+    )
+    response = _get_media_buy_delivery_impl(req, identity)
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def get_media_buy_delivery_raw(
@@ -787,19 +850,16 @@ def get_media_buy_delivery_raw(
 
         identity = enrich_identity_with_account(identity, account)
 
-    # Create request object
-    req = GetMediaBuyDeliveryRequest(
+    req = _build_get_media_buy_delivery_request(
         media_buy_ids=media_buy_ids,
-        status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+        status_filter=status_filter,
         start_date=start_date,
         end_date=end_date,
         reporting_dimensions=reporting_dimensions,
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
-        context=cast(ContextObject | None, context),
+        context=context,
     )
-
-    # Call the implementation
     return _get_media_buy_delivery_impl(req, identity)
 
 

@@ -1,11 +1,16 @@
-"""Shared account resolution helpers for BDD step definitions.
+"""Shared account-setup helper for BDD step definitions.
 
-Extracts the common pattern used by UC-002 and UC-006 When steps:
-- Handle absent/invalid account references
-- Delegate to harness for resolve_account()
-- Capture result or error in ctx
+Provides the tenant/principal bootstrap used by UC-002 and UC-006 When steps.
 
-beads: salesagent-71q (DRY extraction from UC-002 + UC-006 duplication)
+Account *resolution* itself is no longer driven here: account-resolution
+scenarios now dispatch a full ``create_media_buy`` through the wire transport
+(#1417), so production resolves the account at the transport boundary
+and emits the outcome (success or ACCOUNT_NOT_FOUND/AMBIGUOUS/SETUP_REQUIRED/
+PAYMENT_REQUIRED/SUSPENDED/VALIDATION_ERROR) on the wire. The former test-side
+``AdCPValidationError`` construction and the IMPL-only resolve_account call were
+removed: they bypassed the wire and reconstructed errors the harness never saw.
+
+beads: salesagent-71q (DRY extraction), salesagent-zh85 (wire migration)
 """
 
 from __future__ import annotations
@@ -21,62 +26,43 @@ def ensure_tenant_principal(ctx: dict, env: object) -> None:
         ctx["principal"] = principal
 
 
-def validate_account_ref(ctx: dict) -> Any | None:
-    """Validate account reference from ctx, setting ctx["error"] on failure.
+def seed_account_with_access(
+    tenant: Any,
+    principal: Any,
+    *,
+    account_id: str,
+    status: str = "active",
+    brand_domain: str | None = None,
+    operator: str | None = None,
+    sandbox: bool | None = None,
+) -> Any:
+    """Seed one Account plus an AgentAccountAccess row granting ``principal`` access.
 
-    Returns the validated AccountReference, or None if validation failed
-    (ctx["error"] is set in that case).
+    Single source of truth for BDD account seeding: an account the requesting
+    agent can resolve (by explicit id or natural key) requires both the Account
+    row AND the AgentAccountAccess join — resolution is access-scoped (#1417).
+    Callers seed ONLY the accounts a scenario asserts are valid; unseeded ids
+    keep erroring (ACCOUNT_NOT_FOUND) by construction.
 
-    Handles three pre-resolution cases:
-    - account_absent: missing account field (INVALID_REQUEST)
-    - account_invalid_both: both account_id and brand present (INVALID_REQUEST)
-    - account_ref is None: no reference at all
+    Uses factory-boy factories (no inline ``session.add``); the harness binds the
+    session to the factories so the rows commit into the env's integration DB.
     """
-    from src.core.exceptions import AdCPValidationError
+    # Local import keeps the module import-light (matches the harness convention
+    # of importing factories at the point of use inside step definitions).
+    from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
-    if ctx.get("account_absent"):
-        ctx["error"] = AdCPValidationError(
-            "Account field is required. Use account_id or brand+operator to identify the account.",
-            details={"suggestion": "Include an 'account' field with either account_id or brand+operator."},
-        )
-        return None
+    account_kwargs: dict[str, Any] = {
+        "tenant": tenant,
+        "account_id": account_id,
+        "status": status,
+    }
+    if brand_domain is not None:
+        account_kwargs["brand"] = {"domain": brand_domain}
+    if operator is not None:
+        account_kwargs["operator"] = operator
+    if sandbox is not None:
+        account_kwargs["sandbox"] = sandbox
 
-    if ctx.get("account_invalid_both"):
-        ctx["error"] = AdCPValidationError(
-            "Account field must be either account_id OR brand+operator, not both.",
-            details={"suggestion": "Use either account_id or brand+operator, not both."},
-        )
-        return None
-
-    account_ref = ctx.get("account_ref")
-    if account_ref is None:
-        ctx["error"] = AdCPValidationError(
-            "Account reference is required.",
-            details={"suggestion": "Provide an account reference."},
-        )
-        return None
-
-    return account_ref
-
-
-def resolve_account_or_error(ctx: dict) -> None:
-    """Resolve account reference via harness, capturing result or error in ctx.
-
-    On success: sets ctx["response"] and ctx["resolved_account_id"].
-    On failure: sets ctx["error"].
-    """
-    from src.core.exceptions import AdCPError
-
-    account_ref = validate_account_ref(ctx)
-    if account_ref is None:
-        return  # ctx["error"] already set
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-
-    try:
-        result = env.call_impl(account_ref=account_ref)
-        ctx["response"] = result
-        ctx["resolved_account_id"] = result
-    except AdCPError as e:
-        ctx["error"] = e
+    account = AccountFactory(**account_kwargs)
+    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    return account

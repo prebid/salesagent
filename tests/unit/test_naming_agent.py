@@ -39,8 +39,6 @@ class TestBuildNamingPrompt:
             date_range="Dec 1-31, 2025",
             products=["video_premium", "display_standard"],
         )
-
-        # buyer_ref no longer included in prompt (removed from AdCP in 3.12)
         assert "Holiday Campaign" in prompt
         assert "Nike" in prompt
         assert "$10,000.00 USD" in prompt
@@ -73,8 +71,6 @@ class TestBuildNamingPrompt:
             date_range="Jan 1-7, 2025",
             products=["product_1"],
         )
-
-        # buyer_ref no longer included in prompt (removed from AdCP in 3.12)
         assert "N/A" in prompt  # None values become N/A
         assert "Jan 1-7, 2025" in prompt
 

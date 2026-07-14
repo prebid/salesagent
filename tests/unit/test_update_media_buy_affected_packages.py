@@ -8,7 +8,6 @@ def test_affected_packages_includes_creative_assignment_details():
     # Create AffectedPackage with both AdCP-required and internal fields
     affected_packages = [
         AffectedPackage(
-            buyer_ref="buyer_ref_123",  # Required by AdCP
             package_id="pkg_1",  # Required by AdCP
             paused=False,  # Required by AdCP 2.12.0
             buyer_package_ref="pkg_default",  # Internal field (excluded from serialization)
@@ -24,19 +23,16 @@ def test_affected_packages_includes_creative_assignment_details():
 
     response = UpdateMediaBuySuccess(
         media_buy_id="test_buy_123",
-        buyer_ref="buyer_ref_123",
         affected_packages=affected_packages,
     )
 
     # Verify structure
     assert response.media_buy_id == "test_buy_123"
-    assert response.buyer_ref == "buyer_ref_123"
     assert response.affected_packages is not None
     assert len(response.affected_packages) == 1
 
     # Verify internal fields are accessible on the object
     package = response.affected_packages[0]
-    assert package.buyer_ref == "buyer_ref_123"
     assert package.package_id == "pkg_1"
     assert package.buyer_package_ref == "pkg_default"  # Internal field
     assert package.changes_applied is not None  # Internal field
@@ -55,7 +51,6 @@ def test_affected_packages_can_be_empty():
     """Test that affected_packages can be empty for non-creative updates."""
     response = UpdateMediaBuySuccess(
         media_buy_id="test_buy_456",
-        buyer_ref="buyer_ref_456",
         affected_packages=[],
     )
 
@@ -67,7 +62,6 @@ def test_affected_packages_shows_replaced_creatives():
     """Test that affected_packages shows both added and removed creatives."""
     affected_packages = [
         AffectedPackage(
-            buyer_ref="buyer_ref_789",  # Required by AdCP
             package_id="pkg_1",  # Required by AdCP
             paused=False,  # Required by AdCP 2.12.0
             buyer_package_ref="pkg_default",  # Internal field
@@ -83,7 +77,6 @@ def test_affected_packages_shows_replaced_creatives():
 
     response = UpdateMediaBuySuccess(
         media_buy_id="test_buy_789",
-        buyer_ref="buyer_ref_789",
         affected_packages=affected_packages,
     )
 
@@ -97,10 +90,8 @@ def test_response_serialization_includes_affected_packages():
     """Test that UpdateMediaBuySuccess serializes affected_packages correctly."""
     response = UpdateMediaBuySuccess(
         media_buy_id="test_buy_serialization",
-        buyer_ref="buyer_ref_serialization",
         affected_packages=[
             AffectedPackage(
-                buyer_ref="buyer_ref_serialization",  # Required by AdCP
                 package_id="pkg_1",  # Required by AdCP
                 paused=False,  # Required by AdCP 2.12.0
                 buyer_package_ref="pkg_1_buyer_ref",  # Internal field
@@ -123,7 +114,6 @@ def test_response_serialization_includes_affected_packages():
     assert "buyer_package_ref" not in response_dict["affected_packages"][0], "Internal field should be excluded"
     assert "changes_applied" not in response_dict["affected_packages"][0], "Internal field should be excluded"
     # AdCP-required fields should be PRESENT
-    assert response_dict["affected_packages"][0]["buyer_ref"] == "buyer_ref_serialization"
     assert response_dict["affected_packages"][0]["package_id"] == "pkg_1"
 
     # Test 2: Internal serialization - internal fields included

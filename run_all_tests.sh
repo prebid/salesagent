@@ -84,7 +84,11 @@ fi
 # E2E_WORKERS the plain serial `bdd` runs unchanged, so CI and small runners are
 # unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
-    SUITES="${SUITES/bdd/bdd_inprocess,bdd_e2e}"
+    # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
+    # explicit bdd_inprocess/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
+    SUITES=",$SUITES,"
+    SUITES="${SUITES/,bdd,/,bdd_inprocess,bdd_e2e,}"
+    SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
     # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
     # so the in-process bulk only parallelizes if we export a worker count here.
     # Default to `auto` (PYTEST_XDIST_AUTO_NUM_WORKERS) so the swap is actually
@@ -210,12 +214,23 @@ ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 # host runner runs this too; keep parity so the canonical local gate still scans
 # for known vulnerabilities. Single-sourced in scripts/security-audit.sh (also
 # called by .github/workflows/ci.yml, so CI and local can't drift).
-echo "Running security audit (uv-secure)..."
-if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
-    echo "Security audit passed"
-else
-    echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+# RUN_ALL_SKIP_AUDIT=1 skips it: the CI in-network job has no host uvx (it
+# deliberately skips _setup-env) and the dedicated "Security Audit" CI check
+# already owns this scan — a silent command-not-found here must not fail an
+# otherwise-green suite run.
+if [ "${RUN_ALL_SKIP_AUDIT:-0}" = "1" ]; then
+    echo "Security audit skipped (RUN_ALL_SKIP_AUDIT=1 — owned by the dedicated CI check)"
+elif ! command -v uvx >/dev/null 2>&1; then
+    echo "Security audit FAILED — uvx not on PATH (install uv or set RUN_ALL_SKIP_AUDIT=1)"
     [ "$RC" -eq 0 ] && RC=1
+else
+    echo "Running security audit (uv-secure)..."
+    if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+        echo "Security audit passed"
+    else
+        echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+        [ "$RC" -eq 0 ] && RC=1
+    fi
 fi
 
 exit $RC

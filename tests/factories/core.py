@@ -1,6 +1,8 @@
 """Factory_boy factories for core tenant-related models.
 
 Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
+Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig),
+get_or_create (idempotent factory seeding for shared-DB e2e_rest scenarios)
 """
 
 from __future__ import annotations
@@ -22,17 +24,46 @@ from src.core.database.models import (
 )
 
 
-def subdomain_for(tenant_id: str) -> str:
-    """Single source of truth for a tenant's DNS subdomain.
+def get_or_create(env: Any, model: type, filters: dict[str, Any], create: Any):
+    """Idempotent factory seeding for shared-DB (e2e_rest) BDD scenarios.
 
-    DNS labels cannot contain underscores, so tenant_id underscores map to
-    hyphens. This MUST be the only derivation: the persisted ``Tenant.subdomain``
-    (ORM factory) and the ``ResolvedIdentity`` tenant dict (``make_tenant``) have
-    to agree, because the e2e_rest transport authenticates by sending this
-    subdomain as the ``x-adcp-tenant`` header and the live server resolves the
-    tenant from it. A mismatch (underscore in the DB row vs hyphen on the wire)
-    makes the server fail to resolve the tenant and return 401 — which silently
-    parked every e2e_rest delivery scenario on the known-failures ledger.
+    Over e2e_rest all scenarios share one live-server database, so a prior
+    scenario's row (same PK) can survive into this one — the per-scenario
+    ``_reset_e2e_db`` and the env's factory session don't reliably target the
+    same connection — and a plain factory insert hits a UniqueViolation
+    (jdy1-M3, #1418). Look the row up on the env's factory session first and
+    reuse it. On in-process transports each test gets a rolled-back DB, the
+    lookup misses, and this behaves exactly like calling the factory.
+
+    ``create`` is a zero-arg callable running the factory, so lookup keys and
+    factory kwargs stay independent (e.g. Principal filters use ``tenant_id``
+    while ``PrincipalFactory`` takes the ``tenant`` object).
+    """
+    from sqlalchemy import select
+
+    session = getattr(env, "_session", None)
+    if session is not None:
+        existing = session.scalars(select(model).filter_by(**filters)).first()
+        if existing is not None:
+            return existing
+    return create()
+
+
+def tenant_subdomain(tenant_id: str) -> str:
+    """Derive a tenant's subdomain from its tenant_id.
+
+    Single source of truth for subdomain derivation (#1418). DNS labels cannot
+    contain underscores, so tenant_id underscores map to hyphens; the
+    normalization is also required because subdomains feed publisher_domain
+    (``f"{subdomain}.example.com"``) and the AdCP domain regex rejects
+    underscores. This MUST be the only derivation: the persisted
+    ``Tenant.subdomain`` (ORM factory) and the ``ResolvedIdentity`` tenant dict
+    (``make_tenant``) have to agree, because the e2e_rest transport
+    authenticates by sending this subdomain as the ``x-adcp-tenant`` header and
+    the live server resolves the tenant from it. A mismatch (underscore in the
+    DB row vs hyphen on the wire) makes the server fail to resolve the tenant
+    and return 401 — which silently parked every e2e_rest delivery scenario on
+    the known-failures ledger.
     """
     return f"pub-{tenant_id}".replace("_", "-")
 
@@ -45,7 +76,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     tenant_id = Sequence(lambda n: f"tenant_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Publisher {o.tenant_id}")
-    subdomain = LazyAttribute(lambda o: subdomain_for(o.tenant_id))
+    subdomain = LazyAttribute(lambda o: tenant_subdomain(o.tenant_id))
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"
@@ -59,7 +90,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         Uses same defaults as TenantFactory fields.
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
-        subdomain = subdomain_for(tenant_id)
+        subdomain = tenant_subdomain(tenant_id)
         tenant: dict[str, Any] = {
             "tenant_id": tenant_id,
             "name": f"Test Publisher {tenant_id}",
@@ -170,3 +201,35 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+
+
+def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> AdapterConfig:
+    """Upsert the mock-adapter ``test_behavior`` for a tenant (BDD/E2E support).
+
+    The Docker-hosted mock adapter reads injected behavior — ``manual_approval_required``,
+    ``fail_on_create``, ``fail_on_update``, ``error_message``, ``error_details``,
+    ``recovery`` — from ``AdapterConfig.config_json["test_behavior"]`` (see
+    ``mock_ad_server._read_test_behavior``). In-process transports use the env's
+    MagicMock adapter directly and ignore this row; it exists so the same BDD Given
+    steps also drive the real adapter over E2E.
+
+    Merges ``behavior`` into any existing ``test_behavior``. Factory-based upsert —
+    no raw model construction in step bodies.
+    """
+    session = env.get_session()
+    row = session.get(AdapterConfig, tenant_id)
+    if row is None:
+        tenant = session.get(Tenant, tenant_id)
+        row = AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+    config = dict(row.config_json or {})
+    test_behavior = dict(config.get("test_behavior", {}))
+    test_behavior.update(behavior)
+    config["test_behavior"] = test_behavior
+    row.config_json = config
+    if "manual_approval_required" in behavior:
+        # Mirror to the typed column — adapter_helpers reads
+        # AdapterConfig.mock_manual_approval_required when constructing the
+        # real mock adapter from config (the E2E manual-approval read path).
+        row.mock_manual_approval_required = bool(behavior["manual_approval_required"])
+    env._commit_factory_data()
+    return row

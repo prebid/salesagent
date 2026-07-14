@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_error
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -156,20 +155,6 @@ def given_media_buy_with_status_and_reach_unit(ctx: dict, mb_id: str, owner: str
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
 
 
-@given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with buyer_ref "{buyer_ref}"'))
-def given_media_buy_with_buyer_ref(ctx: dict, mb_id: str, owner: str, buyer_ref: str) -> None:
-    """Create a media buy with a buyer reference.
-
-    buyer_ref was removed from the MediaBuy model in adcp 3.12.
-    The step still accepts the parameter for Gherkin compatibility but ignores it.
-    """
-    ctx.setdefault("media_buys", {})[mb_id] = {
-        "media_buy_id": mb_id,
-        "owner": owner,
-    }
-    _ensure_media_buy_in_db(ctx, mb_id, owner)
-
-
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}"'))
 def given_media_buy(ctx: dict, mb_id: str, owner: str) -> None:
     """Create a media buy owned by the given principal."""
@@ -303,11 +288,18 @@ def given_adapter_has_data(ctx: dict, mb_id: str) -> None:
 
 @given("the ad server adapter has delivery data for both media buys")
 def given_adapter_has_data_both(ctx: dict) -> None:
-    """Configure adapter mock to return data for both media buys."""
+    """Configure adapter mock to return data for both media buys.
+
+    Seeds conversions/conversion_value alongside impressions/spend so the
+    roas / cost_per_acquisition aggregated_totals scalars
+    (media-buy/get-media-buy-delivery-response.json, pin 04f59d2d5) are
+    derivable: with two buys, roas = 1000/500 = 2.0 and
+    cost_per_acquisition = 500/20 = 25.0 — the literals the Then steps assert.
+    """
     env = ctx["env"]
     media_buys = ctx.get("media_buys", {})
     for mb_id in list(media_buys.keys())[:2]:
-        env.set_adapter_response(media_buy_id=mb_id)
+        env.set_adapter_response(media_buy_id=mb_id, conversions=10.0, conversion_value=500.0)
 
 
 @given("the ad server adapter has delivery data for all media buys")
@@ -724,7 +716,7 @@ def when_request_by_ids(ctx: dict, ids_json: str) -> None:
     dispatch_request(ctx, media_buy_ids=media_buy_ids)
 
 
-@when("the Buyer Agent requests delivery metrics without media_buy_ids or buyer_refs")
+@when("the Buyer Agent requests delivery metrics without media_buy_ids")
 def when_request_no_identifiers(ctx: dict) -> None:
     """Request delivery metrics without any identifiers."""
     dispatch_request(ctx)
@@ -751,12 +743,6 @@ def when_request_with_media_buy_ids(ctx: dict, ids_json: str) -> None:
     else:
         media_buy_ids = _parse_json_list(ids_json)
         dispatch_request(ctx, media_buy_ids=media_buy_ids)
-
-
-@when(parsers.parse("the Buyer Agent requests delivery metrics with buyer_refs {refs_json}"))
-def when_request_with_buyer_refs(ctx: dict, refs_json: str) -> None:
-    """buyer_refs removed in adcp 3.12 — delegate to no-identifiers step."""
-    when_request_no_identifiers(ctx)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<filter_value>[^"]+)"'))
@@ -960,17 +946,33 @@ def when_deliver_with_retry(ctx: dict) -> None:
 
 @when("the system validates the webhook configuration")
 def when_validate_webhook_config(ctx: dict) -> None:
-    """Validate webhook configuration."""
-    secret = ctx.get("webhook_secret", "")
-    if len(secret) < 32:
-        from src.core.exceptions import AdCPValidationError
+    """Dispatch a create_media_buy carrying the webhook config through the wire.
 
-        ctx["error"] = AdCPValidationError(
-            message="credentials must be at least 32 characters",
-            details={"suggestion": "credentials must be at least 32 characters"},
-        )
-    else:
-        ctx["webhook_validated"] = True
+    The webhook credential min-length (32) is enforced by the SDK
+    ``Authentication.credentials`` (MinLen=32) nested under ``reporting_webhook``.
+    A request carrying a <32-char credential is rejected by production's Pydantic
+    boundary on the wire (VALIDATION_ERROR) — we dispatch the RAW flat body so the
+    rejection happens in PRODUCTION, not in test code. A 32-char credential is
+    accepted and the create succeeds.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _pricing_option_id
+
+    secret = ctx.get("webhook_secret", "")
+    kwargs = _ensure_request_defaults(ctx)
+    product = ctx.get("default_product")
+    pricing_option = ctx.get("default_pricing_option")
+    if product is not None:
+        kwargs["packages"][0]["product_id"] = product.product_id
+    if pricing_option is not None:
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
+    kwargs["reporting_webhook"] = {
+        "url": _WEBHOOK_URL,
+        "reporting_frequency": "daily",
+        "authentication": {"schemes": ["Bearer"], "credentials": secret},
+    }
+    # Dispatch the flat body (no typed construction) so a short credential reaches
+    # the production transport boundary instead of being rejected in test code.
+    dispatch_request(ctx, **kwargs)
 
 
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
@@ -1070,12 +1072,14 @@ def when_boundary_daily_breakdown(ctx: dict, value: str) -> None:
 @when(parsers.parse("the Buyer Agent requests delivery metrics with account {value}"))
 def when_partition_account(ctx: dict, value: str) -> None:
     """Partition test: account value."""
+    _seed_valid_account_if_named(ctx, value)
     _dispatch_partition(ctx, "account", value)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics at account boundary {value}"))
 def when_boundary_account(ctx: dict, value: str) -> None:
     """Boundary test: account value."""
+    _seed_valid_account_if_named(ctx, value)
     _dispatch_partition(ctx, "account", value)
 
 
@@ -1344,6 +1348,68 @@ def then_has_aggregated_totals(ctx: dict) -> None:
     individual_spend = sum(d.totals.spend for d in deliveries)
     assert agg.spend == individual_spend, (
         f"aggregated_totals.spend ({agg.spend}) != sum of individual spend ({individual_spend})"
+    )
+
+
+@then('the aggregated_totals should include "roas" as total conversion_value over total spend')
+def then_aggregated_roas(ctx: dict) -> None:
+    """Assert aggregated_totals.roas equals the Given-derived literal 2.0.
+
+    Spec (pin 04f59d2d5): media-buy/get-media-buy-delivery-response.json
+    defines aggregated_totals.roas as "total conversion_value / total spend".
+    The Given seeds two buys at conversion_value=500.0, spend=250.0 each, so
+    roas = 1000 / 500 = 2.0. Asserting the literal (not a quotient recomputed
+    from production's own per-delivery output) means a same-source extraction
+    bug cannot self-validate (PR #1430 review).
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    agg = resp.aggregated_totals
+    roas = getattr(agg, "roas", None)
+    assert roas is not None, "aggregated_totals.roas is missing — production does not compute roas"
+    conversion_values = [getattr(d.totals, "conversion_value", None) for d in resp.media_buy_deliveries]
+    assert all(v is not None for v in conversion_values), (
+        f"per-delivery totals.conversion_value missing (roas input must be reported per buy): {conversion_values}"
+    )
+    assert roas == pytest.approx(2.0), (
+        f"aggregated_totals.roas ({roas}) != 2.0 (Given seeds 2 buys x conversion_value 500.0 / 2 x spend 250.0)"
+    )
+
+
+@then('the aggregated_totals should include "cost_per_acquisition" as total spend over total conversions')
+def then_aggregated_cost_per_acquisition(ctx: dict) -> None:
+    """Assert aggregated_totals.cost_per_acquisition equals the Given-derived literal 25.0.
+
+    Spec (pin 04f59d2d5): media-buy/get-media-buy-delivery-response.json
+    defines aggregated_totals.cost_per_acquisition as "total spend / total
+    conversions". The Given seeds two buys at conversions=10.0, spend=250.0
+    each, so cpa = 500 / 20 = 25.0. Literal assertion for the same
+    same-source-extraction reason as the roas step above.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    agg = resp.aggregated_totals
+    cpa = getattr(agg, "cost_per_acquisition", None)
+    assert cpa is not None, (
+        "aggregated_totals.cost_per_acquisition is missing — production does not compute cost_per_acquisition"
+    )
+    conversions = [getattr(d.totals, "conversions", None) for d in resp.media_buy_deliveries]
+    assert all(c is not None for c in conversions), (
+        f"per-delivery totals.conversions missing (cpa input must be reported per buy): {conversions}"
+    )
+    assert cpa == pytest.approx(25.0), (
+        f"aggregated_totals.cost_per_acquisition ({cpa}) != 25.0 (Given seeds 2 buys x spend 250.0 / 2 x conversions 10.0)"
+    )
+
+
+@then(parsers.parse('the aggregated_totals should include "media_buy_count" equal to {count:d}'))
+def then_aggregated_media_buy_count(ctx: dict, count: int) -> None:
+    """Assert aggregated_totals.media_buy_count matches the scenario's buy count."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    agg = resp.aggregated_totals
+    assert agg.media_buy_count == count, (
+        f"aggregated_totals.media_buy_count ({agg.media_buy_count}) != expected ({count})"
     )
 
 
@@ -1809,35 +1875,34 @@ def then_circuit_healthy(ctx: dict) -> None:
 
 @then("the configuration should be rejected")
 def then_config_rejected(ctx: dict) -> None:
-    """Assert configuration was rejected with a validation/rejection error message."""
-    error = _require_error(ctx)
-    msg = _get_error_message(error).lower()
-    rejection_keywords = {"reject", "invalid", "validation", "minimum", "too short", "credential", "length", "required"}
-    assert any(kw in msg for kw in rejection_keywords), (
-        f"Expected a rejection/validation error message, but got: {error!r}. Expected one of: {rejection_keywords}"
-    )
+    """Assert production rejected the webhook config on the wire (VALIDATION_ERROR).
+
+    The short credential is rejected by production's Pydantic boundary
+    (Authentication.credentials MinLen=32) — assert the real two-layer AdCP
+    wire envelope, not a reconstructed/hand-built exception.
+    """
+    result = ctx["result"]
+    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32")
 
 
 @then("the error should indicate minimum credential length is 32 characters")
 def then_error_min_credential_length(ctx: dict) -> None:
-    """Assert error specifies the 32-character minimum credential length.
+    """Assert the wire error message names the 32-character minimum.
 
-    Verifies both the minimum length value and that the error is a
-    validation/credential rejection (not some unrelated error containing '32').
+    The 32-char minimum surfaces in the wire error MESSAGE (Pydantic's
+    "String should have at least 32 characters"). Production's RequestValidationError
+    envelope does NOT emit a suggestion for this path, so the message — not a
+    suggestion — carries the boundary value.
     """
-    error = _require_error(ctx)
-    msg = _get_error_message(error).lower()
-    assert "32" in msg, f"Expected '32' (minimum length) in error message: {error}"
-    credential_terms = {"credential", "secret", "length", "minimum", "characters", "short"}
-    assert any(term in msg for term in credential_terms), (
-        f"Error mentions '32' but not in a credential-length context. Expected one of {credential_terms} in: {error}"
-    )
+    result = ctx["result"]
+    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32 characters")
 
 
 @then("the configuration should be accepted")
 def then_config_accepted(ctx: dict) -> None:
-    """Assert configuration was accepted (webhook/circuit-breaker config)."""
-    assert "error" not in ctx, f"Config rejected: {ctx.get('error')}"
+    """Assert production accepted the webhook config on the wire (create succeeded)."""
+    result = ctx["result"]
+    assert not result.is_error, f"Config rejected on the wire: {ctx.get('wire_error_envelope') or ctx.get('error')}"
 
 
 # ── HMAC / auth header assertions ─────────────────────────────────
@@ -2693,35 +2758,18 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
 
 
 def _assert_error_outcome(ctx: dict, code: str, field: str, *, require_suggestion: bool) -> None:
-    """Reference error assertion (clean scenario -> step -> harness path).
+    """Assert the scenario's named wire error CODE on the two-layer envelope.
 
-    The SCENARIO names the expected wire error CODE (its Examples `expected` column);
-    this step asserts the harness-normalized two-layer envelope carries it, with the
-    ``recovery`` the AdCP schema classifies for that code. No transport awareness, no
-    per-field hard-coding, no reconstruction:
-      * the expected code comes from the scenario,
-      * the recovery comes from the schema (``STANDARD_ERROR_CODES`` mirrors
-        adcp error-code.json),
-      * the envelope comes from the harness (``ctx["wire_error_envelope"]``, populated
-        per-transport by the dispatcher — REST body / MCP ToolError JSON / A2A artifact
-        / e2e HTTP), so the same assertion holds on every transport.
+    Thin wrapper over the harness-provided ``TransportResult.assert_wire_error``
+    (single source of truth for wire-error assertions; recovery is pin-sourced
+    from the AdCP error-code enum). The ``field`` is preserved as failure context.
     """
-    from adcp.server.helpers import STANDARD_ERROR_CODES
-
-    from tests.helpers import assert_envelope_shape
-
-    spec = STANDARD_ERROR_CODES.get(code)
-    assert spec is not None, f"{code!r} is not a standard AdCP error code (error-code.json)"
-    envelope = ctx.get("wire_error_envelope")
-    assert envelope is not None, (
-        f"Expected {field} rejected with {code}, but the operation succeeded — no wire error "
-        f"envelope. response={ctx.get('response')!r}"
-    )
-    assert_envelope_shape(envelope, code, recovery=spec["recovery"])
-    if require_suggestion:
-        assert envelope.get("adcp_error", {}).get("suggestion"), (
-            f"Expected a suggestion in the {code} envelope for {field}: {envelope}"
-        )
+    result = ctx.get("result")
+    assert result is not None, f"[{field}] No transport result captured to assert {code} on the wire"
+    try:
+        result.assert_wire_error(code, require_suggestion=require_suggestion)
+    except AssertionError as exc:
+        raise AssertionError(f"[{field}] {exc}") from None
 
 
 def _assert_wire_rejection(ctx: dict, field: str) -> None:
@@ -2737,10 +2785,11 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         code = layer.get("code")
         recovery = layer.get("recovery")
         # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
-        # INTERNAL_ERROR / CONFIGURATION_ERROR to SERVICE_UNAVAILABLE, and the base
-        # AdCPError default recovery is "terminal" — so a {SERVICE_UNAVAILABLE,
-        # terminal} server fault would otherwise pass as a field rejection. (#1420 should-fix)
-        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "AUTH_REQUIRED", "AUTH_TOKEN_INVALID"}, (
+        # INTERNAL_ERROR to SERVICE_UNAVAILABLE — a server fault would otherwise
+        # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now
+        # passes through untranslated (salesagent-nr2q) and is likewise a
+        # seller-side fault, never a field rejection.
+        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR", "AUTH_REQUIRED"}, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
         )
@@ -2800,8 +2849,10 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
         assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
         if require_suggestion:
-            suggestion = (error.details or {}).get("suggestion")
-            assert suggestion, f"Expected suggestion in error for {field}, got details: {error.details}"
+            # STRICT error.json conformance: suggestion is a top-level error
+            # attribute; a copy buried in the free-form details dict does not
+            # count (#1417).
+            assert error.suggestion, f"Expected top-level suggestion in error for {field}, got: {error.suggestion!r}"
         return
 
     raise AssertionError(f"Unexpected expected value '{expected}' for {field}")
@@ -2935,15 +2986,10 @@ def _parse_request_params(params_str: str) -> dict[str, Any]:
     Handles formats like:
     - media_buy_ids=["mb-001"]
     - media_buy_ids=["mb-001"] status_filter=["active"]
-
-    Note: buyer_refs was removed from GetMediaBuyDeliveryRequest in adcp 3.12.
-    Any buyer_refs= parsed from Gherkin are silently dropped.
     """
     kwargs: dict[str, Any] = {}
     for match in re.finditer(r'(\w+)=(\[.+?\]|"[^"]*"|[^\s]+)', params_str):
         key, value = match.group(1), match.group(2)
-        if key == "buyer_refs":
-            continue  # Removed in adcp 3.12
         if value.startswith("["):
             kwargs[key] = json.loads(value)
         elif value.startswith('"'):
@@ -3019,6 +3065,80 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
             f"boundary, but the base request failed elsewhere: {sorted(offending)}"
         )
         ctx["error"] = exc
+
+
+# The account values the UC-004 delivery_account/boundary scenarios assert are
+# VALID (BR-UC-004 feature Examples). Only these are seeded — the invalid rows
+# (acc_nonexistent, acc_001+x.com, {}) name accounts we deliberately never seed
+# so production still raises ACCOUNT_NOT_FOUND / INVALID_REQUEST for them.
+_VALID_ACCOUNT_ID = "acc_acme_001"
+_VALID_BRAND_DOMAIN = "acme-corp.com"
+_VALID_OPERATOR = "acme-corp.com"
+
+
+def _seed_valid_account_if_named(ctx: dict, value: str) -> None:
+    """Seed the account a VALID delivery_account row names, so resolution succeeds.
+
+    The delivery_account partition/boundary scenarios share one media-buy Given
+    step across valid AND invalid rows, so account seeding must happen here in the
+    When step where the account value is known. We seed ONLY the exact valid
+    values the feature Examples mark ``valid`` (explicit acc_acme_001, the
+    acme-corp.com natural key, and its sandbox:true variant); every other value —
+    including the invalid rows — is left unseeded so production correctly emits
+    ACCOUNT_NOT_FOUND / INVALID_REQUEST. Historically these rows only passed
+    because the a2a account param was wire-dropped (salesagent-xpcd); now that
+    resolution runs, a valid row REQUIRES its account to exist.
+    """
+    env = ctx.get("env")
+    if env is None or not hasattr(env, "_session"):
+        return
+
+    try:
+        parsed = json.loads(value.strip())
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(parsed, dict):
+        return
+
+    tenant = ctx.get("db_tenant")
+    principal = ctx.get(f"db_principal_{getattr(env, '_principal_id', '')}")
+    if tenant is None or principal is None:
+        return
+
+    from tests.bdd.steps.generic._account_resolution import seed_account_with_access
+
+    # Explicit account_id ONLY (the invalid oneOf row also carries account_id but
+    # pairs it with brand/operator — exclude it so it still errors).
+    if set(parsed) == {"account_id"} and parsed["account_id"] == _VALID_ACCOUNT_ID:
+        seed_account_with_access(
+            tenant,
+            principal,
+            account_id=_VALID_ACCOUNT_ID,
+            status="active",
+            brand_domain=_VALID_BRAND_DOMAIN,
+            operator=_VALID_OPERATOR,
+        )
+        return
+
+    # Natural key (brand + operator), optionally sandbox:true. Non-sandbox and
+    # sandbox variants are distinct accounts (the repo scopes the query by the
+    # sandbox flag), so each valid row resolves to exactly one match.
+    brand = parsed.get("brand")
+    if (
+        isinstance(brand, dict)
+        and brand.get("domain") == _VALID_BRAND_DOMAIN
+        and parsed.get("operator") == _VALID_OPERATOR
+    ):
+        sandbox = bool(parsed.get("sandbox", False))
+        seed_account_with_access(
+            tenant,
+            principal,
+            account_id=f"acc-acme-corp{'-sandbox' if sandbox else ''}",
+            status="active",
+            brand_domain=_VALID_BRAND_DOMAIN,
+            operator=_VALID_OPERATOR,
+            sandbox=sandbox,
+        )
 
 
 def _dispatch_partition(ctx: dict, field: str, value: str) -> None:

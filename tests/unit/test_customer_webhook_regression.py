@@ -29,7 +29,6 @@ def test_create_media_buy_response_message_access():
     """
     # Create a response like the one from create_media_buy
     response = CreateMediaBuySuccess(
-        buyer_ref="test-webhook-mb-001",
         media_buy_id="mb-12345",
         packages=[],
     )
@@ -73,7 +72,7 @@ def test_other_response_types():
 
     # Test SyncCreativesResponse (generates message via __str__() from creatives list)
     response2 = SyncCreativesResponse(
-        creatives=[SyncCreativeResult(creative_id="cr-001", status="approved", action="created")],
+        creatives=[SyncCreativeResult(creative_id="cr-001", internal_status="approved", action="created")],
         dry_run=False,
     )
     msg2 = str(response2)

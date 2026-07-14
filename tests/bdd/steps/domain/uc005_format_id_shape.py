@@ -22,34 +22,18 @@ from typing import Any
 
 from pytest_bdd import then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
-from tests.harness.transport import Transport
+from tests.bdd.steps._outcome_helpers import _require_response, wire_field
 from tests.helpers.format_assertions import assert_wire_format_id_is_object
 
 
 def _serialized_formats(ctx: dict) -> list[dict[str, Any]]:
     """Return the formats array as the buyer sees it on the serialized wire.
 
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``.
-    IMPL has no wire, so serialize the typed payload through the production
-    serializer — the same path that produces wire bytes for the other transports.
+    Thin alias over the shared :func:`wire_field` reader (single source of truth)
+    — REST/A2A/MCP read the real success-path wire dict; IMPL serializes the typed
+    payload through the production serializer.
     """
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    # Loud guard: a real-wire transport (REST/A2A/MCP) that didn't stash
-    # wire_response would otherwise fall through to the model_dump path and
-    # assert nothing on the wire — the silent tautology this scenario removes.
-    # A future sibling wired against a non-stashing env (e.g. media_buy_list,
-    # creative_sync, media_buy_update A2A/MCP) trips this instead of passing
-    # green. IMPL (and the non-parametrized None default) legitimately have no wire.
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire["formats"]
-    # IMPL has no wire — serialize the typed payload through the production
-    # serializer. _require_response preserves the diagnostic if a (reused) sibling
-    # scenario hit an error path, instead of a bare ctx["response"] KeyError.
-    return _require_response(ctx).model_dump(mode="json")["formats"]
+    return wire_field(ctx, "formats")
 
 
 @when("the response returns a non-empty formats array")

@@ -154,23 +154,32 @@ def test_hand_maintained_scenarios_classify_legacy_preserve():
 
 
 def test_registry_is_bijection_with_marked_scenarios():
-    """Registry ↔ on-disk marked scenarios must match exactly.
+    """Registry ↔ marked SOURCE-LESS scenarios must match exactly.
 
-    Direction 1 (marked ⊆ registry): a hand-edited scenario missing from the
-    registry would be dropped by ``--merge`` while the classify test above
-    stays green — it only checks scenarios already registered. Direction 2
-    (registry ⊆ marked): a stale entry whose scenario was renamed or lost its
-    marker must surface, not silently pass.
+    Direction 1 (marked source-less ⊆ registry): a hand-edited source-less
+    scenario missing from the registry would be dropped by ``--merge`` while the
+    classify test above stays green — it only checks scenarios already
+    registered. Direction 2 (registry ⊆ marked): a stale entry whose scenario
+    was renamed or lost its marker must surface, not silently pass.
+
+    Scoped to the source-less candidate universe (same derivation as the
+    completeness test below): a marked scenario that HAS a proper adcp-req
+    source (upstream hand-edits arriving via main merges) is protected by its
+    marker in ``classify_scenario_pair`` and needs no registry entry — the
+    registry is exactly the source-less set, so the two tests can't demand
+    contradictory registrations for it.
     """
     compile_bdd = _load_compiler()
+    candidates = set(_handmaintained_candidates_from_traceability()) | set(_untracked_scenarios(compile_bdd))
 
     assert_violations_match_allowlist(
-        found=set(_marked_scenarios_on_disk(compile_bdd)),
+        found=set(_marked_scenarios_on_disk(compile_bdd)) & candidates,
         allowlist=set(HAND_MAINTAINED_SCENARIOS),
         fix_hint=(
-            "A hand-edited scenario (an @hand-edited tag or # HAND-EDITED comment under "
-            "tests/bdd/features/) must appear in HAND_MAINTAINED_SCENARIOS, and every registry "
-            "entry must still exist and carry its marker. Add new ones; drop or re-mark stale ones."
+            "A hand-edited SOURCE-LESS scenario (an @hand-edited tag or # HAND-EDITED comment "
+            "under tests/bdd/features/, with a spec-artifact upstream_ref or no traceability row) "
+            "must appear in HAND_MAINTAINED_SCENARIOS, and every registry entry must still exist "
+            "and carry its marker. Add new ones; drop or re-mark stale ones."
         ),
     )
 

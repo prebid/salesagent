@@ -20,12 +20,12 @@ from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryR
 from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import MediaBuyDeliveryStatus as LibraryMediaBuyDeliveryStatus
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
+from adcp.types.generated_poc.core.geo_delivery_metrics import (
+    GeoDeliveryMetrics as LibraryByGeoItem,
+)  # adcp 6.6: inline ByGeoItem promoted to named $ref type GeoDeliveryMetrics (spec 3.1.1 geo-delivery-metrics.json)
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     ByDeviceTypeItem as LibraryByDeviceTypeItem,
 )  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
-    ByGeoItem as LibraryByGeoItem,
-)
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
@@ -111,6 +111,11 @@ class DeliveryTotals(SalesAgentBaseModel):
         None, ge=0, le=1, description="Video completion rate (completions/impressions)"
     )
     conversions: float | None = Field(None, ge=0, description="Total conversions (if applicable)")
+    conversion_value: float | None = Field(
+        None,
+        ge=0,
+        description="Total monetary value of attributed conversions in the reporting currency (if applicable)",
+    )
     viewability: float | None = Field(None, ge=0, le=1, description="Viewability percentage as 0.0-1.0 (if applicable)")
 
 
@@ -124,7 +129,7 @@ class PlacementBreakdown(SalesAgentBaseModel):
 
 
 class GeoBreakdown(LibraryByGeoItem):
-    """Geographic delivery breakdown entry (extends library ByGeoItem).
+    """Geographic delivery breakdown entry (extends library GeoDeliveryMetrics).
 
     Library provides geo_level, system, geo_code, geo_name plus the full
     DeliveryMetrics surface. For metro/postal_area levels the ``system``
@@ -133,7 +138,7 @@ class GeoBreakdown(LibraryByGeoItem):
     §Geo Breakdown.
     """
 
-    pass  # All fields inherited from library ByGeoItem
+    pass  # All fields inherited from library GeoDeliveryMetrics
 
 
 class DeviceTypeBreakdown(LibraryByDeviceTypeItem):

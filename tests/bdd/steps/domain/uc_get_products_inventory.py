@@ -24,6 +24,7 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
+    PrincipalFactory,
     ProductFactory,
     TenantFactory,
 )
@@ -33,7 +34,15 @@ from tests.helpers import assert_envelope_shape
 
 
 def _call_get_products(ctx: dict, **kwargs: Any) -> None:
-    """Dispatch get_products through ctx['transport'] via dispatch_request."""
+    """Dispatch get_products through ctx['transport'] via the shared wire dispatcher.
+
+    Delegates to the universal ``dispatch_request`` helper (#1417): it
+    routes through ``env.call_via`` for the parametrized transport, stores the
+    normalized ``ctx['result']`` plus ``ctx['response']`` / ``ctx['error']`` /
+    ``ctx['wire_error_envelope']``, and fails loudly if no transport is set
+    (the IMPL ``call_impl`` fallback was removed — a missing transport is a
+    wiring bug, not an IMPL bypass).
+    """
     kwargs.setdefault("brief", "inventory profile test")
     dispatch_request(ctx, **kwargs)
 
@@ -53,11 +62,47 @@ def _get_first_prop(ctx: dict) -> Any:
 
 @given("a tenant is configured for product discovery")
 def given_tenant(ctx: dict) -> None:
-    """Create a tenant with required config for get_products."""
-    tenant = TenantFactory(
-        tenant_id="test_tenant",
-        subdomain="test_tenant",
-        ad_server="mock",
+    """Create a tenant + principal with required config for get_products.
+
+    The principal is what makes the request authenticate over the wire: the
+    harness env resolves its per-transport identity's ``auth_token`` from the
+    DB Principal row whose (principal_id, tenant_id) matches the env defaults
+    ("test_principal"/"test_tenant"). In-process transports inject the identity
+    object directly (FastAPI dep override / handler mock), so they don't need a
+    real row — but the e2e_rest transport dispatches over real HTTP through the
+    live auth middleware (token -> get_principal_from_token DB lookup). Without
+    a seeded Principal, ``_resolve_auth_token`` returns None, no ``x-adcp-auth``
+    header is sent, and the server rejects with "no identity in request". Seed
+    it here so both in-process and e2e_rest dispatch carry a valid identity.
+
+    The tenant's ``subdomain`` MUST come from ``TenantFactory``'s default
+    (``subdomain_for(tenant_id)`` -> ``pub-test-tenant``), NOT a hand-set value:
+    the e2e_rest dispatcher sends ``identity.tenant["subdomain"]`` (also derived
+    via ``subdomain_for`` in ``make_tenant``) as the ``x-adcp-tenant`` header,
+    and the live server resolves the tenant by matching that header against the
+    persisted ``Tenant.subdomain`` column. Overriding it to ``"test_tenant"``
+    (with the underscore the DNS derivation strips) makes the row's subdomain
+    disagree with the wire header — the server can't resolve the tenant, so
+    identity is None and it rejects with "no identity in request".
+    """
+    from src.core.database.models import Principal, Tenant
+    from tests.factories.core import get_or_create
+
+    # Idempotent seeding (get_or_create, jdy1-M3 / #1418): over e2e_rest all
+    # scenarios share one live-server DB, so a plain factory insert collides
+    # with a prior scenario's test_tenant row (tenants_pkey UniqueViolation).
+    # The subdomain stays the factory default per the docstring above.
+    tenant = get_or_create(
+        ctx["env"],
+        Tenant,
+        {"tenant_id": "test_tenant"},
+        lambda: TenantFactory(tenant_id="test_tenant", ad_server="mock"),
+    )
+    get_or_create(
+        ctx["env"],
+        Principal,
+        {"principal_id": "test_principal", "tenant_id": "test_tenant"},
+        lambda: PrincipalFactory(tenant=tenant, principal_id="test_principal"),
     )
     ctx["tenant"] = tenant
 

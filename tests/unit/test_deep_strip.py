@@ -729,7 +729,7 @@ class TestRealWorldSchemas:
         schema = {
             "type": "object",
             "properties": {
-                "buyer_ref": {"type": "string"},
+                "po_number": {"type": "string"},
                 "packages": {
                     "type": "array",
                     "items": {
@@ -750,7 +750,7 @@ class TestRealWorldSchemas:
         }
         result = deep_strip_to_schema(
             {
-                "buyer_ref": "ref-1",
+                "po_number": "ref-1",
                 "packages": [
                     {
                         "product_id": "prod-1",
@@ -762,7 +762,7 @@ class TestRealWorldSchemas:
             schema,
         )
         assert result == {
-            "buyer_ref": "ref-1",
+            "po_number": "ref-1",
             "packages": [
                 {
                     "product_id": "prod-1",

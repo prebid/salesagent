@@ -16,7 +16,12 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.schemas._base import CreateMediaBuyError, CreateMediaBuyResult, CreateMediaBuySuccess
+from src.core.schemas._base import (
+    CreateMediaBuyError,
+    CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
+    CreateMediaBuySuccess,
+)
 from tests.harness._base import IntegrationEnv
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -96,7 +101,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """
         from tests.factories import AuthorizedPropertyFactory
 
-        tenant, principal = self.setup_default_data()
+        # Seed the tenant as auto-approve (human_review_required=False). The
+        # in-process transports never hit the tenant approval gate because this
+        # env's mocked adapter sets manual_approval_operations=[] — but the live
+        # e2e_rest server has no patches and reads the REAL tenant row, where
+        # the column defaults to True, routing every create to the submitted
+        # (manual-approval) envelope instead of completing it. Seeding False
+        # makes the live server's gate state match what every other transport
+        # already grades (#1418 class; #1417/#1537 scenarios re-triaged after
+        # the adcp-6.6 merge). Scenarios that grade the approval path flip it
+        # explicitly via the "tenant requires manual approval" Given (which
+        # commits the change to the shared DB).
+        tenant, principal = self.setup_default_data(human_review_required=False)
         # Satisfy the create_media_buy setup-checklist "Authorized Properties"
         # gate. In-process transports skip it via the testing context, but the
         # live e2e_rest server enforces it (validate_setup_complete), so a
@@ -163,18 +179,44 @@ class MediaBuyCreateEnv(IntegrationEnv):
                 principal_id=kwargs.get("principal_id", self._principal_id),
             )
 
+        def _get_or_create_context(*_args: Any, **kwargs: Any):
+            # The update path (media_buy_update.py:263) resolves its context via
+            # get_or_create_context, not create_context. Delegate to the real one so
+            # persistent_ctx.context_id is a real value the workflow_step INSERT can
+            # persist (a MagicMock context_id fails psycopg2 with "can't adapt").
+            return real.get_or_create_context(
+                tenant_id=kwargs.get("tenant_id", self._tenant_id),
+                principal_id=kwargs.get("principal_id", self._principal_id),
+                context_id=kwargs.get("context_id"),
+                is_async=kwargs.get("is_async", True),
+            )
+
         def _create_workflow_step(*_args: Any, **kwargs: Any):
             kwargs.setdefault("step_type", "media_buy_creation")
             kwargs.setdefault("owner", "system")
             kwargs.setdefault("tool_name", tool_name)
             return real.create_workflow_step(**kwargs)
 
+        def _get_or_create_context(*_args: Any, **kwargs: Any):
+            # The async update path calls get_or_create_context (not
+            # create_context) to obtain a persistent Context whose real
+            # context_id backs the workflow_steps FK. Delegate to the real
+            # manager so the persisted context_id is a string, not a MagicMock.
+            return real.get_or_create_context(
+                tenant_id=kwargs.get("tenant_id", self._tenant_id),
+                principal_id=kwargs.get("principal_id", self._principal_id),
+                context_id=kwargs.get("context_id"),
+                is_async=kwargs.get("is_async", True),
+            )
+
         def _link_workflow_to_object(*_args: Any, **kwargs: Any):
             return real.link_workflow_to_object(**kwargs)
 
         mgr.create_context.side_effect = _create_context
         mgr.get_context.return_value = None
+        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.create_workflow_step.side_effect = _create_workflow_step
+        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
         mgr.update_workflow_step.return_value = None
         mgr.add_message.return_value = None
@@ -288,13 +330,26 @@ class MediaBuyCreateEnv(IntegrationEnv):
         }
 
         def _format_spec_side_effect(agent_url: str, format_id: str) -> Any:
-            return self._format_specs.get(format_id)
+            spec = self._format_specs.get(format_id)
+            if spec is not None:
+                return spec
+            # Fall back to the 54-format reference catalog — the SAME fixture the
+            # live server resolves under ADCP_TESTING (format_cache), so
+            # in-process and e2e format resolution agree by construction.
+            # Synthetic ids stay unresolvable (None), matching the server.
+            from src.core.format_cache import load_reference_formats
+
+            for fmt in load_reference_formats():
+                if fmt.format_id.id == format_id:
+                    return fmt
+            return None
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
         """Call _create_media_buy_impl with real DB."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
+        from src.core.transport_helpers import enrich_identity_with_account
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
@@ -304,6 +359,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         if req is None:
             req = CreateMediaBuyRequest(**_ensure_idempotency_key(kwargs))
 
+        identity = enrich_identity_with_account(identity, req.account)
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
 
     def _flatten_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -317,7 +373,10 @@ class MediaBuyCreateEnv(IntegrationEnv):
         if req is None:
             return _ensure_idempotency_key(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
-        for key in ("account", "proposal_id", "total_budget"):
+        # Keep ``account``: the create_media_buy wrappers declare it and resolve it
+        # at the transport boundary (998ad1be2). Stripping it here regresses
+        # account-not-found scenarios to a successful create.
+        for key in ("proposal_id", "total_budget"):
             flat.pop(key, None)
         _restore_creative_ids(req, flat)
         flat.update(kwargs)
@@ -368,16 +427,21 @@ class MediaBuyCreateEnv(IntegrationEnv):
         top-level protocol ``status`` and, on a cached idempotency replay, the
         spec's top-level ``replayed: true`` marker — both are popped back onto
         the wrapper so wire tests can assert ``result.payload.replayed``. The
-        CreateMediaBuySuccess|CreateMediaBuyError union discriminates on
-        ``media_buy_id`` (present only on success) — not on ``errors``, since a
-        *successful* buy may also carry non-fatal advisory ``errors``. An error
-        body has ``errors`` and no ``media_buy_id``, so it reconstructs as a
-        CreateMediaBuyError.
+        CreateMediaBuySuccess|CreateMediaBuyError|CreateMediaBuySubmitted union
+        mirrors the production A2A discrimination (adcp_a2a_server.py): submitted
+        first (status="submitted" + task_id, no media_buy_id — a submitted
+        envelope must not reconstruct as Success/Error), then ``media_buy_id``
+        (present only on success) — not ``errors``, since a *successful* buy may
+        also carry non-fatal advisory ``errors``. An error body has ``errors``
+        and no ``media_buy_id``, so it reconstructs as a CreateMediaBuyError.
         """
         status = data.pop("status", "completed")
         replayed = data.pop("replayed", False)
-        if data.get("media_buy_id") is not None:
-            response: CreateMediaBuySuccess | CreateMediaBuyError = CreateMediaBuySuccess(**data)
+        response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
+        if status == "submitted":
+            response = CreateMediaBuySubmitted(status=status, **data)
+        elif data.get("media_buy_id") is not None:
+            response = CreateMediaBuySuccess(**data)
         else:
             response = CreateMediaBuyError(**data)
         return CreateMediaBuyResult(response=response, status=status, replayed=replayed)

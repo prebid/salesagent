@@ -538,7 +538,7 @@ def process_and_upload_package_creatives(
     import logging
 
     # Lazy import to avoid circular dependency
-    from src.core.exceptions import AdCPAdapterError, AdCPError
+    from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPError
     from src.core.tools.creatives import _sync_creatives_impl
 
     logger = logging.getLogger(__name__)
@@ -567,8 +567,32 @@ def process_and_upload_package_creatives(
                 identity=context,  # ResolvedIdentity for principal_id extraction
             )
 
-            # Extract creative IDs from response
-            uploaded_ids = [result.creative_id for result in sync_response.creatives if result.creative_id]
+            # A failed sync result means the creative was REJECTED (e.g. missing
+            # required URL / dimensions in strict validation). Surface it instead
+            # of silently merging the failed id and letting the downstream
+            # "Creative IDs not found" check mask the real reason ('No Quiet
+            # Failures'). The per-creative error message names the offending
+            # field (e.g. the missing URL) so the buyer can remediate (POST-F3).
+            failed_results = [r for r in sync_response.creatives if r.action == "failed"]
+            if failed_results:
+                detail_msgs = [f"{r.creative_id}: {err.message}" for r in failed_results for err in (r.errors or [])]
+                error_msg = "Creative validation failed:\n" + "\n".join(f"  • {m}" for m in detail_msgs)
+                logger.error(error_msg)
+                raise AdCPCreativeRejectedError(
+                    error_msg,
+                    suggestion=(
+                        "Fix the rejected creative(s) so each reference format has the required "
+                        "content URL and dimensions, then re-submit the create_media_buy request."
+                    ),
+                    details={"creative_errors": detail_msgs},
+                )
+
+            # Extract creative IDs from successfully synced creatives only.
+            uploaded_ids = [
+                result.creative_id
+                for result in sync_response.creatives
+                if result.creative_id and result.action != "failed"
+            ]
 
             logger.info(
                 f"Synced {len(uploaded_ids)} creatives to database for package "

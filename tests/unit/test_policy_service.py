@@ -159,7 +159,7 @@ class TestNamingTemplateValidation:
 
     def test_validate_valid_template(self):
         """Valid template should pass validation."""
-        template = "{campaign_name} - {buyer_ref} - {date_range}"
+        template = "{campaign_name} - {media_buy_id} - {date_range}"
         # Should not raise
         PolicyService.validate_naming_template(template, "order_name_template")
 
@@ -171,7 +171,7 @@ class TestNamingTemplateValidation:
 
     def test_validate_unbalanced_braces(self):
         """Template with unbalanced braces should raise ValidationError."""
-        template = "{campaign_name - {buyer_ref}"  # Missing closing brace
+        template = "{campaign_name - {media_buy_id}"  # Missing closing brace
         with pytest.raises(ValidationError) as exc_info:
             PolicyService.validate_naming_template(template, "order_name_template")
         assert "unbalanced braces" in str(exc_info.value)

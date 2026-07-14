@@ -936,7 +936,7 @@ Then an empty accounts array is returned (not an error)
 ```gherkin
 Given no valid authentication
 When sync_accounts is called
-Then AUTH_TOKEN_INVALID error is returned
+Then AUTH_REQUIRED error is returned
 
 Given no authentication
 When list_accounts is called

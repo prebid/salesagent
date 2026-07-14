@@ -120,16 +120,17 @@ def test_query_summary_sort_applied_serializes_enum_values():
     # CORRECT: Use .value to get the string value
     correct_sort_applied = {"field": field_enum.value, "direction": direction_enum.value}
 
-    # WRONG: Using str() produces the enum repr
-    wrong_sort_applied = {"field": str(field_enum), "direction": str(direction_enum)}
+    # str() of these enums. adcp 6.6 made them StrEnum, so str() now yields the bare value
+    # too — the historical footgun (str(enum) => "CreativeSortField.created_date") is gone.
+    str_sort_applied = {"field": str(field_enum), "direction": str(direction_enum)}
 
     # Verify correct serialization produces simple strings
     assert correct_sort_applied["field"] == "created_date"
     assert correct_sort_applied["direction"] == "desc"
 
-    # Verify wrong serialization produces enum repr (this is the bug we fixed)
-    assert wrong_sort_applied["field"] == "CreativeSortField.created_date"
-    assert wrong_sort_applied["direction"] == "SortDirection.desc"
+    # StrEnum: str() and .value now agree
+    assert str_sort_applied["field"] == "created_date"
+    assert str_sort_applied["direction"] == "desc"
 
     # Create a QuerySummary with the correct sort_applied
     query_summary = QuerySummary(

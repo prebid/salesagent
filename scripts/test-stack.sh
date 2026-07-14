@@ -81,7 +81,16 @@ reap_abandoned_stacks() {
 # Host stack: pytest runs on the host and reaches the stack over localhost, so
 # overlay the ports file (the base compose publishes no host ports — reserved for
 # the in-network runner, run_all_tests.sh).
-dc() { docker-compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml -p "${COMPOSE_PROJECT_NAME:-adcp-test-$$}" "$@"; }
+# v1 `docker-compose` binary when present, else the v2 `docker compose` plugin
+# (hosts like the CI box ship only v2; without this fallback dc() exits 127 and
+# the `dc build | grep | tail` pipeline dies SILENTLY under pipefail).
+dc() {
+    if command -v docker-compose >/dev/null 2>&1; then
+        docker-compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml -p "${COMPOSE_PROJECT_NAME:-adcp-test-$$}" "$@"
+    else
+        docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml -p "${COMPOSE_PROJECT_NAME:-adcp-test-$$}" "$@"
+    fi
+}
 
 cmd_up() {
     echo -e "${BLUE}Starting Docker test stack...${NC}"

@@ -23,49 +23,53 @@ from adcp.types import (
     ContextObject,
     ProductFilters,
     PropertyListReference,
+    PushNotificationConfig,
     ReportingWebhook,
 )
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
+
+
+def _coerce_wire_object[ModelT: BaseModel](value: Any, model_cls: type[ModelT], context: str) -> ModelT | None:
+    """Shared dict → typed-model coercion with the boundary BUILT IN.
+
+    Single home for the ``to_*`` helpers' isinstance ladder. The internal
+    ``adcp_validation_boundary`` means a malformed wire dict rejects as a
+    typed ``AdCPValidationError`` (message + field + top-level suggestion)
+    from EVERY call site — callers cannot forget the boundary
+    (#1417; mirrors ``coerce_creative_filters``).
+
+    Returns ``None`` for non-dict unexpected types, preserving the helpers'
+    long-standing fallback behavior.
+    """
+    if value is None or isinstance(value, model_cls):
+        return value
+    if isinstance(value, dict):
+        with adcp_validation_boundary(context=context):
+            # model_validate handles plain models and RootModels alike
+            # (AccountReference is a RootModel — field-unpacking would break it).
+            return model_cls.model_validate(value)
+    return None  # Fallback for unexpected types
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
-    """Convert dict context to ContextObject for adcp 2.12.0+ compatibility.
-
-    Args:
-        context: Context as dict or ContextObject or None
-
-    Returns:
-        ContextObject or None
-    """
-    if context is None:
-        return None
-    if isinstance(context, ContextObject):
-        return context
-    if isinstance(context, dict):
-        return ContextObject(**context)
-    return None  # Fallback for unexpected types
+    """Convert dict context to ContextObject for adcp 2.12.0+ compatibility."""
+    return _coerce_wire_object(context, ContextObject, "context value")
 
 
 def to_reporting_webhook(webhook: dict[str, Any] | ReportingWebhook | None) -> ReportingWebhook | None:
-    """Convert dict to ReportingWebhook for adcp type compatibility.
+    """Convert dict to ReportingWebhook for adcp type compatibility."""
+    return _coerce_wire_object(webhook, ReportingWebhook, "reporting_webhook value")
 
-    Args:
-        webhook: Webhook config as dict or ReportingWebhook or None
 
-    Returns:
-        ReportingWebhook or None
-    """
-    if webhook is None:
-        return None
-    if isinstance(webhook, ReportingWebhook):
-        return webhook
-    if isinstance(webhook, dict):
-        return ReportingWebhook(**webhook)
-    return None  # Fallback for unexpected types
+def to_push_notification_config(
+    config: dict[str, Any] | PushNotificationConfig | None,
+) -> PushNotificationConfig | None:
+    """Convert dict to PushNotificationConfig for adcp type compatibility."""
+    return _coerce_wire_object(config, PushNotificationConfig, "push_notification_config value")
 
 
 def is_url_shorthand(value: str) -> bool:
@@ -147,68 +151,40 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
         return None
     if isinstance(brand, BrandReference):
         return brand
-    if isinstance(brand, str):
-        return BrandReference(domain=_coerce_domain_or_raise(brand))
-    if isinstance(brand, dict):
-        domain_raw = brand.get("domain")
-        if not isinstance(domain_raw, str):
-            raise AdCPValidationError(
-                "Invalid brand: domain is required",
-                field="brand",
-            )
-        allowed = BrandReference.model_fields.keys()
-        ref_data = {key: value for key, value in brand.items() if key in allowed}
-        ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
-        try:
+    # Raise-capable coercion routes through the internal boundary (like
+    # ``coerce_creative_filters``/``_coerce_wire_object``) so a malformed brand
+    # rejects as a typed AdCPValidationError with field + top-level suggestion
+    # from every call site — no hand-rolled ValidationError translation (#1417).
+    with adcp_validation_boundary(context="brand", field="brand"):
+        if isinstance(brand, str):
+            return BrandReference(domain=_coerce_domain_or_raise(brand))
+        if isinstance(brand, dict):
+            domain_raw = brand.get("domain")
+            if not isinstance(domain_raw, str):
+                raise AdCPValidationError(
+                    "Invalid brand: domain is required",
+                    field="brand",
+                )
+            allowed = BrandReference.model_fields.keys()
+            ref_data = {key: value for key, value in brand.items() if key in allowed}
+            ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
             return BrandReference(**ref_data)
-        except ValidationError as e:
-            raise AdCPValidationError(
-                format_validation_error(e, context="brand"),
-                field="brand",
-            ) from e
-    raise AdCPValidationError(
-        f"Invalid brand: expected dict, string, or BrandReference, got {type(brand).__name__}",
-        field="brand",
-    )
+        raise AdCPValidationError(
+            f"Invalid brand: expected dict, string, or BrandReference, got {type(brand).__name__}",
+            field="brand",
+        )
 
 
 def to_account_reference(account: dict[str, Any] | AccountReference | None) -> AccountReference | None:
-    """Convert dict to AccountReference for adcp compatibility.
-
-    Args:
-        account: Account reference as dict, AccountReference, or None
-
-    Returns:
-        AccountReference or None
-    """
-    if account is None:
-        return None
-    if isinstance(account, AccountReference):
-        return account
-    if isinstance(account, dict):
-        # AccountReference is a RootModel, so validate the whole value instead of field-unpacking.
-        return AccountReference.model_validate(account)
-    return None  # Fallback for unexpected types
+    """Convert dict to AccountReference for adcp compatibility."""
+    return _coerce_wire_object(account, AccountReference, "account value")
 
 
 def to_property_list_reference(
     property_list: dict[str, Any] | PropertyListReference | None,
 ) -> PropertyListReference | None:
-    """Convert dict to PropertyListReference for adcp compatibility.
-
-    Args:
-        property_list: Property list reference as dict or PropertyListReference or None
-
-    Returns:
-        PropertyListReference or None
-    """
-    if property_list is None:
-        return None
-    if isinstance(property_list, PropertyListReference):
-        return property_list
-    if isinstance(property_list, dict):
-        return PropertyListReference(**property_list)
-    return None  # Fallback for unexpected types
+    """Convert dict to PropertyListReference for adcp compatibility."""
+    return _coerce_wire_object(property_list, PropertyListReference, "property_list value")
 
 
 def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) -> CreativeFilters | None:
@@ -237,13 +213,8 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     """
     if filters is None or isinstance(filters, CreativeFilters):
         return filters
-    try:
+    with adcp_validation_boundary(context="list_creatives filters"):
         return CreativeFilters.model_validate(filters)
-    except ValidationError as e:
-        raise AdCPValidationError(
-            format_validation_error(e, context="list_creatives filters"),
-            suggestion="Fix the filters object — e.g. concept_ids must contain at least 1 concept id.",
-        ) from e
 
 
 def create_get_products_request(
@@ -292,9 +263,12 @@ def create_get_products_request(
 # Re-export commonly used generated types for convenience
 __all__ = [
     "is_url_shorthand",
+    "brand_shorthand_to_domain",
     "to_account_reference",
     "to_brand_reference",
     "to_context_object",
+    "to_property_list_reference",
+    "to_push_notification_config",
     "to_reporting_webhook",
     "coerce_creative_filters",
     "create_get_products_request",

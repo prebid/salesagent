@@ -154,28 +154,6 @@ Feature: BR-UC-009 Update Performance Index
     Then the operation should succeed
     # BR-RULE-021 INV-1: Exactly one identifier -> resolves
 
-  @T-UC-009-inv-021-1-buyerref @invariant @BR-RULE-021 @deprecated
-  Scenario: INV-1 holds - buyer_ref resolves target (protocol)
-    Given the Buyer owns a media buy with buyer_ref "my-campaign-2024"
-    When the Buyer Agent submits performance feedback with buyer_ref "my-campaign-2024"
-    Then the operation should succeed
-    # BR-RULE-021 INV-1: buyer_ref resolves the target media buy
-    # DEPRECATED: upstream removed — v3.1 removed `buyer_ref` from provide-performance-feedback-request, so the media_buy_id/buyer_ref XOR rule no longer applies. Scenario kept for historical traceability; awaiting human decision on removal.
-    # @abstract-rejection: buyer_ref/XOR removed in v3.1 (BR-RULE-021 retired this resolution path) — no canonical error code applies to a removed rule
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/provide-performance-feedback-request.json
-
-  @T-UC-009-inv-021-2 @invariant @BR-RULE-021 @error @deprecated @abstract-rejection
-  Scenario: INV-2 violated - both identifiers provided
-    When the Buyer Agent submits performance feedback with:
-    | media_buy_id | buyer_ref_legacy |
-    | mb_xor_002   | my-campaign-2024 |
-    Then the operation should fail with a validation error
-    And the error should indicate that only one identifier is allowed
-    And the error should include "suggestion" field
-    And the suggestion should contain "provide exactly one identifier"
-    # BR-RULE-021 INV-2: Both provided -> schema rejects
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/provide-performance-feedback-request.json
-
   @T-UC-009-inv-021-3 @invariant @BR-RULE-021 @error
   Scenario: INV-3 violated - media_buy_id missing
     When the Buyer Agent submits performance feedback without media_buy_id
@@ -381,29 +359,25 @@ Feature: BR-UC-009 Update Performance Index
       | Single-character creative ID             | c                | success          |
       | Empty string                             |                  | validation error |
 
-  @T-UC-009-mb-ident @validation @media-buy-identification @partition @boundary @BR-RULE-021 @deprecated
+  @T-UC-009-mb-ident @validation @media-buy-identification @partition @boundary @BR-RULE-021
   Scenario Outline: Media buy identification - <partition>
     When the Buyer Agent submits performance feedback with:
-    | media_buy_id   | buyer_ref_legacy   |
-    | <media_buy_id> | <buyer_ref_legacy> |
+    | media_buy_id   |
+    | <media_buy_id> |
     Then the outcome should be <outcome>
 
     Examples: Valid
-      | partition        | media_buy_id | buyer_ref_legacy | outcome |
-      | media_buy_id_only | mb_ident_001 |                  | success |
-      | buyer_ref_only   |              | my-campaign-2024 | success |
+      | partition         | media_buy_id | outcome |
+      | media_buy_id_only | mb_ident_001 | success |
 
     Examples: Invalid
-      | partition         | media_buy_id | buyer_ref_legacy | outcome          |
-      | both_provided     | mb_ident_001 | my-campaign-2024 | validation error |
-      | neither_provided  |              |                  | validation error |
+      | partition        | media_buy_id | outcome          |
+      | neither_provided |              | validation error |
 
     Examples: Boundaries
-      | partition                          | media_buy_id | buyer_ref_legacy | outcome          |
-      | media_buy_id only (primary path)   | mb_ident_001 |                  | success          |
-      | buyer_ref only (fallback path)     |              | my-campaign-2024 | success          |
-      | both identifiers (ambiguous)       | mb_ident_001 | my-campaign-2024 | validation error |
-      | neither identifier (missing)       |              |                  | validation error |
+      | partition                        | media_buy_id | outcome          |
+      | media_buy_id only (primary path) | mb_ident_001 | success          |
+      | neither identifier (missing)     |              | validation error |
 
   @T-UC-009-granularity @dependency @granularity
   Scenario Outline: Feedback granularity targeting - <level>

@@ -30,7 +30,6 @@ class TestNamingAsyncContext:
         assert loop is not None, "Test must run inside an async event loop"
 
         request = MagicMock()
-        request.buyer_ref = "ACME-001"
         request.brand = MagicMock()
         request.brand.domain = "testbrand.com"
         request.brand.campaign_objectives = None
@@ -73,7 +72,6 @@ class TestNamingAsyncContext:
         from src.core.utils.naming import generate_auto_name
 
         request = MagicMock()
-        request.buyer_ref = "ACME-001"
         request.brand = MagicMock()
         request.brand.domain = "testbrand.com"
         request.brand.campaign_objectives = None

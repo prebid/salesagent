@@ -21,7 +21,14 @@ set -euo pipefail
 # (community_points FK violation). Bump deliberately, never to HEAD.
 ADCP_PIN="ca70dd1e2a6c"
 
-IMAGE="adcp-creative-agent"
+# The canonical local tag is pin-keyed so a cached image from a DIFFERENT pin
+# can never satisfy _ensure_image (a bare `adcp-creative-agent` image left by
+# another branch/worktree on a shared Docker host would silently substitute
+# the wrong agent — exactly the drift salesagent-kczg exists to prevent). The
+# un-keyed alias is what docker-compose.e2e.yml and the standalone `up` run;
+# _ensure_image repoints it at this pin before every run.
+IMAGE_ALIAS="adcp-creative-agent"
+IMAGE="${IMAGE_ALIAS}:${ADCP_PIN}"
 NET="creative-net"
 PG="adcp-postgres"
 AGENT="creative-agent"
@@ -97,19 +104,20 @@ _push_to_ghcr() {
 }
 
 _ensure_image() {
-    if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ] && _ghcr_image_exists; then
-        if _retry 3 _pull_from_ghcr; then
-            return 0
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ] && _ghcr_image_exists && _retry 3 _pull_from_ghcr; then
+            :
+        else
+            if [ -n "${CREATIVE_AGENT_GHCR_IMAGE:-}" ]; then
+                echo "[creative-agent] WARN: ghcr image unavailable; building locally" >&2
+            fi
+            _ensure_tarball
+            _retry 3 _build_image_local
         fi
-        echo "[creative-agent] WARN: ghcr pull failed; building locally" >&2
     fi
-
-    _ensure_tarball
-    _retry 3 _build_image_local
+    # Repoint the un-keyed alias (consumed by docker-compose.e2e.yml and
+    # `up`) at the current pin, clobbering any other-pin leftover.
+    docker tag "$IMAGE" "$IMAGE_ALIAS"
 }
 
 cmd_publish() {

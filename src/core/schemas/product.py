@@ -14,7 +14,6 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
-from adcp.types import PushNotificationConfig as LibraryPushNotificationConfig
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -239,8 +238,10 @@ class GetProductsRequest(LibraryGetProductsRequest):
     Library provides: account, brand, brief, buyer_campaign_ref, catalog,
     context, ext, fields, filters, pagination, property_list, refine.
 
-    Spec field not yet in adcp library: push_notification_config (online schema).
     Internal-only: product_selectors (excluded from external serialization).
+
+    push_notification_config is inherited from the adcp library parent (added in the
+    6.6 SDK / spec 3.1.1); no local redeclaration.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -249,11 +250,6 @@ class GetProductsRequest(LibraryGetProductsRequest):
     buying_mode: str | None = Field(  # type: ignore[assignment]
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
-    )
-
-    push_notification_config: LibraryPushNotificationConfig | None = Field(
-        None,
-        description="Webhook configuration for async terminal notifications (brief/refine only per AdCP spec)",
     )
 
     # Internal-only fields (not in AdCP spec)
@@ -275,7 +271,7 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
     # Required (no default): pinned 3.1 get-products-response marks 'products'
     # required. The SDK base declares it optional (list | None); redeclare it
     # required so the model cannot construct an under-specified shape (#1399 Plan-B).
-    products: list[LibraryProduct]  # type: ignore[assignment]
+    products: list[LibraryProduct]
 
     def __str__(self) -> str:
         """Return human-readable message for protocol layer.
