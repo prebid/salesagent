@@ -56,6 +56,10 @@ test-fast:
 test-full:
 	./run_all_tests.sh ci
 
+# Informational (#1603): list BDD scenarios your change touches that never run.
+check-dormant:
+	uv run python scripts/check_dormant_scenarios.py
+
 # ─── tox-based test targets ──────────────────────────────────────
 
 test-stack-up:
