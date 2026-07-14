@@ -4,11 +4,10 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.services.media_buy_completion import emit_media_buy_completion
+from src.admin.services.media_buy_completion import finalize_media_buy_approval, finalize_media_buy_rejection
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -246,48 +245,35 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                             db.commit()
                             return jsonify({"success": True}), 200
 
-                    # Execute adapter creation
+                    # Creatives ready → finalize atomically via the shared seam: the
+                    # approval instant + flight-derived lifecycle status COMPUTED UNDER
+                    # THE ROW LOCK (compute_target callback), then the adapter, the
+                    # workflow-step terminal + response artifact, and the completion
+                    # webhook. The prior code stamped approved_at AFTER the adapter, so
+                    # confirmed_at recorded adapter-completion rather than the approval
+                    # instant, and left the step at "approved" with no artifact — the
+                    # finalizer fixes both. See #1544.
                     from src.core.tools.media_buy_create import execute_approved_media_buy
 
-                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
-                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+                    logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
+                    success, error_msg = finalize_media_buy_approval(
+                        db,
+                        tenant_id,
+                        media_buy_id=media_buy_id,
+                        step_id=step_id,
+                        step_data=step_data,
+                        compute_target=lambda mb: lifecycle_status_for_window(
+                            datetime.now(UTC), *resolve_flight_window_utc(mb)
+                        ),
+                        run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+                        approved_by=user_email,
+                        approved_at=datetime.now(UTC),
+                    )
 
                     if not success:
                         logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
-
-                    # Finalize the approved buy in ONE write: the flight-derived
-                    # lifecycle status (scheduled/active/completed) — not a hardcoded
-                    # "scheduled" — stamped alongside approved_at/approved_by so the
-                    # persisted revision bumps once and the write-once confirmed_at
-                    # records the approval instant. execute_approved_media_buy no
-                    # longer sets status (it did adapter work only). See #1544.
-                    finalized_buy = media_buy_repo.get_by_id(media_buy_id)
-                    final_status = (
-                        lifecycle_status_for_window(datetime.now(UTC), *resolve_flight_window_utc(finalized_buy))
-                        if finalized_buy is not None
-                        else "active"
-                    )
-                    media_buy_repo.update_status_or_raise(
-                        media_buy_id,
-                        final_status,
-                        approved_at=datetime.now(UTC),
-                        approved_by=user_email,
-                    )
-                    db.commit()
-
-                    # Emit the completion artifact so async buyers receive the final
-                    # revision/confirmed_at — previously only the operations route did.
-                    # Re-fetch post-commit for the persisted confirmed_at/revision. #1544.
-                    emit_media_buy_completion(
-                        db,
-                        tenant_id,
-                        media_buy_repo.get_by_id(media_buy_id),
-                        media_buy_repo.get_packages(media_buy_id),
-                        step_data,
-                        AdcpTaskStatus.completed,
-                    )
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
@@ -319,19 +305,42 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
-
-            step = workflow_repo.update_status(
-                step_id,
-                status="rejected",
-                error_message=reason,
-            )
-
+            step = workflow_repo.get_by_step_id(step_id)
             if not step:
                 return jsonify({"error": "Workflow step not found"}), 404
 
-            db.commit()
+            # Snapshot step fields to a dict before commit (the rejection webhook
+            # reads them post-commit, when the ORM instance may have expired).
+            step_data = {
+                "step_id": step.step_id,
+                "context_id": step.context_id,
+                "tool_name": step.tool_name,
+                "request_data": step.request_data or {},
+            }
+
+            # If the step maps to a media buy awaiting a decision, reject it
+            # atomically: buy → rejected (+revision bump), step terminal + rejection
+            # artifact, then the rejection webhook carrying rejection_reason (a
+            # pinned-beta.3 MUST). Previously the reject route only touched the step,
+            # leaving the mapped buy stranded at pending_approval with no artifact and
+            # no buyer notification. See #1544.
+            mappings = workflow_repo.get_mappings_for_step(step_id)
+            mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
+            media_buy = MediaBuyRepository(db, tenant_id).get_by_id(mapping.object_id) if mapping else None
+
+            if mapping and media_buy is not None and media_buy.status in ("pending_approval", "pending_creatives"):
+                finalize_media_buy_rejection(
+                    db,
+                    tenant_id,
+                    media_buy_id=mapping.object_id,
+                    step_id=step_id,
+                    step_data=step_data,
+                    reason=reason,
+                )
+            else:
+                # No mapped buy awaiting a decision — record the step rejection only.
+                workflow_repo.update_status(step_id, status="rejected", error_message=reason)
+                db.commit()
 
             flash("Workflow step rejected", "info")
             return jsonify({"success": True}), 200

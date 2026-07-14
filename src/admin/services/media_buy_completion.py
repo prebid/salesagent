@@ -10,14 +10,18 @@ completion artifact — async buyers otherwise never receive the final
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from sqlalchemy.orm import Session
 
+from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.schemas import CreateMediaBuySuccess, Package
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -131,4 +135,184 @@ def emit_media_buy_completion(
         webhook_config,
         build_media_buy_result(media_buy, packages, rejection_reason=rejection_reason),
         status,
+    )
+
+
+def _terminalize_step_and_emit(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy: MediaBuy,
+    packages: list[MediaPackage],
+    step_id: str,
+    step_data: dict[str, Any],
+    step_status: str,
+    task_status: AdcpTaskStatus,
+    rejection_reason: str | None = None,
+) -> None:
+    """Persist the terminal decision artifact on the workflow step, commit, then emit.
+
+    The single place a media-buy approve/reject decision becomes durable AND
+    observable: stores the built ``CreateMediaBuySuccess`` on
+    ``WorkflowStep.response_data`` under ``step_status``
+    (``completed``/``rejected``/``failed``) so ``tasks/get`` can return the final
+    artifact, commits, then emits the buyer's completion/rejection webhook AFTER
+    commit (best-effort — a delivery failure never rolls back the committed
+    decision). The workflow + creative-unblock routes previously left the step
+    non-terminal with no artifact; centralising it here fixes both. #1544.
+    """
+    result = build_media_buy_result(media_buy, packages, rejection_reason=rejection_reason)
+    WorkflowRepository(session, tenant_id).update_status(
+        step_id,
+        status=step_status,
+        response_data=result.model_dump(mode="json"),
+        error_message=rejection_reason,
+    )
+    session.commit()
+    emit_media_buy_completion(
+        session, tenant_id, media_buy, packages, step_data, task_status, rejection_reason=rejection_reason
+    )
+
+
+def finalize_media_buy_approval(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str,
+    step_data: dict[str, Any],
+    compute_target: Callable[[MediaBuy], str | None],
+    run_adapter: Callable[[], tuple[bool, str | None]],
+    approved_by: str | None = None,
+    approved_at: datetime.datetime | None = None,
+) -> tuple[bool, str | None]:
+    """Atomic approve finalizer shared by the operations / workflow / creative-unblock routes.
+
+    Sequence (see #1544 review B4/B5):
+
+      1. Stamp the approval instant BEFORE external work — transition the buy to the
+         status COMPUTED UNDER THE ROW LOCK (``update_status_computed_or_raise``, so a
+         concurrent flight-window change can't be clobbered), stamping
+         ``approved_at``/``approved_by`` when supplied. That write-once approval
+         instant is what ``confirmed_at`` records — NOT adapter-completion time (the
+         prior workflow route stamped ``approved_at`` only after the adapter
+         returned). commit.
+      2. Run the adapter (``run_adapter`` callback). On failure: mark the buy
+         ``failed`` and the step ``failed``, commit, return ``(False, err)`` — no
+         completion artifact.
+      3. On success: terminalize the step (``completed``) with the response artifact,
+         commit, and emit the completion webhook after commit.
+
+    ``approved_at``/``approved_by`` are omitted when finalizing a buy already stamped
+    at an earlier ``pending_creatives`` hold (the creative-unblock path):
+    ``confirmed_at`` is write-once and ``approved_at`` must keep the original
+    admin-approval instant. Returns ``(success, error_message)``.
+    """
+    repo = MediaBuyRepository(session, tenant_id)
+    repo.update_status_computed_or_raise(media_buy_id, compute_target, approved_at=approved_at, approved_by=approved_by)
+    session.commit()
+
+    success, error_msg = run_adapter()
+    if not success:
+        # The buy was just transitioned above, so it exists — *_or_raise (never a
+        # discarded None) also satisfies the no-silent-skip guard.
+        repo.update_status_or_raise(media_buy_id, "failed")
+        WorkflowRepository(session, tenant_id).update_status(step_id, status="failed", error_message=error_msg)
+        session.commit()
+        return False, error_msg
+
+    _terminalize_step_and_emit(
+        session,
+        tenant_id,
+        media_buy=repo.get_by_id_or_raise(media_buy_id),
+        packages=repo.get_packages(media_buy_id),
+        step_id=step_id,
+        step_data=step_data,
+        step_status="completed",
+        task_status=AdcpTaskStatus.completed,
+    )
+    return True, None
+
+
+def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[bool, str | None]:
+    """Finalize ONE media buy whose last blocking creative was just approved.
+
+    Called from the creative-approval route once all of a buy's creatives are
+    approved. Owns its OWN DB session (the caller's creative UoW has already
+    committed, and — unlike a plain route blueprint — ``creatives.py`` is a scanned
+    business-logic module that must not open ``get_db_session`` itself), then routes
+    through the shared approve finalizer: look up the buy's create/approval workflow
+    step, run the adapter, transition to the flight-derived status UNDER THE ROW LOCK,
+    terminalize the step with its artifact, and emit the completion webhook.
+    ``approved_at``/``approved_by`` are NOT re-stamped — ``confirmed_at`` was recorded
+    at the earlier ``pending_creatives`` hold (write-once). Falls back to an adapter +
+    status-only transition when the buy has no workflow step (no async buyer task to
+    notify). Returns ``(success, error_message)``. #1544.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
+    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+    def _flight_status(media_buy: MediaBuy) -> str:
+        return lifecycle_status_for_window(datetime.datetime.now(datetime.UTC), *resolve_flight_window_utc(media_buy))
+
+    with get_db_session() as session:
+        wf_repo = WorkflowRepository(session, tenant_id)
+        mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
+        step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
+        if step is None:
+            # No workflow step (no async buyer task to notify) — adapter + status only.
+            success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+            if success:
+                MediaBuyRepository(session, tenant_id).update_status_computed_or_raise(media_buy_id, _flight_status)
+                session.commit()
+            return success, error_msg
+
+        step_data = {
+            "step_id": step.step_id,
+            "context_id": step.context_id,
+            "tool_name": step.tool_name,
+            "request_data": step.request_data or {},
+        }
+        return finalize_media_buy_approval(
+            session,
+            tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step.step_id,
+            step_data=step_data,
+            compute_target=_flight_status,
+            run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+        )
+
+
+def finalize_media_buy_rejection(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str,
+    step_data: dict[str, Any],
+    reason: str,
+) -> None:
+    """Atomic reject finalizer shared by the operations + workflow reject routes.
+
+    Transitions the buy to ``rejected`` (revision bump via the repo seam), stores the
+    rejection artifact on the workflow step, commits, and emits the rejection webhook
+    carrying ``rejection_reason`` (a pinned-beta.3 MUST on the seller rejection
+    notification). Ensures a rejected buy never lingers at ``pending_approval``
+    without an artifact — the workflow reject route previously left the mapped buy
+    untouched. #1544.
+    """
+    repo = MediaBuyRepository(session, tenant_id)
+    buy = repo.update_status_or_raise(media_buy_id, "rejected")
+    _terminalize_step_and_emit(
+        session,
+        tenant_id,
+        media_buy=buy,
+        packages=repo.get_packages(media_buy_id),
+        step_id=step_id,
+        step_data=step_data,
+        step_status="rejected",
+        task_status=AdcpTaskStatus.rejected,
+        rejection_reason=reason,
     )

@@ -18,12 +18,10 @@ from adcp.types import (
 )
 from adcp.webhooks import GeneratedTaskStatus
 
-from src.core.database.models import MediaBuy
 from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
-from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -45,10 +43,11 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
+from src.admin.services.media_buy_completion import finalize_unblocked_media_buy
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
-from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
+from src.core.tools.media_buy_create import push_creative_to_existing_buy
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
@@ -82,15 +81,9 @@ def _cleanup_completed_tasks():
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
 
 
-def _compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
-    """Lifecycle status from the buy's flight window.
-
-    Delegates to the shared business-layer decision (media_buy_flight) rather
-    than re-expressing the window→status rule in the Admin UI layer — the same
-    mapping the admin approve route uses. See #1544. (This also corrects a
-    past-end buy to ``completed`` instead of the prior ``scheduled``.)
-    """
-    return lifecycle_status_for_window(datetime.now(UTC), *resolve_flight_window_utc(media_buy))
+# The flight-window→status decision for creative-unblock finalization now lives in
+# the admin service (media_buy_completion.finalize_unblocked_media_buy), computed
+# UNDER THE ROW LOCK. See #1544.
 
 
 async def _call_webhook_for_creative_status(
@@ -627,35 +620,25 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             actor=approved_by,
         )
 
-        # Execute adapter creation for unblocked media buys
+        # Finalize each unblocked media buy through the shared seam: adapter →
+        # flight-derived status COMPUTED UNDER THE ROW LOCK → workflow-step terminal +
+        # response artifact → completion webhook. Previously this ran the adapter and
+        # set the status but never terminalized the create step or emitted the
+        # completion artifact, so async buyers who had been waiting on creative
+        # approval never learned their buy went live. approved_at/approved_by are NOT
+        # re-stamped here — confirmed_at was recorded at the earlier pending_creatives
+        # hold (write-once); this system unblock is not a new approval instant. #1544.
         for action in media_buy_actions:
-            logger.info(
-                f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
-            )
-
-            success, error_msg = execute_approved_media_buy(action["media_buy_id"], tenant_id)
-
+            media_buy_id = action["media_buy_id"]
+            logger.info(f"[CREATIVE APPROVAL] All creatives approved for media buy {media_buy_id}, finalizing")
+            # Session ownership + step lookup + finalize live in the admin service
+            # (this blueprint is a scanned business-logic module that must route DB
+            # access through repositories, not open get_db_session itself). #1544.
+            success, error_msg = finalize_unblocked_media_buy(tenant_id, media_buy_id)
             if success:
-                # Update media buy status in a separate UoW
-                with AdminCreativeUoW(tenant_id) as uow2:
-                    assert uow2.media_buys is not None
-                    mb = uow2.media_buys.get_by_id(action["media_buy_id"])
-                    if mb:
-                        new_status = _compute_media_buy_status_from_flight_dates(mb)
-                        # Route through the repository seam so the persisted
-                        # revision bumps and approved_at/approved_by stamp in one
-                        # place (AdCP 3.1.0-beta.3 revision + confirmed_at) — see #1544.
-                        uow2.media_buys.update_status_or_raise(
-                            action["media_buy_id"],
-                            new_status,
-                            approved_at=datetime.now(UTC),
-                            approved_by="system",
-                        )
-                    # auto-commits
-
-                logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
+                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} successfully created in adapter")
             else:
-                logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {error_msg}")
+                logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
 
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are

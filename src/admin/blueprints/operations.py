@@ -3,11 +3,10 @@
 import asyncio
 import logging
 
-from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.services.media_buy_completion import emit_media_buy_completion
+from src.admin.services.media_buy_completion import finalize_media_buy_approval, finalize_media_buy_rejection
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
@@ -376,75 +375,60 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # No creatives assigned yet
                         all_creatives_approved = False
 
-                    # Compute the target status based on creative approval state.
-                    # The window→status decision lives in the business layer
-                    # (media_buy_flight); the route only orchestrates resolve →
-                    # decide → persist. See #1544.
                     if all_creatives_approved:
-                        new_status = lifecycle_status_for_window(
-                            datetime.now(UTC), *resolve_flight_window_utc(media_buy)
+                        # Creatives ready → finalize in one atomic seam: stamp the
+                        # approval instant + flight-derived status COMPUTED UNDER THE
+                        # ROW LOCK (compute_target callback), run the adapter, then
+                        # terminalize the workflow step with its artifact and emit the
+                        # completion webhook. The window→status decision stays in the
+                        # business layer (media_buy_flight); the route only supplies it
+                        # as a callback the finalizer evaluates post-lock. See #1544.
+                        from src.core.tools.media_buy_create import execute_approved_media_buy
+
+                        logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
+                        success, error_msg = finalize_media_buy_approval(
+                            db_session,
+                            tenant_id,
+                            media_buy_id=media_buy_id,
+                            step_id=step.step_id,
+                            step_data=step_data,
+                            compute_target=lambda mb: lifecycle_status_for_window(
+                                datetime.now(UTC), *resolve_flight_window_utc(mb)
+                            ),
+                            run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+                            approved_by=user_email,
+                            approved_at=datetime.now(UTC),
                         )
+                        if not success:
+                            flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
+                            return redirect(
+                                url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                            )
+                        flash("Media buy approved and order created successfully", "success")
                     else:
-                        # Keep it in a state that shows it needs creative approval
-                        # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
-                        new_status = "draft"
-
-                    # Route the transition through the repository seam so the
-                    # persisted revision bumps and approved_at/approved_by are
-                    # stamped in one place (AdCP 3.1.0-beta.3 revision counter + confirmed_at
-                    # confirmation instant). Direct ``.status``/``.approved_at``
-                    # writes here would skip the bump — see #1544 review.
-                    media_buy_repo.update_status_or_raise(
-                        media_buy_id,
-                        new_status,
-                        approved_at=datetime.now(UTC),
-                        approved_by=user_email,
-                    )
-                    db_session.commit()
-
-                    # Execute adapter creation for approved media buy
-                    # This creates the order/line items in GAM (or other adapter)
-                    # Uses the same logic as auto-approved media buys
-                    from src.core.tools.media_buy_create import execute_approved_media_buy
-
-                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
-                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-
-                    if not success:
-                        # Adapter creation failed - update status and show error
-                        with get_db_session() as error_session:
-                            error_repo = MediaBuyRepository(error_session, tenant_id)
-                            error_buy = error_repo.update_status(media_buy_id, "failed")
-                            if error_buy:
-                                error_session.commit()
-
-                        flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
-                        return redirect(
-                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                        # Creatives not yet approved → hold at pending_creatives (a
+                        # SELLER-CONFIRMED status), stamping the approval instant now so
+                        # confirmed_at records THIS admin decision. The creative-unblock
+                        # route later finalizes (adapter + artifact + emit) WITHOUT
+                        # re-stamping approved_at/confirmed_at (both write-once). Using
+                        # 'draft' here would leave the buy unconfirmed. See #1544.
+                        media_buy_repo.update_status_or_raise(
+                            media_buy_id,
+                            "pending_creatives",
+                            approved_at=datetime.now(UTC),
+                            approved_by=user_email,
                         )
-
-                    logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
-
-                    # Emit the completion artifact to the buyer (shared helper — the
-                    # workflow and creative-unblock routes reuse the same lookup +
-                    # emission). No-op when the buy has no push config. See #1544.
-                    emit_media_buy_completion(
-                        db_session,
-                        tenant_id,
-                        media_buy_repo.get_by_id(media_buy_id),
-                        media_buy_repo.get_packages(media_buy_id),
-                        step_data,
-                        AdcpTaskStatus.completed,
-                    )
-
-                    flash("Media buy approved and order created successfully", "success")
+                        db_session.commit()
+                        flash(
+                            "Media buy approved; waiting for creative approval before creating the order.",
+                            "info",
+                        )
                 else:
                     db_session.commit()
                     flash("Media buy approved successfully", "success")
 
             elif action == "reject":
-                step.status = "rejected"
-                step.error_message = reason or "Rejected by administrator"
+                reason_text = reason or "Rejected by administrator"
                 step.updated_at = datetime.now(UTC)
 
                 if not step.comments:
@@ -459,25 +443,25 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 attributes.flag_modified(step, "comments")
 
                 if media_buy and media_buy.status == "pending_approval":
-                    # Route through the repository seam so the persisted revision
-                    # bumps on this state change (AdCP 3.1.0-beta.3 revision) — see #1544.
-                    media_buy_repo.update_status_or_raise(media_buy_id, "rejected")
-
-                db_session.commit()
-
-                # Emit the rejection notification to the buyer. rejection_reason is a
-                # spec MUST on the seller rejection webhook (pinned beta.3
-                # specification.mdx) — carry the reason recorded on the workflow step
-                # (default when the admin left it blank). No-op without push config. #1544.
-                emit_media_buy_completion(
-                    db_session,
-                    tenant_id,
-                    media_buy_repo.get_by_id(media_buy_id),
-                    media_buy_repo.get_packages(media_buy_id),
-                    step_data,
-                    AdcpTaskStatus.rejected,
-                    rejection_reason=reason or "Rejected by administrator",
-                )
+                    # Atomic reject: buy → rejected (+revision bump), workflow step
+                    # terminalized with the rejection artifact, then the rejection
+                    # webhook carrying rejection_reason (a pinned-beta.3 MUST on the
+                    # seller rejection notification). Same finalizer the workflow
+                    # reject route uses. See #1544.
+                    finalize_media_buy_rejection(
+                        db_session,
+                        tenant_id,
+                        media_buy_id=media_buy_id,
+                        step_id=step.step_id,
+                        step_data=step_data,
+                        reason=reason_text,
+                    )
+                else:
+                    # No mapped buy awaiting approval — record the step rejection only;
+                    # a buy that is not pending_approval must not be force-rejected.
+                    step.status = "rejected"
+                    step.error_message = reason_text
+                    db_session.commit()
 
                 flash("Media buy rejected", "info")
 
