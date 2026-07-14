@@ -300,6 +300,17 @@ class TestA2ARequestHandler:
             method = getattr(self.handler, method_name)
             assert callable(method), f"Method {method_name} is not callable"
 
+    @pytest.mark.asyncio
+    async def test_on_get_task_unknown_id_raises_task_not_found(self):
+        """tasks/get for an unknown task id raises TaskNotFoundError (A2A -32001),
+        not the generic internal error a bare None return produces."""
+        from unittest.mock import MagicMock
+
+        from a2a.types import GetTaskRequest, TaskNotFoundError
+
+        with pytest.raises(TaskNotFoundError):
+            await self.handler.on_get_task(GetTaskRequest(id="task_does_not_exist"), MagicMock())
+
     def test_handler_has_skill_methods(self):
         """Test that handler has skill-specific methods."""
         # Note: get_signals removed - should come from dedicated signals agents

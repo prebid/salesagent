@@ -1045,10 +1045,19 @@ class AdCPRequestHandler(RequestHandler):
             context: Server call context
 
         Returns:
-            Task object if found, otherwise None
+            Task object if found.
+
+        Raises:
+            TaskNotFoundError: if no task with ``task_id`` exists. Returning
+                ``None`` here makes the SDK emit a generic internal error; the
+                A2A spec defines ``TaskNotFoundError`` (JSON-RPC -32001) for an
+                unknown task id, which A2A clients can react to precisely.
         """
         task_id = params.id
-        return self.tasks.get(task_id)
+        task = self.tasks.get(task_id)
+        if task is None:
+            raise TaskNotFoundError(message=f"Task not found: {task_id}")
+        return task
 
     async def on_cancel_task(
         self,
