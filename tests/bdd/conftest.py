@@ -3512,21 +3512,41 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["env"] = env
             yield
     elif uc == "UC-019":
-        # get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
-        # its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
-        # read). Scenarios seed buys via factories under ctx["tenant"]/["principal"]
-        # (principal "buyer-001" matches the feature files). Genuine spec-production
-        # gaps stay xfailed via _UC019_XFAIL_TAGS / the selective blocks above.
-        from tests.harness.media_buy_list import MediaBuyListEnv
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if "T-UC-019-storyboard-post-create-status-poll" in marker_names:
+            # The post-create poll grades the create→get seam, so its Given
+            # drives a REAL create_media_buy — this one scenario needs the
+            # create-capable composite env (create patches + pure-read list
+            # dispatch). Every other UC-019 scenario reads factory-seeded rows.
+            from tests.harness.media_buy_list import MediaBuyCreateListEnv
 
-        with (
-            _db_scope_for(request, e2e_config),
-            MediaBuyListEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
-        ):
-            tenant, principal = env.setup_default_data()
-            ctx["env"] = env
-            ctx["tenant"] = tenant
-            ctx["principal"] = principal
-            yield
+            with (
+                _db_scope_for(request, e2e_config),
+                MediaBuyCreateListEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
+            ):
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
+        else:
+            # get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
+            # its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
+            # read). Scenarios seed buys via factories under ctx["tenant"]/["principal"]
+            # (principal "buyer-001" matches the feature files). Genuine spec-production
+            # gaps stay xfailed via _UC019_XFAIL_TAGS / the selective blocks above.
+            from tests.harness.media_buy_list import MediaBuyListEnv
+
+            with (
+                _db_scope_for(request, e2e_config),
+                MediaBuyListEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
+            ):
+                tenant, principal = env.setup_default_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                yield
     else:
         pytest.xfail(f"No harness wired for {uc}")
